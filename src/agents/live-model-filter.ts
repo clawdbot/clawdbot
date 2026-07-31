@@ -16,6 +16,7 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
@@ -23,7 +24,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.5-flash",
   "cohere/command-a-plus-05-2026",
-  "moonshot/kimi-k2.7-code",
+  "moonshot/kimi-k3",
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",

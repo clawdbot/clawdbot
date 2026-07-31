@@ -3,6 +3,7 @@
  *
  * Builds lightweight SDK-backed send adapters with chunking, sanitization, and media limits.
  */
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -31,29 +32,15 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   opts: TOpts,
 ) => Promise<TResult>;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value != null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readNumberField(record: Record<string, unknown> | undefined, key: string) {
   const value = record?.[key];
   return typeof value === "number" ? value : undefined;
 }
 
-export {
-  resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
-  sendPayloadMediaSequenceAndFinalize,
-  sendPayloadMediaSequenceOrFallback,
-  sendTextMediaPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-
 /**
  * Resolves an account-scoped channel media byte limit.
  */
-export function resolveScopedChannelMediaMaxBytes(params: {
+function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;

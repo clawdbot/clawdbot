@@ -6,8 +6,9 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
-import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
 type GetPluginCommandSpecsFn =
   typeof import("./bot-native-commands.runtime.js").getPluginCommandSpecs;
@@ -19,8 +20,6 @@ type DispatchReplyWithBufferedBlockDispatcherFn =
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
-type RecordInboundSessionMetaSafeFn =
-  typeof import("./bot-native-commands.runtime.js").recordInboundSessionMetaSafe;
 type ResolveChunkModeFn = typeof import("./bot-native-commands.runtime.js").resolveChunkMode;
 type EnsureConfiguredBindingRouteReadyFn =
   typeof import("./bot-native-commands.runtime.js").ensureConfiguredBindingRouteReady;
@@ -28,8 +27,6 @@ type GetAgentScopedMediaLocalRootsFn =
   typeof import("./bot-native-commands.runtime.js").getAgentScopedMediaLocalRoots;
 type ResolveThreadSessionKeysFn =
   typeof import("./bot-native-commands.runtime.js").resolveThreadSessionKeys;
-type CreateChannelReplyPipelineFn =
-  typeof import("./bot-native-commands.delivery.runtime.js").createChannelMessageReplyPipeline;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -62,11 +59,6 @@ const replyPipelineMocks = vi.hoisted(() => {
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(
       (async () => dispatchReplyResult) as DispatchReplyWithBufferedBlockDispatcherFn,
     ),
-    createChannelMessageReplyPipeline: vi.fn((() => ({
-      onModelSelected: () => {},
-      responsePrefixContextProvider: () => undefined,
-    })) as unknown as CreateChannelReplyPipelineFn),
-    recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
     resolveChunkMode: vi.fn((() => "length") as unknown as ResolveChunkModeFn),
     ensureConfiguredBindingRouteReady: vi.fn((async () => ({
       ok: true,
@@ -88,22 +80,44 @@ const replyPipelineMocks = vi.hoisted(() => {
   };
 });
 const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => {}),
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
+
+const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChannelInboundTurn"] =
+  async (plan) => {
+    const dispatchResult = await replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: plan.ctxPayload,
+      cfg: plan.cfg,
+      dispatcherOptions: {
+        ...plan.dispatcherOptions,
+        deliver:
+          "deliverWithProviderMessageSending" in plan.delivery
+            ? plan.delivery.deliverWithProviderMessageSending
+            : plan.delivery.deliver,
+        onError: plan.delivery.onError,
+      },
+      replyOptions: plan.replyOptions,
+    });
+    return {
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: plan.ctxPayload,
+      routeSessionKey: plan.route.sessionKey,
+      dispatchResult,
+    };
+  };
 
 vi.mock("./bot-native-commands.runtime.js", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,
   finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
-  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
   resolveChunkMode: replyPipelineMocks.resolveChunkMode,
   ensureConfiguredBindingRouteReady: replyPipelineMocks.ensureConfiguredBindingRouteReady,
   getAgentScopedMediaLocalRoots: replyPipelineMocks.getAgentScopedMediaLocalRoots,
   resolveThreadSessionKeys: replyPipelineMocks.resolveThreadSessionKeys,
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({
-  createChannelMessageReplyPipeline: replyPipelineMocks.createChannelMessageReplyPipeline,
   deliverReplies: deliveryMocks.deliverReplies,
   emitTelegramMessageSentHooks: vi.fn(),
 }));
@@ -162,8 +176,7 @@ export function createNativeCommandsHarness(params?: {
     getRuntimeConfig: vi.fn(() => cfg),
     readChannelAllowFromStore:
       readChannelAllowFromStore as TelegramNativeCommandDeps["readChannelAllowFromStore"],
-    dispatchReplyWithBufferedBlockDispatcher:
-      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    dispatchChannelInboundTurn: dispatchChannelInboundTurnForTest,
     getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),

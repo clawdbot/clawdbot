@@ -1,8 +1,11 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getResolvedLoggerSettings } from "../logging.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
+import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
+import "./logger.js";
+import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
 // Tail reader for the active log file, with cursor reset and line redaction.
@@ -10,7 +13,6 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
-const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
 
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
@@ -22,17 +24,16 @@ export type LogTailPayload = {
   reset: boolean;
 };
 
-function isRollingLogFile(file: string): boolean {
-  return ROLLING_LOG_RE.test(path.basename(file));
-}
-
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-export async function resolveLogFile(file: string): Promise<string> {
+export async function resolveLogFile(
+  file: string,
+  options?: { rolling?: boolean },
+): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
   if (stat) {
     return file;
   }
-  if (!isRollingLogFile(file)) {
+  if (!(options?.rolling ?? isRollingLogFilePath(file))) {
     return file;
   }
 
@@ -44,7 +45,7 @@ export async function resolveLogFile(file: string): Promise<string> {
 
   const candidates = await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && ROLLING_LOG_RE.test(entry.name))
+      .filter((entry) => entry.isFile() && isSameRollingLogFileFamily(file, entry.name))
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
         const fileStat = await fs.stat(fullPath).catch(() => null);
@@ -126,8 +127,8 @@ async function readLogSlice(params: {
 
     const length = Math.max(0, size - start);
     const buffer = Buffer.alloc(length);
-    const readResult = await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8", 0, readResult.bytesRead);
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
+    const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.
@@ -160,7 +161,8 @@ export async function readConfiguredLogTail(params?: {
   limit?: number;
   maxBytes?: number;
 }): Promise<LogTailPayload> {
-  const file = await resolveLogFile(getResolvedLoggerSettings().file);
+  const target = getResolvedLoggerFileTarget();
+  const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
     file,
     cursor: params?.cursor,

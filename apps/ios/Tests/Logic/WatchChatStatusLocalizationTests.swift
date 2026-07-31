@@ -183,7 +183,7 @@ struct WatchChatStatusLocalizationTests {
             ],
             "gatewayConnected": false,
             "agentName": "Main",
-            "agentAvatarURL": "https://example.com/avatar.png",
+            "agentAvatarUrl": "https://example.com/avatar.png",
             "sessionKey": "main",
             "talkStatus": [
                 "code": OpenClawWatchAppStatusCode.talkOff.rawValue,

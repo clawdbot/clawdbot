@@ -7,12 +7,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import {
-  DEFAULT_APNS_RELAY_BASE_URL,
-  DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
-  resolveApnsRelayConfigFromEnv,
-  sendApnsRelayPush,
-} from "./push-apns.relay.js";
+import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -67,49 +62,12 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
-    it("defaults to the hosted relay when the registration was minted by the hosted relay", () => {
-      expectRelayConfig(
-        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
-          registrationRelayOrigin: `${DEFAULT_APNS_RELAY_BASE_URL}/`,
-        }),
-        {
-          baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
-          timeoutMs: 10_000,
-        },
-      );
-    });
-
-    it("defaults to the sandbox hosted relay when the registration was minted there", () => {
-      expectRelayConfig(
-        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
-          registrationRelayOrigin: `${DEFAULT_APNS_SANDBOX_RELAY_BASE_URL}/`,
-        }),
-        {
-          baseUrl: DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
-          timeoutMs: 10_000,
-        },
-      );
-    });
-
     it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
       const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
 
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         expect(resolved.error).toContain("relay registrations without the hosted relay origin");
-      }
-    });
-
-    it("rejects config that does not match the registration relay origin", () => {
-      const resolved = resolveApnsRelayConfigFromEnv(
-        {} as NodeJS.ProcessEnv,
-        { push: { apns: { relay: { baseUrl: DEFAULT_APNS_RELAY_BASE_URL } } } },
-        { registrationRelayOrigin: "https://relay.example.com" },
-      );
-
-      expect(resolved.ok).toBe(false);
-      if (!resolved.ok) {
-        expect(resolved.error).toContain("origin mismatch");
       }
     });
 
@@ -146,6 +104,66 @@ describe("push-apns.relay", () => {
       expectRelayConfig(resolved, {
         baseUrl: "https://relay.example.com",
         timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      });
+    });
+
+    it.each(["0x1000", "2e4", "2500ms"])(
+      "falls back for non-decimal env timeout %s",
+      (timeoutMs) => {
+        const resolved = resolveApnsRelayConfigFromEnv({
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
+        } as NodeJS.ProcessEnv);
+
+        expectRelayConfig(resolved, {
+          baseUrl: "https://relay.example.com",
+          timeoutMs: 10_000,
+        });
+      },
+    );
+
+    it("retains numeric timeout config values", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
+      });
+    });
+
+    it("uses the configured timeout when the env override is blank", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "   ",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
       });
     });
 
@@ -196,6 +214,39 @@ describe("push-apns.relay", () => {
   });
 
   describe("sendApnsRelayPush", () => {
+    it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
+      const controller = new AbortController();
+      const isCurrent = vi.fn().mockResolvedValue(true);
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await sendApnsRelayPush({
+        ...createRelayPushParams(),
+        signal: controller.signal,
+        isCurrent,
+      });
+
+      expect(isCurrent).toHaveBeenCalledTimes(2);
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { signal?: AbortSignal } | undefined;
+      expect(fetchOptions?.signal?.aborted).toBe(false);
+      controller.abort(new Error("pairing removed"));
+      expect(fetchOptions?.signal?.aborted).toBe(true);
+    });
+
+    it("does not start relay transport when persistent ownership changed", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(
+        sendApnsRelayPush({
+          ...createRelayPushParams(),
+          isCurrent: vi.fn().mockResolvedValue(false),
+        }),
+      ).rejects.toThrow("APNs send invalidated");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("signs relay payloads and forwards the request through the injected sender", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
       const sender = vi.fn().mockResolvedValue({
@@ -272,11 +323,9 @@ describe("push-apns.relay", () => {
     });
 
     it("does not follow relay redirects", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 302,
-        json: vi.fn().mockRejectedValue(new Error("no body")),
-      });
+      const response = new Response("redirected", { status: 302 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      const fetchMock = vi.fn().mockResolvedValue(response);
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       const result = await sendApnsRelayPush(createRelayPushParams());
@@ -288,6 +337,7 @@ describe("push-apns.relay", () => {
       expect(result.status).toBe(302);
       expect(result.reason).toBe("RelayRedirectNotAllowed");
       expect(result.environment).toBeUndefined();
+      expect(cancel).toHaveBeenCalledOnce();
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {
@@ -438,6 +488,35 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toBe("RelayResponseTooLarge");
       expect(result.status).toBe(202);
+    });
+
+    it("rejects relay body with malformed UTF-8 bytes instead of parsing corrupted metadata", async () => {
+      // Regression guard: with { fatal: true } on the TextDecoder, a relay body
+      // containing invalid UTF-8 sequences must be rejected at decode time and
+      // treated as absent (status-derived fallback). Corrupted field values must
+      // never reach the caller.
+      const encoder = new TextEncoder();
+      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
+      const suffix = encoder.encode('1234"}');
+      const body = new Uint8Array(prefix.length + 1 + suffix.length);
+      body.set(prefix, 0);
+      body[prefix.length] = 0xff; // bare invalid byte inside the apns-id string
+      body.set(suffix, prefix.length + 1);
+
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 202,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
     });
   });
 });

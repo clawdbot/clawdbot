@@ -6,11 +6,11 @@ scenario:
   category: channel-replies
   coverage:
     primary:
-      - personal.channel-replies
+      - channels.native-threads-channel-replies
     secondary:
-      - channels.dm
-      - channels.threads
-      - channels.qa-channel
+      - channels.native-threads-dm
+      - channels.native-threads
+      - channels.native-threads-qa-channel
   risk: medium
   capabilities:
     - channel.reply
@@ -29,8 +29,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify fake personal replies stay routed to the requested QA conversation and thread.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       dmUserId: qa-alice
       dmUserName: QA Alice
       dmMarker: PERSONAL-DM-OK

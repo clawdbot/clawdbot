@@ -126,9 +126,9 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     const firstEntered = createDeferred<void>();
     const firstCallback = () => {};
     const secondCallback = () => {};
-    const callbacks: Array<FollowupRun["onFollowupAdmissionWaitChange"]> = [];
+    const callbacks: Array<FollowupRun["onReplyAdmissionWaitChange"]> = [];
     const firstRunner = async (run: FollowupRun) => {
-      callbacks.push(run.onFollowupAdmissionWaitChange);
+      callbacks.push(run.onReplyAdmissionWaitChange);
       if (callbacks.length === 1) {
         firstEntered.resolve();
         await gate.promise;
@@ -140,7 +140,7 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
 
     enqueueFollowupRun(
       key,
-      { ...createRun({ prompt: "msg1" }), onFollowupAdmissionWaitChange: firstCallback },
+      { ...createRun({ prompt: "msg1" }), onReplyAdmissionWaitChange: firstCallback },
       settings,
       "message-id",
       firstRunner,
@@ -150,7 +150,7 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
 
     enqueueFollowupRun(
       key,
-      { ...createRun({ prompt: "msg2" }), onFollowupAdmissionWaitChange: secondCallback },
+      { ...createRun({ prompt: "msg2" }), onReplyAdmissionWaitChange: secondCallback },
       settings,
       "message-id",
       secondRunner,

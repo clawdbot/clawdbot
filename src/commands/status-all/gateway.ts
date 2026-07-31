@@ -99,7 +99,9 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     }
 
     // "[openai] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
+    const tokenRefresh = line.match(
+      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)(?:\s+(\{.*))?\s*$/,
+    );
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";

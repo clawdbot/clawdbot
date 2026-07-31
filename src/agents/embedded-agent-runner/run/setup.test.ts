@@ -10,7 +10,6 @@ import {
   buildBeforeModelResolveAttachments,
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
-  resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
@@ -139,7 +138,6 @@ describe("resolveHookModelSelection", () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeModelResolve: vi.fn(),
-      runBeforeAgentStart: vi.fn(),
     };
 
     await expect(
@@ -154,11 +152,9 @@ describe("resolveHookModelSelection", () => {
     ).resolves.toEqual({
       provider: "foreground-provider",
       modelId: "foreground-model",
-      beforeAgentStartResult: undefined,
     });
     expect(hookRunner.hasHooks).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
   });
 
   it("passes attachment metadata to before_model_resolve hooks", async () => {
@@ -169,7 +165,6 @@ describe("resolveHookModelSelection", () => {
         providerOverride: "vision-provider",
         modelOverride: "vision-model",
       })),
-      runBeforeAgentStart: vi.fn(),
     };
 
     const result = await resolveHookModelSelection({
@@ -185,7 +180,6 @@ describe("resolveHookModelSelection", () => {
       { prompt: "describe this image", attachments },
       hookContext,
     );
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result.provider).toBe("vision-provider");
     expect(result.modelId).toBe("vision-model");
   });
@@ -194,7 +188,6 @@ describe("resolveHookModelSelection", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_model_resolve"),
       runBeforeModelResolve: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(),
     };
 
     await resolveHookModelSelection({
@@ -248,7 +241,7 @@ function createConfiguredModel(
   };
 }
 
-describe("resolveEffectiveRuntimeModel", () => {
+describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
@@ -261,15 +254,16 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       contextConfigProvider: "openai",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "modelsConfig",
       tokens: 1_000_000,
     });
@@ -288,14 +282,15 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 272_000,
     });

@@ -1,6 +1,7 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 // Audits configured model references for risky provider or model choices.
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { modelKey } from "../agents/model-selection-normalize.js";
+import { modelKey } from "../agents/model-ref-shared.js";
 import {
   buildModelAliasIndex,
   resolveModelRefFromString,
@@ -79,8 +80,7 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
     add(fallback, "agents.defaults.imageModel.fallbacks");
   }
 
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of list) {
+  for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object") {
       continue;
     }
@@ -88,13 +88,13 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
       typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
     const model = (agent as { model?: unknown }).model;
     if (typeof model === "string") {
-      add(model, `agents.list.${id}.model`);
+      add(model, `agents.entries.${id}.model`);
     } else if (model && typeof model === "object") {
-      add((model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
+      add((model as { primary?: unknown }).primary, `agents.entries.${id}.model.primary`);
       const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
       if (Array.isArray(fallbacks)) {
         for (const fallback of fallbacks) {
-          add(fallback, `agents.list.${id}.model.fallbacks`);
+          add(fallback, `agents.entries.${id}.model.fallbacks`);
         }
       }
     }

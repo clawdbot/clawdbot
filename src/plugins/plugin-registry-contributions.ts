@@ -1,5 +1,4 @@
 /** Loads manifest and installed-index contributions used to build plugin registry snapshots. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -63,10 +62,6 @@ type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
 };
 
-type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
-  providerId: string;
-};
-
 type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
@@ -76,12 +71,6 @@ type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
 type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   value: string | undefined;
-  origin?: PluginOrigin;
-};
-
-type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams = LoadPluginRegistryParams & {
-  contract: PluginManifestContractListKey;
-  path: string | undefined;
   origin?: PluginOrigin;
 };
 
@@ -369,33 +358,6 @@ export function resolvePluginContributionOwners(
   );
 }
 
-export function resolveProviderOwners(params: ResolveProviderOwnersParams): readonly string[] {
-  const providerId = normalizeProviderId(params.providerId);
-  if (!providerId) {
-    return [];
-  }
-  if (params.lookUpTable) {
-    const index = params.lookUpTable.index;
-    const owners: string[] = [];
-    for (const [contributionId, ownerIds] of params.lookUpTable.owners.providers.entries()) {
-      if (normalizeProviderId(contributionId) === providerId) {
-        owners.push(...ownerIds);
-      }
-    }
-    return filterContributionOwnerIds({
-      owners,
-      index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    });
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "providers",
-    matches: (contributionId) => normalizeProviderId(contributionId) === providerId,
-  });
-}
-
 export function resolveManifestContractPluginIds(
   params: ResolveManifestContractPluginIdsParams,
 ): string[] {
@@ -404,24 +366,6 @@ export function resolveManifestContractPluginIds(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
-  params: ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams,
-): string[] {
-  const normalizedPath = params.path?.trim();
-  if (!normalizedPath) {
-    return [];
-  }
-  return loadManifestContractRegistry(params)
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        listManifestContractValues(plugin, params.contract).length > 0 &&
-        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

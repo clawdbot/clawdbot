@@ -1,7 +1,7 @@
 // Runtime task test harness helpers build mocked plugin runtimes for task-flow tests.
 import { vi } from "vitest";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
 import {
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
@@ -25,6 +25,7 @@ export function installRuntimeTaskDeliveryMock(): void {
     sendMessage: runtimeTaskMocks.sendMessageMock,
   });
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: runtimeTaskMocks.cancelSessionMock,
     }),

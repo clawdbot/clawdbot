@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
-import { getSubCliEntries, registerSubCliByName } from "./register.subclis.js";
+import { registerSubCliByName } from "./register.subclis.js";
+import { getSubCliEntries } from "./subcli-descriptors.js";
 
 describe("root command descriptions", () => {
   beforeEach(() => {

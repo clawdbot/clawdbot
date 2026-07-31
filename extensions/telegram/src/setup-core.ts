@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Telegram plugin module implements setup core behavior.
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
@@ -12,6 +13,7 @@ import {
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId } from "./allow-from.js";
+import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 const t = createSetupTranslator();
 
@@ -86,14 +88,43 @@ export async function promptTelegramAllowFromForAccount(params: {
     channel,
     accountId,
     patch: { dmPolicy: "allowlist", allowFrom: unique },
+    setupSurface: telegramSetupAdapter,
   });
 }
 
-export const telegramSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
-  channelKey: channel,
-  defaultAccountOnlyEnvError: "TELEGRAM_BOT_TOKEN can only be used for the default account.",
-  missingCredentialError: "Telegram requires token or --token-file (or --use-env).",
-  hasCredentials: (input) => Boolean(input.token || input.tokenFile),
-  buildPatch: (input) =>
-    input.tokenFile ? { tokenFile: input.tokenFile } : input.token ? { botToken: input.token } : {},
+export const telegramSetupAdapter: ChannelSetupAdapter = {
+  ...createEnvPatchedAccountSetupAdapter({
+    channelKey: channel,
+    defaultAccountOnlyEnvError: "TELEGRAM_BOT_TOKEN can only be used for the default account.",
+    missingCredentialError: "Telegram requires token or --token-file (or --use-env).",
+    hasCredentials: (input) => Boolean(input.token || input.tokenFile),
+    buildPatch: (input) =>
+      input.tokenFile
+        ? { tokenFile: input.tokenFile }
+        : input.token
+          ? { botToken: input.token }
+          : {},
+  }),
+  singleAccountKeysToMove,
+  namedAccountPromotionKeys,
+};
+
+export const telegramSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Telegram bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Telegram bot token file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use TELEGRAM_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: telegramSetupAdapter,
 });

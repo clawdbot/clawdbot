@@ -167,6 +167,9 @@ export function createMessageCliHelpers(
       defaultRuntime,
       async () => {
         validateMessageNumericOptions(opts);
+        if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
+          throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+        }
         const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
         if (preloadPlan.preload) {
           ensurePluginRegistryLoaded(preloadPlan.loadOptions);

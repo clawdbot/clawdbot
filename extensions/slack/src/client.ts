@@ -1,7 +1,10 @@
 // Slack plugin module implements client behavior.
 import { createHash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
+import type { SlackLookupClientOptions } from "./client-options.js";
 import {
+  resolveSlackLookupClientOptions,
+  resolveSlackReadClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_WRITE_RETRY_OPTIONS,
@@ -24,7 +27,28 @@ export {
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
+  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackReadClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackReadClientOptions(options));
+}
+
+export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
+  // Startup identity stays degraded until restart after auth.test fails. Retry two transient
+  // transport failures before committing that state, without delaying on Slack rate limits.
+  return createSlackWebClient(token, {
+    ...options,
+    rejectRateLimitedCalls: true,
+    retryConfig: { retries: 2, minTimeout: 0 },
+    timeout: 10_000,
+  });
+}
+
+export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
+  return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
 export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {

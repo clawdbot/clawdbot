@@ -78,6 +78,8 @@ export type ProviderUsageSnapshot = {
   costHistory?: ProviderUsageCostHistory;
   summary?: string;
   plan?: string;
+  /** Account identity (email) the usage was fetched under, when known. */
+  accountEmail?: string;
   error?: string;
 };
 

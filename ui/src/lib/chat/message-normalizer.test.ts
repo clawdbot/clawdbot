@@ -1,11 +1,70 @@
+// @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeMessage } from "./message-normalizer.ts";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
+import {
+  isStandaloneToolMessageForDisplay,
+  isToolResultMessage,
+  normalizeMessage,
+} from "./message-normalizer.ts";
 
-const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+// Inbound context blocks are stamped with the provenance marker; strippers key
+// on the marker, so display fixtures must carry it to be recognized.
+const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 describe("message-normalizer", () => {
+  // Regression: gateway/transcript events can carry a null/undefined or
+  // non-object entry (e.g. a transcript row without a `message`). `typeof
+  // m.role` still reads `.role` off the object, so an undefined entry threw
+  // "Cannot read properties of undefined (reading 'role')" inside the gateway
+  // event handler. These entry points must degrade to a safe default instead.
+  describe("malformed input never throws", () => {
+    it.each([undefined, null, "raw string", 42, true])(
+      "normalizeMessage(%o) yields role 'unknown' without throwing",
+      (input) => {
+        expect(() => normalizeMessage(input)).not.toThrow();
+        expect(normalizeMessage(input).role).toBe("unknown");
+      },
+    );
+
+    it.each([undefined, null, "raw string", 42, true])(
+      "tool-message predicates return false for %o without throwing",
+      (input) => {
+        expect(() => isToolResultMessage(input)).not.toThrow();
+        expect(() => isStandaloneToolMessageForDisplay(input)).not.toThrow();
+        expect(isToolResultMessage(input)).toBe(false);
+        expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
+      },
+    );
+
+    it.each([undefined, null, "malformed block", 42, true, []])(
+      "preserves valid assistant text after the malformed content block %o",
+      (block) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: [block, { type: "output_text", text: "The valid answer remains visible." }],
+          }),
+        ).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "The valid answer remains visible." }],
+        });
+      },
+    );
+
+    it("preserves valid tool blocks after malformed content", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: [null, { type: "tool_use", name: "read", args: { path: "notes.md" } }],
+        }),
+      ).toMatchObject({
+        role: "toolResult",
+        content: [{ type: "tool_use", name: "read", args: { path: "notes.md" } }],
+      });
+    });
+  });
+
   describe("normalizeMessage", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -183,6 +242,42 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves managed media playback and artifact metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            fileName: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            kind: "audio",
+            label: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
     it("does not normalize non-assistant structured audio blocks as attachments", () => {
       const result = normalizeMessage({
         role: "user",
@@ -332,6 +427,86 @@ describe("message-normalizer", () => {
             label: "voice.ogg",
             mimeType: "audio/ogg",
             isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
+    it("preserves paragraph breaks and code indentation before an assistant attachment", () => {
+      const text = [
+        "Here is the code.",
+        "",
+        "```python",
+        "def run():",
+        "    if ready:",
+        "        return True",
+        "```",
+        "",
+        "The attachment is ready.",
+      ].join("\n");
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `${text}\nMEDIA:https://example.com/image.png`,
+        }).content,
+      ).toEqual([
+        { type: "text", text },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
+    });
+
+    it.each(["", " ", "\t"])(
+      "preserves a %j paragraph separator around an assistant attachment",
+      (whitespace) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: `First paragraph\n${whitespace}\nMEDIA:https://example.com/image.png\n${whitespace}\nSecond paragraph`,
+          }).content,
+        ).toEqual([
+          { type: "text", text: "First paragraph\n" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://example.com/image.png",
+              kind: "image",
+              label: "image.png",
+              mimeType: "image/png",
+            },
+          },
+          { type: "text", text: "Second paragraph" },
+        ]);
+      },
+    );
+
+    it("preserves canonical code fences after removing reply and audio directives", () => {
+      const code = ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"].join(
+        "\n",
+      );
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `[[reply_to_current]]\n[[audio_as_voice]]\n${code}\nMEDIA:https://example.com/image.png`,
+        }).content,
+      ).toEqual([
+        { type: "text", text: code },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
           },
         },
       ]);
@@ -506,6 +681,8 @@ describe("message-normalizer", () => {
               kind: "image",
               label: "test image.png",
               mimeType: "image/png",
+              width: 1280,
+              height: 720,
             },
           },
         ],
@@ -519,6 +696,8 @@ describe("message-normalizer", () => {
             kind: "image",
             label: "test image.png",
             mimeType: "image/png",
+            width: 1280,
+            height: 720,
           },
         },
       ]);
@@ -601,5 +780,83 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("formats durable sender metadata for transcript attribution", () => {
+      const emailSender = normalizeMessage({
+        role: "user",
+        content: "Prompt from Alice",
+        __openclaw: { senderId: "alice@example.com" },
+      });
+      expect(emailSender.senderLabel).toBe("alice");
+      expect(emailSender.sender).toEqual({ id: "alice@example.com" });
+      expect(
+        normalizeMessage({
+          role: "user",
+          content: "Prompt from a profile",
+          __openclaw: { senderId: "profile_123", senderName: "Alice Example" },
+        }).senderLabel,
+      ).toBe("Alice Example");
+    });
+  });
+});
+
+describe("sender label opaque-id stripping", () => {
+  it("strips a baked profile-UUID suffix and preserves it as sender identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+    });
+    expect(normalized.senderLabel).toBe("steipete");
+    // Legacy rows have no structured sender; the UUID from the label is the
+    // only author key, so it must survive as non-display identity.
+    expect(normalized.sender).toEqual({
+      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      name: "steipete",
+    });
+  });
+
+  it("prefers durable metadata identity over the legacy label identity", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      __openclaw: { senderId: "meta-profile", senderName: "Meta Name" },
+    });
+    expect(normalized.sender).toEqual({ id: "meta-profile", name: "Meta Name" });
+    expect(normalized.senderLabel).toBe("steipete");
+  });
+
+  it("keeps human-meaningful parenthesized suffixes", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "Peter (+436641234567)",
+      }).senderLabel,
+    ).toBe("Peter (+436641234567)");
+  });
+
+  it("keeps a label that is only a UUID rather than emptying it", () => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hi",
+        senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      }).senderLabel,
+    ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
+  });
+
+  it("attributes a bare-UUID legacy label to that profile", () => {
+    const normalized = normalizeMessage({
+      role: "user",
+      content: "hi",
+      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+    });
+    // Nameless legacy senders keep the UUID as last-resort display, but the
+    // row still attributes (and resolves its avatar) to that profile instead
+    // of falling back to the local viewer identity.
+    expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
+    expect(normalized.sender).toEqual({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

@@ -274,11 +274,10 @@ export class TwitchClientManager {
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandlers.get(key);
       if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
         const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
-          `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
+          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
         );
 
         handler({
@@ -286,9 +285,10 @@ export class TwitchClientManager {
           displayName: msg.userInfo.displayName,
           userId: msg.userInfo.userId,
           message: messageText,
-          channel: normalizedChannel,
+          // Preserve the raw callback channel; durable dispatch normalizes it.
+          channel: channelName,
           id: msg.id,
-          timestamp: new Date(),
+          timestamp: Date.now(),
           isMod: msg.userInfo.isMod,
           isOwner: msg.userInfo.isBroadcaster,
           isVip: msg.userInfo.isVip,

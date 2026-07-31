@@ -10,7 +10,7 @@ type PackageJson = {
 };
 
 /** Reads package.json as a loose object, returning null for missing or invalid manifests. */
-export async function readPackageJson(root: string): Promise<PackageJson | null> {
+async function readPackageJson(root: string): Promise<PackageJson | null> {
   const parsed = await tryReadJson<unknown>(path.join(root, "package.json"));
   return parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? (parsed as PackageJson)

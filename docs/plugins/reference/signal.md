@@ -16,8 +16,8 @@ Adds the Signal channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: signal
+channels: `signal`
 
 ## Related docs
 
-- [signal](/channels/signal)
+- [Signal](/channels/signal)

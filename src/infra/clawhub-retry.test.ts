@@ -74,6 +74,69 @@ describe("retryClawHubRead", () => {
     },
   );
 
+  it("honors a valid HTTP-date Retry-After through the shared parser", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
+    try {
+      const delays: number[] = [];
+      let attempts = 0;
+
+      const result = await retryClawHubRead(
+        async () => {
+          attempts += 1;
+          return {
+            response: new Response(attempts === 1 ? "limited" : "ok", {
+              status: attempts === 1 ? 503 : 200,
+              headers:
+                attempts === 1 ? { "Retry-After": "Tue, 02 Mar 2027 23:59:35 GMT" } : undefined,
+            }),
+          };
+        },
+        {
+          disposeRetry: async ({ response }) => {
+            await response.body?.cancel();
+          },
+          sleep: async (ms) => {
+            delays.push(ms);
+          },
+        },
+      );
+
+      expect(await result.response.text()).toBe("ok");
+      expect(delays).toEqual([5_000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the bounded schedule when Retry-After exceeds the ClawHub cap", async () => {
+    const delays: number[] = [];
+    let attempts = 0;
+
+    const result = await retryClawHubRead(
+      async () => {
+        attempts += 1;
+        return {
+          response: new Response(attempts === 1 ? "limited" : "ok", {
+            status: attempts === 1 ? 503 : 200,
+            headers: attempts === 1 ? { "Retry-After": "61" } : undefined,
+          }),
+        };
+      },
+      {
+        disposeRetry: async ({ response }) => {
+          await response.body?.cancel();
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      },
+    );
+
+    expect(await result.response.text()).toBe("ok");
+    expect(delays).toEqual([1_000]);
+  });
+
   it("ignores Retry-After HTTP dates that Date.parse would normalize", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
@@ -123,6 +186,34 @@ describe("retryClawHubRead", () => {
       },
       {
         disposeRetry: async () => {},
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      },
+    );
+
+    expect(await result.response.text()).toBe("ok");
+    expect(attempts).toBe(2);
+    expect(delays).toEqual([1_000]);
+  });
+
+  it("retries transient internal server errors", async () => {
+    const delays: number[] = [];
+    let attempts = 0;
+
+    const result = await retryClawHubRead(
+      async () => {
+        attempts += 1;
+        return {
+          response: new Response(attempts === 1 ? "server error" : "ok", {
+            status: attempts === 1 ? 500 : 200,
+          }),
+        };
+      },
+      {
+        disposeRetry: async ({ response }) => {
+          await response.body?.cancel();
+        },
         sleep: async (ms) => {
           delays.push(ms);
         },

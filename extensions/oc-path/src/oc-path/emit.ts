@@ -30,7 +30,7 @@ import { guardSentinel } from "./sentinel.js";
  * present and not flagged as dirty; `mode: 'render'` always
  * re-renders.
  */
-export interface EmitOptions {
+interface EmitOptions {
   readonly mode?: "roundtrip" | "render";
   /**
    * When provided, the emitter walks every emitted leaf string through

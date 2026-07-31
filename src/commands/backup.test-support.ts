@@ -6,7 +6,50 @@ import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import * as backupShared from "./backup-shared.js";
-import { resolveBackupPlanFromPaths } from "./backup-shared.js";
+import type { BackupAsset } from "./backup-shared.js";
+
+type BackupPlan = {
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+  workspaceDirs: string[];
+  included: BackupAsset[];
+  skipped: Array<{
+    kind: "state" | "config" | "credentials" | "workspace";
+    sourcePath: string;
+    displayPath: string;
+    reason: "covered" | "missing";
+    coveredBy?: string;
+  }>;
+};
+
+type ResolveBackupPlanFromPathsParams = {
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+  workspaceDirs?: string[];
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  configInsideState?: boolean;
+  oauthInsideState?: boolean;
+  nowMs?: number;
+};
+
+type BackupPlanTestApi = {
+  resolveBackupPlanFromPaths(params: ResolveBackupPlanFromPathsParams): Promise<BackupPlan>;
+};
+
+function getBackupPlanTestApi(): BackupPlanTestApi {
+  return (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.backupPlanTestApi")
+  ] as BackupPlanTestApi;
+}
+
+export async function resolveBackupPlanFromPaths(
+  params: ResolveBackupPlanFromPathsParams,
+): Promise<BackupPlan> {
+  return await getBackupPlanTestApi().resolveBackupPlanFromPaths(params);
+}
 
 const backupTestMocks = vi.hoisted(() => ({
   backupVerifyCommandMock: vi.fn(),

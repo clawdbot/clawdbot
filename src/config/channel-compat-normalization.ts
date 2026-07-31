@@ -29,6 +29,18 @@ export type NormalizeLegacyChannelAccountParams = {
   changes: string[];
 };
 
+export type NormalizeChannelConfigEntryParams = {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  accountId?: string;
+};
+
+export type RetiredChannelKeyRemoval = {
+  key: string;
+  pathPrefix: string;
+};
+
 /** Narrows unknown config JSON values to mutable object records. */
 export function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

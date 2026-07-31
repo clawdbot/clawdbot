@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileEntry } from "./session-manager.js";
 
-export type SessionFileParseWarning = {
+type SessionFileParseWarning = {
   code: "invalid-session-json" | "invalid-session-row";
   row: number;
 };

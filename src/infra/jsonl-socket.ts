@@ -111,9 +111,3 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
 export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Promise<T | null> {
   return await requestJsonlSocketWithMaxLineBytes(params, JSONL_SOCKET_MAX_LINE_BYTES);
 }
-
-export const testApi = {
-  JSONL_SOCKET_MAX_LINE_BYTES,
-  requestJsonlSocketWithMaxLineBytes,
-  resolveJsonlSocketTimeoutMs,
-};

@@ -3,23 +3,138 @@ import {
   readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
-  cleanupManagedOutgoingImageRecords,
-  createManagedOutgoingImageBlocks,
+  cleanupManagedOutgoingMediaRecords,
+  createManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
-import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
-const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
+const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
+const chatHistoryManagedMediaCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
+
+function collectReplyMediaEntries(payload: ReplyPayload) {
+  const attachmentByReference = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
+  for (const attachment of payload.attachments ?? []) {
+    const reference = (
+      attachment.path ??
+      attachment.url ??
+      attachment.mediaUrl ??
+      attachment.filePath
+    )?.trim();
+    if (reference && !attachmentByReference.has(reference)) {
+      attachmentByReference.set(reference, attachment);
+    }
+  }
+  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
+  return [
+    ...(payload.mediaUrls ?? []).map((url, index) => ({
+      url,
+      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
+    })),
+    ...(typeof payload.mediaUrl === "string"
+      ? [
+          {
+            url: payload.mediaUrl,
+            attachment:
+              attachmentByReference.get(payload.mediaUrl.trim()) ??
+              payload.attachments?.[mediaUrlCount],
+          },
+        ]
+      : []),
+  ];
+}
+
+function resolveAlignedReplyMedia(
+  payload: ReplyPayload,
+  metadataSource: ReplyPayload = payload,
+): {
+  mediaUrls: string[];
+  attachments?: NonNullable<ReplyPayload["attachments"]>;
+} {
+  const metadataByUrl = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
+  for (const entry of collectReplyMediaEntries(metadataSource)) {
+    const key = entry.url.trim();
+    if (key && entry.attachment && !metadataByUrl.has(key)) {
+      metadataByUrl.set(key, entry.attachment);
+    }
+  }
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<ReplyPayload["attachments"]> = [];
+  let hasMetadata = false;
+  for (const entry of collectReplyMediaEntries(payload)) {
+    const key = entry.url.trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    mediaUrls.push(entry.url);
+    const attachment = metadataByUrl.get(key) ?? entry.attachment ?? {};
+    attachments.push(attachment);
+    hasMetadata ||= Object.keys(attachment).length > 0;
+  }
+  return { mediaUrls, ...(hasMetadata ? { attachments } : {}) };
+}
+
+function splitReplyMediaByTrust(
+  media: ReturnType<typeof resolveAlignedReplyMedia>,
+  payloadTrusted: boolean,
+) {
+  // One payload per trust class is the authorization boundary. Class order follows
+  // first occurrence; interleaved entries are intentionally coalesced within their class.
+  const groups = new Map<
+    boolean,
+    {
+      mediaUrls: string[];
+      attachments: NonNullable<ReplyPayload["attachments"]>;
+      sourceIndexes: number[];
+    }
+  >();
+  for (const [index, url] of media.mediaUrls.entries()) {
+    const attachment = media.attachments?.[index] ?? {};
+    const trusted = attachment.trustedLocalMedia ?? payloadTrusted;
+    const group = groups.get(trusted) ?? { mediaUrls: [], attachments: [], sourceIndexes: [] };
+    group.mediaUrls.push(url);
+    group.attachments.push(attachment);
+    group.sourceIndexes.push(index);
+    groups.set(trusted, group);
+  }
+  return [...groups].map(([trustedLocalMedia, group]) =>
+    Object.assign(group, { trustedLocalMedia }),
+  );
+}
+
+/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
+export function combineNonStreamingReplyParts(parts: readonly string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    if (!combined) {
+      combined = part;
+      continue;
+    }
+    // Outbound media normalization trims a chunk's trailing newline, so an
+    // indented following chunk still needs its original single-line boundary.
+    const separator =
+      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+        ? ""
+        : /^[\t ]+\S/.test(part)
+          ? "\n"
+          : "\n\n";
+    combined += separator + part;
+  }
+  return combined.trim();
+}
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -60,14 +175,18 @@ async function buildPairingQrAssistantContentBlock(
   };
 }
 
-export function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
+export function sanitizeAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
   if (!value) {
     return undefined;
   }
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text.trim();
-  return stripped || undefined;
+  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text;
+  const visible = stripped.trim();
+  return visible ? (options?.preserveBoundaries ? stripped : visible) : undefined;
 }
 
 export function extractAssistantDisplayTextFromContent(
@@ -81,21 +200,21 @@ export function extractAssistantDisplayTextFromContent(
       if (block?.type !== "text" || typeof block.text !== "string") {
         return "";
       }
-      return block.text.trim();
+      return block.text;
     })
     .filter(Boolean);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
+  const text = combineNonStreamingReplyParts(parts);
+  return text || undefined;
 }
 
 export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
-  managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
+  managedMediaLocalRoots?: Parameters<typeof createManagedOutgoingMediaBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
   includeSensitiveDisplay?: boolean;
-  onLocalAudioAccessDenied?: (message: string) => void;
-  onManagedImagePrepareError?: (message: string) => void;
+  onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
@@ -104,17 +223,28 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       typeof payload.text === "string" &&
       payload.text.trim().length > 0,
   ).length;
-  const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
-  if (normalized.length === 0) {
+  const plan = createOutboundPayloadPlan(params.payloads);
+  if (plan.length === 0) {
     return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
   }
 
+  const preserveTextBoundaries =
+    plan.filter(({ payload }) => typeof payload.text === "string" && payload.text.trim()).length >
+    1;
   const content: AssistantDisplayContentBlock[] = [];
   let strippedTextPayloadCount = 0;
-  for (const payload of normalized) {
-    const text = sanitizeAssistantDisplayText(payload.text);
+  for (const entry of plan) {
+    const payload = entry.payload;
+    const text = sanitizeAssistantDisplayText(payload.text, {
+      preserveBoundaries: preserveTextBoundaries,
+    });
     if (text) {
-      content.push({ type: "text", text });
+      const previousBlock = content.at(-1);
+      if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
+        previousBlock.text = combineNonStreamingReplyParts([previousBlock.text, text]);
+      } else {
+        content.push({ type: "text", text });
+      }
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
@@ -131,35 +261,38 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
     }
-    const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
-      localRoots: Array.isArray(params.managedImageLocalRoots)
-        ? params.managedImageLocalRoots
-        : undefined,
-      onLocalAudioAccessDenied: (err) => {
-        params.onLocalAudioAccessDenied?.(formatForLog(err));
-      },
-    });
-    content.push(...audioBlocks);
-
-    const mediaUrls = Array.from(
-      new Set([
-        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-        ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-      ]),
-    );
-    const imageBlocks = await createManagedOutgoingImageBlocks({
-      sessionKey: params.sessionKey,
-      ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
-      mediaUrls,
-      localRoots: params.managedImageLocalRoots,
-      continueOnPrepareError: true,
-      onPrepareError: (error) => {
-        params.onManagedImagePrepareError?.(error.message);
-      },
-    });
-    if (imageBlocks.length > 0) {
-      content.push(...imageBlocks);
+    const media = resolveAlignedReplyMedia(payload, params.payloads[entry.sourceIndex] ?? payload);
+    const preparedMedia: Array<{ sourceIndex: number; blocks: AssistantDisplayContentBlock[] }> =
+      [];
+    for (const mediaGroup of splitReplyMediaByTrust(media, payload.trustedLocalMedia === true)) {
+      for (const [groupIndex, mediaUrl] of mediaGroup.mediaUrls.entries()) {
+        const mediaBlocks = await createManagedOutgoingMediaBlocks({
+          sessionKey: params.sessionKey,
+          ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+          mediaUrls: [mediaUrl],
+          attachments: [mediaGroup.attachments[groupIndex] ?? {}],
+          localRoots: params.managedMediaLocalRoots,
+          allowLocalNonImage: mediaGroup.trustedLocalMedia,
+          continueOnPrepareError: true,
+          onPrepareError: (error) => {
+            params.onManagedMediaPrepareError?.(error.message);
+          },
+        });
+        if (payload.audioAsVoice === true) {
+          for (const block of mediaBlocks) {
+            if (block.type === "audio") {
+              block.isVoiceNote = true;
+            }
+          }
+        }
+        preparedMedia.push({
+          sourceIndex: mediaGroup.sourceIndexes[groupIndex] ?? groupIndex,
+          blocks: mediaBlocks,
+        });
+      }
     }
+    preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
+    content.push(...preparedMedia.flatMap((preparedEntry) => preparedEntry.blocks));
   }
 
   if (content.length > 0) {
@@ -209,13 +342,13 @@ export function replaceAssistantContentTextBlocks(
   return merged;
 }
 
-function isManagedOutgoingImageUrl(value: unknown): boolean {
+function isManagedOutgoingMediaUrl(value: unknown): boolean {
   if (typeof value !== "string" || !value.trim()) {
     return false;
   }
   try {
     const parsed = new URL(value, "http://localhost");
-    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_MEDIA_PATH_PREFIX);
   } catch {
     return false;
   }
@@ -228,10 +361,10 @@ export function stripManagedOutgoingAssistantContentBlocks(
     return undefined;
   }
   const filtered = content.filter((block) => {
-    if (block?.type !== "image") {
+    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
       return true;
     }
-    return !(isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl));
+    return !(isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl));
   });
   return filtered.length > 0 ? filtered : undefined;
 }
@@ -242,11 +375,11 @@ export function extractAssistantDisplayText(
   if (!content || content.length === 0) {
     return undefined;
   }
-  const text = content
-    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
+  const text = combineNonStreamingReplyParts(
+    content.map((block) =>
+      block?.type === "text" && typeof block.text === "string" ? block.text : "",
+    ),
+  );
   return text || undefined;
 }
 
@@ -284,13 +417,13 @@ export function hasManagedOutgoingAssistantContent(
   return Boolean(
     content?.some(
       (block) =>
-        block?.type === "image" &&
-        (isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl)),
+        (block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+        (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
     ),
   );
 }
 
-export function scheduleChatHistoryManagedImageCleanup(params: {
+export function scheduleChatHistoryManagedMediaCleanup(params: {
   sessionKey: string;
   agentId?: string;
   context: Pick<GatewayRequestContext, "logGateway">;
@@ -299,23 +432,23 @@ export function scheduleChatHistoryManagedImageCleanup(params: {
     params.sessionKey === "global" && params.agentId
       ? `agent:${params.agentId}:global`
       : params.sessionKey;
-  if (chatHistoryManagedImageCleanupState.has(cleanupKey)) {
+  if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
     return;
   }
-  const pending = cleanupManagedOutgoingImageRecords({
+  const pending = cleanupManagedOutgoingMediaRecords({
     sessionKey: params.sessionKey,
     ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
   })
     .then(() => undefined)
     .catch((error: unknown) => {
       params.context.logGateway.debug(
-        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
+        `chat.history managed media cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
       );
     })
     .finally(() => {
-      if (chatHistoryManagedImageCleanupState.get(cleanupKey) === pending) {
-        chatHistoryManagedImageCleanupState.delete(cleanupKey);
+      if (chatHistoryManagedMediaCleanupState.get(cleanupKey) === pending) {
+        chatHistoryManagedMediaCleanupState.delete(cleanupKey);
       }
     });
-  chatHistoryManagedImageCleanupState.set(cleanupKey, pending);
+  chatHistoryManagedMediaCleanupState.set(cleanupKey, pending);
 }

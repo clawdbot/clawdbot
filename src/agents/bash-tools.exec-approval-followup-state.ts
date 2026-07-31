@@ -183,8 +183,3 @@ export function isExecApprovalFollowupSessionRebound(params: {
   const resolved = normalizeOptionalString(params.resolvedSessionId);
   return Boolean(expected && resolved && expected !== resolved);
 }
-
-/** Clear exec approval follow-up handoffs between tests. */
-export function resetExecApprovalFollowupRuntimeHandoffsForTests(): void {
-  execApprovalFollowupRuntimeHandoffs.clear();
-}

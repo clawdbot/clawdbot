@@ -2,8 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
+import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -28,6 +30,124 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("inherits the active tool filesystem boundary for workspace metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const restrictedContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true },
+    } as const;
+    const restricted = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: restrictedContext }),
+        restrictedContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+
+    await expect(
+      restricted.get("workboard_create")?.execute("outside", {
+        title: "Outside",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).rejects.toThrow(/outside the caller/);
+    await expect(
+      restricted.get("workboard_create")?.execute("inside", {
+        title: "Inside",
+        workspace: { kind: "worktree", path: "/workspace/repo" },
+        workspaceAccess: { unrestricted: true },
+      }),
+    ).resolves.toBeDefined();
+
+    const unrestrictedContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: false },
+    } as const;
+    const unrestricted = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: unrestrictedContext }),
+        unrestrictedContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      unrestricted.get("workboard_create")?.execute("unrestricted", {
+        title: "Unrestricted",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).resolves.toBeDefined();
+
+    expect((await store.list()).find((card) => card.title === "Inside")).toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
+    expect((await store.list()).find((card) => card.title === "Unrestricted")).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+
+    const sandboxContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: false },
+      sandboxed: true,
+    } as const;
+    const sandboxed = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: sandboxContext }),
+        sandboxContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      sandboxed.get("workboard_create")?.execute("sandbox-outside", {
+        title: "Sandbox outside",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).rejects.toThrow(/outside the caller/);
+  });
+
+  it("preserves read-only sandbox authority while allowing manual card movement", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const context: NonNullable<Parameters<typeof guardWorkboardToolsForWorkspaceAccess>[1]> = {
+      agentId: "main",
+      sessionKey: "agent:main:subagent:readonly",
+      workspaceDir: "/workspace",
+      sandboxed: true,
+      config: {
+        agents: {
+          defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+          list: [{ id: "main", default: true, workspace: "/workspace" }],
+        },
+      },
+    };
+    const tools = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context }),
+        context,
+      ).map((tool) => [tool.name, tool]),
+    );
+
+    const created = readPayload(
+      await tools.get("workboard_create")?.execute("create-readonly", {
+        title: "Read-only card",
+      }),
+    ).card as { id: string };
+    await expect(
+      tools.get("workboard_promote")?.execute("move-readonly", { id: created.id, force: true }),
+    ).resolves.toBeDefined();
+    await expect(store.get(created.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
+        },
+      },
+    });
+  });
+
   it("lists, claims, heartbeats, and reads worker context", async () => {
     const keyed = createMemoryStore();
     const api = {
@@ -191,6 +311,13 @@ describe("workboard tools", () => {
     ).rejects.toThrow(/claimed by main/);
     expect(await store.list()).toHaveLength(1);
 
+    await expect(
+      otherTools.get("workboard_create")?.execute("call-2b", {
+        title: "Wrong token child",
+        parents: [parent.id],
+        token: "test-token-placeholder",
+      }),
+    ).rejects.toThrow(/claimed by main/);
     await otherTools.get("workboard_create")?.execute("call-2", {
       title: "Scoped child",
       parents: [parent.id],
@@ -282,16 +409,28 @@ describe("workboard tools", () => {
       await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
     );
     const token = claimed.token as string;
+    const pendingProof = readPayload(
+      await tools.get("workboard_proof")?.execute("call-proof", {
+        id: parent.id,
+        token,
+        command: "pnpm test extensions/workboard",
+      }),
+    );
+    expect(pendingProof.proofId).toEqual(expect.any(String));
     const completed = readPayload(
       await tools.get("workboard_complete")?.execute("call-4", {
         id: parent.id,
         token,
         summary: "Done.",
         createdCardIds: [child.id],
+        proofId: pendingProof.proofId,
         proof: { status: "passed", command: "pnpm test extensions/workboard" },
       }),
     );
-    expect(completed.card).toMatchObject({ status: "done" });
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
+    });
 
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
@@ -463,5 +602,42 @@ describe("workboard tools", () => {
       }),
     );
     expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
+  });
+
+  it("moves cards with agent claim scope", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "agent-b" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Move tool card", status: "todo" });
+
+    const unclaimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-unclaimed", {
+        id: card.id,
+        status: "ready",
+      }),
+    );
+    expect(unclaimed.card).toMatchObject({ status: "ready" });
+
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+    await expect(
+      tools.get("workboard_move")?.execute("move-denied", {
+        id: card.id,
+        status: "review",
+      }),
+    ).rejects.toThrow("card is claimed by agent-a");
+
+    const claimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-claimed", {
+        id: card.id,
+        status: "review",
+        token: "test-auth-token",
+      }),
+    );
+    expect(claimed.card).toMatchObject({ status: "review" });
   });
 });

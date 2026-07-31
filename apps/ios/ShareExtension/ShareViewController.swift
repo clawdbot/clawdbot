@@ -22,6 +22,7 @@ final class ShareViewController: UIViewController {
     private struct ExtractedShareContent {
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
+        var attachmentSummary: ShareAttachmentSummary
         var attachmentError: ShareImageProcessor.ProcessError?
     }
 
@@ -30,7 +31,8 @@ final class ShareViewController: UIViewController {
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
-    private var attachmentError: ShareImageProcessor.ProcessError?
+    /// Keep omission state controller-owned so send cannot bypass the disabled UI.
+    private var attachmentBlockReason: ShareAttachmentBlockReason?
 
     override func loadView() {
         self.view = self.composeView
@@ -60,7 +62,9 @@ final class ShareViewController: UIViewController {
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
-        self.attachmentError = extracted.attachmentError
+        self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
+            hasImageProcessingError: extracted.attachmentError != nil,
+            summary: extracted.attachmentSummary)
         self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
@@ -70,9 +74,8 @@ final class ShareViewController: UIViewController {
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
-        if let attachmentError = extracted.attachmentError {
-            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
         } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
@@ -88,8 +91,8 @@ final class ShareViewController: UIViewController {
     }
 
     private func sendCurrentDraft() async {
-        if let attachmentError = self.attachmentError {
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
             return
         }
         let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -282,60 +285,34 @@ final class ShareViewController: UIViewController {
             return ExtractedShareContent(
                 payload: SharedContentPayload(title: nil, url: nil, text: nil),
                 attachments: [],
+                attachmentSummary: ShareAttachmentSummary(),
                 attachmentError: nil)
         }
 
-        var title: String?
-        var sharedURL: URL?
-        var sharedText: String?
-        var attributedContentText: String?
+        let providerContent = await ShareContentExtractor.extract(from: items)
         var attachments: [LoadedAttachment] = []
+        var attachmentSummary = providerContent.attachmentSummary
         var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
 
-        for item in items {
-            if title == nil {
-                title = item.attributedTitle?.string
-            }
-            if attributedContentText == nil {
-                attributedContentText = item.attributedContentText?.string
-            }
-
-            for provider in item.attachments ?? [] {
-                if sharedURL == nil {
-                    sharedURL = await self.loadURL(from: provider)
-                }
-
-                if sharedText == nil {
-                    sharedText = await self.loadText(from: provider)
-                }
-
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                    if attachments.count < maxImageAttachments, attachmentError == nil {
-                        do {
-                            let attachment = try await self.loadImageAttachment(
-                                from: provider,
-                                index: attachments.count)
-                            attachments.append(attachment)
-                        } catch let error as ShareImageProcessor.ProcessError {
-                            attachmentError = error
-                        } catch {
-                            attachmentError = .encodeFailed
-                        }
-                    }
-                }
+        for provider in providerContent.imageProviders.prefix(maxImageAttachments) {
+            guard attachmentError == nil else { break }
+            do {
+                let attachment = try await self.loadImageAttachment(
+                    from: provider,
+                    index: attachments.count)
+                attachments.append(attachment)
+            } catch let error as ShareImageProcessor.ProcessError {
+                attachmentError = error
+            } catch {
+                attachmentError = .encodeFailed
             }
         }
-
-        // Share hosts often mirror provider text in attributedContentText.
-        // Preserve distinct content as the historical title, but do not duplicate provider data.
-        let supplementalTitle = SharePayloadNormalizer.distinctAttributedText(
-            attributedContentText,
-            sharedText: sharedText,
-            sharedURL: sharedURL)
+        attachmentSummary.acceptedImageCount = attachments.count
         return ExtractedShareContent(
-            payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
+            payload: providerContent.payload,
             attachments: attachments,
+            attachmentSummary: attachmentSummary,
             attachmentError: attachmentError)
     }
 
@@ -361,10 +338,21 @@ final class ShareViewController: UIViewController {
             preview: self.boundedPreview(from: image))
     }
 
-    private func imageProcessingErrorMessage(_: ShareImageProcessor.ProcessError) -> String {
+    private func imageProcessingErrorMessage() -> String {
         NSLocalizedString(
             "The shared image could not be prepared.",
             comment: "Share extension image processing failure")
+    }
+
+    private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
+        switch blockReason {
+        case .imageProcessingFailed:
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+        case let .omitted(message):
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
+            self.composeView.apply(.blocked(message))
+        }
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so
@@ -395,83 +383,6 @@ final class ShareViewController: UIViewController {
             }
         }
         return nil
-    }
-
-    private func loadURL(from provider: NSItemProvider) async -> URL? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-            if let url = await self.loadURLValue(
-                from: provider,
-                typeIdentifier: UTType.url.identifier)
-            {
-                return url
-            }
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-            if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier),
-               let url = SharePayloadNormalizer.webURL(from: text)
-            {
-                return url
-            }
-        }
-
-        return nil
-    }
-
-    private func loadText(from provider: NSItemProvider) async -> String? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-            if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.plainText.identifier) {
-                return text
-            }
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-            if let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier) {
-                return url.absoluteString
-            }
-        }
-
-        return nil
-    }
-
-    private func loadURLValue(from provider: NSItemProvider, typeIdentifier: String) async -> URL? {
-        await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let url = item as? URL {
-                    continuation.resume(returning: url)
-                    return
-                }
-                if let str = item as? String, let url = URL(string: str) {
-                    continuation.resume(returning: url)
-                    return
-                }
-                if let ns = item as? NSString, let url = URL(string: ns as String) {
-                    continuation.resume(returning: url)
-                    return
-                }
-                continuation.resume(returning: nil)
-            }
-        }
-    }
-
-    private func loadTextValue(from provider: NSItemProvider, typeIdentifier: String) async -> String? {
-        await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let text = item as? String {
-                    continuation.resume(returning: text)
-                    return
-                }
-                if let text = item as? NSString {
-                    continuation.resume(returning: text as String)
-                    return
-                }
-                if let text = item as? NSAttributedString {
-                    continuation.resume(returning: text.string)
-                    return
-                }
-                continuation.resume(returning: nil)
-            }
-        }
     }
 
     private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {

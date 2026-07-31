@@ -8,6 +8,7 @@ import {
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 type WorkerEnvironmentStore = ReturnType<
@@ -24,6 +25,8 @@ export type GatewayWorkerEnvironmentStartupState = {
   listDurableProviderIds: () => string[];
   records: WorkerEnvironmentRecord[];
   store: WorkerEnvironmentStore;
+  placementStore: WorkerSessionPlacementStore;
+  hasNonlocalPlacementRecords: boolean;
 };
 
 export type GatewayWorkerEnvironmentRuntime = {
@@ -39,8 +42,13 @@ const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
 );
 
 export async function loadGatewayWorkerEnvironmentStartupState(): Promise<GatewayWorkerEnvironmentStartupState> {
-  const { createWorkerEnvironmentStore } = await import("./worker-environments/store.js");
+  const [{ createWorkerEnvironmentStore }, { createWorkerSessionPlacementStore }] =
+    await Promise.all([
+      import("./worker-environments/store.js"),
+      import("./worker-environments/placement-store.js"),
+    ]);
   const store = createWorkerEnvironmentStore();
+  const placementStore = createWorkerSessionPlacementStore();
   const records = store.list();
   const durableProviderIds = uniqueStrings(
     records.flatMap((record) =>
@@ -51,7 +59,15 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
   );
   const listDurableProviderIds = () =>
     uniqueStrings(store.listForReconcile().map((record) => record.providerId));
-  return { durableProviderIds, listDurableProviderIds, records, store };
+  return {
+    durableProviderIds,
+    listDurableProviderIds,
+    records,
+    store,
+    placementStore,
+    // Non-local placements must revive the worker service even without configured profiles.
+    hasNonlocalPlacementRecords: placementStore.listForReconcile().length > 0,
+  };
 }
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
@@ -63,16 +79,21 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const [
     { createWorkerEnvironmentService },
     { createWorkerLiveEventReceiver },
+    { createWorkerSessionPlacementGate },
     { createWorkerTranscriptCommitter },
     { createWorkerTunnelManager },
     { resolveWorkerProvider },
   ] = await Promise.all([
     import("./worker-environments/service.js"),
     import("./worker-environments/live-events.js"),
+    import("./worker-environments/placement-worker-gate.js"),
     import("./worker-environments/transcript-commit.js"),
     import("./worker-environments/tunnel.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);
+  // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
+  params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
+  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
   const prepareInstallation = async (install: "bundle" | "npm") => {
@@ -128,6 +149,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
       return await workerInferenceRuntime.executeWorkerInference(inferenceParams);
     },
+    placementStore: placementGate,
     liveEvents: workerLiveEvents,
     resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();

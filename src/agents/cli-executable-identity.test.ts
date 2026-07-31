@@ -52,6 +52,7 @@ describe("CLI executable implementation identity", () => {
     });
 
     expect(first?.runtimeArtifact.kind).toBe("package-tree");
+    expect(first?.runtimeArtifact).toMatchObject({ packageVersion: "1.0.0" });
     expect(second?.runtimeArtifact.kind).toBe("package-tree");
     expect(second?.runtimeArtifact).not.toEqual(first?.runtimeArtifact);
     expect(second?.files.find((file) => file.path === fixture.entrypoint)).toEqual(
@@ -147,12 +148,12 @@ describe("CLI executable implementation identity", () => {
     expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
 
     if (process.platform !== "win32") {
-      const mixedCaseExecutable = path.join(root, "CLAUDE");
-      fs.copyFileSync(process.execPath, mixedCaseExecutable);
-      fs.chmodSync(mixedCaseExecutable, 0o755);
+      const unlistedExecutable = path.join(root, "other-cli");
+      fs.copyFileSync(process.execPath, unlistedExecutable);
+      fs.chmodSync(unlistedExecutable, 0o755);
       await expect(
         resolveCliExecutableIdentity({
-          command: mixedCaseExecutable,
+          command: unlistedExecutable,
           runtimeArtifact: {
             ...commandPackagePolicy,
             nativeExecutableNames: ["claude"],

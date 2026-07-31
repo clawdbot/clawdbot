@@ -342,6 +342,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.progress":
       assignReasonCode(record, event.reason);
       break;
+    case "run.execution_phase":
+      record.phase = event.phase;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.toolName = event.tool;
+      break;
     case "context.assembled":
       record.channel = event.channel;
       record.provider = event.provider;
@@ -789,3 +795,4 @@ export function resetDiagnosticStabilityRecorderForTest(): void {
   };
   globalStore["__openclawDiagnosticStabilityState"] = next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

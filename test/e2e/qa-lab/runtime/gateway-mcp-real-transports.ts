@@ -85,11 +85,6 @@ const SCENARIOS = {
   "gateway-smoke": {
     title: "Gateway smoke evidence",
     sourcePath: "qa/scenarios/runtime/gateway-smoke.yaml",
-    primaryCoverageIds: [
-      "gateway.websocket-transport",
-      "gateway.health-apis",
-      "gateway.hello-ok-snapshot",
-    ],
     docsRefs: ["docs/gateway/index.md", "docs/concepts/qa-e2e-automation.md"],
     codeRefs: [
       SOURCE_PATH,
@@ -100,18 +95,12 @@ const SCENARIOS = {
   "mcp-gateway-connect-startup-retry": {
     title: "MCP Gateway connect startup retry",
     sourcePath: "qa/scenarios/runtime/mcp-gateway-connect-startup-retry.yaml",
-    primaryCoverageIds: [
-      "gateway.connect-request",
-      "gateway.protocol-version-negotiation",
-      "gateway.startup-retry",
-    ],
     docsRefs: ["docs/gateway/protocol.md", "docs/cli/mcp.md"],
     codeRefs: [SOURCE_PATH, "extensions/qa-lab/src/gateway-child.ts", "src/mcp/channel-bridge.ts"],
   },
   "mcp-plugin-tools-call": {
     title: "MCP plugin-tools call",
     sourcePath: "qa/scenarios/plugins/mcp-plugin-tools-call.yaml",
-    primaryCoverageIds: ["plugins.mcp-tools", "tools.invocation"],
     docsRefs: ["docs/cli/mcp.md", "docs/gateway/protocol.md"],
     codeRefs: [SOURCE_PATH, "src/mcp/plugin-tools-serve.ts", "src/mcp/plugin-tools-handlers.ts"],
   },
@@ -798,7 +787,6 @@ async function runGatewayMcpRealTransportProducer(
       id: options.scenarioId,
       title: scenario.title,
       sourcePath: scenario.sourcePath,
-      primaryCoverageIds: scenario.primaryCoverageIds,
       docsRefs: scenario.docsRefs,
       codeRefs: scenario.codeRefs,
     },

@@ -1,6 +1,10 @@
 // Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
-import type { TelegramDraftMessageSnapshot, TelegramDraftPreview } from "./draft-stream.js";
+import type { TelegramDraftPreview, TelegramDraftStream } from "./draft-stream.js";
+
+type TelegramDraftMessageSnapshot = NonNullable<
+  ReturnType<NonNullable<TelegramDraftStream["currentMessageSnapshot"]>>
+>;
 
 type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;

@@ -68,6 +68,10 @@ describe("openrouter speech provider", () => {
     vi.unstubAllEnvs();
   });
 
+  it("advertises the documented ElevenLabs route", () => {
+    expect(buildOpenRouterSpeechProvider().models).toContain("elevenlabs/eleven-turbo-v2");
+  });
+
   it("normalizes provider-owned speech config", () => {
     const provider = buildOpenRouterSpeechProvider();
     const resolved = provider.resolveConfig?.({

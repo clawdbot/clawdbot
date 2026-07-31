@@ -10,7 +10,7 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, resolveRetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
@@ -66,51 +66,55 @@ export async function withRetry<T>(
   // A persistent loop owns its terminal failure. Mark that Error so the outer
   // bounded runner does not accidentally restart the completed deadline loop.
   const persistentFailures = new WeakSet<Error>();
-  return await retryAsync(
-    async () => {
-      try {
-        return await fn();
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
-        if (!persistentPolicy?.shouldPersistRetry(error)) {
-          throw error;
-        }
-        (logger?.warn ?? logger?.error)?.(
-          `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
-        );
-        try {
-          return await persistentRetryLoop(fn, persistentPolicy, logger);
-        } catch (persistentError) {
-          const terminal =
-            persistentError instanceof Error
-              ? persistentError
-              : new Error(formatErrorMessage(persistentError));
-          persistentFailures.add(terminal);
-          throw terminal;
-        }
-      }
-    },
-    {
-      attempts: policy.maxRetries + 1,
-      minDelayMs: 0,
-      maxDelayMs: 2_147_000_000,
-      delayMs: ({ attempt }) =>
-        policy.backoff === "exponential"
-          ? policy.baseDelayMs * 2 ** (attempt - 1)
-          : policy.baseDelayMs,
-      shouldRetry: (err, attempt) => {
-        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
-        return !persistentFailures.has(error) && policy.shouldRetry?.(error, attempt - 1) !== false;
-      },
-      onRetry: ({ attempt, delayMs, err }) => {
-        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+  const retryConfig = resolveRetryConfig(undefined, {
+    attempts: policy.maxRetries + 1,
+    minDelayMs: policy.baseDelayMs,
+    maxDelayMs: policy.backoff === "fixed" ? policy.baseDelayMs : 2_147_000_000,
+    jitter: 0,
+  });
+  const runWithRetry = createChannelApiRetryRunner({
+    retry: retryConfig,
+    strictShouldRetry: true,
+    retryAfterMs: () => undefined,
+    shouldRetry: (err, attempt) => {
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      const shouldRetry =
+        !persistentFailures.has(error) && policy.shouldRetry?.(error, attempt - 1) !== false;
+      if (shouldRetry) {
+        const delayMs =
+          policy.backoff === "fixed"
+            ? retryConfig.minDelayMs
+            : Math.min(retryConfig.minDelayMs * 2 ** (attempt - 1), retryConfig.maxDelayMs);
         logger?.debug?.(
           `[qqbot:retry] Attempt ${attempt} failed, retrying in ${delayMs}ms: ${truncateUtf16Safe(error.message, 100)}`,
         );
-      },
-      sleep,
+      }
+      return shouldRetry;
     },
-  );
+  });
+  return await runWithRetry(async () => {
+    try {
+      return await fn();
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      if (!persistentPolicy?.shouldPersistRetry(error)) {
+        throw error;
+      }
+      (logger?.warn ?? logger?.error)?.(
+        `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
+      );
+      try {
+        return await persistentRetryLoop(fn, persistentPolicy, logger);
+      } catch (persistentError) {
+        const terminal =
+          persistentError instanceof Error
+            ? persistentError
+            : new Error(formatErrorMessage(persistentError));
+        persistentFailures.add(terminal);
+        throw terminal;
+      }
+    }
+  });
 }
 
 /**

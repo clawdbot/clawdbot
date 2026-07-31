@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findBundledPluginSource,
   findBundledPluginSourceInMap,
+  getProcessBundledPluginSources,
   resolveBundledPluginSources,
 } from "./bundled-sources.js";
 
@@ -149,6 +150,16 @@ describe("bundled plugin sources", () => {
     loadPluginManifestMock.mockReset();
   });
 
+  it("reuses one process-stable bundled source snapshot", () => {
+    setBundledLookupFixture();
+
+    const first = getProcessBundledPluginSources();
+    const second = getProcessBundledPluginSources();
+
+    expect(second).toBe(first);
+    expect(discoverOpenClawPluginsMock).toHaveBeenCalledOnce();
+  });
+
   it("resolves bundled sources keyed by plugin id", () => {
     setBundledDiscoveryCandidates([
       createBundledCandidate({
@@ -199,6 +210,11 @@ describe("bundled plugin sources", () => {
     [
       "finds bundled source by plugin id",
       { kind: "pluginId", value: "diffs" } as const,
+      { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
+    ],
+    [
+      "finds bundled source by local path",
+      { kind: "localPath", value: appBundledPluginRoot("diffs") } as const,
       { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
     ],
     [

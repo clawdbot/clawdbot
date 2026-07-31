@@ -204,11 +204,6 @@ export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): s
   ]);
 }
 
-/** @deprecated Use `channelRouteDedupeKey`. */
-export function channelRouteIdentityKey(input?: ChannelRouteTargetInput | null): string {
-  return channelRouteDedupeKey(input);
-}
-
 function threadIdsEqual(left?: string | number, right?: string | number): boolean {
   const normalizedLeft = stringifyRouteThreadId(left);
   const normalizedRight = stringifyRouteThreadId(right);
@@ -322,9 +317,4 @@ export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): str
     normalized.accountId ?? "",
     stringifyRouteThreadId(normalized.thread?.id) ?? "",
   ].join("|");
-}
-
-/** @deprecated Use `channelRouteCompactKey`. */
-export function channelRouteKey(route?: ChannelRouteRef): string | undefined {
-  return channelRouteCompactKey(route);
 }

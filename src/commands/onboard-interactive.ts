@@ -27,7 +27,7 @@ export async function runInteractiveSetup(
 }
 
 /**
- * Opens the Crestodian onboarding conversation used by the guided escape hatch.
+ * Opens the OpenClaw onboarding conversation used by the guided escape hatch.
  * The first-run greeting proposes a setup plan and keeps subsequent setup and
  * agent handoff in the same conversation.
  */
@@ -42,15 +42,15 @@ export async function runConversationalOnboarding(
     runtime.exit(1);
     return;
   }
-  const { verifySetupInference } = await import("../crestodian/setup-inference.js");
+  const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const inference = await verifySetupInference({ runtime, bindSession: true });
   if (!inference.ok) {
-    runtime.error(`Crestodian requires working inference: ${inference.error}`);
+    runtime.error(`OpenClaw requires working inference: ${inference.error}`);
     runtime.exit(1);
     return;
   }
-  const { runCrestodian } = await import("../crestodian/crestodian.js");
-  await runCrestodian(
+  const { runSystemAgent } = await import("../system-agent/system-agent.js");
+  await runSystemAgent(
     {
       welcomeVariant: "onboarding",
       ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),

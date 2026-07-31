@@ -85,6 +85,44 @@ describe("subscribeEmbeddedAgentSession", () => {
     await waitPromise;
     expect(resolved).toBe(true);
   });
+
+  it("clears the exact usage snapshot when compaction starts a new attempt", () => {
+    const listeners: SessionEventHandler[] = [];
+    const session = {
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
+    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-usage-reset" });
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "before compaction" }],
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 300,
+        cacheWrite: 0,
+        totalTokens: 420,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } as AssistantMessage;
+
+    for (const listener of listeners) {
+      listener({ type: "message_end", message: assistantMessage });
+    }
+    expect(subscription.getLastAssistantUsage()).toMatchObject({
+      input: 100,
+      output: 20,
+      cacheRead: 300,
+      total: 420,
+    });
+
+    for (const listener of listeners) {
+      listener({ type: "compaction_end", willRetry: true });
+    }
+    expect(subscription.getLastAssistantUsage()).toBeUndefined();
+  });
   it("resolves after compaction ends without retry", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {

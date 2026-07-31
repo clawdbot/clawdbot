@@ -1,4 +1,7 @@
 // Mattermost tests cover monitor.authz plugin behavior.
+import "./monitor-helpers.test-support.js";
+import "./monitor-onchar.test-support.js";
+import "./monitor.channel-kind.test-support.js";
 import { describe, expect, it } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
@@ -26,11 +29,7 @@ function authorizeGroupCommand(senderId: string) {
         allowFrom: ["trusted-user"],
       },
     },
-    cfg: {
-      commands: {
-        useAccessGroups: true,
-      },
-    },
+    cfg: {},
     senderId,
     senderName: senderId,
     channelId: "chan-1",
@@ -123,11 +122,7 @@ describe("mattermost monitor authz", () => {
           dmPolicy: "open",
         },
       },
-      cfg: {
-        commands: {
-          useAccessGroups: true,
-        },
-      },
+      cfg: {},
       senderId: "alice",
       senderName: "Alice",
       channelId: "dm-1",
@@ -234,9 +229,6 @@ describe("mattermost monitor authz", () => {
         },
       },
       cfg: {
-        commands: {
-          useAccessGroups: true,
-        },
         accessGroups: {
           oncall: {
             type: "message.senders",

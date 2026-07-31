@@ -11,10 +11,10 @@ import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -284,15 +284,6 @@ export function buildStatusHealthRows(params: {
       Item: "Event loop",
       Status: params.health.eventLoop.degraded ? params.warn("WARN") : params.ok("OK"),
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
-    });
-  }
-  if (params.health.modelPricing?.state === "degraded") {
-    rows.push({
-      Item: "Model pricing",
-      Status: params.warn("WARN"),
-      Detail: `optional pricing refresh degraded${
-        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
-      }`,
     });
   }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {

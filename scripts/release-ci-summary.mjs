@@ -5,7 +5,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -22,6 +22,10 @@ const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
 const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
+// Release evidence lookups run during full release validation, so keep enough
+// headroom for GitHub latency while preventing one stalled read from consuming
+// the workflow budget.
+const GH_COMMAND_TIMEOUT_MS = 60_000;
 
 const CHILD_DISPATCHES = [
   {
@@ -89,65 +93,49 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["performance", ["productPerformance"]],
 ]);
 
-function gh(args) {
-  return execFileSync(resolvePlainGhBin(), args, {
+export function runReleaseCiGh(args, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
+  const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
+  return execFileSyncImpl(resolvePlainGhBin(), args, {
     encoding: "utf8",
     env: plainGhEnv(),
+    killSignal: "SIGKILL",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio,
+    timeout: timeoutMs,
   });
+}
+
+function gh(args) {
+  return runReleaseCiGh(args);
 }
 
 function jsonGh(args) {
   return JSON.parse(gh(args));
 }
 
+export function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
+  return ["api", `repos/${repository}/${pathSuffix}`];
+}
+
 function githubRestJson(pathSuffix, repository = DEFAULT_REPO) {
-  const result = execFileSync(
-    "bash",
-    [
-      "-lc",
-      [
-        "set -euo pipefail",
-        'token="$("$OPENCLAW_PLAIN_GH_BIN" auth token)"',
-        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
-      ].join("\n"),
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...plainGhEnv(),
-        OPENCLAW_PLAIN_GH_BIN: resolvePlainGhBin(),
-        OPENCLAW_GITHUB_REST_URL: `https://api.github.com/repos/${repository}/${pathSuffix}`,
-      },
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  return JSON.parse(result);
+  return jsonGh(githubRestArgs(pathSuffix, repository));
+}
+
+export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
+  return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
-  execFileSync(
-    "bash",
-    [
-      "-lc",
-      [
-        "set -euo pipefail",
-        'token="$("$OPENCLAW_PLAIN_GH_BIN" auth token)"',
-        'curl -fsSL -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" --output "$OPENCLAW_GITHUB_ARTIFACT_DESTINATION" "$OPENCLAW_GITHUB_ARTIFACT_URL"',
-      ].join("\n"),
-    ],
-    {
-      env: {
-        ...plainGhEnv(),
-        OPENCLAW_GITHUB_ARTIFACT_DESTINATION: destination,
-        OPENCLAW_GITHUB_ARTIFACT_URL: `https://api.github.com/repos/${repository}/actions/artifacts/${artifactId}/zip`,
-        OPENCLAW_PLAIN_GH_BIN: resolvePlainGhBin(),
-      },
-      stdio: ["ignore", "ignore", "pipe"],
-    },
-  );
+  const output = openSync(destination, "w");
+  try {
+    runReleaseCiGh(artifactDownloadArgs(artifactId, repository), {
+      stdio: ["ignore", output, "pipe"],
+    });
+  } finally {
+    closeSync(output);
+  }
 }
 
 function rate() {
@@ -1210,6 +1198,10 @@ export function resolveVerifierIdentity(
         "git",
         ["-C", repositoryRoot, "show", `${normalizedSourceSha}:${RELEASE_EVIDENCE_SCRIPT}`],
         {
+          // Evidence verification must stay local-deterministic: in a partial
+          // clone a missing blob would otherwise trigger a promisor network
+          // fetch (hang/minutes) inside this security check.
+          env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
           maxBuffer: 16 * 1024 * 1024,
           stdio: ["ignore", "pipe", "pipe"],
         },

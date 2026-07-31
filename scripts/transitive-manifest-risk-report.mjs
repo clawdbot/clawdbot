@@ -48,7 +48,7 @@ function isAllowedPinnedSpec(spec) {
 }
 
 function encodePackageName(name) {
-  return name.startsWith("@") ? name.replace("/", "%2f") : name;
+  return encodeURIComponent(name).replace(/^%40/u, "@");
 }
 
 function resolveRegistryBaseUrl() {

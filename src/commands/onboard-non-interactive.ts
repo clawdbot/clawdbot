@@ -4,8 +4,9 @@
  * This module validates the existing config snapshot, routes local/remote
  * setup, and handles explicit migration imports without interactive prompts.
  */
+import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import { replaceConfigFile } from "../config/config.js";
+import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,7 +22,6 @@ async function runNonInteractiveMigrationImport(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
-  baseHash?: string;
 }) {
   const providerId = params.opts.importFrom?.trim();
   if (!providerId) {
@@ -39,7 +39,7 @@ async function runNonInteractiveMigrationImport(params: {
     config: params.baseConfig,
     runtime: params.runtime,
   });
-  await runSetupMigrationImport({
+  const outcome = await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
     detections,
@@ -49,16 +49,35 @@ async function runNonInteractiveMigrationImport(params: {
         `Non-interactive migration import needs explicit flags before prompting: ${message}`,
     ),
     runtime: params.runtime,
-    async commitConfigFile(config) {
-      await replaceConfigFile({
+    async readConfigFile() {
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+      }
+      return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
+    },
+    async commitConfigFile(config, expectedConfig) {
+      const latest = await readConfigFileSnapshot();
+      if (!latest.valid) {
+        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+      }
+      const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+      if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+        throw new ConfigMutationConflictError("config changed during migration promotion", {
+          currentHash: latest.hash ?? null,
+        });
+      }
+      const committed = await replaceConfigFile({
         nextConfig: config,
-        ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+        snapshot: latest,
+        ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
         writeOptions: { allowConfigSizeDrop: true },
       });
       logConfigUpdated(params.runtime);
-      return config;
+      return committed.nextConfig;
     },
   });
+  await outcome.acknowledgePromotion?.();
 }
 
 /** Runs non-interactive onboarding in local, remote, or migration-import mode. */
@@ -94,7 +113,7 @@ export async function runNonInteractiveSetup(
   if (opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import") {
     // Import flow owns its own commit path because migrations may intentionally
     // shrink legacy config after extracting credentials.
-    await runNonInteractiveMigrationImport({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+    await runNonInteractiveMigrationImport({ opts, runtime, baseConfig });
     return;
   }
 

@@ -1,20 +1,21 @@
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  completeDeferredSessionMcpRuntimeRetirement,
-  peekSessionMcpRuntime,
-} from "../../agents/agent-bundle-mcp-runtime.js";
-import type { McpCatalogTool, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
-import {
-  acquireMcpAppViewRequest,
-  getMcpAppViewLease,
-  type McpAppViewLease,
-} from "../../agents/mcp-ui-resource.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
-import { restoreMcpAppView } from "../mcp-app-reconstruction.js";
+import {
+  executeMcpAppOperation,
+  McpAppViewExpiredError,
+  type McpAppOperation,
+  requireMcpAppInteraction,
+  resolveMcpAppActiveView,
+  withMcpAppActiveView,
+} from "../mcp-app-operations.js";
+import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -30,94 +31,15 @@ function optionalCursor(params: Record<string, unknown>): { cursor?: string } | 
   return typeof cursor === "string" && cursor.trim() ? { cursor: cursor.trim() } : undefined;
 }
 
-function isAppCallableTool(tool: McpCatalogTool): boolean {
-  return tool.uiVisibility === undefined || tool.uiVisibility.includes("app");
-}
-
-function isAppCallableListedTool(tool: Tool): boolean {
-  const { _meta: metadata } = tool;
-  const ui =
-    metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
-      ? (metadata.ui as { visibility?: unknown })
-      : undefined;
-  const visibility = Array.isArray(ui?.visibility)
-    ? ui.visibility.filter(
-        (entry): entry is "app" | "model" => entry === "app" || entry === "model",
-      )
-    : undefined;
-  return visibility === undefined || visibility.includes("app");
-}
-
-function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
-  return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
-}
-
-async function requireActiveView(
+async function runOperation(
   params: Record<string, unknown>,
-  cfg?: OpenClawConfig,
-): Promise<{
-  runtime: SessionMcpRuntime;
-  view: McpAppViewLease;
-}> {
-  const sessionKey = requireString(params, "sessionKey");
-  const viewId = requireString(params, "viewId");
-  const existingRuntime = peekSessionMcpRuntime({ sessionKey });
-  if (
-    (existingRuntime && existingRuntime.mcpAppsEnabled !== true) ||
-    (cfg && cfg.mcp?.apps?.enabled !== true)
-  ) {
-    throw new Error("MCP App runtime is unavailable");
-  }
-  const existingView = existingRuntime ? getMcpAppViewLease(viewId, existingRuntime) : undefined;
-  const restored =
-    existingRuntime?.mcpAppsEnabled === true && existingView
-      ? { runtime: existingRuntime, view: existingView }
-      : cfg
-        ? await restoreMcpAppView({ cfg, sessionKey, viewId })
-        : undefined;
-  if (!restored) {
-    throw new Error("MCP App view expired or is not authorized for this session");
-  }
-  const { runtime, view } = restored;
-  runtime.markUsed();
-  return { runtime, view };
-}
-
-async function withActiveView<T>(
-  params: Record<string, unknown>,
-  kind: "read" | "tool",
-  operation: (active: { runtime: SessionMcpRuntime; view: McpAppViewLease }) => Promise<T> | T,
-  cfg?: OpenClawConfig,
-): Promise<T> {
-  const active = await requireActiveView(params, cfg);
-  const release = acquireMcpAppViewRequest(active.view, kind);
-  const releaseRuntimeLease = active.runtime.acquireLease?.();
-  try {
-    return await operation(active);
-  } finally {
-    release();
-    releaseRuntimeLease?.();
-    await completeDeferredSessionMcpRuntimeRetirement(active.runtime).catch((error: unknown) => {
-      // A completed app tool call may have side effects. Cleanup failure must
-      // never turn its successful response into an apparent retryable failure.
-      logWarn(`mcp-app: deferred runtime cleanup failed: ${formatErrorMessage(error)}`);
-    });
-  }
-}
-
-async function requireCallableTool(
-  runtime: SessionMcpRuntime,
-  view: McpAppViewLease,
-  toolName: string,
-): Promise<McpCatalogTool> {
-  const catalog = await runtime.getCatalog();
-  const tool = catalog.tools.find(
-    (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
-  );
-  if (!tool || !isAppCallableTool(tool) || !isAllowedByView(view, toolName)) {
-    throw new Error(`MCP tool "${toolName}" is not app-callable`);
-  }
-  return tool;
+  operation: McpAppOperation,
+): Promise<unknown> {
+  const active = await resolveMcpAppActiveView({
+    sessionKey: requireString(params, "sessionKey"),
+    viewId: requireString(params, "viewId"),
+  });
+  return await executeMcpAppOperation(active, operation);
 }
 
 async function handle(
@@ -127,46 +49,100 @@ async function handle(
   try {
     respond(true, await operation());
   } catch (error) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        formatErrorMessage(error),
+        error instanceof McpAppViewExpiredError
+          ? { details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED } }
+          : undefined,
+      ),
+    );
   }
 }
 
 export const mcpAppHandlers: GatewayRequestHandlers = {
   "mcp.app.view": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await withActiveView(
-          params,
-          "read",
-          ({ view }) => {
-            const sandboxPort = context.getMcpAppSandboxPort?.();
-            if (sandboxPort === undefined) {
-              throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
-            }
-            const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
-            return {
-              sandboxUrl: buildMcpAppSandboxPath(view.csp),
-              sandboxPort,
-              ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
-              html: view.html,
-              ...(view.csp ? { csp: view.csp } : {}),
-              toolInput: view.toolInput,
-              toolResult: view.toolResult,
-            };
-          },
-          context.getRuntimeConfig(),
-        ),
-    );
+    await handle(respond, async () => {
+      const active = await resolveMcpAppActiveView({
+        sessionKey: requireString(params, "sessionKey"),
+        viewId: requireString(params, "viewId"),
+        cfg: context.getRuntimeConfig(),
+      });
+      return await withMcpAppActiveView(active, "read", async () => {
+        const { view } = active;
+        let interactive = false;
+        try {
+          await requireMcpAppInteraction(view);
+          interactive = true;
+        } catch {
+          // Stale board leases remain renderable but lose every interactive capability.
+        }
+        const updateModelContextSupported =
+          interactive && active.runtime.mcpAppModelContextRevoked !== true;
+        const sandboxPort =
+          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
+        if (sandboxPort === undefined) {
+          throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
+        }
+        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+        let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
+        try {
+          standalone = createMcpAppStandaloneTicket({
+            sessionKey: requireString(params, "sessionKey"),
+            view,
+          });
+        } catch (error) {
+          // Standalone links are additive; issuance must never break the
+          // existing authenticated Control UI view payload.
+          logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
+        }
+        return {
+          sandboxUrl: buildMcpAppSandboxPath(view.csp),
+          sandboxPort,
+          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+          html: view.html,
+          ...(view.csp ? { csp: view.csp } : {}),
+          toolInput: view.toolInput,
+          toolResult: view.toolResult,
+          ...(standalone
+            ? {
+                standaloneUrl: standalone.url,
+                standaloneExpiresAtMs: standalone.expiresAtMs,
+              }
+            : {}),
+          // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+          messageSupported: interactive,
+          updateModelContextSupported,
+        };
+      });
+    });
+  },
+  "mcp.app.updateModelContext": async ({ respond, params }) => {
+    await handle(respond, async () => {
+      const active = await resolveMcpAppActiveView({
+        sessionKey: requireString(params, "sessionKey"),
+        viewId: requireString(params, "viewId"),
+      });
+      return await withMcpAppActiveView(active, "read", async () => {
+        await requireMcpAppInteraction(active.view);
+        updateMcpAppModelContext(active.runtime, active.view, params);
+        return {};
+      });
+    });
   },
   "mcp.app.callTool": async ({ respond, params }) => {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "tool", async ({ runtime, view }) => {
-          const toolName = requireString(params, "toolName");
-          await requireCallableTool(runtime, view, toolName);
-          return await runtime.callTool(view.serverName, toolName, params.arguments ?? {});
+        await runOperation(params, {
+          method: "tools/call",
+          params: {
+            name: requireString(params, "toolName"),
+            arguments: (params.arguments ?? {}) as Record<string, unknown>,
+          },
         }),
     );
   },
@@ -174,43 +150,16 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "read", async ({ runtime, view }) => {
-          if (!runtime.listTools) {
-            throw new Error("MCP tools/list is unavailable");
-          }
-          const [listed, catalog] = await Promise.all([
-            runtime.listTools(view.serverName, optionalCursor(params)),
-            runtime.getCatalog(),
-          ]);
-          const allowed = new Set(
-            catalog.tools
-              .filter(
-                (tool) =>
-                  tool.serverName === view.serverName &&
-                  isAppCallableTool(tool) &&
-                  isAllowedByView(view, tool.toolName),
-              )
-              .map((tool) => tool.toolName),
-          );
-          return {
-            ...listed,
-            tools: listed.tools.filter(
-              (tool) => allowed.has(tool.name.trim()) && isAppCallableListedTool(tool),
-            ),
-          };
-        }),
+        await runOperation(params, { method: "tools/list", params: optionalCursor(params) ?? {} }),
     );
   },
   "mcp.app.listResources": async ({ respond, params }) => {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "read", async ({ runtime, view }) => {
-          if (!runtime.listResources) {
-            throw new Error("MCP resources/list is unavailable");
-          }
-          const resources = await runtime.listResources(view.serverName);
-          return Array.isArray(resources) ? { resources } : resources;
+        await runOperation(params, {
+          method: "resources/list",
+          params: optionalCursor(params) ?? {},
         }),
     );
   },
@@ -218,11 +167,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "read", async ({ runtime, view }) => {
-          if (!runtime.listResourceTemplates) {
-            throw new Error("MCP resources/templates/list is unavailable");
-          }
-          return await runtime.listResourceTemplates(view.serverName, optionalCursor(params));
+        await runOperation(params, {
+          method: "resources/templates/list",
+          params: optionalCursor(params) ?? {},
         }),
     );
   },
@@ -230,11 +177,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "read", async ({ runtime, view }) => {
-          if (!runtime.readResource) {
-            throw new Error("MCP resources/read is unavailable");
-          }
-          return await runtime.readResource(view.serverName, requireString(params, "uri"));
+        await runOperation(params, {
+          method: "resources/read",
+          params: { uri: requireString(params, "uri") },
         }),
     );
   },

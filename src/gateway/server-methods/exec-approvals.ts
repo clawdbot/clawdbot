@@ -166,6 +166,14 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   await respondUnavailableOnThrow(params.respond, async () => {
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
+      ...(nodeSession
+        ? {
+            expectedConnId: nodeSession.connId,
+            ...(nodeSession.pairingGeneration
+              ? { expectedPairingGeneration: nodeSession.pairingGeneration }
+              : {}),
+          }
+        : {}),
       command: params.command,
       params: params.commandParams(parsedParams, nodeSession),
     });

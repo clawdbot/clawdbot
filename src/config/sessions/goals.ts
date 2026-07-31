@@ -5,11 +5,11 @@ import {
   type SessionStateActorType,
 } from "../../sessions/session-state-events.js";
 import { formatTokenCount } from "../../utils/token-format.js";
-import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
+import { loadSessionEntryReadOnly, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
-export type SessionGoalSnapshot = {
+type SessionGoalSnapshot = {
   status: "missing" | "found";
   goal?: SessionGoal;
 };
@@ -182,7 +182,7 @@ export async function getSessionGoal(
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
-      loadSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
+      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
     const projected = entry
       ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })

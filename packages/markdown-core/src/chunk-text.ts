@@ -1,4 +1,8 @@
 // Markdown Core module implements chunk text behavior.
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+
+export { avoidTrailingHighSurrogateBreak };
+
 function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
   if (!text) {
     return [];
@@ -103,23 +107,6 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
     start = end;
   }
   return ranges;
-}
-
-/**
- * Keeps UTF-16 chunk boundaries from separating a supplementary-plane character.
- * A one-unit positive limit still needs to emit an entire surrogate pair.
- */
-export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
-  if (
-    end >= text.length ||
-    text.charCodeAt(end - 1) < 0xd800 ||
-    text.charCodeAt(end - 1) > 0xdbff ||
-    text.charCodeAt(end) < 0xdc00 ||
-    text.charCodeAt(end) > 0xdfff
-  ) {
-    return end;
-  }
-  return end - 1 > start ? end - 1 : end + 1;
 }
 
 /**

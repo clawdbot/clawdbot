@@ -153,13 +153,44 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
       await fs.writeFile(attachmentPath, "ok");
 
-      const cache = new MediaAttachmentCache([{ index: 0, path: "media/inbound/report.pdf" }], {
-        localPathRoots: [workspaceDir],
-        workspaceDir,
-      });
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, path: "media/inbound/report.pdf", workspaceDir }],
+        { localPathRoots: [workspaceDir] },
+      );
 
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
       expect(result.buffer.toString()).toBe("ok");
+    });
+  });
+
+  it("resolves each relative attachment against its own workspace", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
+      const workspaces = ["first", "second"].map((name) => path.join(base, name));
+      await Promise.all(
+        workspaces.map(async (workspaceDir, index) => {
+          await fs.mkdir(workspaceDir, { recursive: true });
+          await fs.writeFile(path.join(workspaceDir, "attachment.txt"), `slot-${index}`);
+        }),
+      );
+      const cache = new MediaAttachmentCache(
+        workspaces.map((workspaceDir, index) => ({
+          index,
+          path: "attachment.txt",
+          workspaceDir,
+        })),
+        { localPathRoots: workspaces },
+      );
+
+      await expect(
+        Promise.all(
+          workspaces.map((_workspaceDir, attachmentIndex) =>
+            cache.getBuffer({ attachmentIndex, maxBytes: 1024, timeoutMs: 1000 }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ buffer: Buffer.from("slot-0") }),
+        expect.objectContaining({ buffer: Buffer.from("slot-1") }),
+      ]);
     });
   });
 

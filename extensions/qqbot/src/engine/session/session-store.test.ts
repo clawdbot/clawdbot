@@ -7,7 +7,7 @@ import {
   installQQBotRuntimeForStateTests,
   resetQQBotStateTestRuntime,
 } from "../../test-support/runtime.js";
-import type { SessionState } from "./session-store.js";
+type SessionState = Parameters<(typeof import("./session-store.js"))["saveSession"]>[0];
 
 const createdDirs: string[] = [];
 

@@ -75,18 +75,24 @@ function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAu
   return candidate;
 }
 
-function isStructuredClaudeCliExpiredOAuthFailure(err: unknown): boolean {
+function classifyStructuredClaudeCliOAuthFailureReason(
+  err: unknown,
+): OAuthRefreshFailureReason | null {
   const failure = readStructuredClaudeCliAuthFailure(err);
   if (!failure) {
-    return false;
+    return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
   const message = err instanceof Error ? err.message : "";
   const combined = `${message}\n${rawError}`;
   const lower = combined.toLowerCase();
-  return (
-    lower.includes("failed to authenticate") || lower.includes("invalid authentication credentials")
-  );
+  if (/\bnot logged in\b\s*·\s*please run \/login\b/i.test(combined)) {
+    return "sign_in_again";
+  }
+  const hasExpiredTokenSignal =
+    lower.includes("failed to authenticate") ||
+    lower.includes("invalid authentication credentials");
+  return hasExpiredTokenSignal ? "revoked" : null;
 }
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
@@ -181,10 +187,11 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   const seen = new Set<object>();
   let candidate = err;
   while (candidate && typeof candidate === "object") {
-    if (isStructuredClaudeCliExpiredOAuthFailure(candidate)) {
+    const claudeCliReason = classifyStructuredClaudeCliOAuthFailureReason(candidate);
+    if (claudeCliReason) {
       return {
         provider: "claude-cli",
-        reason: "revoked",
+        reason: claudeCliReason,
       };
     }
     if (candidate instanceof OAuthRefreshFailureError) {

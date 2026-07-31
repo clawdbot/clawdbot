@@ -42,14 +42,27 @@ function splitBody(body: string) {
   };
 }
 
-async function loadResetModelCatalog(cfg: OpenClawConfig): Promise<ModelCatalogEntry[]> {
-  const { loadModelCatalog } = await import("../../agents/model-catalog.js");
-  return loadModelCatalog({ config: cfg });
+async function loadResetModelCatalog(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ModelCatalogEntry[]> {
+  const { loadPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
+  return loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
+  });
 }
 
 async function resolveResetFallbackModels(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<string[]> {
   if (params.agentId) {
     const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
@@ -67,21 +80,14 @@ async function buildResetAllowedModelKeys(params: {
   defaultProvider: string;
   defaultModel?: string;
   fallbackModels: readonly string[];
+  agentId?: string;
 }): Promise<Set<string>> {
-  const rawAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length > 0 || params.cfg.models?.providers) {
-    return buildAllowedModelSetWithFallbacks(params).allowedKeys;
-  }
-
-  const allowedKeys = new Set<string>();
-  for (const entry of params.catalog) {
-    allowedKeys.add(modelKey(entry.provider, entry.id));
-  }
+  const allowed = buildAllowedModelSetWithFallbacks(params);
   const defaultModel = params.defaultModel?.trim();
-  if (defaultModel) {
-    allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
+  if (allowed.allowAny && defaultModel) {
+    allowed.allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
   }
-  return allowedKeys;
+  return allowed.allowedKeys;
 }
 
 function buildSelectionFromExplicit(params: {
@@ -168,6 +174,8 @@ async function applySelectionToSession(params: {
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -195,7 +203,14 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params.cfg));
+  const catalog =
+    params.modelCatalog ??
+    (await loadResetModelCatalog({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    }));
   const allowedModelKeys = await buildResetAllowedModelKeys({
     cfg: params.cfg,
     catalog,
@@ -205,6 +220,7 @@ export async function applyResetModelOverride(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    agentId: params.agentId,
   });
   if (allowedModelKeys.size === 0) {
     return {};
@@ -226,6 +242,8 @@ export async function applyResetModelOverride(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      cfg: params.cfg,
+      agentId: params.agentId,
     });
 
   let selection: ModelDirectiveSelection | undefined;
@@ -270,6 +288,8 @@ export async function applyResetModelOverride(params: {
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  params.sessionCtx.commandText = cleanedBody;
+  params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 

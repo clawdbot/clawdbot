@@ -1,0 +1,147 @@
+.plan-checklist {
+  box-sizing: border-box;
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  color: var(--text);
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.plan-checklist--card {
+  flex: none;
+  width: min(760px, 100%);
+  margin-top: 4px;
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
+}
+
+.plan-checklist--card .plan-checklist__summary {
+  cursor: default;
+  user-select: text;
+}
+
+.plan-checklist--card .plan-checklist__body {
+  border-top-color: color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.agent-chat__composer-status-stack:has(.plan-checklist) {
+  display: flex;
+}
+
+.plan-checklist__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.plan-checklist__summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-checklist__summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -2px;
+}
+
+.plan-checklist__current-marker,
+.plan-checklist__step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.plan-checklist__current-marker {
+  color: var(--accent);
+  transition: transform var(--duration-fast) ease;
+}
+
+.plan-checklist--bar[open] .plan-checklist__current-marker {
+  transform: rotate(90deg);
+}
+
+.plan-checklist__current {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-checklist__count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-checklist__body {
+  padding: 7px 9px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+}
+
+.plan-checklist__explanation {
+  margin: 0 0 6px 21px;
+  color: var(--muted);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  line-height: 1.4;
+}
+
+.plan-checklist__steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-checklist__step {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.plan-checklist__step--completed .plan-checklist__step-marker {
+  color: var(--ok);
+}
+
+.plan-checklist__step--completed .plan-checklist__step-text {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.plan-checklist__step--in_progress {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.plan-checklist__step--in_progress .plan-checklist__step-marker {
+  color: var(--accent);
+}
+
+.plan-checklist__step--pending .plan-checklist__step-marker {
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-checklist__current-marker {
+    transition: none;
+  }
+}

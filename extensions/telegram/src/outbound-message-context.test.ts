@@ -8,11 +8,15 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createTelegramMessageCache,
-  resetTelegramMessageCacheBucketsForTest,
+  hasProviderObservedTelegramThreadBinding,
   resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const cfg = {
@@ -103,6 +107,80 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(cached?.sourceMessage.from).not.toHaveProperty("last_name");
+  });
+
+  it("binds topics only when the successful provider response identifies the thread", async () => {
+    const common = {
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      messageId: 700,
+      text: "Bot just replied",
+      messageThreadId: 77,
+    } as const;
+    const callerOnlyThread = await recordAndRead({
+      ...common,
+      successfulSendThread: { id: 77, scope: "forum" },
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 700,
+        text: "Bot just replied",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(callerOnlyThread, 77)).toBe(false);
+
+    const providerThread = await recordAndRead({
+      ...common,
+      messageId: 701,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_701,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 701,
+        message_thread_id: 77,
+        text: "Bot replied in the topic",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
+  });
+
+  it("binds a successful General-topic response from trusted send context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 702,
+        text: "Bot replied in General",
+      },
+      messageId: 702,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "forum" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
+  });
+
+  it("does not infer a General-topic binding for DM thread context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 703,
+        text: "Bot replied in a DM topic",
+      },
+      messageId: 703,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "dm" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(false);
   });
 
   it("falls back to the Telegram bot name when no configured name exists", async () => {

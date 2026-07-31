@@ -5,25 +5,26 @@ scenario:
   surface: image-generation
   coverage:
     primary:
-      - media.image-generation
+      - media.image-routing
     secondary:
-      - tools.native-image-generation
-  objective: Verify image_generate appears when configured and returns a real saved media artifact.
+      - media.image-routing-native-image-generation
+  objective: Verify image_generate appears when configured, returns a real saved media artifact, and delivers it once.
   successCriteria:
     - image_generate appears in the effective tool inventory.
     - Agent triggers native image_generate.
     - Tool output returns a saved MEDIA path and the file exists.
+    - The generated-media completion produces exactly one outbound channel delivery containing the saved PNG bytes.
   docsRefs:
     - docs/tools/image-generation.md
     - docs/providers/openai.md
   codeRefs:
     - src/agents/tools/image-generate-tool.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify image_generate appears when configured and returns a real saved media artifact.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       prompt: "Image generation check: generate a QA lighthouse image and summarize it in one short sentence."
       promptSnippet: "Image generation check"
       generatedNeedle: "QA lighthouse"
@@ -40,6 +41,7 @@ flow:
           args:
             - ref: env
             - Image generation
+            - agent:qa:image-generate
         - call: readEffectiveTools
           saveAs: tools
           args:
@@ -55,7 +57,8 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:image-generate
+            - sessionKey:
+                ref: sessionKey
               message:
                 expr: config.prompt
               timeoutMs:
@@ -85,4 +88,43 @@ flow:
         - assert:
             expr: "typeof generatedPath === 'string' && generatedPath.length > 0"
             message: image generation did not produce a saved media path
+        - call: fs.stat
+          saveAs: generatedImageStat
+          args:
+            - ref: generatedPath
+        - assert:
+            expr: "generatedImageStat.isFile() && generatedImageStat.size > 0"
+            message: image generation did not produce a nonempty saved media file
+        - call: fs.readFile
+          saveAs: generatedImageBytes
+          args:
+            - ref: generatedPath
+        - call: sleep
+          args:
+            - 3000
+        - set: outboundMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator')"
+        - assert:
+            expr: >-
+              outboundMessages.length === 1
+              && Array.isArray(outboundMessages[0].attachments)
+              && outboundMessages[0].attachments.length === 1
+              && outboundMessages[0].attachments[0].kind === 'image'
+              && outboundMessages[0].attachments[0].mimeType === 'image/png'
+              && typeof outboundMessages[0].attachments[0].contentBase64 === 'string'
+              && Buffer.from(outboundMessages[0].attachments[0].contentBase64, 'base64').equals(generatedImageBytes)
+            message:
+              expr: "`expected exactly one generated-image delivery with bytes matching ${generatedPath}; saw ${outboundMessages.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-operator' })}`"
+        - call: readSessionTranscriptSummary
+          saveAs: generatedImageTranscript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: >-
+              generatedImageTranscript.successfulToolCallCounts.image_generate === 1
+              && typeof generatedImageTranscript.finalText === 'string'
+              && generatedImageTranscript.finalText.trim().length > 0
+            message: generated image completion was not persisted to the requester session
       detailsExpr: "`${outbound.text}\\nIMAGE_PATH:${generatedPath}`"

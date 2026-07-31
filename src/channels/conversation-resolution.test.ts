@@ -230,27 +230,60 @@ describe("conversation resolution", () => {
     });
   });
 
-  it("strips Telegram numeric topic shorthand in fallback resolution", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-      messaging: {
-        normalizeTarget: () => "telegram:-1001234567890:77",
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "telegram",
-        accountId: "default",
-        originatingTo: "-1001234567890:77",
-      })?.canonical,
-    ).toEqual({
+  it.each([
+    {
+      name: "declared raw shorthand",
       channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
-  });
+      declaresNumericShorthand: true,
+      originatingTo: "-1001234567890:77",
+      expectedConversationId: "-1001234567890",
+    },
+    {
+      name: "undeclared raw shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      originatingTo: "-1001234567890:77",
+      expectedConversationId: "-1001234567890:77",
+    },
+    {
+      name: "declared normalized shorthand",
+      channel: "telegram",
+      declaresNumericShorthand: true,
+      originatingTo: "topic-alias",
+      expectedConversationId: "-1001234567890",
+    },
+    {
+      name: "undeclared normalized shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      originatingTo: "topic-alias",
+      expectedConversationId: "-1001234567890:77",
+    },
+  ])(
+    "uses $name metadata in fallback resolution",
+    ({ channel, declaresNumericShorthand, originatingTo, expectedConversationId }) => {
+      registerChannelPlugin({
+        ...createChannelTestPluginBase({ id: channel, label: channel }),
+        messaging: {
+          ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
+          normalizeTarget: () => `${channel}:-1001234567890:77`,
+        },
+      });
+
+      expect(
+        resolveCommandConversationResolution({
+          cfg: testConfig,
+          channel,
+          accountId: "default",
+          originatingTo,
+        })?.canonical,
+      ).toEqual({
+        channel,
+        accountId: "default",
+        conversationId: expectedConversationId,
+      });
+    },
+  );
 
   it("keeps parser-only fallback conversation targets during the migration window", () => {
     registerChannelPlugin({

@@ -1,8 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Defines safe-bin policy profile fixtures and metadata.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-
 export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
@@ -111,7 +108,7 @@ function compileSafeBinProfiles(
   ) as Record<string, SafeBinProfile>;
 }
 
-export const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
+const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],
@@ -372,38 +369,4 @@ export function resolveSafeBinProfiles(
     ...SAFE_BIN_PROFILES,
     ...compileSafeBinProfiles(normalizedFixtures),
   };
-}
-
-function resolveSafeBinDeniedFlags(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
-): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  for (const [name, fixture] of Object.entries(fixtures)) {
-    const denied = sortUniqueStrings(fixture.deniedFlags ?? []);
-    if (denied.length > 0) {
-      out[name] = denied;
-    }
-  }
-  return out;
-}
-
-export function renderSafeBinDeniedFlagsDocBullets(
-  fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
-): string {
-  const deniedByBin = resolveSafeBinDeniedFlags(fixtures);
-  const bins = Object.keys(deniedByBin).toSorted();
-  return bins
-    .map(
-      (bin) =>
-        `- \`${bin}\`: ${expectDefined(deniedByBin[bin], "denied by bin entry at bin")
-          .map((flag) => `\`${flag}\``)
-          .join(", ")}`,
-    )
-    .join("\n");
-}
-
-export function renderDefaultSafeBinsDocText(
-  defaults: readonly string[] = DEFAULT_SAFE_BINS,
-): string {
-  return defaults.map((bin) => `\`${bin}\``).join(", ");
 }

@@ -5,10 +5,8 @@ import {
 import {
   registerMemoryCapability as registerGlobalMemoryCapability,
   registerMemoryCorpusSupplement as registerGlobalMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolverForPlugin,
+  registerMemoryPromptPreparation as registerGlobalMemoryPromptPreparation,
   registerMemoryPromptSupplement as registerGlobalMemoryPromptSupplement,
-  registerMemoryPromptSectionForPlugin,
-  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -43,15 +41,6 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     }
   };
 
-  const registerMemoryPromptSection = (
-    record: PluginRecord,
-    builder: Parameters<OpenClawPluginApi["registerMemoryPromptSection"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "prompt section")) {
-      registerMemoryPromptSectionForPlugin(record.id, builder);
-    }
-  };
-
   const registerMemoryPromptSupplement = (
     record: PluginRecord,
     builder: Parameters<OpenClawPluginApi["registerMemoryPromptSupplement"]>[0],
@@ -68,29 +57,27 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     registerGlobalMemoryPromptSupplement(record.id, builder);
   };
 
+  const registerMemoryPromptPreparation = (
+    record: PluginRecord,
+    prepare: Parameters<OpenClawPluginApi["registerMemoryPromptPreparation"]>[0],
+  ) => {
+    if (typeof prepare !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "memory prompt preparation registration missing prepare function",
+      });
+      return;
+    }
+    registerGlobalMemoryPromptPreparation(record.id, prepare);
+  };
+
   const registerMemoryCorpusSupplement = (
     record: PluginRecord,
     supplement: Parameters<OpenClawPluginApi["registerMemoryCorpusSupplement"]>[0],
   ) => {
     registerGlobalMemoryCorpusSupplement(record.id, supplement);
-  };
-
-  const registerMemoryFlushPlan = (
-    record: PluginRecord,
-    resolver: Parameters<OpenClawPluginApi["registerMemoryFlushPlan"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "flush plan")) {
-      registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
-    }
-  };
-
-  const registerMemoryRuntime = (
-    record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerMemoryRuntime"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "runtime")) {
-      registerMemoryRuntimeForPlugin(record.id, runtime);
-    }
   };
 
   const registerMemoryEmbeddingProvider = (
@@ -133,11 +120,9 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
 
   return {
     registerMemoryCapability,
-    registerMemoryPromptSection,
     registerMemoryPromptSupplement,
+    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryFlushPlan,
-    registerMemoryRuntime,
     registerMemoryEmbeddingProvider,
   };
 }

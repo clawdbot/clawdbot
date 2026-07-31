@@ -16,7 +16,7 @@ Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw
 
 ## Surface
 
-providers: google, google-gemini-cli, google-vertex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, musicGenerationProviders, realtimeVoiceProviders, speechProviders, usageProviders, videoGenerationProviders, webSearchProviders
+providers: `google`, `google-gemini-cli`, `google-vertex`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `musicGenerationProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 

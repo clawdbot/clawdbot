@@ -2,6 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import {
   parseStrictFiniteNumber,
@@ -32,18 +34,6 @@ const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "PAIRING_REQUIRED",
 ]);
 
-function readGatewayClientRequestDetailCode(value: unknown): string | null {
-  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
-    return null;
-  }
-  const details = (value as Error & { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const code = (details as { code?: unknown }).code;
-  return typeof code === "string" ? code : null;
-}
-
 function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
   if (
     value instanceof Error &&
@@ -53,16 +43,15 @@ function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
   ) {
     return true;
   }
-  const detailCode = readGatewayClientRequestDetailCode(value);
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const details = (value as Error & { details?: unknown }).details;
+  const detailCode = readConnectErrorDetailCode(details);
   if (detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode)) {
     return true;
   }
-  return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    value.message.includes("missing scope: operator.read")
-  );
+  return readMissingScopeError(value)?.missingScope === "operator.read";
 }
 
 function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {

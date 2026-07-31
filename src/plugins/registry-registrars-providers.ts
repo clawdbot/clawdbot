@@ -160,6 +160,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registry.cliBackends.push({
       pluginId: record.id,
       pluginName: record.name,
+      builtWithOpenClawVersion: record.builtWithOpenClawVersion,
       backend: { ...backend, id },
       source: record.source,
       rootDir: record.rootDir,

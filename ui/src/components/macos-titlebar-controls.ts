@@ -8,6 +8,7 @@ import "./tooltip.ts";
 
 class MacosTitlebarControls extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navCollapsed = false;
+  @property({ attribute: false }) historyOnly = false;
   @property({ attribute: false }) canGoBack = false;
   @property({ attribute: false }) canGoForward = false;
   @property({ attribute: false }) onToggleSidebar?: () => void;
@@ -18,13 +19,15 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
     const toggleLabel = this.navCollapsed ? t("nav.expand") : t("nav.collapse");
     return html`
       <nav class="macos-titlebar-controls" @mousedown=${beginNativeWindowDrag}>
-        ${this.renderButton({
-          label: toggleLabel,
-          icon: this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose,
-          ariaExpanded: !this.navCollapsed,
-          onClick: this.onToggleSidebar,
-          className: "macos-titlebar-controls__sidebar-toggle",
-        })}
+        ${this.historyOnly
+          ? nothing
+          : this.renderButton({
+              label: toggleLabel,
+              icon: this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose,
+              ariaExpanded: !this.navCollapsed,
+              onClick: this.onToggleSidebar,
+              className: "macos-titlebar-controls__sidebar-toggle",
+            })}
         ${this.renderButton({
           label: t("nav.back"),
           icon: icons.chevronLeft,
@@ -39,7 +42,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           onClick: () => globalThis.history.forward(),
           className: "macos-titlebar-controls__forward",
         })}
-        ${this.navCollapsed
+        ${!this.historyOnly
           ? html`
               ${this.renderButton({
                 label: t("chat.openCommandPalette"),
@@ -48,12 +51,16 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 onClick: this.onOpenPalette,
                 className: "macos-titlebar-controls__search",
               })}
-              ${this.renderButton({
-                label: t("chat.runControls.newSession"),
-                icon: icons.plus,
-                onClick: this.onOpenNewSession,
-                className: "macos-titlebar-controls__new-session",
-              })}
+              ${this.navCollapsed
+                ? this.renderButton({
+                    // While the sidebar rail is collapsed, this mirrors the native
+                    // ⌘N item and stays deliberately free of connection state.
+                    label: t("chat.runControls.newSession"),
+                    icon: icons.plus,
+                    onClick: this.onOpenNewSession,
+                    className: "macos-titlebar-controls__new-session",
+                  })
+                : nothing}
             `
           : nothing}
       </nav>

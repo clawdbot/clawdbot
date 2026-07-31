@@ -1,9 +1,7 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerSecretValueForRedaction,
-  resetSecretRedactionRegistryForTest,
-} from "../logging/secret-redaction-registry.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,
@@ -407,6 +405,59 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("skips capturing decimal Content-Length values above the safe integer range", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/huge",
+        method: "GET",
+        response: new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "9007199254740993",
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
+    expect(response).not.toHaveProperty("dataText");
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("streams non-decimal Content-Length values through the body cap", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/small",
+        method: "GET",
+        response: new Response("captured", {
+          status: 200,
+          headers: {
+            "content-type": "text/plain",
+            "content-length": "1e9",
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response).toBeDefined();
+    expect(response?.dataText).toBe("captured");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
   it("fails closed on chunked responses that stream past the cap", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     // 20 MiB streamed without a Content-Length header: the bounded reader must
@@ -473,6 +524,50 @@ describe("debug proxy runtime", () => {
     const response = events.find((event) => event.kind === "response");
     expect(response).toBeDefined();
     expect(response?.status).toBe(200);
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("captures a spec-compliant null response body as empty", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/no-content",
+        method: "HEAD",
+        response: new Response(null, { status: 204 }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response?.status).toBe(204);
+    expect(response?.dataText).toBe("");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("captures a clone-only Response-like readable body", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    const headers = new Headers({ "content-type": "text/plain" });
+    const clone = vi.fn(() => new Response("captured", { headers }));
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/clone-only",
+        method: "GET",
+        response: { status: 200, headers, clone } as unknown as Response,
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(clone).toHaveBeenCalledOnce();
+    expect(response?.dataText).toBe("captured");
     expect(response?.metaJson).toBeUndefined();
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });

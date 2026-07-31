@@ -15,15 +15,3 @@ export { filterRecallEntriesWithinLookback } from "./src/dreaming-phases.js";
 export { previewRemHarness } from "./src/rem-harness.js";
 export type { PreviewRemHarnessOptions, PreviewRemHarnessResult } from "./src/rem-harness.js";
 export { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
-export {
-  buildDreamingShadowTrialReport,
-  defaultDreamingShadowTrialReportPath,
-  resolveDreamingShadowTrialRecommendation,
-  writeDreamingShadowTrialReport,
-} from "./src/dreaming-shadow-trial.js";
-export type {
-  DreamingShadowTrialInput,
-  DreamingShadowTrialRecommendation,
-  DreamingShadowTrialReport,
-  DreamingShadowTrialVerdict,
-} from "./src/dreaming-shadow-trial.js";

@@ -2,10 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import {
-  createTuiTaskSuggestionController,
-  parseTuiTaskSuggestion,
-} from "./tui-task-suggestions.js";
+import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 
 type TestSelector = Component & {
   items: SelectItem[];
@@ -115,9 +112,13 @@ function createHarness() {
 }
 
 describe("TUI task suggestions", () => {
-  it("parses the Gateway suggestion shape", () => {
-    expect(parseTuiTaskSuggestion(suggestionPayload())).toEqual(suggestionPayload());
-    expect(parseTuiTaskSuggestion({ id: "task_missing_fields" })).toBeNull();
+  it("ignores malformed Gateway suggestion payloads", () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: { id: "task_missing_fields" },
+    });
+    expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
   it("shows an active-session suggestion and starts it after confirmation", async () => {

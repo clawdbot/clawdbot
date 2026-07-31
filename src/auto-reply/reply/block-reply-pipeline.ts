@@ -49,13 +49,14 @@ export function createAudioAsVoiceBuffer(params: {
 }
 
 /** Creates a stable duplicate key for a complete outbound payload. */
-export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
     statusNotice: isReplyPayloadStatusNotice(payload),
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
+    presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
     replyToId: payload.replyToId ?? null,
@@ -72,6 +73,7 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
+    presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
   });

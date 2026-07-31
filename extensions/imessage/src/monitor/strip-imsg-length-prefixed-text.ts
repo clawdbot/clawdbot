@@ -27,7 +27,7 @@ function readVarint(buf: Uint8Array, start: number): Varint | null {
   return null;
 }
 
-export function tryStripImessageLengthPrefixedUtf8Buffer(buf: Uint8Array): Uint8Array | null {
+function tryStripImessageLengthPrefixedUtf8Buffer(buf: Uint8Array): Uint8Array | null {
   const key = readVarint(buf, 0);
   if (!key || key.nextOffset >= buf.length) {
     return null;

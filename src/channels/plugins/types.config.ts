@@ -3,6 +3,7 @@
  *
  * Defines JSON Schema metadata, UI hints, and runtime parser result shapes.
  */
+import type { ConfigUiPresentation } from "../../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 
 /** Optional UI metadata for a JSON Schema property. */
@@ -13,6 +14,7 @@ export type ChannelConfigUiHint = {
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
+  presentation?: ConfigUiPresentation;
   itemTemplate?: unknown;
 };
 

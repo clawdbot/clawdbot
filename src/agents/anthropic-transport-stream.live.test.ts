@@ -5,11 +5,12 @@
  */
 import http from "node:http";
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
+import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveBillingDrift } from "./live-test-provider-drift.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
+import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
@@ -77,6 +78,23 @@ function skipAnthropicBillingDrift(
   }
   console.warn(`[anthropic:live] skip ${label}: billing drift`);
   return true;
+}
+
+function classifyProviderError(errorMessage: string | undefined): string {
+  if (!errorMessage) {
+    return "none";
+  }
+  return (
+    shouldSkipLiveProviderDrift({
+      allowAuth: true,
+      allowBilling: true,
+      allowModelNotFound: true,
+      allowProviderUnavailable: true,
+      allowRateLimit: true,
+      allowTimeout: true,
+      error: errorMessage,
+    })?.reason ?? "unclassified"
+  );
 }
 
 describeLive("anthropic transport stream live", () => {
@@ -217,7 +235,10 @@ describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
       (block) => block.type === "toolCall" && block.name === "tuple_probe",
     );
 
-    expect(result.stopReason).toBe("toolUse");
+    expect(
+      result.stopReason,
+      `tuple tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
+    ).toBe("toolUse");
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "tuple_probe",
@@ -282,7 +303,10 @@ describeProviderLive("anthropic transport stream provider live", () => {
       (block) => block.type === "toolCall" && block.name === "healthy_probe",
     );
 
-    expect(result.stopReason).toBe("toolUse");
+    expect(
+      result.stopReason,
+      `forced tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
+    ).toBe("toolUse");
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "healthy_probe",
@@ -344,7 +368,10 @@ describeProviderLive("anthropic transport stream provider live", () => {
       (block) => block.type === "toolCall" && block.name === "healthy_probe",
     );
 
-    expect(result.stopReason).toBe("toolUse");
+    expect(
+      result.stopReason,
+      `SDK forced tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
+    ).toBe("toolUse");
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "healthy_probe",

@@ -176,6 +176,7 @@ describe("FS tools with workspaceOnly=false", () => {
         },
       ],
       details: {
+        kind: "not_found",
         status: "not_found",
         path: "memory/2026-05-15.md",
         optional: true,

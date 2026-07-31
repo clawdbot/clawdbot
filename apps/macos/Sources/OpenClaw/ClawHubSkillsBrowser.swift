@@ -63,10 +63,17 @@ struct ClawHubSkillsBrowser: View {
                         ForEach(Array(self.model.results.enumerated()), id: \.element.id) { index, skill in
                             ClawHubSkillResultRow(
                                 skill: skill,
-                                installed: SkillManagementContract.installed(
+                                installed: skill.version.map {
+                                    SkillManagementContract.installed(
+                                        self.installedSkills,
+                                        slug: skill.slug,
+                                        version: $0)
+                                } ?? SkillManagementContract.installed(
                                     self.installedSkills,
                                     slug: skill.slug),
-                                isBusy: self.model.reviewingSlug == skill.slug,
+                                isBusy: self.model.reviewingSlug == skill.slug || self.model.installingSlug.map {
+                                    SkillManagementContract.sameClawHubSkill($0, skill.slug)
+                                } == true,
                                 showsDivider: index != self.model.results.count - 1)
                             {
                                 Task { await self.model.review(skill) }
@@ -119,8 +126,8 @@ private struct ClawHubSkillResultRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: self.skill.displayName,
-            subtitle: self.skill.summary ?? self.skill.slug,
+            title: .verbatim(self.skill.displayName),
+            subtitle: .verbatim(self.skill.summary ?? self.skill.slug),
             showsDivider: self.showsDivider)
         {
             if let version = self.skill.version {

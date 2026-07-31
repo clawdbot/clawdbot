@@ -47,7 +47,7 @@ function processStartParams(processId: string) {
   return {
     processId,
     argv: ["sh", "-lc", "true"],
-    cwd: "/workspace",
+    cwd: "file:///workspace",
     env: {},
     tty: false,
     pipeStdin: false,

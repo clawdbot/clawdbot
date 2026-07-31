@@ -3,8 +3,10 @@ import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
+  clearOpenClawAgentDatabaseOpenFailure,
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
+  migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
@@ -13,6 +15,7 @@ import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
+  options: { env?: NodeJS.ProcessEnv; migrateOlderSchema?: boolean } = {},
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
@@ -38,13 +41,29 @@ export function compactDoctorSessionSqliteTarget(
       `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
     );
   }
+  const requireQuarantineCleared = () => {
+    if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: options.env })) {
+      throw new Error(
+        `OpenClaw agent database ${sqlitePath} was repaired, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+      );
+    }
+  };
+  if (options.migrateOlderSchema) {
+    migrateOpenClawAgentDatabaseForMaintenance({
+      agentId: target.agentId,
+      pathname: sqlitePath,
+    });
+    requireQuarantineCleared();
+  }
 
   const compact = compactDoctorSqliteFile({
-    afterMutation: () =>
+    afterSuccess: () => {
+      requireQuarantineCleared();
       ensureOpenClawAgentDatabasePermissions(sqlitePath, {
         agentId: target.agentId,
         path: sqlitePath,
-      }),
+      });
+    },
     sqlitePath,
     validateBeforeMutation: (database) =>
       assertOpenClawAgentDatabaseForMaintenance(database, {

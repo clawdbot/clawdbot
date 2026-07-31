@@ -200,6 +200,16 @@ try {
     readNpmInventory();
   } else if (install === "bundle") {
     walk("dist");
+    // Vendored workspace packages ship inside the bundle and are part of its hash;
+    // node_modules is installed after verification and never walked here.
+    const vendorPath = path.join(root, "vendor");
+    const vendorStats = fs.existsSync(vendorPath) ? fs.lstatSync(vendorPath) : undefined;
+    if (vendorStats) {
+      if (vendorStats.isSymbolicLink() || !vendorStats.isDirectory()) {
+        fail("unsafe worker vendor directory");
+      }
+      walk("vendor");
+    }
   } else {
     fail("invalid worker install channel");
   }
@@ -437,14 +447,14 @@ case "$install" in
     fi
     npm_prefix=$staging/.npm-prefix
     npm_pack_json=$staging/npm-pack.json
-    OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
+    npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
     package_archive=$staging/$package_archive
     if ! node -e '${VERIFY_NPM_PACKAGE_JS}' "$package_archive" "$package_integrity"; then
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
+    npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
     package_dir=$npm_prefix/lib/node_modules/openclaw
     if [ ! -f "$package_dir/openclaw.mjs" ]; then
       printf '%s\n' 'npm did not install the OpenClaw package root' >&2
@@ -465,6 +475,15 @@ if ! node -e '${VERIFY_INSTALL_JS}' "$staging" "$hash" "$install"; then
   printf '%s\n' 'worker install content does not match the expected bundle hash' >&2
   exit 2
 fi
+# Materialize production dependencies only after the pristine bundle passed its
+# integrity check; npm install writes node_modules the hash intentionally excludes.
+if [ "$install" = bundle ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    printf '%s\n' '${NPM_MISSING_MARKER}' >&2
+    exit ${NPM_MISSING_EXIT_CODE}
+  fi
+  npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
+fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
 rm -rf "$install_dir"
@@ -474,21 +493,21 @@ cat "$receipt"
 printf '\n'
 `;
 
-export type ResolvedWorkerSshIdentity = WorkerSshIdentity;
+type ResolvedWorkerSshIdentity = WorkerSshIdentity;
 
-export type WorkerBootstrapCommandRunner = (
+type WorkerBootstrapCommandRunner = (
   argv: string[],
   options: CommandOptions,
 ) => Promise<SpawnResult>;
 
-export type WorkerBootstrapRequest = {
+type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
   /** Provider endpoint host key copied by the gateway bootstrap adapter. */
   pinnedHostKey?: string;
 };
 
-export type WorkerBootstrapDependencies = {
+type WorkerBootstrapDependencies = {
   resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
@@ -764,3 +783,4 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

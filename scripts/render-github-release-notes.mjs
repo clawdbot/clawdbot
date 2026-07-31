@@ -40,14 +40,14 @@ function validateTag(tag) {
   }
 }
 
-export function githubReleaseBodySize(body) {
+function githubReleaseBodySize(body) {
   return {
     characters: [...body].length,
     bytes: Buffer.byteLength(body, "utf8"),
   };
 }
 
-export function fitsGithubReleaseBody(body) {
+function fitsGithubReleaseBody(body) {
   const size = githubReleaseBodySize(body);
   return (
     size.characters <= GITHUB_RELEASE_BODY_MAX_CHARACTERS &&
@@ -185,7 +185,7 @@ export function parseShippedBaselineExclusions(section) {
   return baselines;
 }
 
-export function tagPinnedContributionRecordUrl(repository, tag) {
+function tagPinnedContributionRecordUrl(repository, tag) {
   validateRepository(repository);
   validateTag(tag);
   return `https://github.com/${repository}/blob/${tag}/CHANGELOG.md#complete-contribution-record`;

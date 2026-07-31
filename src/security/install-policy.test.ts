@@ -1,20 +1,8 @@
 // Covers install-policy checks for packages and plugin installs.
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (...args: Parameters<typeof actual.spawn>) =>
-      spawnMock(...args) ?? actual.spawn(...args),
-  };
-});
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
@@ -22,11 +10,9 @@ import {
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
-import {
-  runInstallPolicy,
-  validateInstallPolicyStatic,
-  type InstallPolicyRequest,
-} from "./install-policy.js";
+import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.js";
+
+type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
 
 const tempDirs: string[] = [];
 
@@ -40,7 +26,7 @@ async function writePolicyScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
   await fs.writeFile(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -115,10 +101,9 @@ function configWithPolicy(scriptPath: string, env: Record<string, string>): Open
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
+          command: scriptPath,
           env,
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },
@@ -187,7 +172,9 @@ describe("runInstallPolicy", () => {
       mutable: false,
       network: true,
     });
-    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(path.dirname(process.execPath));
+    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(
+      await fs.realpath(path.dirname(scriptPath)),
+    );
     expect(captured.request).toMatchObject({
       kind: "skill-install",
       mode: "install",
@@ -215,7 +202,7 @@ describe("runInstallPolicy", () => {
                 POLICY_RESPONSE: response,
               },
               passEnv: ["PATH"],
-              allowInsecurePath: true,
+              trustedDirs: [path.dirname(envNodeScriptPath)],
             },
           },
         },
@@ -257,7 +244,7 @@ describe("runInstallPolicy", () => {
                   source: "exec",
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-                  allowInsecurePath: true,
+                  trustedDirs: [path.dirname(forkScriptPath)],
                   // Preserve production-like startup headroom; the test fires
                   // the re-armed timer only after the readiness byte arrives.
                   noOutputTimeoutMs: 1_000,
@@ -268,9 +255,12 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
-        await vi.waitFor(() => {
-          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-        });
+        await vi.waitFor(
+          () => {
+            expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+          },
+          { timeout: 5_000 },
+        );
         childPid = await readPidFile(pidPath);
         noOutputTimeouts.at(-1)?.();
         const result = await resultPromise;
@@ -321,7 +311,7 @@ describe("runInstallPolicy", () => {
             env: {
               EXIT_CODE: "1",
             },
-            allowInsecurePath: true,
+            trustedDirs: [path.dirname(scriptPath)],
           },
         },
       },
@@ -480,7 +470,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: "policy.cjs",
               args: [],
-              allowInsecurePath: true,
             },
           },
         },
@@ -506,7 +495,6 @@ describe("runInstallPolicy", () => {
                 source: "exec",
                 command: "C:\\tmp\\policy.cjs",
                 args: [],
-                allowInsecurePath: true,
               },
             },
           },
@@ -670,7 +658,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: process.execPath,
               args: [symlinkScriptPath],
-              allowSymlinkCommand: true,
             },
           },
         },
@@ -693,7 +680,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: "/usr/bin/env",
               args: ["-S", `node ${scriptPath}`],
-              allowInsecurePath: true,
             },
           },
         },
@@ -702,62 +688,6 @@ describe("runInstallPolicy", () => {
       expect(validation.issues.map((issue) => issue.message)).toContain(
         "security.installPolicy.exec.command must not use env; configure the policy executable directly.",
       );
-    },
-  );
-});
-
-describe("runPolicyCommand stream errors", () => {
-  function createFakeChild(): {
-    child: ChildProcess;
-    kill: ReturnType<typeof vi.fn>;
-  } {
-    const child = new EventEmitter() as EventEmitter & ChildProcess;
-    const kill = vi.fn(() => true);
-    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
-    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
-    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
-    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
-    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
-    child.kill = kill as ChildProcess["kill"];
-    return { child, kill };
-  }
-
-  beforeEach(() => {
-    spawnMock.mockReset();
-  });
-
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
-  it.each(["stdout", "stderr", "stdin"] as const)(
-    "fails closed and kills the policy process after a %s stream error",
-    async (streamName) => {
-      const dir = await makeTempDir();
-      const policyScriptPath = await writePolicyScript(dir);
-      const { child, kill } = createFakeChild();
-      spawnMock.mockImplementation(() => {
-        queueMicrotask(() => {
-          child.stdout?.emit(
-            "data",
-            Buffer.from(JSON.stringify({ protocolVersion: 1, decision: "allow" })),
-          );
-          child[streamName]?.emit("error", new Error(`${streamName} read failed`));
-          child.emit("close", 0, null);
-        });
-        return child;
-      });
-
-      const result = await runInstallPolicy({
-        config: configWithPolicy(policyScriptPath, {}),
-        request: baseRequest(dir),
-      });
-
-      expect(result?.blocked?.code).toBe("security_scan_failed");
-      expect(result?.blocked?.reason).toContain(`policy ${streamName} stream failed`);
-      expect(kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
 });

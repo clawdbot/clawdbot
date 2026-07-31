@@ -1,8 +1,8 @@
 // Tests session reset cleanup for stale files and persisted state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
-  testing as sessionPromptStateTesting,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import {
   enqueueSystemEvent,
@@ -10,15 +10,12 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  testing as replyRunTesting,
-} from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 afterEach(() => {
-  sessionPromptStateTesting.reset();
+  clearEmbeddedSessionPromptStates(["old-session"]);
   replyRunTesting.resetReplyRunRegistry();
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();

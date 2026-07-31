@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
+import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
@@ -473,8 +474,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
     }
     const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
-      const index = Number(key);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
+      if (index < 0 || index >= current.length) {
         return undefined;
       }
       current = current[index];
@@ -831,12 +832,16 @@ function normalizeToolParameterSchemaUncached(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";
 
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
-    const arrayItemsCompatibleSchema = omitEmptyArrayItems
+    let arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
+    if (isLlamacppGbnfProfile) {
+      arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
+    }
     if (isGeminiProvider && !isAnthropicProvider) {
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
       return unsupportedToolSchemaKeywords.size > 0
@@ -969,3 +974,4 @@ export function normalizeToolParameterSchema(
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

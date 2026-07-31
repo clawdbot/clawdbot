@@ -1,18 +1,17 @@
 // Gateway WebSocket paired-device connects enforce pinned metadata and approved access.
-import { GATEWAY_CLIENT_MODES } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
-import {
-  isPairingSetupBootstrapProfile,
-  resolveBootstrapProfileScopesForRole,
-} from "../../../shared/device-bootstrap-profile.js";
+import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
+  isMobileNodeBootstrapConnect,
+  isSetupCodeHandoffBootstrapClient,
+  pairedDeviceAllowsBootstrapOperator,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
@@ -124,13 +123,14 @@ export async function authorizeExistingGatewayDevice(params: {
   const retryBootstrapHandoffProfile =
     authMethod === "bootstrap-token" &&
     bootstrapTokenCandidate &&
-    role === "node" &&
-    scopes.length === 0 &&
-    !isControlUi &&
-    !isBrowserOperatorUi &&
-    !isWebchat &&
-    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
-    pairedRoles.includes("operator") &&
+    isMobileNodeBootstrapConnect({
+      role,
+      scopes,
+      isControlUi,
+      isBrowserOperatorUi,
+      isWebchat,
+      clientMode: connectParams.client.mode,
+    }) &&
     device
       ? await getBoundDeviceBootstrapProfile({
           token: bootstrapTokenCandidate,
@@ -142,19 +142,39 @@ export async function authorizeExistingGatewayDevice(params: {
     const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
       "operator",
       retryBootstrapHandoffProfile.scopes,
+      retryBootstrapHandoffProfile.purpose,
     );
     if (
-      isPairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: retryBootstrapOperatorScopes,
-        allowedScopes: pairedScopes,
+      isSetupCodeHandoffBootstrapClient({
+        profile: retryBootstrapHandoffProfile,
+        client: connectParams.client,
       })
     ) {
-      // If the first QR bootstrap hello-ok failed to reach mobile, the
-      // bootstrap token is restored while the paired device already has
-      // node+operator grants. Preserve the same bounded handoff on retry.
-      handoffBootstrapProfile = retryBootstrapHandoffProfile;
+      const pairedAllowsHandoff =
+        pairedRoles.includes("operator") &&
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: retryBootstrapOperatorScopes,
+          allowedScopes: pairedScopes,
+        });
+      if (!pairedAllowsHandoff) {
+        params.logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+        if (!(await requirePairing("scope-upgrade", paired))) {
+          return { ok: false, handoffBootstrapProfile };
+        }
+      }
+      const pairedAfterBootstrapUpgrade = device ? await getPairedDevice(device.id) : null;
+      if (
+        pairedDeviceAllowsBootstrapOperator({
+          device: pairedAfterBootstrapUpgrade,
+          devicePublicKey,
+          profile: retryBootstrapHandoffProfile,
+        })
+      ) {
+        // The setup code is the owner-approved upgrade artifact. Reuse the
+        // same handoff after retrying or promoting an existing mobile pairing.
+        handoffBootstrapProfile = retryBootstrapHandoffProfile;
+      }
     }
   }
 

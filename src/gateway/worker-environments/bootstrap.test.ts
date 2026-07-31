@@ -4,13 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import {
-  bootstrapWorker as bootstrapWorkerCore,
-  type WorkerBootstrapCommandRunner,
-  type WorkerBootstrapDependencies,
-  type WorkerBootstrapRequest,
-} from "./bootstrap.js";
+import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
+
+type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
+type WorkerBootstrapDependencies = Parameters<typeof bootstrapWorkerCore>[1];
+type WorkerBootstrapCommandRunner = NonNullable<WorkerBootstrapDependencies["runCommand"]>;
 
 const BUNDLE_HASH = "a".repeat(64);
 const TARBALL_SHA256 = "b".repeat(64);
@@ -242,9 +241,6 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).toContain("npm install --global");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1",
-    );
     expect(npmRunner.calls[1]?.options.input).toContain("postinstall-inventory.json");
     expect(npmRunner.calls[1]?.options.input).toContain("lib/node_modules/openclaw");
     expect(npmRunner.calls[1]?.options.input).toContain('cp -R "$package_dir/." "$staging/"');
@@ -435,7 +431,8 @@ describe("bootstrapWorker", () => {
             await fs.copyFile(artifact.tarballPath, remoteTarball);
             return result();
           }
-          const isPreflight = options.input?.includes("expected_receipt=$2") ?? false;
+          const isPreflight =
+            typeof options.input === "string" && options.input.includes("expected_receipt=$2");
           const scriptArgs = isPreflight
             ? [artifact.bundleHash, receiptJson, "bundle"]
             : [

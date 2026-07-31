@@ -11,7 +11,6 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendText,
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
@@ -153,21 +152,6 @@ describe("fuzz: sendJson", () => {
       expect(res.statusCode).toBe(status);
       expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
       expect(end).toHaveBeenCalledWith(JSON.stringify(body));
-    }
-  });
-});
-
-describe("fuzz: sendText", () => {
-  it("propagates status, sets plain-text content type, and forwards the body", () => {
-    const rng = makeRng(0xfeed);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, setHeader, end } = makeMockHttpResponse();
-      const status = randInt(rng, 100, 599);
-      const body = randString(rng, 64);
-      sendText(res, status, body);
-      expect(res.statusCode).toBe(status);
-      expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-      expect(end).toHaveBeenCalledWith(body);
     }
   });
 });

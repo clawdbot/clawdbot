@@ -2,13 +2,7 @@
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  COPILOT_DEFAULT_AGENT_ID,
-  COPILOT_TOKEN_PROFILE_ERROR,
-  resolveCopilotAuth,
-  sanitizeAgentId,
-  tokenFingerprint,
-} from "./auth-bridge.js";
+import { resolveCopilotAuth, tokenFingerprint } from "./auth-bridge.js";
 
 function cleanEnv(): NodeJS.ProcessEnv {
   return {} as NodeJS.ProcessEnv;
@@ -16,37 +10,43 @@ function cleanEnv(): NodeJS.ProcessEnv {
 
 const FAKE_HOME = "/fake-home";
 const fakeHomeDir = () => FAKE_HOME;
+const COPILOT_DEFAULT_AGENT_ID = "copilot";
+const COPILOT_TOKEN_PROFILE_ERROR =
+  "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
+
+function resolveAgentId(agentId: string | undefined): string {
+  return resolveCopilotAuth({ agentId, env: cleanEnv(), homeDir: fakeHomeDir }).agentId;
+}
 
 describe("sanitizeAgentId", () => {
   it("returns default for null/undefined/empty", () => {
-    expect(sanitizeAgentId(undefined)).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId(null)).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("   ")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId(undefined)).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("   ")).toBe(COPILOT_DEFAULT_AGENT_ID);
   });
 
   it("lowercases and accepts alnum + dash + underscore", () => {
-    expect(sanitizeAgentId("Agent-1")).toBe("agent-1");
-    expect(sanitizeAgentId("my_agent_42")).toBe("my_agent_42");
-    expect(sanitizeAgentId("a")).toBe("a");
+    expect(resolveAgentId("Agent-1")).toBe("agent-1");
+    expect(resolveAgentId("my_agent_42")).toBe("my_agent_42");
+    expect(resolveAgentId("a")).toBe("a");
   });
 
   it("rejects path-traversal segments and falls back to default", () => {
-    expect(sanitizeAgentId("../etc/passwd")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("../..")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("a/b")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("a\\b")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("a\u0000b")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("../etc/passwd")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("../..")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("a/b")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("a\\b")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("a\u0000b")).toBe(COPILOT_DEFAULT_AGENT_ID);
   });
 
   it("rejects ids that do not start with alnum", () => {
-    expect(sanitizeAgentId("-foo")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(sanitizeAgentId("_bar")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("-foo")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("_bar")).toBe(COPILOT_DEFAULT_AGENT_ID);
   });
 
   it("rejects ids longer than 64 chars", () => {
-    expect(sanitizeAgentId("a".repeat(64))).toBe("a".repeat(64));
-    expect(sanitizeAgentId("a".repeat(65))).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(resolveAgentId("a".repeat(64))).toBe("a".repeat(64));
+    expect(resolveAgentId("a".repeat(65))).toBe(COPILOT_DEFAULT_AGENT_ID);
   });
 });
 

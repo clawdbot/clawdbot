@@ -4,13 +4,26 @@ import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
+const clickclackPluginWritePath =
+  "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const httpProbePath = "scripts/e2e/lib/openwebui/http-probe.mjs";
+
+type ClickClackFixturePlugin = {
+  outbound: {
+    sendText(ctx: {
+      cfg: { channels: { clickclack: { baseUrl: string; token: string } } };
+      text: string;
+      to: string;
+    }): Promise<unknown>;
+  };
+};
 
 function runScript(scriptPath: string, args: string[] = [], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
@@ -264,5 +277,59 @@ describe("e2e helper numeric env limits", () => {
         url: "http://127.0.0.1/probe",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("bounds generated ClickClack plugin response bodies", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-plugin-"));
+    let headersSentResolve: (() => void) | undefined;
+    const headersSent = new Promise<void>((resolve) => {
+      headersSentResolve = resolve;
+    });
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.flushHeaders();
+      headersSentResolve?.();
+    });
+    const baseUrl = await listen(server);
+    const realTimeout = AbortSignal.timeout;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(200));
+    try {
+      const result = runScript(clickclackPluginWritePath, [tempDir]);
+      expect(result.status).toBe(0);
+      const generated = (await import(pathToFileURL(path.join(tempDir, "index.mjs")).href)) as {
+        default: {
+          register(api: {
+            registerChannel(entry: { plugin: ClickClackFixturePlugin }): void;
+          }): void;
+        };
+      };
+      let plugin: ClickClackFixturePlugin | undefined;
+      generated.default.register({
+        registerChannel: ({ plugin: registeredPlugin }) => {
+          plugin = registeredPlugin;
+        },
+      });
+      if (!plugin) {
+        throw new Error("generated ClickClack plugin did not register a channel");
+      }
+
+      const startedAt = Date.now();
+      const request = plugin.outbound.sendText({
+        cfg: { channels: { clickclack: { baseUrl, token: "x" } } },
+        text: "hello",
+        to: "channel:general",
+      });
+      const rejection = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+      await headersSent;
+      await rejection;
+
+      expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      timeoutSpy.mockRestore();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 });

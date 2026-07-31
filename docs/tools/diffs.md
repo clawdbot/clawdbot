@@ -289,11 +289,11 @@ Supported `defaults` keys: `fontFamily`, `fontSize`, `lineSpacing`, `layout`, `s
 
 ## Artifact lifecycle and storage
 
-- Artifacts live under `$TMPDIR/openclaw-diffs`.
-- Viewer metadata stores a random 20-hex-char artifact ID, a random 48-hex-char token, `createdAt`/`expiresAt`, and the stored `viewer.html` path.
+- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed; SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
+- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata; no JSON sidecars are written.
 - Default artifact TTL: 30 minutes. Maximum accepted TTL: 6 hours.
-- Cleanup runs opportunistically after each artifact create call; expired artifacts are deleted.
-- Fallback sweep removes stale folders older than 24 hours when metadata is missing.
+- Cleanup runs opportunistically after each artifact create call. Expired SQLite rows are deleted first, followed by any corresponding PNG/PDF directory.
+- A fallback sweep removes rowless temporary folders older than 24 hours. Legacy `meta.json`, `file-meta.json`, and `viewer.html` caches are not imported or read.
 
 ## Viewer URL and network behavior
 

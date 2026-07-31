@@ -155,9 +155,19 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerDevicesCli",
     },
     {
+      commandNames: ["users"],
+      loadModule: () => import("../users-cli.js"),
+      exportName: "registerUsersCli",
+    },
+    {
       commandNames: ["node"],
       loadModule: () => import("../node-cli.js"),
       exportName: "registerNodeCli",
+    },
+    {
+      commandNames: ["worker"],
+      loadModule: () => import("../worker-cli.js"),
+      exportName: "registerWorkerCli",
     },
     {
       commandNames: ["sandbox"],
@@ -185,7 +195,9 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerTuiCli",
     },
     {
-      commandNames: ["cron"],
+      // automations is a commander alias on the cron command; the lazy
+      // router only routes names listed here, so the alias must be owned too.
+      commandNames: ["cron", "automations"],
       loadModule: () => import("../cron-cli.js"),
       exportName: "registerCronCli",
     },

@@ -26,7 +26,6 @@ const loadPluginMetadataSnapshotMock = vi.fn((): MetadataSnapshotMock => metadat
 const isPluginMetadataSnapshotCompatibleMock = vi.fn(() => true);
 const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
-const clearCurrentPluginMetadataSnapshotMock = vi.fn();
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
@@ -54,11 +53,7 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../current-plugin-metadata-snapshot.js", () => ({
-  clearCurrentPluginMetadataSnapshot: clearCurrentPluginMetadataSnapshotMock,
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
-  isReusableCurrentPluginMetadataSnapshot: (
-    _snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
-  ) => true,
   setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -78,7 +73,6 @@ describe("resolvePluginRuntimeLoadContext", () => {
     loadPluginMetadataSnapshotMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
-    clearCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
 
@@ -167,7 +161,6 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env: { HOME: "/tmp/openclaw-home" },
       workspaceDir: "/resolved-workspace",
     });
-    expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {
@@ -260,6 +253,26 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
       demo: { source: "registry", version: "1.0.0" },
     });
+  });
+
+  it.each([
+    { scope: "explicit empty", pluginIds: [] },
+    { scope: "explicit owner", pluginIds: ["demo"] },
+  ])("keeps $scope plugin metadata scoped before activation", ({ pluginIds }) => {
+    const config = { plugins: {} };
+    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce({ ...metadataSnapshot, pluginIds });
+
+    resolvePluginRuntimeLoadContext({ config, env, onlyPluginIds: pluginIds });
+
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+      allowWorkspaceScopedCurrent: true,
+      config,
+      env,
+      pluginIds,
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(setCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("builds plugin load options from the shared runtime context", () => {

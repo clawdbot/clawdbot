@@ -115,10 +115,12 @@ Add one `operator_approvals` table to the shared state database.
 
 Required indexes:
 
-- unique `(resolution_ref)`; inserts also reject cross-column `approval_id`/`resolution_ref` ambiguity
-- `(status, expires_at_ms)`
-- `(source_session_key, created_at_ms DESC)`
-- `(resolved_at_ms)` for retention pruning
+| Index                                      | Purpose                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------- |
+| unique `(resolution_ref)`                  | Reject cross-column `approval_id`/`resolution_ref` ambiguity during insert. |
+| `(status, expires_at_ms)`                  | Find pending approvals and reconcile authoritative deadlines.               |
+| `(source_session_key, created_at_ms DESC)` | Replay recent approvals for one source session.                             |
+| `(resolved_at_ms)`                         | Prune retained terminal approvals according to the fixed retention policy.  |
 
 Audience arrays are small and bounded. Session-filtered replay first selects visible pending rows through Kysely, then decodes and filters the bounded audience arrays in application code; it does not use string matching or raw SQL JSON queries.
 

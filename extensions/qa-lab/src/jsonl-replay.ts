@@ -23,7 +23,7 @@ type JsonlReplayTurn = {
   transcriptPrefix: string;
 };
 
-export type JsonlReplayCellRunner = (params: {
+type JsonlReplayCellRunner = (params: {
   runtime: RuntimeId;
   transcriptPath: string;
   turn: JsonlReplayTurn;
@@ -171,7 +171,7 @@ function assertSupportedRuntimePair(runtimePair: JsonlReplayInput["runtimePair"]
 
 export function createMockJsonlReplayCellRunner(): JsonlReplayCellRunner {
   return async ({ runtime, turn }) => ({
-    scenarioStatus: "pass",
+    status: "pass",
     cell: {
       runtime,
       transcriptBytes: turn.transcriptPrefix,

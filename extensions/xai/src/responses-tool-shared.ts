@@ -80,20 +80,6 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   };
 }
 
-export function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): {
-  content: string;
-  citations: string[];
-} {
-  const { text, annotationCitations } = extractXaiWebSearchContent(data);
-  return {
-    content: text ?? "No response",
-    citations:
-      Array.isArray(data.citations) && data.citations.length > 0
-        ? data.citations
-        : annotationCitations,
-  };
-}
-
 export function requireXaiResponseTextAndCitations(
   data: XaiWebSearchResponse,
   label: string,
@@ -111,25 +97,6 @@ export function requireXaiResponseTextAndCitations(
       Array.isArray(data.citations) && data.citations.length > 0
         ? data.citations
         : annotationCitations,
-  };
-}
-
-export function resolveXaiResponseTextCitationsAndInline(
-  data: XaiWebSearchResponse,
-  inlineCitationsEnabled: boolean,
-): {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-} {
-  const { content, citations } = resolveXaiResponseTextAndCitations(data);
-  return {
-    content,
-    citations,
-    inlineCitations:
-      inlineCitationsEnabled && Array.isArray(data.inline_citations)
-        ? data.inline_citations
-        : undefined,
   };
 }
 
@@ -152,16 +119,3 @@ export function requireXaiResponseTextCitationsAndInline(
         : undefined,
   };
 }
-
-export const testing = {
-  buildXaiResponsesToolBody,
-  extractXaiWebSearchContent,
-  requireXaiResponseTextCitationsAndInline,
-  requireXaiResponseTextAndCitations,
-  resolveXaiResponseTextCitationsAndInline,
-  resolveXaiResponseTextAndCitations,
-  resolveXaiResponsesEndpoint,
-  XAI_RESPONSES_BASE_URL,
-  XAI_RESPONSES_ENDPOINT,
-} as const;
-export { testing as __testing };

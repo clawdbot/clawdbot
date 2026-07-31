@@ -118,9 +118,14 @@ describe("fs.listDir", () => {
       }),
     });
     const context = {
+      getRuntimeConfig: () => ({}),
       nodeRegistry: {
         get: vi.fn().mockReturnValue({
           connId: "conn-1",
+          pairingGeneration: "generation-1",
+          nodeId: "macbook",
+          platform: "macos",
+          deviceFamily: "Mac",
           commands: ["system.run", "fs.listDir"],
         }),
         invoke,
@@ -137,9 +142,39 @@ describe("fs.listDir", () => {
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "macbook",
       expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command: "fs.listDir",
       params: {},
     });
+  });
+
+  it("rejects node listings blocked by the live command policy", async () => {
+    const invoke = vi.fn();
+    const context = {
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: ["fs.listDir"] } } } }),
+      nodeRegistry: {
+        get: vi.fn().mockReturnValue({
+          connId: "conn-1",
+          nodeId: "macbook",
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["fs.listDir"],
+        }),
+        invoke,
+      },
+    };
+
+    const [ok, , error] = expectDefined(
+      await call({ nodeId: "macbook" }, context),
+      'await call({ nodeId: "macbook" }, context) test invariant',
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { command: "fs.listDir", reason: "command not allowlisted" },
+    });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("rejects disconnected and directory-browse-incompatible nodes", async () => {

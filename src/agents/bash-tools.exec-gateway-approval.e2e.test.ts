@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -19,8 +19,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
-import { createExecTool } from "./bash-tools.exec.js";
 
 const TEST_ENV_KEYS = [
   "HOME",

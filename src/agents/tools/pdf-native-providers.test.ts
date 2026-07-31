@@ -1,6 +1,7 @@
 // Native PDF provider tests cover direct Anthropic and Gemini request shapes,
 // base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
@@ -207,14 +208,13 @@ describe("native PDF provider API calls", () => {
       }),
     );
 
-    const error = await Promise.race([
+    const error = await withTestTimeout(
       pdfNativeProviders
         .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
         .catch((caught: unknown) => caught),
-      new Promise<Error>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
-      }),
-    ]);
+      500,
+      "timed out waiting for bounded error body",
+    );
 
     if (!(error instanceof Error)) {
       throw new Error("expected Anthropic PDF request to throw an Error");

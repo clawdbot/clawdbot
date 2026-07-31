@@ -1,7 +1,6 @@
 // Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  createFailureAwareTransportWaitForCondition,
   findFailureOutboundMessage as findTransportFailureOutboundMessage,
   waitForQaTransportCondition,
   type QaTransportState,
@@ -15,20 +14,16 @@ type WaitForNoOutboundOptions = {
 
 function findFailureOutboundMessage(
   state: QaTransportState,
-  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
   return findTransportFailureOutboundMessage(state, options);
-}
-
-function createScenarioWaitForCondition(state: QaTransportState) {
-  return createFailureAwareTransportWaitForCondition(state);
 }
 
 async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
-  options?: { sinceIndex?: number },
+  options?: { accountId?: string; sinceIndex?: number },
 ) {
   return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
@@ -39,7 +34,12 @@ async function waitForOutboundMessage(
       .getSnapshot()
       .messages.filter((message: QaBusMessage) => message.direction === "outbound")
       .slice(options?.sinceIndex ?? 0)
-      .find(predicate);
+      .find(
+        (message) =>
+          !message.deleted &&
+          (!options?.accountId || message.accountId === options.accountId) &&
+          predicate(message),
+      );
     if (!match) {
       return undefined;
     }
@@ -141,22 +141,6 @@ function formatConversationTranscript(
   return formatTransportTranscript(state, params);
 }
 
-async function waitForTransportOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForOutboundMessage(state, predicate, timeoutMs);
-}
-
-async function waitForChannelOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
-}
-
 async function waitForNoTransportOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
@@ -166,15 +150,11 @@ async function waitForNoTransportOutbound(
 }
 
 export {
-  createScenarioWaitForCondition,
-  findFailureOutboundMessage,
   formatConversationTranscript,
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 };

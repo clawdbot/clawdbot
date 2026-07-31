@@ -6,6 +6,8 @@ import {
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
+  toSignalToolResultTestError,
+  waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
@@ -62,6 +64,7 @@ describe("monitorSignalProvider tool results", () => {
         event: "receive",
         data: JSON.stringify(payload),
       });
+      await waitForSignalToolResultIngressIdle();
       abortController.abort();
     });
 
@@ -127,7 +130,6 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("cancels a pending reply-session conflict retry when the monitor stops", async () => {
-    vi.useFakeTimers();
     const abortController = new AbortController();
     replyMock.mockRejectedValue(
       new Error(
@@ -151,22 +153,25 @@ describe("monitorSignalProvider tool results", () => {
       });
     });
 
+    const monitorPromise = monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+    let waitError: Error | undefined;
     try {
-      const monitorPromise = monitorSignalProvider({
-        autoStart: false,
-        baseUrl: "http://127.0.0.1:8080",
-        abortSignal: abortController.signal,
-      });
-
-      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
-      abortController.abort(new Error("monitor stopped"));
-      await monitorPromise;
-      await vi.advanceTimersByTimeAsync(10_000);
-
-      expect(replyMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    } catch (error) {
+      waitError = toSignalToolResultTestError(error, "Signal reply was not dispatched");
     } finally {
-      vi.useRealTimers();
+      abortController.abort(new Error("monitor stopped"));
     }
+    await monitorPromise;
+    if (waitError) {
+      throw waitError;
+    }
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
   });
 
   it("drains an inline inbound message accepted before the monitor stops", async () => {
@@ -176,7 +181,7 @@ describe("monitorSignalProvider tool results", () => {
     });
     replyMock.mockResolvedValue({ text: "accepted reply" });
     streamMock.mockImplementation(async ({ onEvent }) => {
-      onEvent({
+      await onEvent({
         event: "receive",
         data: JSON.stringify({
           envelope: {
@@ -187,6 +192,7 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
+      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
       abortController.abort(new Error("monitor stopped"));
     });
 
@@ -242,6 +248,15 @@ describe("monitorSignalProvider tool results", () => {
     const abortController = new AbortController();
     const maxBytes = 2 * 1024 * 1024;
     const expectedMaxResponseBytes = Math.ceil((maxBytes * 4) / 3) + 64 * 1024;
+    setSignalToolResultTestConfig({
+      channels: {
+        signal: {
+          transport: { kind: "container", url: "http://container:8080" },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
 
     replyMock.mockResolvedValue({ text: "ok" });
     signalRpcRequestMock.mockResolvedValue({ data: Buffer.from("hello").toString("base64") });
@@ -260,12 +275,11 @@ describe("monitorSignalProvider tool results", () => {
           },
         }),
       });
+      await waitForSignalToolResultIngressIdle();
       abortController.abort();
     });
 
     await monitorSignalProvider({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
       mediaMaxMb: 2,
       abortSignal: abortController.signal,
     });
@@ -277,9 +291,9 @@ describe("monitorSignalProvider tool results", () => {
         recipient: "+15550001111",
       },
       {
-        baseUrl: "http://127.0.0.1:8080",
+        baseUrl: "http://container:8080",
         timeoutMs: undefined,
-        apiMode: "auto",
+        transportKind: "container",
         maxResponseBytes: expectedMaxResponseBytes,
       },
     );

@@ -10,6 +10,24 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class ChatControllerMessageIdentityTest {
+  @Test
+  fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
+    val previous =
+      ChatMessage(
+        id = "stable-compose-id",
+        role = "user",
+        content = listOf(ChatMessageContent(text = "hello")),
+        timestampMs = 10,
+        entryId = "old-entry",
+      )
+    val incoming = previous.copy(id = "temporary-id", entryId = "canonical-entry")
+
+    val reconciled = reconcileMessageIds(listOf(previous), listOf(incoming)).single()
+
+    assertEquals("stable-compose-id", reconciled.id)
+    assertEquals("canonical-entry", reconciled.entryId)
+  }
+
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
@@ -40,6 +58,30 @@ class ChatControllerMessageIdentityTest {
     val content = parseChatMessageContents(obj)
 
     assertEquals(listOf(ChatMessageContent(type = "text", text = "Hi there")), content)
+  }
+
+  @Test
+  fun managedImagesParticipateInMessageIdentity() {
+    fun message(artifactId: String) =
+      ChatMessage(
+        id = artifactId,
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              artifactId = artifactId,
+              url = "/api/chat/media/outgoing/main/$artifactId/full",
+              mimeType = "image/png",
+            ),
+          ),
+        timestampMs = 1,
+      )
+
+    assertNotEquals(
+      messageIdentityKey(message("artifact_managed_image_11111111-1111-4111-8111-111111111111")),
+      messageIdentityKey(message("artifact_managed_image_22222222-2222-4222-8222-222222222222")),
+    )
   }
 
   @Test

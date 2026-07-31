@@ -7,7 +7,7 @@ import {
   type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -346,6 +346,96 @@ describeModelLive("moonshot K2.7 Code live", () => {
       lastAuthError,
       "Moonshot K2.7 Code rejected the API key in both regions",
     );
+  }, 180_000);
+});
+
+describeModelLive("moonshot K3 live", () => {
+  it("forces max reasoning and completes a required tool call", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const wrappedStream = provider.wrapStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k3",
+      thinkingLevel: "off",
+      extraParams: { thinking: { type: "disabled", keep: "all" } },
+      streamFn: streamSimple,
+    } as never);
+    if (!wrappedStream) {
+      throw new Error("Moonshot provider did not register a stream wrapper");
+    }
+
+    const runScenario = async (model: Model<"openai-completions">, liveValue: string) => {
+      let capturedPayload: Record<string, unknown> | undefined;
+      const response = await collectDoneMessage(
+        wrappedStream(
+          model,
+          {
+            messages: [
+              {
+                role: "user",
+                content: "Call the noop tool with {}. Do not answer directly.",
+                timestamp: Date.now(),
+              },
+            ],
+            tools: [createNoopTool()],
+          },
+          {
+            apiKey: liveValue,
+            maxTokens: 4096,
+            onPayload: (value) => {
+              const payload = value as Record<string, unknown>;
+              capturedPayload = payload;
+              payload.thinking = { type: "disabled", keep: "all" };
+              payload.reasoning_effort = "low";
+              payload.reasoningEffort = "low";
+              payload.temperature = 0;
+              payload.top_p = 0.5;
+              payload.n = 2;
+              payload.presence_penalty = 1;
+              payload.frequency_penalty = 1;
+              payload.tool_choice = "required";
+            },
+          },
+        ) as AsyncIterable<{
+          type: string;
+          message?: AssistantMessage;
+          error?: AssistantMessage;
+        }>,
+      );
+
+      expect(capturedPayload).toBeDefined();
+      expect(capturedPayload).not.toHaveProperty("thinking");
+      expect(capturedPayload).not.toHaveProperty("reasoningEffort");
+      expect(capturedPayload?.reasoning_effort).toBe("max");
+      expect(capturedPayload?.tool_choice).toBe("required");
+      expect(capturedPayload).not.toHaveProperty("temperature");
+      expect(capturedPayload).not.toHaveProperty("top_p");
+      expect(capturedPayload).not.toHaveProperty("n");
+      expect(capturedPayload).not.toHaveProperty("presence_penalty");
+      expect(capturedPayload).not.toHaveProperty("frequency_penalty");
+      const reasoning = response.content.find((block) => block.type === "thinking");
+      if (!reasoning || reasoning.type !== "thinking" || reasoning.thinking.length === 0) {
+        throw new Error("Moonshot K3 did not return captured reasoning");
+      }
+      const toolCall = response.content.find((block) => block.type === "toolCall");
+      if (!toolCall || toolCall.type !== "toolCall") {
+        throw new Error(`Moonshot K3 did not call noop: ${response.stopReason}`);
+      }
+      expect(toolCall.name).toBe("noop");
+    };
+
+    let lastAuthError: unknown;
+    for (const model of resolveMoonshotModels("kimi-k3")) {
+      try {
+        await runScenario(model, MOONSHOT_API_KEY);
+        return;
+      } catch (error) {
+        if (!isMoonshotAuthDrift(error)) {
+          throw error;
+        }
+        lastAuthError = error;
+      }
+    }
+    throw toLintErrorObject(lastAuthError, "Moonshot K3 rejected the API key in both regions");
   }, 180_000);
 });
 

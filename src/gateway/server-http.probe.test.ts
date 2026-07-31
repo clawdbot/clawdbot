@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -53,11 +52,68 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
       },
     });
   });
+
+  it("returns 404 for disabled GET routes when the Control UI is root-mounted", async () => {
+    await withGatewayServer({
+      prefix: "openai-compat-disabled-root-control-ui",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+      },
+      run: async (server) => {
+        for (const path of [
+          "/v1",
+          "/v1/",
+          "/v1/models",
+          "/v1/models/openclaw",
+          "/v1/chat/completions",
+          "/v1/responses",
+          "/v1/embeddings",
+        ]) {
+          const { res, getBody } = await sendGatewayRequest(server, {
+            path,
+            method: "GET",
+          });
+
+          expect(res.statusCode, path).toBe(404);
+          expect(getBody(), path).toBe("Not Found");
+        }
+      },
+    });
+  });
+
+  it.each([
+    { name: "chat completions", enabled: { openAiChatCompletionsEnabled: true } },
+    { name: "responses", enabled: { openResponsesEnabled: true } },
+  ])("keeps $name model discovery ahead of a root-mounted Control UI", async ({ enabled }) => {
+    await withGatewayServer({
+      prefix: "openai-compat-enabled-root-control-ui",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        ...enabled,
+      },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/v1/models",
+          method: "GET",
+          headers: { "x-openclaw-scopes": "operator.read" },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toMatchObject({
+          object: "list",
+          data: expect.arrayContaining([expect.objectContaining({ id: "openclaw/default" })]),
+        });
+      },
+    });
+  });
 });
 
 describe("gateway probe endpoints", () => {
   it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
-    resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
     const channelManager = {
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
@@ -121,6 +177,14 @@ describe("gateway probe endpoints", () => {
             error: { code: "gateway_unavailable" },
           });
 
+          const blockedBoard = await sendGatewayRequest(server, {
+            path: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage",
+          });
+          expect(blockedBoard.res.statusCode).toBe(503);
+          expect(JSON.parse(blockedBoard.getBody())).toMatchObject({
+            error: { code: "gateway_unavailable" },
+          });
+
           expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
             ok: true,
             status: "running",
@@ -136,13 +200,11 @@ describe("gateway probe endpoints", () => {
         },
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
       resetGatewayWorkAdmission();
     }
   });
 
   it("keeps in-flight core HTTP work visible to suspension preparation", async () => {
-    resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
     let releaseWatch = () => {};
     let markWatchStarted = () => {};
@@ -205,7 +267,6 @@ describe("gateway probe endpoints", () => {
       });
     } finally {
       releaseWatch();
-      resetGatewaySuspendCoordinatorForTest();
       resetGatewayWorkAdmission();
     }
   });

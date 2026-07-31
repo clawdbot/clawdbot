@@ -231,12 +231,14 @@ class VoiceNoteRecorderControllerTest {
       controller.finish()
       assertEquals(VoiceNoteRecorderState.Preparing, controller.state.value)
       assertTrue(finished.single().file.exists())
+      assertTrue(controller.canCommitPreparation(finished.single().id))
 
       // Composition-scoped staging may be cancelled before it runs; cancel()
       // must still delete the handed-off recording.
       controller.cancel()
 
       assertEquals(VoiceNoteRecorderState.Idle, controller.state.value)
+      assertFalse(controller.canCommitPreparation(finished.single().id))
       assertFalse(finished.single().file.exists())
       directory.deleteRecursively()
     }

@@ -210,11 +210,9 @@ export function windowsEscapeArg(value: string): { ok: true; escaped: string } |
   return { ok: true, escaped: `"${escaped}"` };
 }
 
-export type ShellSegmentRenderResult =
-  | { ok: true; rendered: string }
-  | { ok: false; reason: string };
+type ShellSegmentRenderResult = { ok: true; rendered: string } | { ok: false; reason: string };
 
-export type RebuiltShellCommandResult = {
+type RebuiltShellCommandResult = {
   ok: boolean;
   command?: string;
   reason?: string;

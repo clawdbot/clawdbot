@@ -1,7 +1,8 @@
 // Channel option tests cover channel command option parsing and config resolution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing, formatCliChannelOptions, resolveCliChannelOptions } from "./channel-options.js";
-import { testing as startupMetadataTesting } from "./startup-metadata.js";
+import { formatCliChannelOptions, resolveCliChannelOptions } from "./channel-options.js";
+import { testing } from "./channel-options.test-support.js";
+import { testing as startupMetadataTesting } from "./startup-metadata.test-support.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 

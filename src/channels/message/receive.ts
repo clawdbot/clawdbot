@@ -9,10 +9,10 @@ import type { ChannelMessageReceiveAckPolicy } from "./types.js";
 export type MessageAckPolicy = ChannelMessageReceiveAckPolicy;
 
 /** Processing stage where a durable inbound message may be acknowledged. */
-export type MessageAckStage = "receive_record" | "agent_dispatch" | "durable_send" | "manual";
+type MessageAckStage = "receive_record" | "agent_dispatch" | "durable_send" | "manual";
 
 /** Current acknowledgement state for one inbound message context. */
-export type MessageAckState = "pending" | "acked" | "nacked";
+type MessageAckState = "pending" | "acked" | "nacked";
 
 /** Mutable receive context passed through durable inbound message processing. */
 export type MessageReceiveContext<TMessage = unknown> = {
@@ -34,10 +34,7 @@ export type MessageReceiveContext<TMessage = unknown> = {
 const neverAbortedSignal = new AbortController().signal;
 
 /** Returns whether an ack policy should acknowledge at the supplied processing stage. */
-export function shouldAckMessageAfterStage(
-  policy: MessageAckPolicy,
-  stage: MessageAckStage,
-): boolean {
+function shouldAckMessageAfterStage(policy: MessageAckPolicy, stage: MessageAckStage): boolean {
   switch (policy) {
     case "after_receive_record":
       return stage === "receive_record";

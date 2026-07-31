@@ -333,7 +333,10 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(toolResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 
-  it("preserves real OpenAI transport results and aborts missing parallel siblings", () => {
+  it.each([
+    "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
+  ] as const)("preserves real %s results and aborts missing parallel siblings", (api) => {
     const messages: Context["messages"] = [
       {
         ...assistantToolCall("call_keep"),
@@ -353,10 +356,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       { role: "user", content: "continue", timestamp: Date.now() },
     ];
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("openclaw-openai-responses-transport" as Api, "openai", "gpt-5.4"),
-    );
+    const result = transformTransportMessages(messages, makeModel(api as Api, "openai", "gpt-5.4"));
 
     expect(result.map((msg) => msg.role)).toEqual([
       "assistant",
@@ -545,6 +545,35 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
 
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
     expect(JSON.stringify(result)).not.toContain("call_error");
+  });
+
+  it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
+    const messages: Context["messages"] = [
+      assistantToolCall("call_repeated"),
+      assistantToolCall("call_repeated", "exec", "error"),
+      {
+        role: "toolResult",
+        toolCallId: "call_repeated",
+        toolName: "exec",
+        content: [{ type: "text", text: "failed turn output" }],
+        isError: true,
+        timestamp: Date.now(),
+      },
+      { role: "user", content: "retry after error", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+
+    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(requireToolResultMessage(result[1])).toMatchObject({
+      toolCallId: "call_repeated",
+      isError: true,
+      content: [{ type: "text", text: "No result provided" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("failed turn output");
   });
 
   it("still synthesizes missing tool results for Anthropic transports", () => {

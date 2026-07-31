@@ -118,6 +118,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedReason: normalizeEnumValue(raw.blockedReason, AUTH_BLOCKED_REASONS),
     blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
     blockedModel: normalizeOptionalString(raw.blockedModel),
+    blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: normalizeFiniteNumber(raw.cooldownUntil),
     cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
@@ -126,6 +127,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     errorCount: normalizeFiniteNumber(raw.errorCount),
     failureCounts: normalizeFailureCounts(raw.failureCounts),
     lastFailureAt: normalizeFiniteNumber(raw.lastFailureAt),
+    lastProbeAt: normalizeFiniteNumber(raw.lastProbeAt),
   };
   for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
     if (stats[key] === undefined) {

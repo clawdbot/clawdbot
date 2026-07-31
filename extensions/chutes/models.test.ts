@@ -1,12 +1,21 @@
 // Chutes tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildChutesModelDefinition,
-  CHUTES_MODEL_CATALOG,
-  clearChutesModelCacheForTests,
-  discoverChutesModels,
-} from "./models.js";
+import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
+import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
+import { applyChutesConfig, CHUTES_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const EXPECTED_STATIC_MODEL_IDS = [
+  "deepseek-ai/DeepSeek-V3.2-TEE",
+  "moonshotai/Kimi-K2.6-TEE",
+  "moonshotai/Kimi-K2.5-TEE",
+  "zai-org/GLM-5.2-TEE",
+  "MiniMaxAI/MiniMax-M2.5-TEE",
+  "Qwen/Qwen3.6-27B-TEE",
+  "Qwen/Qwen3.5-397B-A17B-TEE",
+];
 
 function restoreEnvVar(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -86,12 +95,12 @@ function requireChutesModel(
 
 describe("chutes-models", () => {
   beforeEach(() => {
-    clearChutesModelCacheForTests();
+    clearLiveCatalogCacheForTests();
   });
 
-  it("buildChutesModelDefinition returns config with required fields", () => {
+  it("builds static definitions with required fields", () => {
     const entry = expectDefined(CHUTES_MODEL_CATALOG[0], "first Chutes catalog model");
-    const def = buildChutesModelDefinition(entry);
+    const def = entry;
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
     expect(def.reasoning).toBe(entry.reasoning);
@@ -105,18 +114,77 @@ describe("chutes-models", () => {
     expect(def.compat.supportsUsageInStreaming).toBe(false);
   });
 
-  it("keeps Qwen VL image limits in the runtime catalog", () => {
-    const visionModelIds = ["Qwen/Qwen2.5-VL-32B-Instruct", "Qwen/Qwen3-VL-235B-A22B-Instruct"];
+  it("keeps image-capable fallback models in the runtime catalog", () => {
+    const visionModelIds = ["moonshotai/Kimi-K2.6-TEE", "Qwen/Qwen3.6-27B-TEE"];
     for (const id of visionModelIds) {
       const model = CHUTES_MODEL_CATALOG.find((candidate) => candidate.id === id);
       expect(model).toBeDefined();
       if (!model) {
         throw new Error(`expected ${id}`);
       }
-      expect(buildChutesModelDefinition(model).mediaInput).toEqual({
-        image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
-      });
+      expect(model.input).toContain("image");
     }
+  });
+
+  it("keeps manifest, runtime catalog, defaults, and aliases aligned", () => {
+    const manifestIds = manifest.modelCatalog.providers.chutes.models.map((model) => model.id);
+    const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
+    expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+    expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+    expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
+    expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
+    expect(
+      manifest.modelCatalog.providers.chutes.models
+        .filter((model) => "status" in model && model.status === "deprecated")
+        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+    ).toEqual([
+      {
+        id: "moonshotai/Kimi-K2.5-TEE",
+        replacedBy: "moonshotai/Kimi-K2.6-TEE",
+      },
+      {
+        id: "Qwen/Qwen3.5-397B-A17B-TEE",
+        replacedBy: "Qwen/Qwen3.6-27B-TEE",
+      },
+    ]);
+
+    const cfg = applyChutesConfig({});
+    expect(cfg.models?.providers?.chutes?.models.map((model) => model.id)).toEqual(
+      EXPECTED_STATIC_MODEL_IDS,
+    );
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: CHUTES_DEFAULT_MODEL_REF,
+      fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
+    });
+    expect(cfg.agents?.defaults?.imageModel).toEqual({
+      primary: "chutes/moonshotai/Kimi-K2.6-TEE",
+      fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
+    });
+    expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
+    expect(cfg.agents?.defaults?.models?.["chutes-pro"]?.alias).toBe(
+      "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
+    );
+    expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
+      "chutes/moonshotai/Kimi-K2.6-TEE",
+    );
+    expect(Object.keys(cfg.agents?.defaults?.models ?? {}).toSorted()).toEqual(
+      [
+        ...EXPECTED_STATIC_MODEL_IDS.map((id) => `chutes/${id}`),
+        "chutes-pro",
+        "chutes-vision",
+      ].toSorted(),
+    );
+    const catalogBackedTargets = [
+      CHUTES_DEFAULT_MODEL_REF,
+      "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
+      "chutes/moonshotai/Kimi-K2.6-TEE",
+      "chutes/Qwen/Qwen3.6-27B-TEE",
+    ];
+    expect(
+      catalogBackedTargets.every((modelRef) =>
+        runtimeIds.includes(modelRef.slice("chutes/".length)),
+      ),
+    ).toBe(true);
   });
 
   it("discoverChutesModels returns static catalog when accessToken is empty", async () => {
@@ -128,21 +196,21 @@ describe("chutes-models", () => {
   it("discoverChutesModels returns static catalog in test env by default", async () => {
     const models = await discoverChutesModels("test-token");
     expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);
-    expect(requireChutesModel(models, 0).id).toBe("Qwen/Qwen3-32B");
+    expect(requireChutesModel(models, 0).id).toBe("deepseek-ai/DeepSeek-V3.2-TEE");
   });
 
   it("discoverChutesModels correctly maps API response when not in test env", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [
-          { id: "zai-org/GLM-4.7-TEE" },
+          { id: "zai-org/GLM-5.2-TEE" },
           {
             id: "new-provider/new-model-r1",
             supported_features: ["reasoning"],
             input_modalities: ["text", "image"],
             context_length: 200000,
             max_output_length: 16384,
-            pricing: { prompt: 0.1, completion: 0.2 },
+            pricing: { prompt: 0.1, completion: 0.2, input_cache_read: 0.05 },
           },
           { id: "new-provider/simple-model" },
         ],
@@ -154,8 +222,14 @@ describe("chutes-models", () => {
       if (models.length === 3) {
         const firstModel = requireChutesModel(models, 0);
         const secondModel = requireChutesModel(models, 1);
-        expect(firstModel.id).toBe("zai-org/GLM-4.7-TEE");
+        expect(firstModel.id).toBe("zai-org/GLM-5.2-TEE");
         expect(secondModel.reasoning).toBe(true);
+        expect(secondModel.cost).toEqual({
+          input: 0.1,
+          output: 0.2,
+          cacheRead: 0.05,
+          cacheWrite: 0,
+        });
         if (!secondModel.compat) {
           throw new Error("expected Chutes API model compat");
         }
@@ -207,30 +281,30 @@ describe("chutes-models", () => {
         jsonResponse({
           data: [
             {
-              id: "Qwen/Qwen3-32B",
-              name: "Qwen/Qwen3-32B",
+              id: "Qwen/Qwen3-32B-TEE",
+              name: "Qwen/Qwen3-32B-TEE",
               supported_features: ["reasoning"],
               input_modalities: ["text"],
               context_length: 40960,
               max_output_length: 40960,
-              pricing: { prompt: 0.08, completion: 0.24 },
+              pricing: { prompt: 0.104, completion: 0.416 },
             },
             {
-              id: "unsloth/Mistral-Nemo-Instruct-2407",
-              name: "unsloth/Mistral-Nemo-Instruct-2407",
+              id: "unsloth/Mistral-Nemo-Instruct-2407-TEE",
+              name: "unsloth/Mistral-Nemo-Instruct-2407-TEE",
               input_modalities: ["text"],
               context_length: 131072,
               max_output_length: 131072,
-              pricing: { prompt: 0.02, completion: 0.04 },
+              pricing: { prompt: 0.0245, completion: 0.0978 },
             },
             {
-              id: "deepseek-ai/DeepSeek-V3-0324-TEE",
-              name: "deepseek-ai/DeepSeek-V3-0324-TEE",
+              id: "zai-org/GLM-5.2-TEE",
+              name: "zai-org/GLM-5.2-TEE",
               supported_features: ["reasoning"],
               input_modalities: ["text"],
-              context_length: 131072,
-              max_output_length: 65536,
-              pricing: { prompt: 0.28, completion: 0.42 },
+              context_length: 1048576,
+              max_output_length: 65535,
+              pricing: { prompt: 1.4, completion: 4.4 },
             },
           ],
         }),

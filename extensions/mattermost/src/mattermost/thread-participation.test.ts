@@ -1,3 +1,4 @@
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 // Mattermost tests cover thread participation cache plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -5,13 +6,16 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setMattermostRuntime } from "../runtime.js";
-import {
-  clearMattermostThreadParticipationCache,
-  hasMattermostThreadParticipationWithPersistence,
-  recordMattermostThreadParticipation,
-} from "./thread-participation.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const threadParticipationMemory = resolveGlobalDedupeCache(
+  Symbol.for("openclaw.mattermostThreadParticipation"),
+  { ttlMs: 7 * 24 * 60 * 60 * 1000, maxSize: 5000 },
+);
+
+let setMattermostRuntime: typeof import("../runtime.js").setMattermostRuntime;
+let hasMattermostThreadParticipationWithPersistence: typeof import("./thread-participation.js").hasMattermostThreadParticipationWithPersistence;
+let recordMattermostThreadParticipation: typeof import("./thread-participation.js").recordMattermostThreadParticipation;
 
 // Drain microtasks + the immediate queue so the fire-and-forget persistent write
 // in recordMattermostThreadParticipation has settled before we assert on it.
@@ -32,14 +36,18 @@ function setPersistentRuntime(): void {
 }
 
 describe("mattermost thread participation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetPluginStateStoreForTests();
-    clearMattermostThreadParticipationCache();
+    threadParticipationMemory.clear();
+    vi.resetModules();
+    ({ setMattermostRuntime } = await import("../runtime.js"));
+    ({ hasMattermostThreadParticipationWithPersistence, recordMattermostThreadParticipation } =
+      await import("./thread-participation.js"));
     setPersistentRuntime();
   });
 
   afterEach(() => {
-    clearMattermostThreadParticipationCache();
+    threadParticipationMemory.clear();
     resetPluginStateStoreForTests();
   });
 
@@ -81,7 +89,7 @@ describe("mattermost thread participation", () => {
     recordMattermostThreadParticipation("acct", "chan", "root-1");
     await flush();
     // Simulate a restart: in-memory cache cleared, persistent SQLite store intact.
-    clearMattermostThreadParticipationCache();
+    threadParticipationMemory.clear();
     await expect(
       hasMattermostThreadParticipationWithPersistence({
         accountId: "acct",

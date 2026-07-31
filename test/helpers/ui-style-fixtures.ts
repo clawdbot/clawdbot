@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export function resolveStylePath(path: string): string {
+function resolveStylePath(path: string): string {
   const candidates = [resolve(process.cwd(), path), resolve(process.cwd(), "..", path)];
   const cssPath = candidates.find((candidate) => existsSync(candidate));
   if (!cssPath) {

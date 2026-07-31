@@ -10,8 +10,9 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import type { PersistedWorkboardCard } from "./src/persistence-types.js";
 import { createWorkboardSqliteStores } from "./src/sqlite-store.js";
-import { WorkboardStore, type PersistedWorkboardCard } from "./src/store.js";
+import { WorkboardStore } from "./src/store.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {

@@ -2,16 +2,40 @@
  * Tests the plugin SDK public API baseline.
  */
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import {
+  computePluginSdkApiBaselineHashFileContent,
   listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
+  renderPluginSdkApiBaselineModules,
+  type PluginSdkApiBaselineRender,
 } from "./api-baseline.js";
 
+const TEST_ENTRYPOINTS = [
+  "agent-harness-runtime",
+  "approval-gateway-runtime",
+  "channel-policy",
+  "core",
+  "infra-runtime",
+  "provider-auth",
+  "provider-catalog-live-runtime",
+  "provider-oauth-runtime",
+  "provider-selection-runtime",
+  "provider-web-search-config-contract",
+  "realtime-voice",
+  "sqlite-runtime-testing",
+] as const;
+
 describe("Plugin SDK API baseline", () => {
+  let rendered: PluginSdkApiBaselineRender;
+
+  beforeAll(async () => {
+    rendered = await renderPluginSdkApiBaseline({ entrypoints: TEST_ENTRYPOINTS });
+  });
+
   it("normalizes declaration import paths to repo-relative paths", () => {
     const repoRoot = process.cwd();
     const modelCatalogPath = path.join(repoRoot, "src", "agents", "agent-model-discovery");
@@ -64,26 +88,16 @@ describe("Plugin SDK API baseline", () => {
     expect(normalizePluginSdkApiSourcePath(repoRoot, sourcePath)).toBe("src/plugin-sdk/core.ts");
   });
 
-  it("renders complete declarations for the canonical public entrypoint inventory", async () => {
+  it("renders complete declarations for the canonical public entrypoint inventory", () => {
     expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
 
-    const rendered = await renderPluginSdkApiBaseline({
-      entrypoints: [
-        "agent-harness-runtime",
-        "approval-gateway-runtime",
-        "infra-runtime",
-        "provider-catalog-live-runtime",
-        "provider-oauth-runtime",
-        "provider-selection-runtime",
-        "provider-web-search-config-contract",
-        "realtime-voice",
-        "sqlite-runtime-testing",
-      ],
-    });
     const findDeclaration = (exportName: string) =>
       rendered.baseline.modules
         .flatMap((moduleSurface) => moduleSurface.exports)
-        .find((exportSurface) => exportSurface.exportName === exportName)?.declaration;
+        .find(
+          (exportSurface) =>
+            exportSurface.exportName === exportName && exportSurface.declaration !== null,
+        )?.declaration;
 
     expect(rendered.baseline.modules.find((entry) => entry.entrypoint === "infra-runtime")).toEqual(
       expect.objectContaining({
@@ -100,6 +114,9 @@ describe("Plugin SDK API baseline", () => {
       "constructor(providerId: string, status: number);",
     );
     expect(findDeclaration("LiveModelCatalogHttpError")).not.toContain("super(");
+    expect(findDeclaration("LiveModelRowProjection")).toContain(
+      "export type LiveModelRowProjection",
+    );
     expect(findDeclaration("ApprovalResolveResult")).not.toContain("see source");
     expect(findDeclaration("RealtimeVoiceAgentConsultRuntime")).not.toContain("see source");
     expect(findDeclaration("createWebSearchProviderContractFields")).toContain(
@@ -117,5 +134,36 @@ describe("Plugin SDK API baseline", () => {
     );
     expect(rendered.json).not.toContain('"line":');
     expect(rendered.jsonl).not.toContain('"sourceLine":');
+  });
+
+  it("renders snapshots independently of entrypoint discovery order", () => {
+    const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
+
+    expect(reverse.json).toBe(rendered.json);
+    expect(reverse.jsonl).toBe(rendered.jsonl);
+  });
+
+  it("hashes entrypoints independently so unrelated API changes merge", () => {
+    const target = rendered.baseline.modules[0];
+    expect(target?.exports.length).toBeGreaterThan(0);
+    const changed = renderPluginSdkApiBaselineModules(
+      rendered.baseline.modules.map((moduleSurface) =>
+        moduleSurface === target
+          ? {
+              ...moduleSurface,
+              exports: moduleSurface.exports.map((exportSurface, index) =>
+                index === 0
+                  ? { ...exportSurface, declaration: `${exportSurface.declaration ?? ""} changed` }
+                  : exportSurface,
+              ),
+            }
+          : moduleSurface,
+      ),
+    );
+    const before = computePluginSdkApiBaselineHashFileContent(rendered).split("\n");
+    const after = computePluginSdkApiBaselineHashFileContent(changed).split("\n");
+
+    expect(after[0]).not.toBe(before[0]);
+    expect(after.slice(1)).toEqual(before.slice(1));
   });
 });

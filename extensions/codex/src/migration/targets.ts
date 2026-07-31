@@ -15,7 +15,7 @@ type CodexMigrationTargets = {
 
 export function resolveCodexMigrationTargets(ctx: MigrationProviderContext): CodexMigrationTargets {
   const cfg = ctx.config;
-  const agentId = resolveDefaultAgentId(cfg);
+  const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const configuredAgentDir = resolveAgentConfig(cfg, agentId)?.agentDir?.trim();
   const agentDir =

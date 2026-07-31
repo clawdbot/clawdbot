@@ -471,6 +471,47 @@ describe("cli program (nodes basics)", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      platform: "win32",
+      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
+      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
+      rejectedPath: "path: C:\\one;D:…:\\four",
+    },
+    {
+      platform: "windows",
+      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
+      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
+      rejectedPath: "path: C:\\one;D:…:\\four",
+    },
+    {
+      platform: "linux",
+      pathEnv: "/one:/two:/three:/four",
+      expectedPath: "path: /one:/two:…:/four",
+      rejectedPath: "path: /one:/two:/three:/four",
+    },
+  ])("renders $platform node PATH entries with their platform delimiter", async (fixture) => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      nodes: [
+        {
+          nodeId: `${fixture.platform}-node`,
+          displayName: `${fixture.platform} node`,
+          platform: fixture.platform,
+          pathEnv: fixture.pathEnv,
+          paired: true,
+          connected: true,
+        },
+      ],
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain(fixture.expectedPath);
+    expect(output).not.toContain(fixture.rejectedPath);
+  });
+
   it("keeps connection age adjacent to connection status before pending approval", async () => {
     callGateway.mockResolvedValue({
       ts: Date.now(),
@@ -728,9 +769,14 @@ describe("cli program (nodes basics)", () => {
         useStoredDeviceAuth?: boolean;
       };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("missing scope: operator.read"), {
+        throw Object.assign(new Error("permission denied"), {
           name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.read",
+            requiredScopes: ["operator.read"],
+          },
         });
       }
       if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {

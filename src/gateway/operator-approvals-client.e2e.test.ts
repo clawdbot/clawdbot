@@ -5,12 +5,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ApprovalGetResult,
+  type ApprovalHistoryResult,
   type ApprovalResolveResult,
   validateApprovalGetResult,
+  validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -190,15 +192,15 @@ describe("operator approval gateway client e2e", () => {
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
-    const requesterIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-requester.json"),
-    );
-    const reviewerIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-reviewer.json"),
-    );
-    const underscopedIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-underscoped.json"),
-    );
+    const requesterIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),
+    });
+    const reviewerIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-reviewer.sqlite"),
+    });
+    const underscopedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-underscoped.sqlite"),
+    });
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
 
     const port = await getFreeGatewayPort();
@@ -258,6 +260,9 @@ describe("operator approval gateway client e2e", () => {
     await expect(underscoped.request("approval.get", { id: approvalId })).rejects.toThrow(
       "missing scope: operator.approvals",
     );
+    await expect(underscoped.request("approval.history", {})).rejects.toThrow(
+      "missing scope: operator.approvals",
+    );
     await expect(
       underscoped.request("approval.resolve", { id: approvalId, kind: "exec", decision: "deny" }),
     ).rejects.toThrow("missing scope: operator.approvals");
@@ -303,5 +308,11 @@ describe("operator approval gateway client e2e", () => {
     const terminal = await requester.request<ApprovalGetResult>("approval.get", { id: approvalId });
     expect(validateApprovalGetResult(terminal)).toBe(true);
     expect(terminal.approval).toEqual(allowResult.approval);
+
+    const history = await reviewer.request<ApprovalHistoryResult>("approval.history", {
+      limit: 10,
+    });
+    expect(validateApprovalHistoryResult(history)).toBe(true);
+    expect(history.items).toContainEqual(allowResult.approval);
   }, 120_000);
 });

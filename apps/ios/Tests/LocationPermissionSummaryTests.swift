@@ -327,18 +327,42 @@ import Testing
         #expect(locationService.startMonitoringCallCount == 2)
         #expect(locationService.stopMonitoringCallCount == 1)
     }
+
+    @MainActor @Test func `node model publishes cached location authorization changes`() {
+        let locationService = MockLocationService(
+            authorizationStatus: .authorizedWhenInUse,
+            accuracyAuthorization: .reducedAccuracy)
+        let appModel = NodeAppModel(locationService: locationService)
+
+        #expect(appModel.locationAuthorizationSnapshot == LocationAuthorizationSnapshot(
+            authorizationStatus: .authorizedWhenInUse,
+            accuracyAuthorization: .reducedAccuracy))
+
+        locationService.simulateAuthorizationChange(
+            .authorizedAlways,
+            accuracyAuthorization: .fullAccuracy)
+
+        #expect(appModel.locationAuthorizationSnapshot == LocationAuthorizationSnapshot(
+            authorizationStatus: .authorizedAlways,
+            accuracyAuthorization: .fullAccuracy))
+    }
 }
 
 @MainActor
 private final class MockLocationService: LocationServicing, @unchecked Sendable {
     private var status: CLAuthorizationStatus
-    private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
+    private var accuracy: CLAccuracyAuthorization
+    private var authorizationChangeHandler: (@MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)?
     var backgroundUpdatesEnabled: Bool?
     var startMonitoringCallCount = 0
     var stopMonitoringCallCount = 0
 
-    init(authorizationStatus: CLAuthorizationStatus) {
+    init(
+        authorizationStatus: CLAuthorizationStatus,
+        accuracyAuthorization: CLAccuracyAuthorization = .fullAccuracy)
+    {
         self.status = authorizationStatus
+        self.accuracy = accuracyAuthorization
     }
 
     func authorizationStatus() -> CLAuthorizationStatus {
@@ -346,7 +370,7 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
     }
 
     func accuracyAuthorization() -> CLAccuracyAuthorization {
-        .fullAccuracy
+        self.accuracy
     }
 
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
@@ -372,7 +396,7 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
     }
 
     func setAuthorizationChangeHandler(
-        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+        _ handler: @escaping @MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)
     {
         self.authorizationChangeHandler = handler
     }
@@ -386,8 +410,12 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
         self.stopMonitoringCallCount += 1
     }
 
-    func simulateAuthorizationChange(_ status: CLAuthorizationStatus) {
+    func simulateAuthorizationChange(
+        _ status: CLAuthorizationStatus,
+        accuracyAuthorization: CLAccuracyAuthorization = .fullAccuracy)
+    {
         self.status = status
-        self.authorizationChangeHandler?(status)
+        self.accuracy = accuracyAuthorization
+        self.authorizationChangeHandler?(self.authorizationSnapshot())
     }
 }

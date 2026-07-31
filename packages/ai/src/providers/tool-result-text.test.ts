@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasMediaPayload,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
+
+describe("hasMediaPayload", () => {
+  it("requires non-empty inline data instead of media metadata", () => {
+    expect(hasMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(true);
+    expect(hasMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" })).toBe(true);
+    expect(hasMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", data: "  ", mimeType: "image/png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", path: "/tmp/image.png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", url: "https://example.test/image.png" })).toBe(false);
+  });
+});
+
+describe("isImageWithMediaPayload", () => {
+  it("requires both the image type and inline payload bytes", () => {
+    expect(isImageWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
+      true,
+    );
+    expect(isImageWithMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+    expect(
+      isImageWithMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" }),
+    ).toBe(false);
+  });
+});
 
 describe("extractToolResultText", () => {
   it("keeps media-only blocks out of provider replay text", () => {
@@ -114,5 +142,23 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
+  });
+
+  it("does not advertise payload-less media husks", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "image", mimeType: "image/png", data: "" },
+        { type: "image", path: "/tmp/image.png" },
+        { type: "audio", mimeType: "audio/mpeg" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("does not treat text MIME metadata as attached media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "text", text: "actual tool output", mimeType: "image/svg+xml" },
+      ]),
+    ).toBeUndefined();
   });
 });

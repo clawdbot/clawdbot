@@ -92,6 +92,7 @@ internal class CameraClipSession(
 
 class CameraCaptureManager(
   private val context: Context,
+  private val defaultFacing: () -> String = { "front" },
 ) {
   /** Base64 JSON response for camera.snap after resize and JPEG budget enforcement. */
   data class Payload(
@@ -148,7 +149,7 @@ class CameraCaptureManager(
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val params = parseJsonParamsObject(paramsJson)
-      val facing = parseFacing(params) ?: "front"
+      val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
       val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
       val maxWidth = parseMaxWidth(params) ?: 1600
       val deviceId = parseDeviceId(params)
@@ -228,7 +229,7 @@ class CameraCaptureManager(
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val params = parseJsonParamsObject(paramsJson)
-      val facing = parseFacing(params) ?: "front"
+      val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
       val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
       val includeAudio = parseIncludeAudio(params) ?: true
       val deviceId = parseDeviceId(params)
@@ -420,6 +421,11 @@ class CameraCaptureManager(
   @SuppressLint("UnsafeOptInUsageError")
   private fun cameraIdOrNull(info: CameraInfo): String? = runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
 }
+
+internal fun resolveCameraFacing(
+  explicitFacing: String?,
+  preferredFacing: String,
+): String = explicitFacing ?: preferredFacing.takeIf { it == "back" } ?: "front"
 
 private suspend fun Context.cameraProvider(): ProcessCameraProvider =
   suspendCancellableCoroutine { cont ->

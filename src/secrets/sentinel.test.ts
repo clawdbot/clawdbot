@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
-import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,

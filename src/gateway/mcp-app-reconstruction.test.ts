@@ -30,9 +30,10 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
+  loadSessionEntryReadOnly: mocks.loadSessionEntry,
 }));
 
-import { restoreMcpAppView } from "./mcp-app-reconstruction.js";
+import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";
 
 const runtime = { mcpAppsEnabled: true };
 const view = { id: "view-lease" };
@@ -50,7 +51,9 @@ beforeEach(() => {
     storePath: "/tmp/sessions.json",
   });
   mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
-  mocks.fetchMcpAppView.mockResolvedValue(undefined);
+  mocks.fetchMcpAppView.mockImplementation(async (params: { viewId?: string }) => ({
+    viewId: params.viewId ?? "mcp-app-fresh",
+  }));
   mocks.getMcpAppViewLease.mockReturnValue(view);
 });
 
@@ -124,7 +127,56 @@ describe("MCP App transcript reconstruction", () => {
       },
       viewId: "mcp-app-1",
       allowedAppToolNames: new Set(),
+      readOnly: true,
     });
+  });
+
+  it("mints a fresh board lease from the stable transcript descriptor", async () => {
+    mocks.visitSessionMessagesAsync.mockImplementation(
+      async (_scope: unknown, visit: (message: unknown) => void) => {
+        for (const message of [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "demo__show",
+                arguments: { city: "Paris" },
+              },
+            ],
+          },
+          toolResult("mcp-app-original", "call-1"),
+        ]) {
+          visit(message);
+        }
+      },
+    );
+
+    const authorizeAppInteraction = vi.fn(async () => true);
+    await expect(
+      mintMcpAppViewFromTranscript({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        descriptor: {
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app",
+          toolCallId: "call-1",
+        },
+        allowedAppToolNames: new Set(["refresh"]),
+        authorizeAppInteraction,
+        readOnly: false,
+      }),
+    ).resolves.toEqual({ runtime, view });
+    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedAppToolNames: new Set(["refresh"]),
+        authorizeAppInteraction,
+        toolCallId: "call-1",
+      }),
+    );
+    expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
   });
 
   it("rejects client-selected descriptors that do not match transcript ownership", async () => {

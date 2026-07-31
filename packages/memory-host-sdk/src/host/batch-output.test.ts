@@ -114,6 +114,30 @@ describe("readEmbeddingBatchJsonl", () => {
     },
   );
 
+  it.each([
+    { name: "newline-terminated record", suffix: "\n", canceled: true },
+    { name: "unterminated final record", suffix: "", canceled: false },
+  ])("rejects malformed UTF-8 in a $name", async ({ canceled, suffix }) => {
+    const encoder = new TextEncoder();
+    const malformed = streamingResponse([
+      new Uint8Array([
+        ...encoder.encode('{"value":"'),
+        0xc3,
+        0x28,
+        ...encoder.encode(`"}${suffix}`),
+      ]),
+    ]);
+
+    await expect(
+      readEmbeddingBatchJsonl(malformed.response, {
+        label: "test.batch-output",
+        maxRecords: 1,
+        onRecord: () => true,
+      }),
+    ).rejects.toThrow("test.batch-output: malformed JSONL record");
+    expect(malformed.wasCanceled()).toBe(canceled);
+  });
+
   it("accepts a null response body", async () => {
     await expect(
       readEmbeddingBatchJsonl(new Response(null), {

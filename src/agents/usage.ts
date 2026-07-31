@@ -30,7 +30,7 @@ export type UsageLike = {
   reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
-  output_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // OpenAI Responses reports cached prompt reuse here.
@@ -201,7 +201,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.reasoningTokens ??
       raw.reasoning_tokens ??
       raw.completion_tokens_details?.reasoning_tokens ??
-      raw.output_tokens_details?.reasoning_tokens,
+      raw.output_tokens_details?.reasoning_tokens ??
+      raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
@@ -337,14 +338,8 @@ export function deriveContextPromptTokens(params: {
 
 /** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
-  usage?: {
-    input?: number;
-    output?: number;
-    total?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-  };
+  lastCallUsage?: NormalizedUsage;
+  usage?: NormalizedUsage;
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
@@ -353,13 +348,14 @@ export function deriveSessionTotalTokens(params: {
     typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
 
   const usage = params.usage;
-  if (!usage && !hasPromptOverride) {
+  if (!params.lastCallUsage && !usage && !hasPromptOverride) {
     return undefined;
   }
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
   const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,
     usage,
   });

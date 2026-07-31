@@ -6,6 +6,8 @@ import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   isToolCallBlock,
   isToolResultBlock,
@@ -22,7 +24,7 @@ import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
-type ClaudeCliProjectEntry = {
+export type ClaudeCliProjectEntry = {
   type?: unknown;
   timestamp?: unknown;
   uuid?: unknown;
@@ -66,7 +68,7 @@ export function resolveClaudeCliBindingSessionId(
   return getCliSessionBinding(entry, CLAUDE_CLI_PROVIDER)?.sessionId;
 }
 
-function resolveTimestampMs(value: unknown): number | undefined {
+export function resolveClaudeCliTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -231,7 +233,7 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
-function resolveClaudeCliPromptTextCandidates(
+export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
@@ -261,7 +263,7 @@ function resolveClaudeCliPromptTextCandidates(
   );
 }
 
-function parseClaudeCliHistoryEntry(
+export function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
   sourceLineNumber: number,
@@ -280,7 +282,7 @@ function parseClaudeCliHistoryEntry(
     return null;
   }
 
-  const timestamp = resolveTimestampMs(entry.timestamp);
+  const timestamp = resolveClaudeCliTimestampMs(entry.timestamp);
   const externalId = normalizeOptionalString(entry.uuid);
   const baseMeta = {
     id: externalId ?? `${CLAUDE_CLI_PROVIDER}:${cliSessionId}:line:${sourceLineNumber}`,
@@ -382,7 +384,7 @@ function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -477,7 +479,15 @@ export function readClaudeCliSessionMessages(params: {
       // Ignore malformed external history entries.
     }
   }
-  return coalesceClaudeCliToolMessages(messages);
+  const visibleMessages = coalesceClaudeCliToolMessages(messages);
+  // Match local transcript persistence before dedupe so imported secrets cannot
+  // bypass exact-text matching or reach chat history through the external copy.
+  return visibleMessages.map(
+    (message) =>
+      redactTranscriptMessage(
+        message as unknown as AgentMessage,
+      ) as unknown as TranscriptLikeMessage,
+  );
 }
 
 type ClaudeCliCompactBoundaryEntry = {

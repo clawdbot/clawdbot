@@ -8,6 +8,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { escapeHtml } from "../shared/html-escape.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -176,7 +177,7 @@ export async function waitForLocalOAuthCallback(params: {
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const escapedSuccessTitle = escapeHtmlText(params.successTitle);
+  const escapedSuccessTitle = escapeHtml(params.successTitle);
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
   const hasCorsOriginAllowlist =
     params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
@@ -337,15 +338,6 @@ function isHttpOrigin(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function escapeHtmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;

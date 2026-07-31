@@ -84,7 +84,7 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
     }),
     reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
     backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
-    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
+    timeoutSec: agentExec?.timeoutSeconds ?? globalExec?.timeoutSeconds,
     approvalRunningNoticeMs:
       agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
     cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,

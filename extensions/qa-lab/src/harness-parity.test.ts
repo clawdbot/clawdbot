@@ -4,10 +4,11 @@ import {
   buildHarnessParityCell,
   buildHarnessParityResult,
   type HarnessRuntimeParityCell,
-  type HarnessVariant,
 } from "./harness-parity.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
+
+type HarnessVariant = Parameters<typeof buildHarnessParityCell>[0]["variant"];
 
 const LEFT: HarnessVariant = { id: "left", label: "Left", runtime: "openclaw" };
 const RIGHT: HarnessVariant = { id: "right", label: "Right", runtime: "openclaw" };

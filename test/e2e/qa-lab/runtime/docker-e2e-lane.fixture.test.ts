@@ -13,7 +13,8 @@ describe("QA Docker E2E lane fixture", () => {
     expect(listQaDockerE2eLaneNames()).toEqual(
       expect.arrayContaining([
         "agent-bundle-mcp-tools",
-        "crestodian-first-run",
+        "codex-on-demand",
+        "system-agent-first-run",
         "gateway-network",
         "release-plugin-marketplace",
         "update-migration",
@@ -44,6 +45,10 @@ describe("QA Docker E2E lane fixture", () => {
   });
 
   it("resolves lane-specific environment overlays at run time", () => {
+    expect(resolveQaDockerE2eLane("codex-on-demand", {}).script).toBe(
+      "scripts/e2e/codex-on-demand-docker.sh",
+    );
+
     const updateMigration = resolveQaDockerE2eLane("update-migration", {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@custom",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "custom-scenario",

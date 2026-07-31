@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover browser-safe media extension parsing.
 import { describe, expect, it } from "vitest";
 import { getMediaFileExtension } from "./media-file-extension.ts";

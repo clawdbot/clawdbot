@@ -56,11 +56,15 @@ export async function issueGatewayConnectDeviceTokens(params: {
         continue;
       }
       // Extra hello-ok handoff tokens are only emitted for the approved
-      // setup-code profile. Operator scopes are filtered through the
-      // documented allowlist so QR bootstrap cannot grant admin/pairing.
+      // setup-code profile. Operator scopes are filtered through the closed
+      // mobile allowlist selected when the setup code was issued.
       const bootstrapRoleScopes =
         bootstrapRole === "operator"
-          ? resolveBootstrapProfileScopesForRole(bootstrapRole, handoffBootstrapProfile.scopes)
+          ? resolveBootstrapProfileScopesForRole(
+              bootstrapRole,
+              handoffBootstrapProfile.scopes,
+              handoffBootstrapProfile.purpose,
+            )
           : [];
       const extraToken = await ensureDeviceToken({
         deviceId: device.id,

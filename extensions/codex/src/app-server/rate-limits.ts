@@ -25,6 +25,9 @@ const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 const DAY_WINDOW_MINUTES = 24 * 60;
 const WEEKLY_WINDOW_MINUTES = 7 * DAY_WINDOW_MINUTES;
 const WEEKLY_RESET_GAP_MS = 3 * ONE_DAY_MS;
+const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "You've reached your Codex subscription usage limit.";
+const CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE =
+  "Codex rejected the request with a usage-limit error, but its current account usage does not report an exhausted limit.";
 
 type LimitWindowKey = (typeof LIMIT_WINDOW_KEYS)[number];
 
@@ -55,19 +58,30 @@ export function formatCodexUsageLimitErrorMessage(params: {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
+  rateLimitsAuthoritative?: boolean;
   nowMs?: number;
 }): string | undefined {
   const message = normalizeText(params.message);
-  if (!isCodexUsageLimitError(params.codexErrorInfo, message)) {
+  if (!isCodexUsageLimitError(params.codexErrorInfo)) {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
   const usageSummary = summarizeCodexAccountUsage(params.rateLimits, nowMs);
+  if (
+    params.rateLimitsAuthoritative &&
+    hasCodexRateLimitSnapshots(params.rateLimits) &&
+    !usageSummary?.blocked
+  ) {
+    return [
+      CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE,
+      "Retry the request, use another Codex account if available, or switch to another configured model/provider.",
+    ].join(" ");
+  }
   const blockingReset = selectBlockingRateLimitReset(params.rateLimits, nowMs);
   const nextReset =
     blockingReset ??
     (usageSummary?.blocked ? undefined : selectNextRateLimitReset(params.rateLimits, nowMs));
-  const parts = ["You've reached your Codex subscription usage limit."];
+  const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
   let recoveryAction = "Wait until Codex becomes available";
   if (nextReset) {
     parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
@@ -95,9 +109,10 @@ export function shouldRefreshCodexRateLimitsForUsageLimitMessage(
   message: string | null | undefined,
 ): boolean {
   const text = normalizeText(message);
+  // Only our formatted prefix is a refresh contract. Provider prose alone is
+  // not structural evidence of a Codex usage-limit failure.
   return Boolean(
-    text?.includes("You've reached your Codex subscription usage limit.") &&
-    !text.includes("Next reset "),
+    text?.startsWith(CODEX_USAGE_LIMIT_MESSAGE_PREFIX) && !text.includes("Next reset "),
   );
 }
 
@@ -210,10 +225,7 @@ export function buildCodexAppServerUsageSnapshot(value: unknown): ProviderUsageS
   };
 }
 
-function isCodexUsageLimitError(
-  codexErrorInfo: JsonValue | null | undefined,
-  message: string | undefined,
-): boolean {
+function isCodexUsageLimitError(codexErrorInfo: JsonValue | null | undefined): boolean {
   if (codexErrorInfo === "usageLimitExceeded") {
     return true;
   }
@@ -223,7 +235,7 @@ function isCodexUsageLimitError(
       return true;
     }
   }
-  return Boolean(message?.toLowerCase().includes("usage limit"));
+  return false;
 }
 
 function selectNextRateLimitReset(
@@ -774,3 +786,4 @@ function normalizeText(value: string | null | undefined): string | undefined {
   const text = value?.trim();
   return text ? text : undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

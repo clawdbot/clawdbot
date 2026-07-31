@@ -24,7 +24,7 @@
  */
 
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -40,8 +40,9 @@ import {
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
-const loadMediaRuntimeModule = createLazyRuntimeModule(
+const loadReadRemoteMediaBuffer = createLazyRuntimeNamedExport(
   () => import("openclaw/plugin-sdk/media-runtime"),
+  "readRemoteMediaBuffer",
 );
 
 function createBuiltinAdapter(): PlatformAdapter {
@@ -58,7 +59,7 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
-      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
       const result = await readRemoteMediaBuffer({ url, filePathHint: filename });
       const fs = await import("node:fs");
       const path = await import("node:path");
@@ -71,7 +72,7 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async fetchMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
       const result = await readRemoteMediaBuffer({
         url: options.url,
         filePathHint: options.filePathHint,

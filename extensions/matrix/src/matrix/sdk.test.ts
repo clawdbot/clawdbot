@@ -5,10 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import type { DecryptionFailureCode as DecryptionFailureCodeValue } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
-import { readMatrixRecoveryKeyState } from "./crypto-state-store.js";
+import { readMatrixRecoveryKeyStateForPath } from "./crypto-state-store.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 
 function requestUrl(input: RequestInfo | URL | undefined): string {
@@ -62,7 +63,7 @@ function expectSomeMockCallOptions(
 }
 
 function readStoredRecoveryKey(recoveryKeyPath: string) {
-  return readMatrixRecoveryKeyState(path.dirname(recoveryKeyPath));
+  return readMatrixRecoveryKeyStateForPath(recoveryKeyPath);
 }
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -108,7 +109,7 @@ class FakeMatrixEvent extends EventEmitter {
     age?: number;
     redacted_because?: unknown;
   };
-  private decryptionFailureReasonValue?: string;
+  private decryptionFailureReasonValue: DecryptionFailureCodeValue | null;
   private decryptionFailure: boolean;
   private decryptAttemptHandler?: (options?: { isRetry?: boolean }) => Promise<void> | void;
   readonly attemptDecryption = vi.fn(
@@ -130,7 +131,7 @@ class FakeMatrixEvent extends EventEmitter {
       redacted_because?: unknown;
     };
     decryptionFailure?: boolean;
-    decryptionFailureReason?: string;
+    decryptionFailureReason?: DecryptionFailureCodeValue;
   }) {
     super();
     this.roomId = params.roomId;
@@ -142,11 +143,13 @@ class FakeMatrixEvent extends EventEmitter {
     this.content = params.content;
     this.stateKey = params.stateKey;
     this.unsigned = params.unsigned;
-    this.decryptionFailureReasonValue = params.decryptionFailureReason;
+    this.decryptionFailureReasonValue = params.decryptionFailure
+      ? (params.decryptionFailureReason ?? DecryptionFailureCode.UNKNOWN_ERROR)
+      : null;
     this.decryptionFailure = params.decryptionFailure === true;
   }
 
-  get decryptionFailureReason(): string | undefined {
+  get decryptionFailureReason(): DecryptionFailureCodeValue | null {
     return this.decryptionFailureReasonValue;
   }
 
@@ -174,11 +177,23 @@ class FakeMatrixEvent extends EventEmitter {
     return this.clearEvent?.content ?? this.content;
   }
 
+  getOriginalContent(): Record<string, unknown> {
+    return this.getContent();
+  }
+
+  getWireContent(): Record<string, unknown> {
+    return this.content;
+  }
+
   getUnsigned(): { age?: number; redacted_because?: unknown } {
     return this.unsigned ?? {};
   }
 
   getStateKey(): string | undefined {
+    return this.stateKey;
+  }
+
+  getWireStateKey(): string | undefined {
     return this.stateKey;
   }
 
@@ -212,7 +227,7 @@ class FakeMatrixEvent extends EventEmitter {
     this.content = params.content;
     this.clearEvent = { type: params.type, content: params.content };
     this.decryptionFailure = false;
-    this.decryptionFailureReasonValue = undefined;
+    this.decryptionFailureReasonValue = null;
   }
 }
 
@@ -3955,3 +3970,4 @@ describe("MatrixClient crypto bootstrapping", () => {
     ).toBe(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

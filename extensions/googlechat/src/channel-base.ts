@@ -9,13 +9,14 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type GoogleChatConfigAccessorAccount,
+  inspectGoogleChatAccount,
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatConfigAccessorAccount,
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
-import { googlechatSetupAdapter } from "./setup-core.js";
+import { googlechatSetupAdapter, googlechatSetupContract } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
@@ -62,7 +63,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
     "botUser",
     "name",
   ],
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
@@ -71,11 +72,18 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
+function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
+  return account.tokenStatus
+    ? account.tokenStatus !== "missing"
+    : account.credentialSource !== "none";
+}
+
 type GoogleChatPluginBase = Pick<
   ChannelPlugin<ResolvedGoogleChatAccount>,
   | "id"
   | "meta"
   | "setup"
+  | "setupContract"
   | "setupWizard"
   | "capabilities"
   | "streaming"
@@ -93,6 +101,7 @@ export function createGoogleChatPluginBase(
     id: GOOGLECHAT_CHANNEL_ID,
     meta: { ...googlechatMeta },
     setup: googlechatSetupAdapter,
+    setupContract: googlechatSetupContract,
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],
@@ -110,13 +119,15 @@ export function createGoogleChatPluginBase(
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
     config: {
       ...googleChatConfigAdapter,
-      isConfigured: (account) => account.credentialSource !== "none",
+      inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
+      isConfigured: isGoogleChatAccountConfigured,
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
-          configured: account.credentialSource !== "none",
+          configured: isGoogleChatAccountConfigured(account),
           extra: {
             credentialSource: account.credentialSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

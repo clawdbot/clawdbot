@@ -75,7 +75,7 @@ node scripts/e2e/lib/release-scenarios/write-marketplace.mjs \
 openclaw plugins marketplace list release-fixtures --json >/tmp/openclaw-release-plugin-marketplace-list.json
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-list.json release-marketplace-plugin
 
-openclaw plugins install release-marketplace-plugin@release-fixtures >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
+openclaw plugins install release-marketplace-plugin@release-fixtures --force >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
 openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-v1.log 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-v1.log "release-marketplace-plugin:v1"
 

@@ -338,30 +338,6 @@ describe("xai x_search tool", () => {
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/xai-search/v1/responses");
   });
 
-  it("falls back to Grok web search baseUrl for x_search", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-                baseUrl: "https://api.x.ai/legacy/v1/",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:legacy-grok-base-url", {
-      query: "legacy base url route",
-    });
-
-    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/legacy/v1/responses");
-  });
-
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
@@ -519,64 +495,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer x-search-runtime-key");
-  });
-
-  it("reuses the legacy grok web search key for x_search requests", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:legacy-key", {
-      query: "latest legacy-key post from huntharo",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
-  });
-
-  it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "legacy-x-search-key", // pragma: allowlist secret
-              enabled: true,
-            } as Record<string, unknown>,
-          },
-        },
-      },
-      runtimeConfig: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "migrated-runtime-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:migrated-runtime-key", {
-      query: "migrated runtime auth",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer migrated-runtime-key");
   });
 
   it("rejects invalid date ordering before calling xAI", async () => {

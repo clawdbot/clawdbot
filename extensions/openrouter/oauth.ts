@@ -17,14 +17,14 @@ import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.j
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_OAUTH_METHOD_ID = "oauth";
-export const OPENROUTER_OAUTH_CHOICE_ID = "openrouter-oauth";
+const OPENROUTER_OAUTH_CHOICE_ID = "openrouter-oauth";
 const OPENROUTER_OAUTH_AUTHORIZE_URL = "https://openrouter.ai/auth";
-export const OPENROUTER_OAUTH_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
-export const OPENROUTER_OAUTH_CALLBACK_HOST = "localhost";
-export const OPENROUTER_OAUTH_CALLBACK_PORT = 3000;
-export const OPENROUTER_OAUTH_CALLBACK_PATH = "/openrouter-oauth/callback";
-export const OPENROUTER_OAUTH_REDIRECT_URI = `http://${OPENROUTER_OAUTH_CALLBACK_HOST}:${OPENROUTER_OAUTH_CALLBACK_PORT}${OPENROUTER_OAUTH_CALLBACK_PATH}`;
-export const OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD = "S256";
+const OPENROUTER_OAUTH_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
+const OPENROUTER_OAUTH_CALLBACK_HOST = "localhost";
+const OPENROUTER_OAUTH_CALLBACK_PORT = 3000;
+const OPENROUTER_OAUTH_CALLBACK_PATH = "/openrouter-oauth/callback";
+const OPENROUTER_OAUTH_REDIRECT_URI = `http://${OPENROUTER_OAUTH_CALLBACK_HOST}:${OPENROUTER_OAUTH_CALLBACK_PORT}${OPENROUTER_OAUTH_CALLBACK_PATH}`;
+const OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD = "S256";
 
 const OPENROUTER_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const OPENROUTER_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
@@ -106,13 +106,13 @@ function parseOpenRouterKeyResponse(value: unknown): OpenRouterOAuthKeyResult {
   };
 }
 
-export function buildOpenRouterOAuthRedirectUri(params: { state: string }): string {
+function buildOpenRouterOAuthRedirectUri(params: { state: string }): string {
   const url = new URL(OPENROUTER_OAUTH_REDIRECT_URI);
   url.searchParams.set("state", params.state);
   return url.toString();
 }
 
-export function buildOpenRouterOAuthAuthorizeUrl(params: {
+function buildOpenRouterOAuthAuthorizeUrl(params: {
   codeChallenge: string;
   state: string;
 }): string {
@@ -133,7 +133,7 @@ function requireOpenRouterOAuthState(state: string | undefined, expectedState: s
   return state;
 }
 
-export function parseOpenRouterOAuthCallbackInput(
+function parseOpenRouterOAuthCallbackInput(
   input: string,
   expectedState: string,
 ): OpenRouterOAuthCallbackResult {
@@ -143,11 +143,18 @@ export function parseOpenRouterOAuthCallbackInput(
   }
 
   const parseParams = (params: URLSearchParams): OpenRouterOAuthCallbackResult => {
+    const state = requireOpenRouterOAuthState(readString(params.get("state")), expectedState);
+    const error = readString(params.get("error"));
+    if (error) {
+      const description = readString(params.get("error_description"));
+      throw new Error(
+        `OpenRouter OAuth error: ${description ? `${error}: ${description}` : error}`,
+      );
+    }
     const code = readString(params.get("code"));
     if (!code) {
       throw new Error("Missing 'code' parameter in redirect URL.");
     }
-    const state = requireOpenRouterOAuthState(readString(params.get("state")), expectedState);
     return { code, state };
   };
 
@@ -156,7 +163,7 @@ export function parseOpenRouterOAuthCallbackInput(
     return parseParams(url.searchParams);
   } catch (err) {
     if (err instanceof TypeError) {
-      if (trimmed.includes("code=")) {
+      if (trimmed.includes("code=") || trimmed.includes("error=")) {
         return parseParams(new URLSearchParams(trimmed));
       }
       throw new Error("Paste the full OpenRouter redirect URL, not just the code.", {
@@ -167,7 +174,7 @@ export function parseOpenRouterOAuthCallbackInput(
   }
 }
 
-export async function exchangeOpenRouterOAuthCode(params: {
+async function exchangeOpenRouterOAuthCode(params: {
   code: string;
   codeVerifier: string;
   fetchImpl?: typeof fetch;
@@ -199,7 +206,7 @@ export async function exchangeOpenRouterOAuthCode(params: {
   return parseOpenRouterKeyResponse(body);
 }
 
-export async function waitForOpenRouterOAuthCallback(params: {
+async function waitForOpenRouterOAuthCallback(params: {
   expectedState: string;
   timeoutMs?: number;
   onProgress?: (message: string) => void;
@@ -231,12 +238,25 @@ export async function waitForOpenRouterOAuthCallback(params: {
           return;
         }
 
-        const error = readString(requestUrl.searchParams.get("error"));
-        if (error) {
+        const state = readString(requestUrl.searchParams.get("state"));
+        try {
+          requireOpenRouterOAuthState(state, params.expectedState);
+        } catch (err) {
           res.statusCode = 400;
           res.setHeader("Content-Type", "text/plain");
-          res.end(`OpenRouter authentication failed: ${error}`);
-          finish(new Error(`OpenRouter OAuth error: ${error}`));
+          res.end("Invalid OAuth state");
+          finish(err instanceof Error ? err : new Error("OpenRouter OAuth state mismatch"));
+          return;
+        }
+
+        const error = readString(requestUrl.searchParams.get("error"));
+        if (error) {
+          const description = readString(requestUrl.searchParams.get("error_description"));
+          const detail = description ? `${error}: ${description}` : error;
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.end(`OpenRouter authentication failed: ${detail}`);
+          finish(new Error(`OpenRouter OAuth error: ${detail}`));
           return;
         }
 
@@ -246,16 +266,6 @@ export async function waitForOpenRouterOAuthCallback(params: {
           res.setHeader("Content-Type", "text/plain");
           res.end("Missing OAuth code");
           finish(new Error("Missing OpenRouter OAuth code"));
-          return;
-        }
-        const state = readString(requestUrl.searchParams.get("state"));
-        try {
-          requireOpenRouterOAuthState(state, params.expectedState);
-        } catch (err) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Invalid OAuth state");
-          finish(err instanceof Error ? err : new Error("OpenRouter OAuth state mismatch"));
           return;
         }
 
@@ -386,7 +396,7 @@ async function resolveOpenRouterOAuthCode(
   return (await callbackPromise).code;
 }
 
-export async function loginOpenRouterOAuth(
+async function loginOpenRouterOAuth(
   ctx: ProviderAuthContext,
   options: OpenRouterOAuthLoginOptions = {},
 ): Promise<ProviderAuthResult> {
@@ -437,7 +447,9 @@ export async function loginOpenRouterOAuth(
   }
 }
 
-export function createOpenRouterOAuthAuthMethod(): ProviderAuthMethod {
+export function createOpenRouterOAuthAuthMethod(
+  options: OpenRouterOAuthLoginOptions = {},
+): ProviderAuthMethod {
   return {
     id: OPENROUTER_OAUTH_METHOD_ID,
     label: "OpenRouter OAuth",
@@ -454,6 +466,6 @@ export function createOpenRouterOAuthAuthMethod(): ProviderAuthMethod {
       onboardingScopes: ["text-inference", "music-generation"],
       onboardingFeatured: true,
     },
-    run: async (ctx) => await loginOpenRouterOAuth(ctx),
+    run: async (ctx) => await loginOpenRouterOAuth(ctx, options),
   };
 }

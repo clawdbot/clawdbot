@@ -51,12 +51,29 @@ function resolveApprovalTimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, 1);
 }
 
+// Approval IDs cross terminal, UI, push, and channel surfaces unchanged. Keep
+// unsafe display bytes and unbounded identifiers out at the creation boundary.
+const EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN = /[^A-Za-z0-9._:-]/;
+
+/** Typed creation failure for an explicit approval id outside the shared safe format. */
+export class InvalidApprovalIdError extends Error {
+  readonly code = "EXEC_APPROVAL_ID_INVALID";
+  readonly reason = "INVALID_APPROVAL_ID";
+
+  constructor() {
+    super(
+      "approval id must be 1-128 characters using only letters, numbers, '.', '_', ':', or '-', and cannot be '.' or '..'",
+    );
+    this.name = "InvalidApprovalIdError";
+  }
+}
+
 type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 // Distinguishes operator decisions from trusted auto-review resolutions.
 // system.run replay validation is stricter for auto-review approvals, so this
 // runtime fact must survive on the process-local record (bindings never persist).
-export type ExecApprovalResolutionSource = "operator" | "auto-review";
+type ExecApprovalResolutionSource = "operator" | "auto-review";
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
@@ -83,12 +100,12 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   consumedBy?: string | null;
 };
 
-export type OperatorApprovalPersistenceRuntime = {
+type OperatorApprovalPersistenceRuntime = {
   runtimeEpoch: string;
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
 
-export type ExecApprovalManagerOptions<TPayload> = {
+type ExecApprovalManagerOptions<TPayload> = {
   approvalKind?: OperatorApprovalKind;
   persistence?: OperatorApprovalPersistenceRuntime;
   resolveAllowedDecisions?: (request: TPayload) => readonly ExecApprovalDecision[];
@@ -115,17 +132,17 @@ type WithLiveRecord<TResult, TPayload> = TResult extends { record: OperatorAppro
   ? TResult & { liveRecord?: ExecApprovalRecord<TPayload> }
   : TResult;
 
-export type ExecApprovalResolveResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
+type ExecApprovalResolveResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
   ResolveOperatorApprovalResult,
   TPayload
 >;
 
-export type ExecApprovalForceDenyResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
+type ExecApprovalForceDenyResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
   ForceDenyOperatorApprovalResult,
   TPayload
 >;
 
-export type ExecApprovalDurableLookup =
+type ExecApprovalDurableLookup =
   | { outcome: "found"; record: OperatorApprovalRecord }
   | { outcome: "missing" | "corrupt"; id: string };
 
@@ -221,7 +238,18 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
     }
-    const resolvedId = id === null || id === undefined || id.length === 0 ? randomUUID() : id;
+    // Empty remains the caller-facing sentinel for manager-generated ids.
+    const hasExplicitId = id !== null && id !== undefined && id.length > 0;
+    if (
+      hasExplicitId &&
+      (id.length > 128 ||
+        id === "." ||
+        id === ".." ||
+        EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
+    ) {
+      throw new InvalidApprovalIdError();
+    }
+    const resolvedId = hasExplicitId ? id : randomUUID();
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
@@ -1139,3 +1167,4 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return this.lookupApprovalId(input);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

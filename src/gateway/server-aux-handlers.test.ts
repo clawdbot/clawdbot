@@ -16,7 +16,19 @@ import {
 } from "../secrets/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { replaceSharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
+
+function publishSharedGatewayGeneration(
+  state: { current: string | undefined; required: string | undefined | null },
+  generation: string,
+) {
+  enforceSharedGatewaySessionGenerationForConfigWrite({
+    state,
+    nextConfig: { gateway: { reload: { mode: "off" } } },
+    resolveRuntimeSnapshotGeneration: () => generation,
+    clients: [],
+  });
+}
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -35,6 +47,7 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
     reloadPlugins: overrides?.reloadPlugins ?? false,
     restartChannels: overrides?.restartChannels ?? new Set(),
+    restartChannelAccounts: overrides?.restartChannelAccounts,
     disposeMcpRuntimes: overrides?.disposeMcpRuntimes ?? false,
     noopPaths: overrides?.noopPaths ?? [],
   };
@@ -292,6 +305,31 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
+  it("restarts the whole channel when a secret change is scoped to one account", async () => {
+    // secrets.reload has no per-account restart path — account-scoped plan
+    // entries must still produce a channel restart so rotated credentials
+    // are applied.
+    const buildReloadPlan = () =>
+      createReloadPlan({
+        restartChannels: new Set(),
+        restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
+      });
+    activateSnapshot(slackConfig("old-slack-secret"));
+    const prepared = createSnapshot(slackConfig("new-slack-secret"));
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(prepared);
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        activateRuntimeSecrets,
+        buildReloadPlan,
+      });
+
+    await reload();
+
+    expect(stopChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack"]);
+    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack"]);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+  });
+
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     activateSnapshot(slackConfig("old-slack-secret"));
@@ -375,8 +413,18 @@ describe("gateway aux handlers", () => {
       canonicalConfig,
     ]);
     expect(activateRuntimeSecrets.mock.calls.map(([, activation]) => activation)).toEqual([
-      { reason: "reload", activate: false },
-      { reason: "reload", activate: false },
+      {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
+      },
+      {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
+      },
     ]);
     expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledTimes(2);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(canonicalConfig);
@@ -488,10 +536,7 @@ describe("gateway aux handlers", () => {
       .fn()
       .mockImplementationOnce(async () => {
         activateSecretsRuntimeSnapshot(concurrent);
-        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
-          current: "gen-concurrent",
-          required: "gen-concurrent",
-        });
+        publishSharedGatewayGeneration(sharedGatewaySessionGenerationState, "gen-concurrent");
         throw new Error("slack refused to start");
       })
       .mockResolvedValue(undefined);
@@ -527,10 +572,7 @@ describe("gateway aux handlers", () => {
     const startChannel = vi
       .fn()
       .mockImplementationOnce(async () => {
-        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
-          current: "gen-concurrent",
-          required: "gen-concurrent",
-        });
+        publishSharedGatewayGeneration(sharedGatewaySessionGenerationState, "gen-concurrent");
         throw new Error("slack refused to start");
       })
       .mockResolvedValue(undefined);

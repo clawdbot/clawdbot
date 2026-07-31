@@ -16,7 +16,7 @@ Adds Kilocode model provider support to OpenClaw.
 
 ## Surface
 
-providers: kilocode
+providers: `kilocode`
 
 ## Related docs
 

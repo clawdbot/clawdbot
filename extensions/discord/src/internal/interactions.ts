@@ -16,6 +16,7 @@ import {
 import {
   createInteractionCallback,
   createWebhookMessage,
+  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
@@ -110,7 +111,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   return null;
 }
 
-export class BaseInteraction {
+class BaseInteraction {
   readonly id: string;
   readonly token: string;
   readonly user: User | null;
@@ -205,6 +206,17 @@ export class BaseInteraction {
     return result;
   }
 
+  async deleteReply(): Promise<unknown> {
+    const result = await deleteWebhookMessage(
+      this.client.rest,
+      this.client.options.clientId,
+      this.token,
+      "@original",
+    );
+    this.response.recordReplyDelete();
+    return result;
+  }
+
   async fetchReply(): Promise<unknown> {
     return await getWebhookMessage(
       this.client.rest,
@@ -279,6 +291,9 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
   async showModal(modal: Modal): Promise<unknown> {
     return await this.callback(InteractionResponseType.Modal, modal.serialize());
+  }
+  async launchActivity(): Promise<unknown> {
+    return await this.callback(InteractionResponseType.LaunchActivity);
   }
 }
 

@@ -1,24 +1,21 @@
 // Imessage plugin module implements actions behavior.
-import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import {
-  appendIMessageCliStderrTail,
-  appendIMessageCliStdout,
-  listenForIMessageCliStreamErrors,
-} from "./cli-output.js";
+import { normalizeDirectChatIdentifier } from "./chat-context.js";
+import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
-  normalizeDirectChatIdentifier,
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+  type IMessageChatContext,
 } from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
@@ -34,6 +31,16 @@ type IMessageBridgeActionOptions = CliRunOptions & {
 
 type IMessageBridgeSendResult = {
   messageId: string;
+};
+
+type IMessageConversationReadOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
+
+/** Option identity assigned by Messages when the poll balloon was created. */
+export type IMessagePollSentOption = {
+  id: string;
+  text: string;
 };
 
 type TempFileInput = {
@@ -169,140 +176,42 @@ function findChatGuid(
   return null;
 }
 
-function buildIMessageCliJsonArgs(args: readonly string[], options: CliRunOptions): string[] {
-  const dbPath = options.dbPath?.trim();
-  return [...args, ...(dbPath ? ["--db", dbPath] : []), "--json"];
-}
-
 async function runIMessageCliJson(
   args: readonly string[],
   options: CliRunOptions,
 ): Promise<Record<string, unknown>> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(options.cliPath, buildIMessageCliJsonArgs(args, options), {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let killEscalation: ReturnType<typeof setTimeout> | null = null;
-    let settled = false;
-    const clearTimers = (optionsValue: { keepKillEscalation?: boolean } = {}): void => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation && !optionsValue.keepKillEscalation) {
-        clearTimeout(killEscalation);
-      }
-    };
-    const fail = (error: Error, optionsLocal: { keepKillEscalation?: boolean } = {}): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers(optionsLocal);
-      reject(error);
-    };
-    const succeed = (value: Record<string, unknown>): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve(value);
-    };
-    const timer =
-      options.timeoutMs && options.timeoutMs > 0
-        ? setTimeout(() => {
-            child.kill("SIGTERM");
-            // If SIGTERM doesn't take within 2s (wedged child, ignored
-            // signal handler), escalate to SIGKILL so the process doesn't
-            // linger as a zombie.
-            killEscalation = setTimeout(() => {
-              try {
-                child.kill("SIGKILL");
-              } catch {
-                // best-effort
-              }
-            }, 2000);
-            fail(new Error(`iMessage action timed out after ${options.timeoutMs}ms`), {
-              keepKillEscalation: true,
-            });
-          }, options.timeoutMs)
-        : null;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      const appended = appendIMessageCliStdout(stdout, chunk);
-      if (!appended.ok) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // best-effort
-        }
-        fail(new Error(appended.message));
-        return;
-      }
-      stdout = appended.value;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendIMessageCliStderrTail(stderr, chunk);
-    });
-    listenForIMessageCliStreamErrors({
-      child,
-      isSettled: () => settled,
-      fail,
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      fail(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      const lines = normalizeStringEntries(stdout.split(/\r?\n/));
-      const last = lines.at(-1);
-      let parsed: Record<string, unknown> | null = null;
-      if (last) {
-        try {
-          const value = JSON.parse(last);
-          if (value && typeof value === "object" && !Array.isArray(value)) {
-            parsed = value as Record<string, unknown>;
-          }
-        } catch {
-          parsed = null;
-        }
-      }
-      if (code !== 0) {
-        const detail =
-          (typeof parsed?.error === "string" && parsed.error.trim()) ||
-          stderr.trim() ||
-          stdout.trim() ||
-          `imsg exited with code ${code}`;
-        fail(new Error(detail));
-        return;
-      }
-      if (!parsed) {
-        fail(new Error(`imsg returned non-JSON output: ${stdout.trim() || stderr.trim()}`));
-        return;
-      }
-      if (parsed.success === false) {
-        const error =
-          typeof parsed.error === "string" && parsed.error.trim()
-            ? parsed.error.trim()
-            : "iMessage action failed";
-        fail(new Error(error));
-        return;
-      }
-      succeed(parsed);
-    });
+  return await runIMessageCliJsonCommand({
+    args,
+    cliPath: options.cliPath,
+    dbPath: options.dbPath,
+    timeoutMs: options.timeoutMs,
+  });
+}
+
+/**
+ * Messages mints the option UUIDs, so the send response is the only place they
+ * appear before someone votes. Approval bindings key decisions off these ids
+ * rather than option text, which a vote payload could otherwise spoof.
+ */
+function readSentPollOptions(result: Record<string, unknown>): IMessagePollSentOption[] {
+  const poll = result.poll;
+  if (typeof poll !== "object" || poll === null) {
+    return [];
+  }
+  const options = (poll as { options?: unknown }).options;
+  if (!Array.isArray(options)) {
+    return [];
+  }
+  return options.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+    const { id, text } = entry as { id?: unknown; text?: unknown };
+    if (typeof id !== "string" || typeof text !== "string") {
+      return [];
+    }
+    const trimmedId = id.trim();
+    return trimmedId ? [{ id: trimmedId, text: text.trim() }] : [];
   });
 }
 
@@ -330,10 +239,27 @@ async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promi
 export const imessageActionsRuntime = {
   resolveIMessageMessageId: resolveIMessageMessageIdImpl,
 
+  authorizeMessageReference(params: {
+    accountId: string;
+    chatContext: IMessageChatContext;
+    cliPath: string;
+    dbPath?: string;
+    hasExclusiveLocalDatabase: boolean;
+    remoteHost?: string;
+    messageId: string;
+    conversationReadOrigin?: string;
+  }): void {
+    authorizeIMessageResourceReference(params);
+  },
+
   async resolveChatGuidForTarget(params: {
     target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
     options: CliRunOptions;
+    conversationReadOrigin: IMessageConversationReadOrigin;
   }): Promise<string | null> {
+    // Requiring the host-normalized origin at this list-backed read seam keeps
+    // direct operator lookups distinct from delegated actions, which have
+    // already passed the core exact-current-conversation gate.
     // Each `chats.list` call spawns a fresh imsg rpc subprocess and pulls
     // every chat the account knows about. Bursts of agent actions (react
     // then reply, reply then add-participant, etc.) all paid that cost
@@ -540,8 +466,9 @@ export const imessageActionsRuntime = {
     // shadow `options` (the CLI run options) on this params bag.
     choices: readonly string[];
     replyToMessageId?: string;
+    suppressComment?: boolean;
     options: IMessageBridgeActionOptions;
-  }): Promise<IMessageBridgeSendResult> {
+  }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
     const result = await runIMessageCliJson(
       [
         "poll",
@@ -552,10 +479,11 @@ export const imessageActionsRuntime = {
         params.question,
         ...params.choices.flatMap((choice) => ["--option", choice]),
         ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+        ...(params.suppressComment ? ["--no-comment"] : []),
       ],
       params.options,
     );
-    return { messageId: resolveMessageId(result) };
+    return { messageId: resolveMessageId(result), pollOptions: readSentPollOptions(result) };
   },
 
   async sendPollVote(params: {

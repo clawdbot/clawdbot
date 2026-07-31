@@ -92,9 +92,7 @@ export function resolveEnvApiKeyVarName(
 }
 
 /** Resolves the AWS SDK API key env var used by Bedrock-style auth. */
-export function resolveAwsSdkApiKeyVarName(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return resolveAwsSdkEnvVarName(env);
 }
 

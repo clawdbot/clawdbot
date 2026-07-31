@@ -16,7 +16,8 @@ import type {
 } from "../../config/types.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
+import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -24,6 +25,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -38,6 +40,7 @@ import {
   formatPortDiagnostics,
   inspectPortConnections,
   inspectPortUsage,
+  inspectPortUsages,
   type PortConnection,
   type PortListener,
   type PortUsageStatus,
@@ -295,6 +298,7 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    gatewayHeap?: GatewayHeapLimitReport;
     restartHandoff?: GatewayRestartHandoff;
     staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
@@ -343,7 +347,7 @@ export type DaemonStatus = {
     healthy: boolean;
     staleGatewayPids: number[];
   };
-  extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraServices: ExtraGatewayService[];
   /**
    * Plugin version drift report. Surfaces active official external plugins
    * whose installed version does not match the running gateway version, which
@@ -492,16 +496,24 @@ function toPortStatusSummary(
 async function inspectDaemonPortStatuses(params: {
   daemonPort: number;
   cliPort: number;
+  daemonBindHost: string;
 }): Promise<{ portStatus?: PortStatusSummary; portCliStatus?: PortStatusSummary }> {
-  const [portDiagnostics, portCliDiagnostics] = await Promise.all([
-    inspectPortUsage(params.daemonPort).catch(() => null),
-    params.cliPort !== params.daemonPort
-      ? inspectPortUsage(params.cliPort).catch(() => null)
-      : null,
-  ]);
+  const daemonProbeHosts = resolveGatewayRequiredListenHosts(params.daemonBindHost);
+  if (params.cliPort === params.daemonPort) {
+    const portDiagnostics = await inspectPortUsage(params.daemonPort, {
+      probeHosts: daemonProbeHosts,
+    }).catch(() => null);
+    return {
+      portStatus: toPortStatusSummary(portDiagnostics),
+      portCliStatus: undefined,
+    };
+  }
+  const portDiagnosticsByPort = await inspectPortUsages([params.daemonPort, params.cliPort], {
+    probeHostsByPort: new Map([[params.daemonPort, daemonProbeHosts]]),
+  }).catch(() => new Map());
   return {
-    portStatus: toPortStatusSummary(portDiagnostics),
-    portCliStatus: toPortStatusSummary(portCliDiagnostics),
+    portStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.daemonPort) ?? null),
+    portCliStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.cliPort) ?? null),
   };
 }
 
@@ -617,6 +629,7 @@ export async function gatherDaemonStatus(
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
+    daemonBindHost: gateway.bindHost,
   });
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
@@ -642,9 +655,7 @@ export async function gatherDaemonStatus(
           .catch(() => [])
       : [];
 
-  const timeoutMs =
-    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
-    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
+  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -702,7 +713,6 @@ export async function gatherDaemonStatus(
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
-          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -722,6 +732,7 @@ export async function gatherDaemonStatus(
               service,
               port: daemonPort,
               env: serviceEnv,
+              probeHosts: resolveGatewayRequiredListenHosts(gateway.bindHost),
             }),
           )
           .catch(() => undefined)
@@ -781,6 +792,9 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(command
+        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
@@ -846,3 +860,4 @@ export function resolvePortListeningAddresses(status: DaemonStatus): string[] {
   );
   return addrs;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

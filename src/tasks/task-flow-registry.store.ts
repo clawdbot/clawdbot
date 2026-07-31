@@ -57,7 +57,7 @@ export function getTaskFlowRegistryObservers(): TaskFlowRegistryObservers | null
   return configuredFlowRegistryObservers;
 }
 
-export function configureTaskFlowRegistryRuntime(params: {
+function configureTaskFlowRegistryRuntime(params: {
   store?: TaskFlowRegistryStore;
   observers?: TaskFlowRegistryObservers | null;
 }) {
@@ -73,4 +73,10 @@ export function resetTaskFlowRegistryRuntimeForTests() {
   configuredFlowRegistryStore.close?.();
   configuredFlowRegistryStore = defaultFlowRegistryStore;
   configuredFlowRegistryObservers = null;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.taskFlowRegistryStoreTestApi")
+  ] = { configureTaskFlowRegistryRuntime };
 }

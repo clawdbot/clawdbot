@@ -76,12 +76,3 @@ export function getBundledLanguageAliases(
 ): readonly string[] {
   return "aliases" in language ? language.aliases : [];
 }
-export const bundledLanguagesAlias = Object.fromEntries(
-  bundledLanguagesInfo.flatMap((language) =>
-    getBundledLanguageAliases(language).map((alias) => [alias, language.import]),
-  ),
-);
-export const bundledLanguages = {
-  ...bundledLanguagesBase,
-  ...bundledLanguagesAlias,
-};

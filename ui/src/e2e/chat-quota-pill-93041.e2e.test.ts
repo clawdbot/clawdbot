@@ -92,16 +92,15 @@ const claudeSubscriptionSessions = {
 };
 
 let server: ControlUiE2eServer;
+let browser: Browser;
 
 async function openChat(
   authStatus: unknown,
   extraMethodResponses: Record<string, unknown> = {},
 ): Promise<{
-  browser: Browser;
   context: BrowserContext;
   page: Page;
 }> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
@@ -112,35 +111,37 @@ async function openChat(
     });
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },
     });
     await page.goto(`${server.baseUrl}chat`);
-    return { browser, context, page };
+    await gateway.waitForRequest("models.authStatus");
+    return { context, page };
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
     throw error;
   }
 }
 
-async function closeChat(fixture: {
-  browser: Browser;
-  context: BrowserContext;
-  page: Page;
-}): Promise<void> {
+async function closeChat(fixture: { context: BrowserContext; page: Page }): Promise<void> {
   await fixture.page.close().catch(() => {});
   await fixture.context.close().catch(() => {});
-  await fixture.browser.close().catch(() => {});
 }
 
 describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
@@ -205,7 +206,14 @@ describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
     const { page } = fixture;
     try {
       await page.locator(".agent-chat__composer-controls").first().waitFor({ state: "visible" });
-      await page.waitForTimeout(500);
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: { modelAuthStatusResult?: { providers?: unknown[] } | null };
+            })
+          | null;
+        return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
+      });
       expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
     } finally {
       await closeChat(fixture);

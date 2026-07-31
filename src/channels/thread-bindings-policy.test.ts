@@ -103,9 +103,7 @@ describe("thread binding spawn policy helpers", () => {
     const cfg = {
       channels: {
         discord: {
-          threadBindings: {
-            spawnSessions: false,
-          },
+          threadBindings: { spawnSessions: false },
         },
       },
     };

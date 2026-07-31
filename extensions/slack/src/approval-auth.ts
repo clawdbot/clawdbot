@@ -1,34 +1,25 @@
 // Slack plugin module implements approval auth behavior.
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 
-export function getSlackApprovalApprovers(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const account = resolveSlackAccount(params).config;
-  return resolveApprovalApprovers({
-    allowFrom: resolveSlackAccountAllowFrom(params),
-    defaultTo: account.defaultTo,
-    normalizeApprover: normalizeSlackApproverId,
-    normalizeDefaultTo: normalizeSlackApproverId,
-  });
-}
+const slackApproval = createChannelApprovalAuth({
+  channelLabel: "Slack",
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveSlackAccount({ cfg, accountId }).config;
+    return {
+      allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId }),
+      defaultTo: account.defaultTo,
+    };
+  },
+  normalizeApprover: normalizeSlackApproverId,
+  normalizeDefaultTo: normalizeSlackApproverId,
+  isWildcardAuthorized: ({ purpose, senderId, inputs, approvers }) =>
+    purpose === "sender" &&
+    Boolean(senderId) &&
+    approvers.length === 0 &&
+    inputs.allowFrom?.some((entry) => String(entry).trim() === "*") === true,
+});
 
-export function isSlackApprovalAuthorizedSender(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  senderId?: string | null;
-}): boolean {
-  const senderId = params.senderId ? normalizeSlackApproverId(params.senderId) : undefined;
-  if (!senderId) {
-    return false;
-  }
-  const approvers = getSlackApprovalApprovers(params);
-  if (approvers.length > 0) {
-    return approvers.includes(senderId);
-  }
-  return (resolveSlackAccountAllowFrom(params) ?? []).some((entry) => entry.trim() === "*");
-}
+export const getSlackApprovalApprovers = slackApproval.resolveApprovers;
+export const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;

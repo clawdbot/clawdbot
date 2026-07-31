@@ -8,10 +8,13 @@ import "./logs-page.ts";
 type TestLogsPage = HTMLElement & {
   context: ApplicationContext;
   connected: boolean;
-  logsAtBottom: boolean;
   logsAutoFollow: boolean;
   logsEntries: unknown[];
-  scheduleScroll: (force?: boolean) => void;
+  logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
+  streamFollow: {
+    atBottom: boolean;
+    schedule: (force?: boolean) => void;
+  };
   readonly updateComplete: Promise<boolean>;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadLogs: (opts?: { reset?: boolean; quiet?: boolean }) => Promise<boolean>;
@@ -30,7 +33,7 @@ function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
   return {
     basePath: "",
     gateway: {
-      snapshot: { client, connected: false },
+      snapshot: { client, phase: "stopped" },
       subscribe: () => () => undefined,
     },
     navigate: vi.fn(),
@@ -49,7 +52,7 @@ describe("LogsPage lifecycle", () => {
     page.context = {
       basePath: "",
       gateway: {
-        snapshot: { client: null, connected: false },
+        snapshot: { client: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
       navigate: vi.fn(),
@@ -62,7 +65,7 @@ describe("LogsPage lifecycle", () => {
     await Promise.resolve();
     requestFrame.mockClear();
 
-    page.scheduleScroll();
+    page.streamFollow.schedule();
     page.remove();
     await Promise.resolve();
 
@@ -85,8 +88,8 @@ describe("LogsPage lifecycle", () => {
 
     page.logsAutoFollow = false;
     await page.updateComplete;
-    const scheduleScroll = vi.spyOn(page, "scheduleScroll");
-    page.logsAtBottom = false;
+    const scheduleScroll = vi.spyOn(page.streamFollow, "schedule");
+    page.streamFollow.atBottom = false;
     page.logsAutoFollow = true;
     await page.updateComplete;
 
@@ -146,7 +149,7 @@ describe("LogsPage lifecycle", () => {
     page.connected = true;
 
     const load = page.loadLogs({ reset: true });
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
     pending.resolve({ cursor: 1, lines: ["stale"], reset: true });
     await load;
 
@@ -175,6 +178,33 @@ describe("LogsPage lifecycle", () => {
     expect(page.logsEntries).toHaveLength(1);
   });
 
+  it("retains loaded logs as stale after failure and clears the marker on retry success", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 1, lines: ["old"], reset: true })
+      .mockRejectedValueOnce(new Error("logs unavailable"))
+      .mockResolvedValueOnce({ cursor: 2, lines: ["fresh"], reset: true });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client);
+    document.body.append(page);
+    await page.updateComplete;
+    page.connected = true;
+
+    await page.loadLogs({ reset: true });
+    await page.loadLogs({ reset: true });
+    expect(page.logsEntries).toHaveLength(1);
+    expect(page.logsStatus).toEqual({
+      error: "Error: logs unavailable",
+      hasLoaded: true,
+      stale: true,
+    });
+
+    await page.loadLogs({ reset: true });
+    expect(page.logsStatus).toEqual({ error: null, hasLoaded: true, stale: false });
+    expect(page.logsEntries).toHaveLength(1);
+  });
+
   it("drops deferred scroll work after a same-client reconnect", async () => {
     const client = {
       request: vi.fn(
@@ -189,12 +219,12 @@ describe("LogsPage lifecycle", () => {
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     document.body.append(page);
     await page.updateComplete;
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     requestFrame.mockClear();
 
-    page.scheduleScroll();
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.streamFollow.schedule();
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     await Promise.resolve();
 
     expect(requestFrame).not.toHaveBeenCalled();

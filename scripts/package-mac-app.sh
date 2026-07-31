@@ -89,6 +89,152 @@ sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
 
+run_with_locked_swift_packages() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+  local command_status=0
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  "$@" || command_status=$?
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+  return "$command_status"
+}
+
+PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+
+restore_swiftpm_resource_sources() {
+  local source_file
+  local backup_file
+  for source_file in "${PATCHED_SWIFTPM_RESOURCE_SOURCES[@]:-}"; do
+    [[ -n "$source_file" ]] || continue
+    backup_file="$source_file.openclaw-original"
+    if [[ -f "$backup_file" ]]; then
+      mv "$backup_file" "$source_file"
+    fi
+  done
+  PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+}
+
+patch_swiftpm_resource_lookups() {
+  local build_path="$1"
+  local checkout_root="$build_path/checkouts"
+  local source_file
+  local source_files=(
+    "$checkout_root/KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift"
+  )
+
+  for source_file in "${source_files[@]}"; do
+    if [[ ! -f "$source_file" ]]; then
+      echo "ERROR: SwiftPM resource source not found at $source_file" >&2
+      return 1
+    fi
+    if [[ -e "$source_file.openclaw-original" ]]; then
+      echo "ERROR: Stale SwiftPM resource source backup at $source_file.openclaw-original" >&2
+      return 1
+    fi
+    cp -p "$source_file" "$source_file.openclaw-original"
+    chmod u+w "$source_file"
+    PATCHED_SWIFTPM_RESOURCE_SOURCES+=("$source_file")
+  done
+
+  /usr/bin/python3 - "${source_files[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+
+def replace_exact(path: Path, old: str, new: str, expected: int = 1) -> str:
+    text = path.read_text()
+    if text.count(old) != expected:
+        raise SystemExit(f"Expected {expected} occurrence(s) in {path}: {old!r}")
+    return text.replace(old, new)
+
+
+keyboard_shortcuts, swift_math_font, swift_math_legacy_font = map(Path, sys.argv[1:])
+
+keyboard_text = replace_exact(
+    keyboard_shortcuts,
+    "NSLocalizedString(self, bundle: .module, comment: self)",
+    "NSLocalizedString(self, bundle: .keyboardShortcutsPackagedResources, comment: self)",
+)
+keyboard_marker = "\n\nextension Data {"
+keyboard_injection = """
+
+private extension Bundle {
+\t// Command-line SwiftPM builds resolve Bundle.module beside the executable, which is
+\t// outside a valid signed .app layout. Prefer the bundle copied into Contents/Resources.
+\tstatic let keyboardShortcutsPackagedResources: Bundle = {
+\t\t#if os(macOS)
+\t\tif let url = Bundle.main.url(
+\t\t\tforResource: \"KeyboardShortcuts_KeyboardShortcuts\",
+\t\t\twithExtension: \"bundle\"),
+\t\t   let bundle = Bundle(url: url)
+\t\t{
+\t\t\treturn bundle
+\t\t}
+\t\t#endif
+\t\treturn .module
+\t}()
+}
+"""
+if keyboard_text.count(keyboard_marker) != 1:
+    raise SystemExit(f"Expected one KeyboardShortcuts insertion marker in {keyboard_shortcuts}")
+keyboard_shortcuts.write_text(keyboard_text.replace(keyboard_marker, keyboard_injection + keyboard_marker))
+
+swift_math_text = replace_exact(
+    swift_math_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    expected=2,
+)
+swift_math_marker = "\n#endif\n\n/// Now available for everyone to use"
+swift_math_injection = """
+
+extension Bundle {
+    // Keep SwiftMath's generated resource sidecar inside the signed app Resources directory.
+    static let swiftMathPackagedResources: Bundle = {
+        #if os(macOS)
+        if let url = Bundle.main.url(
+            forResource: \"SwiftMath_SwiftMath\",
+            withExtension: \"bundle\"),
+           let bundle = Bundle(url: url)
+        {
+            return bundle
+        }
+        #endif
+        return .module
+    }()
+}
+"""
+if swift_math_text.count(swift_math_marker) != 1:
+    raise SystemExit(f"Expected one SwiftMath insertion marker in {swift_math_font}")
+swift_math_font.write_text(
+    swift_math_text.replace(swift_math_marker, "\n#endif" + swift_math_injection + "\n/// Now available for everyone to use")
+)
+
+legacy_text = replace_exact(
+    swift_math_legacy_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+)
+swift_math_legacy_font.write_text(legacy_text)
+PY
+}
+
+trap restore_swiftpm_resource_sources EXIT
+
 PNPM_CMD=()
 
 resolve_pnpm_cmd() {
@@ -220,8 +366,12 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "📦 Resolving Swift packages [$arch]"
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
+  patch_swiftpm_resource_lookups "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  restore_swiftpm_resource_sources
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
@@ -241,6 +391,11 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
+PORT_GUARDIAN_STORAGE_VERSION="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawPortGuardianStorageVersion)"
+if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: OpenClawPortGuardianStorageVersion must be a positive integer." >&2
+  exit 1
+fi
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
@@ -351,15 +506,29 @@ else
   exit 1
 fi
 
-echo "📦 Copying OpenClawKit resources"
-OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
-if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-  cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-else
-  echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
-  exit 1
-fi
+echo "📦 Copying SwiftPM resource bundles"
+SWIFTPM_BUILD_PRODUCTS="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
+# Generated Bundle.module accessors resolve from Bundle.main.bundleURL. In a packaged app,
+# that is the .app root, not Contents/Resources; placing a bundle there traps on first access.
+for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle; do
+  [[ -d "$resource_bundle_src" ]] || continue
+  resource_bundle="${resource_bundle_src##*/}"
+  rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
+  cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
+done
+REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
+  "GRDB_GRDB.bundle"
+  "KeyboardShortcuts_KeyboardShortcuts.bundle"
+  "OpenClaw_OpenClaw.bundle"
+  "OpenClawKit_OpenClawKit.bundle"
+  "SwiftMath_SwiftMath.bundle"
+)
+for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do
+  if [[ ! -d "$APP_ROOT/Contents/Resources/$resource_bundle" ]]; then
+    echo "ERROR: Required SwiftPM resource bundle not found at $SWIFTPM_BUILD_PRODUCTS/$resource_bundle" >&2
+    exit 1
+  fi
+done
 
 running_packaged_app_pids() {
   command -v pgrep >/dev/null 2>&1 || return 0

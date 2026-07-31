@@ -3,6 +3,10 @@ import OSLog
 
 enum NodeServiceManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
+    private static var launchdPlistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+    }
 
     static func start() async -> String? {
         let result = await self.runServiceCommandResult(
@@ -27,11 +31,54 @@ enum NodeServiceManager {
         }
         return nil
     }
+
+    static func restart() async -> String? {
+        let result = await self.runServiceCommandResult(
+            ["restart"],
+            timeout: 20,
+            quiet: false)
+        if let error = self.errorMessage(from: result, treatNotLoadedAsError: true) {
+            self.logger.error("node service restart failed: \(error, privacy: .public)")
+            return error
+        }
+        return nil
+    }
+
+    /// Empty means no node LaunchAgent. Nil means the on-disk ownership proof
+    /// exists but could not be read, so callers must not treat it as external.
+    static func launchdProgramArguments() -> [String]? {
+        self.launchdProgramArguments(
+            plistURL: self.launchdPlistURL,
+            fileManager: .default)
+    }
+
+    static func waitUntilRunning() async -> Bool {
+        var consecutiveRunningChecks = 0
+        for attempt in 0..<20 {
+            let result = await self.runServiceCommandResult(
+                ["status"],
+                timeout: 10,
+                quiet: true)
+            if result.success,
+               let object = result.parsed?.object,
+               self.runtimeIsRunning(in: object)
+            {
+                consecutiveRunningChecks += 1
+                if consecutiveRunningChecks == 2 { return true }
+            } else {
+                consecutiveRunningChecks = 0
+            }
+            if attempt < 19 {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        return false
+    }
 }
 
 extension NodeServiceManager {
-    private static func serviceCommand(_ args: [String]) -> [String] {
-        CommandResolver.openclawCommand(
+    private static func serviceCommand(_ args: [String]) async -> [String] {
+        await CommandResolver.openclawCommand(
             subcommand: "node",
             extraArgs: self.withJsonFlag(args),
             // Service management must always run locally, even if remote mode is configured.
@@ -60,7 +107,7 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = self.serviceCommand(args)
+        let command = await self.serviceCommand(args)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
@@ -136,6 +183,22 @@ extension NodeServiceManager {
         return hintText
     }
 
+    private static func launchdProgramArguments(
+        plistURL: URL,
+        fileManager: FileManager) -> [String]?
+    {
+        guard fileManager.fileExists(atPath: plistURL.path) else { return [] }
+        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
+    }
+
+    private static func runtimeIsRunning(in object: [String: Any]) -> Bool {
+        guard let service = object["service"] as? [String: Any],
+              service["loaded"] as? Bool == true,
+              let runtime = service["runtime"] as? [String: Any]
+        else { return false }
+        return runtime["status"] as? String == "running"
+    }
+
     private static func summarize(_ text: String) -> String? {
         TextSummarySupport.summarizeLastLine(text)
     }
@@ -143,8 +206,17 @@ extension NodeServiceManager {
 
 #if DEBUG
 extension NodeServiceManager {
-    static func _testServiceCommand(_ args: [String]) -> [String] {
-        self.serviceCommand(args)
+    static func _testServiceCommand(_ args: [String]) async -> [String] {
+        await self.serviceCommand(args)
+    }
+
+    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
+        self.launchdProgramArguments(plistURL: plistURL, fileManager: .default)
+    }
+
+    static func _testRuntimeIsRunning(fromJSON json: String) -> Bool {
+        guard let object = JSONObjectExtractionSupport.extract(from: json)?.object else { return false }
+        return self.runtimeIsRunning(in: object)
     }
 }
 #endif

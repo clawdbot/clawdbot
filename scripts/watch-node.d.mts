@@ -31,6 +31,10 @@ export function runWatchMain(params?: {
     };
   }>;
   watchPaths?: string[];
+  pathClassifier?: {
+    refreshGeneratedPluginAssetPaths(): void;
+    isRestartRelevantRunNodePath(repoPath: unknown): boolean;
+  };
   process?: NodeJS.Process;
   cwd?: string;
   args?: string[];

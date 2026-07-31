@@ -4,9 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ALLOWED_PLUGIN_SDK_FIXTURE_IMPORTS = new Set([
-  // Intentional legacy SDK-root compatibility smoke tests.
-  'src/plugins/loader.test.ts:configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),',
-  'src/plugins/loader.test.ts:const { onDiagnosticEvent } = require("openclaw/plugin-sdk");',
   // Intentional jiti alias regression test.
   'src/plugins/loader.git-path-regression.test.ts:`import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";',
   'src/plugins/loader.git-path-regression.test.ts:          "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(copiedChannelRuntimeShim)},',

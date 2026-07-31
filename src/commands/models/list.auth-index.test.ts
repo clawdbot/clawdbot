@@ -116,6 +116,34 @@ describe("createModelListAuthIndex", () => {
     expect(index.evaluateModelAuth("disabled-provider").availability).toBeUndefined();
   });
 
+  it("uses enabled synthetic refs from prepared metadata without reloading the registry", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      registryDiagnostics: [],
+      plugins: [],
+      index: {
+        plugins: [
+          { enabled: true, syntheticAuthRefs: ["codex"] },
+          { enabled: false, syntheticAuthRefs: ["disabled-provider"] },
+        ],
+      },
+    } as unknown as PluginMetadataSnapshot;
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.evaluateModelAuth("openai", { modelId: "gpt-5.5" })).toMatchObject({
+      availability: undefined,
+      evidence: "synthetic",
+    });
+    expect(index.evaluateModelAuth("disabled-provider").availability).toBeUndefined();
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
   it.each(["derived" as const, "persisted" as const])(
     "does not trust unusable synthetic refs from a %s snapshot",
     (source) => {
@@ -140,10 +168,15 @@ describe("createModelListAuthIndex", () => {
   );
 
   it("uses explicit synthetic refs without loading plugin metadata", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      plugins: [],
+    } as unknown as PluginMetadataSnapshot;
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
       env: {},
+      metadataSnapshot,
       syntheticAuthProviderRefs: ["codex"],
       routeResolverFactory: dualRouteResolverFactory,
     });

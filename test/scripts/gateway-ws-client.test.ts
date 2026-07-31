@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { createGatewayWsClient } from "../../scripts/dev/gateway-ws-client.js";
+import { createGatewayWsClient, rawDataToString } from "../../scripts/dev/gateway-ws-client.js";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
@@ -88,6 +88,14 @@ async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url
 }
 
 describe("createGatewayWsClient", () => {
+  it("decodes every ws raw-data shape without core source files", () => {
+    expect(rawDataToString(Buffer.from("buffer"))).toBe("buffer");
+    expect(rawDataToString(Uint8Array.from(Buffer.from("array-buffer")).buffer)).toBe(
+      "array-buffer",
+    );
+    expect(rawDataToString([Buffer.from("frag"), Buffer.from("ments")])).toBe("fragments");
+  });
+
   it("rejects pending RPC requests when the client closes", async () => {
     const url = await listen(() => {});
     const client = createGatewayWsClient({ url });

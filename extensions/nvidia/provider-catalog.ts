@@ -1,9 +1,6 @@
 // Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
-import {
-  clearLiveCatalogCacheForTests,
-  getCachedLiveProviderModelRows,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { getCachedLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -17,7 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
-export const NVIDIA_FEATURED_MODELS_URL =
+const NVIDIA_FEATURED_MODELS_URL =
   "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const FEATURED_MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -117,10 +114,6 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
     ...provider,
     models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
   };
-}
-
-export function clearNvidiaFeaturedModelCacheForTests() {
-  clearLiveCatalogCacheForTests();
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {

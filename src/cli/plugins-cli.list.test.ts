@@ -133,9 +133,8 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
     expect(output).toContain(
-      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
     );
     expect(output).toContain(
       'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',

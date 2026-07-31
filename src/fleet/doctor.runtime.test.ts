@@ -20,6 +20,7 @@ const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-doctor-" }
 function healthyInspection(): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: {
@@ -125,6 +126,28 @@ describe("fleet doctor", () => {
         fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       });
       expect(reports).toHaveLength(1);
+      expect(reports[0]?.findings.map((entry) => entry.check)).toEqual([
+        "runtime-local",
+        "container-present",
+        "container-owned",
+        "container-running",
+        "gateway-health",
+        "cap-drop",
+        "security-opt",
+        "init",
+        "pids-limit",
+        "memory-limit",
+        "cpu-limit",
+        "restart-policy",
+        "port-binding",
+        "gateway-token-env",
+        "network-present",
+        "network-owned",
+        "network-attachments",
+        "network-egress",
+        "data-dir",
+        "auth-dir",
+      ]);
       expect(reports[0]?.findings.every((entry) => entry.status === "pass")).toBe(true);
     },
   );

@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
+import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
+import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
@@ -89,10 +92,64 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   );
 }
 
+async function maybeRemoveLegacySkillUploadTree(params: {
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): Promise<void> {
+  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
+  const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
+  const stats = await fs.lstat(uploadRoot).catch(() => null);
+  if (!stats) {
+    return;
+  }
+  if (!params.shouldRepair) {
+    note(
+      "Legacy skill-upload staging remains. Run `openclaw doctor --fix` to discard it; active uploads now live in SQLite and must be retried.",
+      "Skill uploads",
+    );
+    return;
+  }
+  try {
+    // Removing a symlink removes only the fixed legacy entry, never its target.
+    if (stats.isSymbolicLink()) {
+      await fs.unlink(uploadRoot);
+    } else {
+      await fs.rm(uploadRoot, { recursive: true, force: true });
+    }
+  } catch (error) {
+    note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
+    return;
+  }
+  note(
+    "Removed legacy skill-upload staging; unfinished transient uploads must be retried.",
+    "Skill uploads",
+  );
+}
+
 export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
+  if (shouldRepair) {
+    for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
+      if ((await fs.stat(entry.path).catch(() => null))?.isFile()) {
+        runDoctorAgentDatabaseOperation({
+          agentId: entry.agentId,
+          path: entry.path,
+          run: () =>
+            deleteSessionCostUsageRollupsExcept({
+              agentId: entry.agentId,
+              databasePath: entry.path,
+              liveKeys: new Set(),
+              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              rows: [],
+            }),
+        });
+      }
+    }
+  }
+  await maybeRemoveLegacySkillUploadTree({ shouldRepair, env });
 }

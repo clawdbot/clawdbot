@@ -9,7 +9,7 @@ import OpenClawKit
 ///
 /// Both sessions derive routing and authentication ownership from the route's
 /// `stableID`. TLS certificate pins prove transport trust but are not gateway identity.
-struct GatewayConnectConfig {
+struct GatewayConnectConfig: Sendable {
     let url: URL
     let stableID: String
     let tls: GatewayTLSParams?

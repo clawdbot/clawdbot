@@ -6,12 +6,7 @@ import { normalizeLegacyDotBetaVersion } from "./semver.js";
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
 /** Evidence source that decided the effective update channel. */
-export type UpdateChannelSource =
-  | "config"
-  | "git-tag"
-  | "git-branch"
-  | "installed-version"
-  | "default";
+type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "installed-version" | "default";
 
 /** Default channel for npm/package installs when no config or version signal overrides it. */
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
@@ -67,7 +62,7 @@ export function isBetaTag(tag: string): boolean {
 }
 
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
-export function isPrereleaseTag(tag: string): boolean {
+function isPrereleaseTag(tag: string): boolean {
   const parsed = parseSemver(normalizeLegacyDotBetaVersion(tag));
   if (parsed) {
     return parsed.prerelease.some((part) => typeof part === "string");

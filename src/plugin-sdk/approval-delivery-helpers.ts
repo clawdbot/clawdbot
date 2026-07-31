@@ -247,16 +247,12 @@ export function createChannelApprovalCapability(params: {
   render?: ChannelApprovalCapability["render"];
   /** Native target/capability discovery hooks. */
   native?: ChannelApprovalCapability["native"];
-  /** @deprecated Pass delivery/nativeRuntime/render/native directly. */
-  approvals?: Partial<ChannelApprovalCapabilitySurfaces>;
 }): ChannelApprovalCapability {
-  // Keep the approvals alias for shipped plugin-sdk callers; registry tests track
-  // this compatibility marker until the public deprecation window closes.
   const surfaces: ChannelApprovalCapabilitySurfaces = {
-    delivery: params.delivery ?? params.approvals?.delivery,
-    nativeRuntime: params.nativeRuntime ?? params.approvals?.nativeRuntime,
-    render: params.render ?? params.approvals?.render,
-    native: params.native ?? params.approvals?.native,
+    delivery: params.delivery,
+    nativeRuntime: params.nativeRuntime,
+    render: params.render,
+    native: params.native,
   };
   return {
     authorizeActorAction: params.authorizeActorAction,

@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
-import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
+import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
 const { runDuckDuckGoSearch } = vi.hoisted(() => ({
   runDuckDuckGoSearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -158,7 +158,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("defaults safeSearch to moderate and accepts strict and off", () => {
-    expect(resolveDdgSafeSearch(undefined)).toBe(DEFAULT_DDG_SAFE_SEARCH);
+    expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
 
     expect(
       resolveDdgSafeSearch({
@@ -250,6 +250,21 @@ describe("duckduckgo web search provider", () => {
         title: "Direct result",
         url: "https://example.org/direct",
         snippet: "Second snippet",
+      },
+    ]);
+  });
+
+  it("keeps inline result markup from splitting words", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
+      <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
+    `;
+
+    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Café guide",
+        url: "https://example.com/cafe",
+        snippet: "Find the best café near you.",
       },
     ]);
   });

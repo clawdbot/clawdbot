@@ -4,7 +4,6 @@ import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
-  matchSystemRunApprovalEnvHash,
   missingSystemRunApprovalBinding,
   normalizeSystemRunApprovalPlan,
 } from "./system-run-approval-binding.js";
@@ -260,68 +259,6 @@ describe("buildSystemRunApprovalBinding", () => {
       },
       envKeys: ["alpha", "beta"],
     });
-  });
-});
-
-describe("matchSystemRunApprovalEnvHash", () => {
-  it.each([
-    {
-      name: "accepts matching empty env bindings",
-      params: {
-        expectedEnvHash: null,
-        actualEnvHash: null,
-        actualEnvKeys: [],
-      },
-      expected: { ok: true },
-    },
-    {
-      name: "reports missing approval env binding",
-      params: {
-        expectedEnvHash: null,
-        actualEnvHash: "abc",
-        actualEnvKeys: ["ALPHA"],
-      },
-      expected: {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: ["ALPHA"] },
-      },
-    },
-    {
-      name: "reports missing approval env binding when actual env keys are present without hashes",
-      params: {
-        expectedEnvHash: null,
-        actualEnvHash: null,
-        actualEnvKeys: ["ProgramFiles(x86)"],
-      },
-      expected: {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: ["ProgramFiles(x86)"] },
-      },
-    },
-    {
-      name: "reports env hash mismatches",
-      params: {
-        expectedEnvHash: "abc",
-        actualEnvHash: "def",
-        actualEnvKeys: ["ALPHA"],
-      },
-      expected: {
-        ok: false,
-        code: "APPROVAL_ENV_MISMATCH",
-        message: "approval id env binding mismatch",
-        details: {
-          envKeys: ["ALPHA"],
-          expectedEnvHash: "abc",
-          actualEnvHash: "def",
-        },
-      },
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(matchSystemRunApprovalEnvHash(params)).toEqual(expected);
   });
 });
 

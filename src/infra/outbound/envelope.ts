@@ -6,7 +6,7 @@ import type { OutboundDeliveryJson } from "./format.js";
 import { normalizeOutboundPayloadsForJson, type OutboundPayloadJson } from "./payloads.js";
 
 /** Structured result returned by outbound helpers when payloads/meta wrap delivery data. */
-export type OutboundResultEnvelope = {
+type OutboundResultEnvelope = {
   payloads?: OutboundPayloadJson[];
   meta?: unknown;
   delivery?: OutboundDeliveryJson;

@@ -126,4 +126,55 @@ describe("listOpenClawPluginManifestMetadata", () => {
       origin: "global",
     });
   });
+
+  it("skips oversized plugin manifests to prevent OOM during metadata scan", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+
+    const goodPluginDir = path.join(home, ".openclaw", "extensions", "good-plugin");
+    writeJson(path.join(goodPluginDir, "openclaw.plugin.json"), { id: "good-plugin" });
+
+    const oversizedDir = path.join(home, ".openclaw", "extensions", "big-plugin");
+    const oversizedPath = path.join(oversizedDir, "openclaw.plugin.json");
+    fs.mkdirSync(oversizedDir, { recursive: true });
+    fs.writeFileSync(
+      oversizedPath,
+      JSON.stringify({ id: "big-plugin", pad: "x".repeat(256 * 1024) }),
+      "utf8",
+    );
+    expect(fs.statSync(oversizedPath).size).toBeGreaterThan(256 * 1024);
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
+    });
+
+    // "good-plugin" is present; "big-plugin" is skipped due to oversized manifest.
+    expect(records.find((record) => record.manifest.id === "good-plugin")).toBeTruthy();
+    expect(records.find((record) => record.manifest.id === "big-plugin")).toBeUndefined();
+  });
+
+  it("accepts plugin manifests at the exact byte limit", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+
+    const exactDir = path.join(home, ".openclaw", "extensions", "exact-plugin");
+    fs.mkdirSync(exactDir, { recursive: true });
+
+    // Write a compact JSON manifest padded to exactly the byte limit.
+    const exactPath = path.join(exactDir, "openclaw.plugin.json");
+    const exactManifest = { id: "exact-plugin", pad: "" };
+    const compactJson = JSON.stringify(exactManifest);
+    const requiredPadding = 256 * 1024 - Buffer.byteLength(compactJson, "utf8");
+    exactManifest.pad = "x".repeat(requiredPadding);
+    fs.writeFileSync(exactPath, JSON.stringify(exactManifest), "utf8");
+    expect(Buffer.byteLength(fs.readFileSync(exactPath), "utf8")).toBe(256 * 1024);
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
+    });
+
+    expect(records.find((record) => record.manifest.id === "exact-plugin")).toBeTruthy();
+  });
 });

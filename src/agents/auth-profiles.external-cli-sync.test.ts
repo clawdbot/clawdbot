@@ -513,6 +513,9 @@ describe("external cli oauth resolution", () => {
         access: "usable-local-access",
         refresh: "usable-local-refresh",
         expires: Date.now() + 10 * 60_000,
+        // Identity-complete steady state; profiles missing the email get one
+        // bounded backfill read (external-cli-sync.email-backfill.test.ts).
+        email: "stored@example.com",
       }),
     );
 
@@ -584,6 +587,22 @@ describe("external cli oauth resolution", () => {
     });
 
     expect(profiles).toStrictEqual([]);
+  });
+
+  it("ignores Claude CLI apiKeyHelper credentials for OAuth profile sync", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: "helper-hash",
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toStrictEqual([]);
+    expectReaderPolicyCall(mocks.readClaudeCliCredentialsCached);
   });
 
   it("resolves fresher minimax external oauth profiles as runtime overlays", () => {

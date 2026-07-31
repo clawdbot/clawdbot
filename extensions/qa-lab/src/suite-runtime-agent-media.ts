@@ -86,12 +86,13 @@ async function resolveGeneratedImagePath(params: {
   startedAtMs: number;
   timeoutMs: number;
 }) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
     if (params.env.mock) {
       try {
         const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
           `${params.env.mock.baseUrl}/debug/requests`,
+          Math.max(1, deadline - Date.now()),
         );
         for (const request of requests.toReversed()) {
           if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
@@ -99,7 +100,11 @@ async function resolveGeneratedImagePath(params: {
           }
           const mediaPath = extractMediaPathFromText(request.toolOutput);
           if (mediaPath) {
-            return mediaPath;
+            const stat = await fs.stat(mediaPath).catch(() => null);
+            // Request snapshots include previous runs; only fresh, nonempty files prove this run.
+            if (stat?.isFile() && stat.size > 0 && stat.mtimeMs >= params.startedAtMs - 1_000) {
+              return mediaPath;
+            }
           }
         }
       } catch {
@@ -118,7 +123,7 @@ async function resolveGeneratedImagePath(params: {
       entries.map(async (entry) => {
         const fullPath = path.join(mediaDir, entry);
         const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat?.isFile()) {
+        if (!stat?.isFile() || stat.size === 0) {
           return null;
         }
         return {
@@ -135,9 +140,12 @@ async function resolveGeneratedImagePath(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(250, remainingMs));
+      });
+    }
   }
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }

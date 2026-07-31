@@ -148,7 +148,7 @@ function rememberRealtimeConversationEntry(
   return { ...state, assistantEntryId: isFinal ? null : entryId };
 }
 
-export function finishRealtimeConversationEntry(
+function finishRealtimeConversationEntry(
   state: RealtimeTalkConversationState,
   role: RealtimeTalkConversationRole,
   nowMs: number = Date.now(),

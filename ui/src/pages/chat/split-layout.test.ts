@@ -1,11 +1,10 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  applyUiCommandToSplitLayout,
   closePane,
-  createSinglePaneLayout,
-  createSplitLayout,
   findPane,
   insertPane,
-  nextPaneId,
   normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
@@ -14,6 +13,18 @@ import {
   setPaneSession,
   type ChatSplitLayout,
 } from "./split-layout.ts";
+
+function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
+  return {
+    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: "p1",
+  };
+}
+
+function createSplitLayout(sessionKey: string): ChatSplitLayout {
+  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
+}
 
 function threePaneLayout(): ChatSplitLayout {
   return insertPane(createSplitLayout("main"), "p2", "agent:main:second", "down");
@@ -120,6 +131,37 @@ describe("chat split layout", () => {
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
   });
 
+  it("maps UI split, focus, and close commands onto pane state", () => {
+    const initial = setActivePane(setPaneSession(createSplitLayout("main"), "p2", "source"), "p1");
+    const split = applyUiCommandToSplitLayout(
+      initial,
+      {
+        kind: "split",
+        direction: "down",
+        sessionKey: "agent:main:new",
+      },
+      "source",
+    );
+    expect(split && panesOf(split).map((pane) => pane.sessionKey)).toEqual([
+      "main",
+      "source",
+      "agent:main:new",
+    ]);
+    expect(split?.activePaneId).toBe("p3");
+
+    const focused = applyUiCommandToSplitLayout(split!, {
+      kind: "focus",
+      sessionKey: "main",
+    });
+    expect(focused?.activePaneId).toBe("p1");
+
+    const closed = applyUiCommandToSplitLayout(focused!, {
+      kind: "close-pane",
+      sessionKey: "agent:main:new",
+    });
+    expect(closed && panesOf(closed).map((pane) => pane.sessionKey)).toEqual(["main", "source"]);
+  });
+
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {
     const layout = insertPane(createSplitLayout("main"), "p1", "third", "right");
     const columns = resizeColumns(layout, 0, 0.8);
@@ -197,7 +239,7 @@ describe("chat split layout", () => {
     ).toBeUndefined();
   });
 
-  it("generates ids after the highest matching numeric suffix", () => {
+  it("inserts after the highest restored pane and column suffix", () => {
     const layout: ChatSplitLayout = {
       columns: [
         {
@@ -212,8 +254,9 @@ describe("chat split layout", () => {
       columnWeights: [1],
       activePaneId: "custom",
     };
-    expect(nextPaneId(layout)).toBe("p15");
+
     const inserted = insertPane(layout, "custom", "c", "right");
+
     expect(inserted.columns.at(1)?.id).toBe("c10");
     expect(inserted.columns.at(1)?.panes.at(0)?.id).toBe("p15");
   });

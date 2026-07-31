@@ -5,6 +5,8 @@ import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
 
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
+
 type ClientHarness = ReturnType<typeof createClientHarness>;
 
 type WireResponse = {
@@ -44,6 +46,31 @@ describe("CodexAppServerTurnRouter", () => {
     expect(addNotificationHandler).toHaveBeenCalledTimes(1);
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
     expect(addCloseHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch a request that times out before route activation", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const requestHandler = vi.fn(() => ({ executed: true }));
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-late",
+    });
+
+    harness.send({
+      id: "request-late",
+      method: "item/tool/call",
+      params: { threadId: "thread-late", turnId: "turn-late", tool: "message" },
+    });
+    await vi.advanceTimersByTimeAsync(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    expect(await waitForResponse(harness, "request-late")).toMatchObject({
+      id: "request-late",
+      result: { success: false },
+    });
+
+    await route.activate({ onRequest: requestHandler });
+
+    expect(requestHandler).not.toHaveBeenCalled();
   });
 
   it("routes concurrent traffic to the exact thread and turn", async () => {
@@ -113,6 +140,55 @@ describe("CodexAppServerTurnRouter", () => {
     expect(secondRequests).toHaveBeenCalledTimes(1);
     expect(firstResponse).toEqual({ id: "request-1", result: { owner: "first" } });
     expect(secondResponse).toEqual({ id: "request-2", result: { owner: "second" } });
+  });
+
+  it("warns once only for a thread-correlated stale turn notification", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const notifications = vi.fn();
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-1",
+      onNotification: notifications,
+    });
+    route.armTurn();
+    await route.bindTurn("turn-current");
+    const staleNotification = {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-stale",
+        itemId: "msg-stale",
+        delta: "ignored",
+      },
+    };
+
+    harness.send(staleNotification);
+    harness.send(staleNotification);
+    harness.send({
+      method: "thread/status/changed",
+      params: { threadId: "thread-1", status: { type: "active" } },
+    });
+    harness.send({ method: "configWarning", params: { message: "global" } });
+    await settleInput();
+
+    expect(notifications).toHaveBeenCalledOnce();
+    expect(notifications).toHaveBeenCalledWith(
+      {
+        method: "thread/status/changed",
+        params: { threadId: "thread-1", status: { type: "active" } },
+      },
+      { threadId: "thread-1" },
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("codex app-server notification ignored for inactive turn", {
+      eventKind: "item/agentMessage/delta",
+      activeThreadId: "thread-1",
+      activeTurnId: "turn-current",
+      threadId: "thread-1",
+      turnId: "turn-stale",
+      matchesActiveThread: true,
+      matchesActiveTurn: false,
+    });
   });
 
   it("buffers pre-bind notifications in order and filters the bound turn", async () => {

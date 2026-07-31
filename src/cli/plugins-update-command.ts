@@ -1,4 +1,5 @@
 // `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
+import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -6,25 +7,36 @@ import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
-import { extractShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
-import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
 } from "../plugins/install-persistence.js";
-import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
+import {
+  commitPluginInstallRecordsOnly,
+  commitPluginInstallRecordsWithConfig,
+} from "../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { configReferencesNpmInstallPath } from "../plugins/installs.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -34,6 +46,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
@@ -100,8 +113,66 @@ function projectUpdaterResultOntoSourceConfig(params: {
   return applyMergePatch(params.sourceBase, updatePatch) as OpenClawConfig;
 }
 
-/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
-export async function runPluginUpdateCommand(params: {
+function assertWriteOptionRecordFresh(params: {
+  currentHash: string | null;
+  current?: Record<string, string>;
+  expected?: Record<string, string>;
+  message: string;
+}): void {
+  if (!isDeepStrictEqual(params.current ?? {}, params.expected ?? {})) {
+    throw new ConfigMutationConflictError(params.message, {
+      currentHash: params.currentHash,
+    });
+  }
+}
+
+async function assertRecordsOnlyUpdateConfigFresh(params: {
+  baseHash?: string;
+  writeOptions?: ConfigWriteOptions;
+}): Promise<void> {
+  const prepared = await readConfigFileSnapshotForWrite(params.writeOptions);
+  const writeOptions = {
+    ...prepared.writeOptions,
+    ...params.writeOptions,
+  };
+  const currentHash = prepared.snapshot.hash ?? null;
+
+  writeOptions.assertConfigPathForWrite?.();
+  if (
+    writeOptions.expectedConfigPath !== undefined &&
+    writeOptions.expectedConfigPath !== prepared.snapshot.path
+  ) {
+    throw new ConfigMutationConflictError("config path changed since last load", {
+      currentHash,
+      retryable: false,
+    });
+  }
+  if (params.baseHash !== undefined && params.baseHash !== currentHash) {
+    throw new ConfigMutationConflictError("config changed since last load", {
+      currentHash,
+    });
+  }
+  assertWriteOptionRecordFresh({
+    currentHash,
+    current: prepared.writeOptions.includeFileTargetsForWrite,
+    expected: params.writeOptions?.includeFileTargetsForWrite,
+    message: "included config target changed since last load",
+  });
+  assertWriteOptionRecordFresh({
+    currentHash,
+    current: prepared.writeOptions.includeFileHashesForWrite,
+    expected: params.writeOptions?.includeFileHashesForWrite,
+    message: "included config changed since last load",
+  });
+  if (!prepared.snapshot.valid) {
+    throw createInvalidConfigError(
+      prepared.snapshot.path,
+      formatInvalidConfigDetails(prepared.snapshot.issues),
+    );
+  }
+}
+
+type RunPluginUpdateCommandParams = {
   id?: string;
   opts: {
     all?: boolean;
@@ -109,7 +180,21 @@ export async function runPluginUpdateCommand(params: {
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
-}) {
+};
+
+/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
+export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
+  assertConfigWriteAllowedInCurrentMode();
+  if (params.opts.dryRun) {
+    return await runPluginUpdateCommandUnlocked(params);
+  }
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginUpdateCommandUnlocked(params),
+  );
+}
+
+async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
@@ -131,23 +216,14 @@ export async function runPluginUpdateCommand(params: {
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
   const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
-  const shippedPluginInstallRecords = mutationSnapshot
-    ? {
-        ...extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.parsed),
-        ...extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.sourceConfig),
-      }
-    : extractShippedPluginInstallConfigRecords(cfg);
   const persistedPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-  // Persisted index records win over shipped legacy config during migration.
-  const pluginInstallRecords = {
-    ...shippedPluginInstallRecords,
-    ...persistedPluginInstallRecords,
-  };
+  const pluginInstallRecords = persistedPluginInstallRecords;
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const sourceCfgWithPluginInstallRecords = withPluginInstallRecords(
     sourceCfg,
     pluginInstallRecords,
   );
+  const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -160,8 +236,9 @@ export async function runPluginUpdateCommand(params: {
     rawId: params.id,
     all: params.opts.all,
   });
+  const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
-    installs: cfg.hooks?.internal?.installs ?? {},
+    installs: selectedHooks,
     rawId: params.id,
     all: params.opts.all,
   });
@@ -175,7 +252,6 @@ export async function runPluginUpdateCommand(params: {
     return defaultRuntime.exit(1);
   }
 
-  const selectedHooks = cfg.hooks?.internal?.installs ?? {};
   const pluginUpdateMayMutate =
     !params.opts.dryRun &&
     pluginSelection.pluginIds.some((pluginId) => {
@@ -202,13 +278,6 @@ export async function runPluginUpdateCommand(params: {
       snapshotPath: mutationSnapshot.snapshot.path,
       writeOptions: mutationSnapshot.writeOptions,
     });
-    // Write snapshots retain valid shipped install records in sourceConfig after
-    // include resolution; parsed also catches root-authored legacy records.
-    const pluginRecordCleanupMayMutate =
-      Object.keys(extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.sourceConfig))
-        .length > 0 ||
-      Object.keys(extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.parsed))
-        .length > 0;
     const parsedConfig =
       mutationSnapshot.snapshot.parsed &&
       typeof mutationSnapshot.snapshot.parsed === "object" &&
@@ -229,9 +298,15 @@ export async function runPluginUpdateCommand(params: {
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
-    // Manual update records stay in the index unless shipped-record cleanup or
-    // scoped-package compatibility migrates authored references from a legacy id.
-    const pluginConfigMayMutate = pluginRecordCleanupMayMutate || pluginIdMigrationMayMutate;
+    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+      configReferencesNpmInstallPath({
+        config: cfg,
+        install: pluginInstallRecords[pluginId],
+      }),
+    );
+    // Manual update records stay in the index unless scoped-package compatibility
+    // migrates authored references or moves an explicit prior managed root.
+    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);
@@ -268,8 +343,12 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+          updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
           officialPluginUpdateChannel: params.opts.all
-            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+            ? resolveRegistryUpdateChannel({
+                configChannel: normalizeUpdateChannel(cfg.update?.channel),
+                currentVersion: VERSION,
+              })
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,
@@ -346,17 +425,32 @@ export async function runPluginUpdateCommand(params: {
         sourceConfig: sourceSnapshot?.snapshot.sourceConfig ?? {},
       }),
     });
+    let recordsOnlyPluginUpdate = false;
     if (shouldPersistPluginInstallIndex) {
-      await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: persistedPluginInstallRecords,
-        nextInstallRecords: nextPluginInstallRecords,
-        nextConfig,
-        baseHash: sourceSnapshot?.snapshot.hash,
-        writeOptions: {
-          ...sourceSnapshot?.writeOptions,
-          afterWrite: { mode: "restart", reason: "plugin source changed" },
-        },
-      });
+      if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
+        await commitPluginInstallRecordsOnly({
+          previousInstallRecords: persistedPluginInstallRecords,
+          nextInstallRecords: nextPluginInstallRecords,
+          verifyConfigFresh: async () => {
+            await assertRecordsOnlyUpdateConfigFresh({
+              baseHash: sourceSnapshot?.snapshot.hash,
+              writeOptions: sourceSnapshot?.writeOptions,
+            });
+          },
+        });
+        recordsOnlyPluginUpdate = pluginResult.changed;
+      } else {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: persistedPluginInstallRecords,
+          nextInstallRecords: nextPluginInstallRecords,
+          nextConfig,
+          baseHash: sourceSnapshot?.snapshot.hash,
+          writeOptions: {
+            ...sourceSnapshot?.writeOptions,
+            afterWrite: { mode: "restart", reason: "plugin source changed" },
+          },
+        });
+      }
     } else {
       await replaceConfigFile({
         nextConfig,
@@ -372,6 +466,9 @@ export async function runPluginUpdateCommand(params: {
         invalidateRuntimeCache: false,
         logger,
       });
+      if (recordsOnlyPluginUpdate) {
+        await notifyGatewayPluginMetadataChanged(cfg);
+      }
     }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }

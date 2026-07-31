@@ -184,9 +184,3 @@ export function createAuditEventWriter(
     },
   };
 }
-
-export const testApi = {
-  auditWriterShutdownTimeoutMs: AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS,
-  maxPendingAuditEvents: MAX_PENDING_AUDIT_EVENTS,
-  resolveAuditEventWriterUrl,
-};

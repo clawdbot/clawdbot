@@ -43,11 +43,25 @@ enum OnboardingStep: Int, CaseIterable {
     }
 }
 
-enum OnboardingConnectPhase {
+enum OnboardingConnectPhase: Equatable {
     case connecting(detail: String)
     case failed(GatewayConnectionProblem)
     case failedStatus(message: String, allowsRetry: Bool)
     case ready
+
+    static func resolve(
+        problem: GatewayConnectionProblem?,
+        connectingDetail: String?,
+        localFailure: String?,
+        retryableFailure: String?) -> Self
+    {
+        // A retry may already be running; keep its previous error readable until success clears it.
+        if let localFailure { return .failedStatus(message: localFailure, allowsRetry: false) }
+        if let problem { return .failed(problem) }
+        if let connectingDetail { return .connecting(detail: connectingDetail) }
+        if let retryableFailure { return .failedStatus(message: retryableFailure, allowsRetry: true) }
+        return .ready
+    }
 }
 
 /// Typed connection attempt replaces string sentinels ("manual", "retry", ...) so

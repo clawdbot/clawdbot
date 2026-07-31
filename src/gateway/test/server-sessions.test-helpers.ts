@@ -8,7 +8,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -22,7 +22,6 @@ import {
   embeddedRunMock,
   installGatewayTestHooks,
   agentDiscoveryMock,
-  rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
@@ -39,31 +38,12 @@ export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;
 }
 
-export function createLinearSessionTranscript(sessionId: string, contents: string[]): string {
-  const records: Array<Record<string, unknown>> = [
-    {
-      type: "session",
-      version: 3,
-      id: sessionId,
-      timestamp: "2026-06-19T12:00:00.000Z",
-      cwd: "/tmp",
-    },
-  ];
-  for (const [index, content] of contents.entries()) {
-    records.push({
-      type: "message",
-      id: `${sessionId}-entry-${index}`,
-      parentId: index === 0 ? null : `${sessionId}-entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`,
-      message: { role: "user", content, timestamp: index + 1 },
-    });
-  }
-  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
-}
-
 type TestTranscriptMessage = Record<string, unknown> & {
   role: string;
 };
+type RetireSessionMcpRuntimeParams = Parameters<
+  (typeof import("../../agents/agent-bundle-mcp-tools.js"))["retireSessionMcpRuntime"]
+>[0];
 
 export async function seedSessionTranscript(params: {
   agentId?: string;
@@ -205,6 +185,7 @@ const browserSessionTabMocks = vi.hoisted(() => ({
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
 vi.mock("../../auto-reply/reply/queue.js", async () => {
@@ -324,10 +305,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
-  retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
-    sessionId
-      ? bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId).then(() => true)
-      : Promise.resolve(false),
+  retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
 export function setupGatewaySessionsTestHarness() {
@@ -383,6 +361,14 @@ export function setupGatewaySessionsTestHarness() {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
+    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockReset();
+    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async ({ sessionId }) => {
+      if (!sessionId) {
+        return false;
+      }
+      await bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId);
+      return true;
+    });
   });
 
   const requireHarness = () => {
@@ -564,12 +550,23 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
   };
 }
 
+function writeSessionFixture(
+  sessionFile: string,
+  session: { getPersistedEntries(): unknown[] },
+): void {
+  const contents = session
+    .getPersistedEntries()
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  fsSync.writeFileSync(sessionFile, `${contents}\n`, "utf8");
+}
+
 export async function createCheckpointFixture(
   dir: string,
   options: { legacyPreCompactionSnapshot?: boolean } = { legacyPreCompactionSnapshot: true },
 ) {
   const { SessionManager } = await getSessionManagerModule();
-  const session = SessionManager.create(dir, dir);
+  const session = SessionManager.inMemory(dir);
   const userMessage: UserMessage = {
     role: "user",
     content: "before compaction",
@@ -604,10 +601,8 @@ export async function createCheckpointFixture(
   if (!preCompactionLeafId) {
     throw new Error("expected persisted session leaf before compaction");
   }
-  const sessionFile = session.getSessionFile();
-  if (!sessionFile) {
-    throw new Error("expected persisted session file");
-  }
+  const sessionFile = path.join(dir, `${session.getSessionId()}.jsonl`);
+  writeSessionFixture(sessionFile, session);
   const legacyPreCompactionSnapshot = options.legacyPreCompactionSnapshot ?? true;
   const preCompactionSessionFile = legacyPreCompactionSnapshot
     ? path.join(dir, `${path.parse(sessionFile).name}.checkpoint-test.jsonl`)
@@ -616,13 +611,14 @@ export async function createCheckpointFixture(
     fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
   }
   const preCompactionSession = preCompactionSessionFile
-    ? SessionManager.open(preCompactionSessionFile, dir)
+    ? SessionManager.fromEntries(session.getPersistedEntries(), dir)
     : undefined;
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {
     throw new Error("expected post-compaction leaf");
   }
+  writeSessionFixture(sessionFile, session);
   return {
     session,
     sessionId: session.getSessionId(),
@@ -648,7 +644,7 @@ export function expectActiveRunCleanup(
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
+function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
@@ -658,19 +654,8 @@ export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   }
 }
 
-export async function getMainPreviewEntry(ws: import("ws").WebSocket) {
-  const preview = await rpcReq<{
-    previews: Array<{
-      key: string;
-      status: string;
-      items: Array<{ role: string; text: string }>;
-    }>;
-  }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
-  expect(preview.ok).toBe(true);
-  const entry = preview.payload?.previews[0];
-  expect(entry?.key).toBe("main");
-  expect(entry?.status).toBe("ok");
-  return entry;
+export function expectNoSessionQueueCleanup() {
+  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;

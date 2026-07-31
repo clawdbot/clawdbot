@@ -1,11 +1,10 @@
 /**
  * Decodes HTML-entity escaped tool-call arguments in stream wrappers.
  */
-import { streamSimple } from "../../llm/stream.js";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
-import { decodeHtmlEntities } from "../utils/html.js";
 
 /**
  * Decodes HTML entities inside streamed tool-call arguments before downstream execution.
@@ -14,7 +13,7 @@ import { decodeHtmlEntities } from "../utils/html.js";
  * repairs only arguments, preserving user-facing assistant text exactly as emitted.
  */
 /** Recursively decodes HTML entities in string leaves of an object graph. */
-export function decodeHtmlEntitiesInObject(value: unknown): unknown {
+function decodeHtmlEntitiesInObject(value: unknown): unknown {
   if (typeof value === "string") {
     return decodeHtmlEntities(value);
   }
@@ -91,12 +90,9 @@ function wrapStreamMessageObjects(
 }
 
 /** Wraps a stream function so tool-call arguments are decoded before consumers inspect them. */
-export function createHtmlEntityToolCallArgumentDecodingWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+export function createHtmlEntityToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn): StreamFn {
   return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
+    const maybeStream = baseStreamFn(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
         wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),

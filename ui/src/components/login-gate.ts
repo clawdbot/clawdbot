@@ -30,6 +30,7 @@ type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
+  refreshAction?: { label: string };
   steps: string[];
   docsHref: string;
   docsLabel: string;
@@ -74,7 +75,7 @@ function resolveDocsLabel(href: string): string {
   return t("login.failure.docsAuth");
 }
 
-// Shared with the connection banner so no offline surface prints credentials.
+// Shared with offline presentation so no disconnected surface prints credentials.
 export function redactLoginFailureError(value: string): string {
   return value
     .replace(
@@ -96,12 +97,14 @@ function buildFeedback(params: {
   summaryKey: string;
   stepKeys: string[];
   stepParams?: Record<string, string>;
+  refreshAction?: { label: string };
 }): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
   return {
     kind: params.kind,
     title: t(params.titleKey, params.stepParams),
     summary: t(params.summaryKey, params.stepParams),
+    refreshAction: params.refreshAction,
     steps: params.stepKeys.map((key) => t(key, params.stepParams)),
     docsHref,
     docsLabel: resolveDocsLabel(docsHref),
@@ -209,6 +212,7 @@ function resolveLoginFailureFeedback(
         "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
+      refreshAction: { label: t("login.failure.protocol.refresh") },
       stepKeys: [
         "login.failure.protocol.stepDashboard",
         "login.failure.protocol.stepDevUi",
@@ -264,6 +268,11 @@ function resolveLoginFailureFeedback(
   });
 }
 
+function refreshLoginGatePage() {
+  // The login gate blocks before the composer mounts, so there is no draft to preserve.
+  window.location.reload();
+}
+
 function renderLoginFailure(feedback: LoginFailureFeedback) {
   return html`
     <div
@@ -274,6 +283,17 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
     >
       <div class="login-gate__failure-title">${feedback.title}</div>
       <div class="login-gate__failure-summary">${feedback.summary}</div>
+      ${feedback.refreshAction
+        ? html`
+            <button
+              type="button"
+              class="btn primary login-gate__failure-refresh"
+              @click=${refreshLoginGatePage}
+            >
+              ${feedback.refreshAction.label}
+            </button>
+          `
+        : nothing}
       <ol class="login-gate__failure-steps">
         ${feedback.steps.map((step) => html`<li>${step}</li>`)}
       </ol>
@@ -335,7 +355,7 @@ function renderLoginGate(props: LoginGateProps) {
           </label>
           <label class="field">
             <span>${t("connection.access.token")}</span>
-            <div class="login-gate__secret-row">
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
@@ -357,7 +377,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.toggleTokenVisibility")}
                   aria-pressed=${props.showGatewayToken}
                   @click=${props.onToggleGatewayToken}
@@ -365,11 +385,11 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayToken ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <label class="field">
             <span>${t("connection.access.password")}</span>
-            <div class="login-gate__secret-row">
+            <span class="settings-secret">
               <input
                 type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
@@ -393,7 +413,7 @@ function renderLoginGate(props: LoginGateProps) {
               >
                 <button
                   type="button"
-                  class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                  class="settings-secret__toggle"
                   aria-label=${t("login.togglePasswordVisibility")}
                   aria-pressed=${props.showGatewayPassword}
                   @click=${props.onToggleGatewayPassword}
@@ -401,7 +421,7 @@ function renderLoginGate(props: LoginGateProps) {
                   ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
                 </button>
               </openclaw-tooltip>
-            </div>
+            </span>
           </label>
           <button class="btn primary login-gate__connect" @click=${props.onConnect}>
             ${t("common.connect")}

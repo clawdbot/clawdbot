@@ -7,7 +7,6 @@ import {
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
-import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
@@ -25,7 +24,6 @@ import {
 import { setRefIndex } from "../ref/store.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
-import { createActiveCfgProvider } from "./active-cfg.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipeline.js";
 import { createInteractionHandler } from "./interaction-handler.js";
@@ -96,22 +94,17 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     allowTextCommands: ctx.group?.allowTextCommands,
     isControlCommand: ctx.group?.isControlCommand,
     resolveIntroHint: ctx.group?.resolveIntroHint,
-    sessionStoreReader: ctx.group?.sessionStoreReader,
   };
   const groupChatEnabled = groupOpts.enabled;
   const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
     ? new Map()
     : undefined;
-  const sessionStoreReader = groupChatEnabled
-    ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
-    : undefined;
-
-  // Live config provider: per-inbound lookup so binding edits applied
-  // through the CLI take effect without a gateway restart (#69546).
-  const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
-
   // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
+    if (event.turnAdoptionLifecycle?.abortSignal.aborted) {
+      await event.turnAdoptionLifecycle.onAbandoned();
+      return;
+    }
     log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
       accountId: account.accountId,
       messageId: event.messageId,
@@ -126,7 +119,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       direction: "inbound",
     });
 
-    const activeCfg = activeCfgProvider.getActiveCfg();
+    const activeCfg = ctx.getCurrentConfig();
 
     const inbound = await buildInboundContext(event, {
       account,
@@ -135,7 +128,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
       groupHistories,
-      sessionStoreReader,
       allowTextCommands: groupOpts.allowTextCommands,
       isControlCommand: groupOpts.isControlCommand,
       resolveGroupIntroHint: groupOpts.resolveIntroHint,
@@ -149,6 +141,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         blockReason: inbound.blockReason,
       });
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -170,6 +163,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           },
         );
         inbound.typing.keepAlive?.stop();
+        await event.turnAdoptionLifecycle?.onAdopted();
         return;
       }
       log?.info(
@@ -182,6 +176,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -219,6 +214,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -234,6 +230,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (event.turnAdoptionLifecycle) {
+        throw err;
+      }
     } finally {
       inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {
@@ -248,7 +247,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   };
 
   const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
-    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
+    getActiveCfg: ctx.getCurrentConfig,
     resolveCommandAuthorized: (params) => adapters.access.resolveSlashCommandAuthorization(params),
   });
 

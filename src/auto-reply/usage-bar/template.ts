@@ -156,6 +156,8 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
       });
       watcher.on("error", () => {
         watcher.close();
+        entry.watcher = undefined;
+        entry.template = undefined;
       });
       entry.watcher = watcher;
     } catch {
@@ -186,10 +188,16 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
   );
 }
 
-export function clearUsageBarTemplateCacheForTest(): void {
+function clearUsageBarTemplateCacheForTest(): void {
   for (const entry of fileCache.values()) {
     entry.watcher?.close();
   }
   fileCache.clear();
   warnedTemplateOverrides.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.usageBarTemplateTestApi")] = {
+    clearUsageBarTemplateCacheForTest,
+  };
 }

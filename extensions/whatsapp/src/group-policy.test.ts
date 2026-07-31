@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "./runtime-api.js";
 
 describe("whatsapp group policy", () => {
-  it("uses generic channel group policy helpers", () => {
+  it("resolves exact, wildcard, and unconfigured policies", () => {
     const cfg = {
       channels: {
         whatsapp: {
@@ -33,5 +33,66 @@ describe("whatsapp group policy", () => {
     expect(resolveWhatsAppGroupToolPolicy({ cfg, groupId: "other@g.us" })).toEqual({
       allow: ["message.send"],
     });
+    expect(resolveWhatsAppGroupRequireMention({ cfg: {}, groupId: "other@g.us" })).toBe(true);
+    expect(resolveWhatsAppGroupToolPolicy({ cfg: {}, groupId: "other@g.us" })).toBeUndefined();
+  });
+
+  it("uses account groups and preserves the single-account empty fallback", () => {
+    const overrideCfg = {
+      channels: {
+        whatsapp: {
+          groups: { "1203630@g.us": { requireMention: false } },
+          accounts: {
+            work: { groups: { "1203630@g.us": { requireMention: true } } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const fallbackCfg = {
+      channels: {
+        whatsapp: {
+          groups: { "1203630@g.us": { requireMention: false } },
+          accounts: { work: { groups: {} } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveWhatsAppGroupRequireMention({
+        cfg: overrideCfg,
+        accountId: "work",
+        groupId: "1203630@g.us",
+      }),
+    ).toBe(true);
+    expect(
+      resolveWhatsAppGroupRequireMention({
+        cfg: fallbackCfg,
+        accountId: "work",
+        groupId: "1203630@g.us",
+      }),
+    ).toBe(false);
+  });
+
+  it("prefers sender-scoped tools", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "1203630@g.us": {
+              tools: { deny: ["exec"] },
+              toolsBySender: { "channel:whatsapp:alice": { allow: ["message.send"] } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveWhatsAppGroupToolPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["message.send"] });
   });
 });

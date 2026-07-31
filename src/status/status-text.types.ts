@@ -4,6 +4,7 @@ import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
+  ThinkingCatalogEntry,
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import type { SessionEntry, SessionScope } from "../config/sessions.js";
@@ -25,6 +26,8 @@ export type BuildStatusTextParams = {
   provider: string;
   model: string;
   contextTokens?: number;
+  /** Model metadata prepared by the caller; status rendering never loads a catalog. */
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel?: ThinkLevel;
   resolvedFastMode?: FastMode;
   resolvedHarness?: string;

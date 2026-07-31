@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
 
@@ -15,8 +16,6 @@ vi.mock("node:crypto", async (importOriginal) => {
         actual.randomUUID()) as `${string}-${string}-${string}-${string}-${string}`,
   };
 });
-
-const { SessionManager } = await import("./session-manager.js");
 
 function writeV1File(dir: string): string {
   const file = join(dir, "2026-01-01T00-00-00-000Z_sess-v1.jsonl");
@@ -53,7 +52,7 @@ describe("v1 session migration id assignment", () => {
       "cafef00d-0000-4000-8000-000000000000",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = openFileBackedSessionManagerForTest(file, dir);
 
     const messages = sm
       .getEntries()
@@ -111,7 +110,7 @@ describe("v1 session migration id assignment", () => {
         .join("\n") + "\n",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = openFileBackedSessionManagerForTest(file, dir);
     const kept = sm
       .getEntries()
       .find(

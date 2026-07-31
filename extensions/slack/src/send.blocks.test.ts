@@ -1356,3 +1356,4 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

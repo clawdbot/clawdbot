@@ -1,11 +1,11 @@
 // Gateway HTTP session history endpoint.
 // Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -17,7 +17,9 @@ import {
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
+  SSE_CONTENT_TYPE,
 } from "./http-common.js";
+import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -36,7 +38,7 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
@@ -59,25 +61,27 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
-  return accept.includes("text/event-stream");
+  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", "http://localhost");
 }
 
-function resolveLimit(req: IncomingMessage): number | undefined {
+function resolveLimit(req: IncomingMessage): Result<number | undefined, string> {
   const raw = getRequestUrl(req).searchParams.get("limit");
-  if (raw == null || raw.trim() === "") {
-    return undefined;
+  if (raw == null) {
+    return ok(undefined);
   }
   const trimmed = raw.trim();
-  const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (Number.isNaN(value) || value < 1) {
-    return 1;
+  const value = parseStrictPositiveInteger(trimmed);
+  if (value !== undefined) {
+    return ok(Math.min(MAX_SESSION_HISTORY_LIMIT, value));
   }
-  return Math.min(MAX_SESSION_HISTORY_LIMIT, value);
+  if (/^\d+$/.test(trimmed) && /[1-9]/.test(trimmed)) {
+    return ok(MAX_SESSION_HISTORY_LIMIT);
+  }
+  return err("limit must be a positive integer");
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
@@ -129,7 +133,7 @@ export async function handleSessionHistoryHttpRequest(
   const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -140,44 +144,69 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const limit = resolveLimit(req);
+  const limitResult = resolveLimit(req);
+  if (!limitResult.ok) {
+    sendInvalidRequest(res, limitResult.error);
+    return true;
+  }
+  const limit = limitResult.value;
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const boundedSnapshot =
-    cursor === undefined && typeof limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
-  // Cursor reads still need an arbitrary historical window. The common first
-  // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-  const fullSnapshot =
-    boundedSnapshot === undefined && entry?.sessionId
-      ? await readSessionMessagesWithSourceAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            mode: "full",
-            reason: "session history cursor pagination",
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
+  let boundedSnapshot:
+    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
+    | undefined;
+  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  try {
+    boundedSnapshot =
+      cursor === undefined && typeof limit === "number"
+        ? await readRecentSessionMessagesWithStatsAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              ...resolveSessionHistoryTailReadOptions(limit),
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+    // Cursor reads still need an arbitrary historical window. The common first
+    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
+    fullSnapshot =
+      boundedSnapshot === undefined && entry?.sessionId
+        ? await readSessionMessagesWithSourceAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              mode: "full",
+              reason: "session history cursor pagination",
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    res.setHeader("Retry-After", "1");
+    sendJson(res, 503, {
+      ok: false,
+      error: {
+        type: "unavailable",
+        message: "session history is rebuilding; retry shortly",
+        retryable: true,
+      },
+    });
+    return true;
+  }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -202,7 +231,7 @@ export async function handleSessionHistoryHttpRequest(
         resolveSessionTranscriptCandidates(
           entry.sessionId,
           target.storePath,
-          entry.sessionFile,
+          undefined,
           target.agentId,
         )
           .map((candidate) => resolveTranscriptPathForComparison(candidate))
@@ -234,6 +263,16 @@ export async function handleSessionHistoryHttpRequest(
     heartbeat?: ReturnType<typeof setInterval>;
     unsubscribe?: () => void;
   } = {};
+
+  function writeStreamHistory(snapshot: ReturnType<SessionHistorySseState["snapshot"]>) {
+    sseWrite(res, "history", {
+      sessionKey: target.canonicalKey,
+      ...snapshot,
+    });
+    // Send the entire requested page before bounding private live state.
+    // Cursor refreshes reread SQLite, so their next page remains complete.
+    sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
+  }
 
   function releaseStreamResources() {
     if (streamStopped) {
@@ -307,10 +346,7 @@ export async function handleSessionHistoryHttpRequest(
   if (isStreamClosed()) {
     return true;
   }
-  sseWrite(res, "history", {
-    sessionKey: target.canonicalKey,
-    ...sentHistory,
-  });
+  writeStreamHistory(sentHistory);
   if (isStreamClosed()) {
     return true;
   }
@@ -392,10 +428,7 @@ export async function handleSessionHistoryHttpRequest(
         if (limit === undefined && cursor === undefined) {
           if (sseState.shouldRefreshForTranscriptPath(updatePath)) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           const nextEvent = sseState.appendInlineMessage({
@@ -408,16 +441,13 @@ export async function handleSessionHistoryHttpRequest(
           }
           if (nextEvent.shouldRefresh) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           if (nextEvent.message === undefined) {
             return;
           }
-          sentHistory = sseState.snapshot();
+          sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
           sseWrite(res, "message", {
             sessionKey: target.canonicalKey,
             message: nextEvent.message,
@@ -428,10 +458,7 @@ export async function handleSessionHistoryHttpRequest(
         }
       }
       sentHistory = await sseState.refreshAsync();
-      sseWrite(res, "history", {
-        sessionKey: target.canonicalKey,
-        ...sentHistory,
-      });
+      writeStreamHistory(sentHistory);
     });
   });
   return true;

@@ -2,13 +2,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.js";
+import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.test-support.js";
 import {
   clearSessionAuthProfileOverrideMock,
   compactEmbeddedAgentSessionMock,
@@ -67,8 +67,17 @@ function createThinkingPolicyProvider(
     id: providerId,
     label: providerId,
     auth: [],
-    supportsXHighThinking: ({ modelId }) =>
-      xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId)),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId))
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
   };
 }
 

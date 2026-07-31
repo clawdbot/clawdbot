@@ -1,6 +1,6 @@
 /** Promotion decorations for `models list`: claim tags + passive discovery. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { modelKey } from "../../agents/model-selection-normalize.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { ClawHubPromotionsFeedEntry } from "../../infra/clawhub.js";
 import {

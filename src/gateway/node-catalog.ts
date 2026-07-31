@@ -223,8 +223,10 @@ function buildEffectiveKnownNode(entry: {
   return {
     nodeId,
     displayName: firstNormalizedString(
-      live?.displayName,
+      // The approved surface owns the operator's rename. Live metadata is a
+      // fallback only, or every reconnect would temporarily undo that choice.
       nodePairing?.displayName,
+      live?.displayName,
       devicePairing?.displayName,
       pendingNodePairing?.displayName,
     ),
@@ -391,10 +393,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

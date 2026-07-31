@@ -2,9 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
+const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForNoOutbound = vi.hoisted(() => vi.fn());
 const waitForNoTransportOutbound = vi.hoisted(() => vi.fn());
 const recentOutboundSummary = vi.hoisted(() => vi.fn());
@@ -59,7 +58,6 @@ const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
 const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
-const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
 const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
 const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
@@ -67,10 +65,12 @@ vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
 }));
 
+vi.mock("./scenario-flow-runner.js", () => ({
+  runScenarioFlow,
+}));
+
 vi.mock("./suite-runtime-transport.js", () => ({
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   recentOutboundSummary,
@@ -154,19 +154,42 @@ vi.mock("./model-switch-eval.js", () => ({
   hasModelSwitchContinuitySignal,
 }));
 
-vi.mock("./runtime-api.js", () => ({
-  qaChannelPlugin,
-}));
-
 vi.mock("./gateway-log-sentinel.js", () => ({
   scanGatewayLogSentinels,
   assertNoGatewayLogSentinels,
 }));
 
-import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
+  it("records intentional scenario skips without running later steps", async () => {
+    const laterStep = vi.fn();
+    const result = await runQaSuiteScenarioSteps("requires group credentials", [
+      {
+        name: "Prepare WhatsApp",
+        run: async () => {
+          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
+        },
+      },
+      { name: "Run scenario", run: laterStep },
+    ]);
+
+    expect(result).toMatchObject({
+      status: "skip",
+      details: "requires groupJid in the credential payload",
+      steps: [
+        {
+          name: "Prepare WhatsApp",
+          status: "skip",
+          details: "requires groupJid in the credential payload",
+        },
+      ],
+    });
+    expect(laterStep).not.toHaveBeenCalled();
+  });
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },
@@ -200,13 +223,14 @@ describe("qa suite runtime flow", () => {
         },
         waitForCondition: vi.fn(),
       },
+      outputDir: "/artifacts",
       repoRoot: "/repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
+    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
@@ -227,7 +251,7 @@ describe("qa suite runtime flow", () => {
     const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = createQaSuiteScenarioFlowApi({
+    const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,
@@ -263,7 +287,6 @@ describe("qa suite runtime flow", () => {
           envArg: typeof env,
           configArg: Record<string, unknown>,
         ) => Promise<unknown>;
-        qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
       constants: {
@@ -276,7 +299,15 @@ describe("qa suite runtime flow", () => {
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
-    expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
+    const outboundPredicate = vi.fn();
+    call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    expect(waitForOutboundMessage).toHaveBeenCalledWith(
+      env.transport.state,
+      outboundPredicate,
+      123,
+      { accountId: "qa-channel" },
+    );
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
@@ -297,7 +328,6 @@ describe("qa suite runtime flow", () => {
         ensureImageGenerationConfigured,
       },
     );
-    expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",

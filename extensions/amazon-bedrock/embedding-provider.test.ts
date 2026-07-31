@@ -1,6 +1,44 @@
 // Amazon Bedrock tests cover embedding provider plugin behavior.
-import { describe, expect, it, vi } from "vitest";
-import { testing, hasAwsCredentials } from "./embedding-provider.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
+import { embeddingTesting as testing } from "./test-support.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("bedrock embedding region resolution", () => {
+  it.each([
+    {
+      name: "secondary region when the primary env override is blank",
+      primary: "   ",
+      secondary: "eu-west-1",
+      expected: "eu-west-1",
+    },
+    {
+      name: "plugin default when both env overrides are blank",
+      primary: "",
+      secondary: "   ",
+      expected: "us-east-1",
+    },
+    {
+      name: "primary region when both env overrides are nonblank",
+      primary: "ap-southeast-2",
+      secondary: "eu-west-1",
+      expected: "ap-southeast-2",
+    },
+  ])("uses $name", async ({ primary, secondary, expected }) => {
+    vi.stubEnv("AWS_REGION", primary);
+    vi.stubEnv("AWS_DEFAULT_REGION", secondary);
+
+    const { client } = await createBedrockEmbeddingProvider({
+      config: {},
+      model: "",
+    });
+
+    expect(client.region).toBe(expected);
+  });
+});
 
 describe("hasAwsCredentials", () => {
   it("accepts static AWS key credentials without loading the credential chain", async () => {
@@ -35,9 +73,9 @@ describe("hasAwsCredentials", () => {
   });
 
   it("requires AWS profile credentials to resolve through the credential chain", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => ({ accessKeyId: "resolved-access-key" }),
-    });
+    const loadCredentialProvider = vi
+      .fn()
+      .mockResolvedValue(() => async () => ({ accessKeyId: "resolved-access-key" }));
 
     await expect(hasAwsCredentials({ AWS_PROFILE: "work" }, loadCredentialProvider)).resolves.toBe(
       true,
@@ -47,10 +85,8 @@ describe("hasAwsCredentials", () => {
   });
 
   it("rejects AWS profile markers when the credential chain cannot resolve", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => {
-        throw new Error("Could not load credentials from any providers");
-      },
+    const loadCredentialProvider = vi.fn().mockResolvedValue(() => async () => {
+      throw new Error("Could not load credentials from any providers");
     });
 
     await expect(

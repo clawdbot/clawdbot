@@ -93,6 +93,7 @@ describe("extension relay lifecycle", () => {
     expect(startExtensionRelayServerMock).toHaveBeenCalledWith({
       port: RELAY_PORT,
       token: ROTATED_TOKEN,
+      onPageShare: expect.any(Function),
     });
     expect(handle.token).toBe(ROTATED_TOKEN);
     expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);

@@ -208,7 +208,7 @@ export async function auditListCommand(
   }
 }
 
-export const testApi = {
+const testApi = {
   formatAuditRows,
   hasMessageSpecificFilters,
   isUnsupportedActivityMethodError,
@@ -217,3 +217,8 @@ export const testApi = {
   toLegacyAuditListParams,
   validateAuditKind,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.auditCommandTestApi")] =
+    testApi;
+}

@@ -193,7 +193,7 @@ function hasPotentialSlackNamedPolicy(params: {
 }
 
 function resolveSlackDmReadAllowed(account: ResolvedSlackAccount): boolean {
-  const dmPolicy = account.config.dmPolicy ?? account.config.dm?.policy ?? "pairing";
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
   return account.config.dm?.enabled !== false && dmPolicy !== "disabled";
 }
 
@@ -481,30 +481,20 @@ export async function handleSlackAction(
     );
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const { resolveSlackAccount } = await loadSlackAccountsRuntime();
+  const { resolveSlackAccount, resolveSlackOperationToken } = await loadSlackAccountsRuntime();
   const account = resolveSlackAccount({ cfg, accountId });
   if (account.config.enterpriseOrgInstall === true) {
     throw new Error("Slack action tools are unavailable for Enterprise Grid org installs.");
   }
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
-  const userToken = account.userToken;
   const botToken = account.botToken?.trim();
-  const allowUserWrites = account.config.userTokenReadOnly === false;
-
-  // Choose the most appropriate token for Slack read/write operations.
-  const getTokenForOperation = (operation: "read" | "write") => {
-    if (operation === "read") {
-      return userToken ?? botToken;
-    }
-    if (!allowUserWrites) {
-      return botToken;
-    }
-    return botToken ?? userToken;
-  };
 
   const buildActionOpts = (operation: "read" | "write") => {
-    const token = getTokenForOperation(operation);
+    const token = resolveSlackOperationToken(account, operation);
+    if (!token && account.identity === "user") {
+      throw new Error(`Slack operation token missing for account "${account.accountId}".`);
+    }
     const tokenOverride = token && token !== botToken ? token : undefined;
     return {
       cfg,
@@ -801,7 +791,13 @@ export async function handleSlackAction(
             (message as { ts?: unknown }).ts,
           ),
         );
-        return jsonResult({ ok: true, messages, hasMore: result.hasMore });
+        return jsonResult({
+          ok: true,
+          channelId,
+          ...(threadId ? { threadId } : {}),
+          messages,
+          hasMore: result.hasMore,
+        });
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
@@ -820,7 +816,7 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const readToken = getTokenForOperation("read");
+        const readToken = resolveSlackOperationToken(account, "read");
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
           ...(readToken && !readOpts?.token ? { token: readToken } : {}),
@@ -949,3 +945,4 @@ export async function handleSlackAction(
 
   throw new Error(`Unknown action: ${action}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

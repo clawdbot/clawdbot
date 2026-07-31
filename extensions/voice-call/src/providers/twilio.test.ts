@@ -712,4 +712,57 @@ describe("TwilioProvider", () => {
     expect(sendAudio).toHaveBeenCalled();
     expect(sendMark).not.toHaveBeenCalled();
   });
+
+  it("exits chunk pacing early when the abort signal fires after the first chunk", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-abort-chunk", "MZ-abort-chunk");
+
+      const sendMark = vi.fn(() => ({ sent: true }));
+      const controller = new AbortController();
+      const sendAudio = vi.fn(() => {
+        // The first send is the synthesis keepalive; the second is the first real audio chunk.
+        if (sendAudio.mock.calls.length === 2) {
+          controller.abort();
+        }
+        return { sent: true };
+      });
+
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(controller.signal);
+        },
+        sendAudio,
+        sendMark,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async () => Buffer.alloc(160 * 10, 0x80),
+      });
+
+      const startedAt = Date.now();
+      await expect(
+        provider.playTts({
+          callId: "call-abort-chunk",
+          providerCallId: "CA-abort-chunk",
+          text: "hello",
+          voice: "default",
+          locale: "en-US",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(Date.now()).toBe(startedAt);
+      expect(sendAudio).toHaveBeenCalledTimes(2);
+      expect(sendMark).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

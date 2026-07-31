@@ -260,9 +260,8 @@ describe("browser doctor readiness", () => {
       },
     );
 
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const note = requireFirstNoteText(noteFn);
-    expect(note).toContain("explicit Chromium user data directory");
+    expect(noteFn).toHaveBeenCalled();
+    const note = requireNoteTextContaining(noteFn, "explicit Chromium user data directory");
     expect(note).toContain("brave://inspect/#remote-debugging");
   });
 });

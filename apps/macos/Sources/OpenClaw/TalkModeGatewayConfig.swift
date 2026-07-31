@@ -13,6 +13,8 @@ struct TalkModeGatewayConfigState {
     let silenceTimeoutMs: Int
     let speechLocaleID: String?
     let apiKey: String?
+    let referenceAudioPath: String?
+    let referenceText: String?
     let seamColorHex: String?
 }
 
@@ -56,6 +58,10 @@ enum TalkModeGatewayConfigParser {
         let interrupt = talk?["interruptOnSpeech"]?.boolValue
         let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
         let apiKey = activeConfig?["apiKey"]?.stringValue
+        let referenceAudioPath = activeConfig?["referenceAudioPath"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let referenceText = activeConfig?["referenceText"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice: String? = if activeProvider == defaultProvider {
             (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -82,6 +88,8 @@ enum TalkModeGatewayConfigParser {
             silenceTimeoutMs: silenceTimeoutMs,
             speechLocaleID: speechLocaleID,
             apiKey: resolvedApiKey,
+            referenceAudioPath: referenceAudioPath?.isEmpty == false ? referenceAudioPath : nil,
+            referenceText: referenceText?.isEmpty == false ? referenceText : nil,
             seamColorHex: rawSeam.isEmpty ? nil : rawSeam)
     }
 
@@ -109,6 +117,8 @@ enum TalkModeGatewayConfigParser {
             silenceTimeoutMs: defaultSilenceTimeoutMs,
             speechLocaleID: nil,
             apiKey: resolvedApiKey,
+            referenceAudioPath: nil,
+            referenceText: nil,
             seamColorHex: nil)
     }
 }

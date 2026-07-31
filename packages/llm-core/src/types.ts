@@ -68,6 +68,11 @@ export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Optional JSON Schema for the generated response. Providers that support
+   * constrained decoding map it to their native request shape; others ignore it.
+   */
+  responseFormat?: Record<string, unknown>;
+  /**
    * Stop sequences forwarded to providers that support them. Providers map this
    * to their native request field, such as OpenAI `stop` or Anthropic
    * `stop_sequences`.
@@ -268,6 +273,10 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Whether the provider reported a cache-read/write token split. */
+  cacheTelemetry?: { state: "available" | "unavailable" };
+  /** Subset of `cacheWrite` written with 1-hour retention when reported. */
+  cacheWrite1h?: number;
   /** Exact context snapshot for the final provider iteration. */
   contextUsage?:
     | { state: "available"; promptTokens: number; totalTokens: number }
@@ -312,6 +321,7 @@ export interface AssistantMessage {
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
   stopReason: StopReason;
@@ -463,6 +473,8 @@ export interface OpenAICompletionsCompat {
   zaiToolStream?: boolean;
   /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
   supportsStrictMode?: boolean;
+  /** Whether the provider supports JSON Schema through `response_format`. Default: false for unknown compatible endpoints. */
+  supportsJsonSchemaResponseFormat?: boolean;
   /** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
@@ -475,6 +487,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
+  supportsDeveloperRole?: boolean;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -511,6 +525,8 @@ export interface AnthropicMessagesCompat {
    * Default: true.
    */
   supportsCacheControlOnTools?: boolean;
+  /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
+  allowEmptySignature?: boolean;
 }
 
 /**

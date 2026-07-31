@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover logs behavior.
 import { describe, expect, it } from "vitest";
 import { parseLogLine } from "./log-lines.ts";

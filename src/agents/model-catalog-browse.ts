@@ -34,7 +34,7 @@ export function buildProviderConfigModelCatalogForBrowse(params: {
   );
 }
 
-/** True when a browse view cannot be answered from read-only cached catalog entries. */
+/** True when a browse view requires the full published catalog generation. */
 export function modelCatalogBrowseRequiresFullDiscovery(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
@@ -59,17 +59,19 @@ async function loadCatalogForBrowse<T>(params: {
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<T>;
   empty: T;
+  timeoutFullDiscovery?: boolean;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
 }): Promise<T> {
   const view = params.view ?? "default";
-  if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view })) {
+  const requiresFullDiscovery = modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view });
+  if (requiresFullDiscovery && !params.timeoutFullDiscovery) {
     return await params.loadCatalog({ readOnly: false });
   }
 
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveModelCatalogBrowseTimeoutMs(params.timeoutMs);
-  const catalogPromise = params.loadCatalog({ readOnly: true });
+  const catalogPromise = params.loadCatalog({ readOnly: !requiresFullDiscovery });
   const catalogResult = catalogPromise.then((value) => ({ kind: "catalog" as const, value }));
   const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
     timeout = globalThis.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
@@ -93,10 +95,11 @@ async function loadCatalogForBrowse<T>(params: {
 }
 
 /** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
-export function loadModelCatalogSnapshotForBrowse(params: {
+export function loadPreparedModelCatalogSnapshotForBrowse(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;
+  timeoutFullDiscovery?: boolean;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
 }): Promise<ModelCatalogSnapshot> {

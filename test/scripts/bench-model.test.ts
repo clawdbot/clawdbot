@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-model.ts";
 
+// Keep this helper limited to one CLI error smoke plus the help smoke. Parser
+// edge cases stay in-process so this fast unit file avoids repeated cold TSX startup.
 function runBenchModel(args: string[]) {
   return spawnSync(process.execPath, ["--import", "tsx", "scripts/bench-model.ts", ...args], {
     cwd: process.cwd(),
@@ -38,39 +40,17 @@ describe("scripts/bench-model", () => {
 
   it("rejects malformed run counts instead of silently using defaults", () => {
     expect(() => testing.parseArgs(["--runs", "1e3"])).toThrow("--runs must be an integer");
-
-    const result = runBenchModel(["--runs", "1e3"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--runs must be an integer");
-    expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
   });
 
-  it("rejects short flag values before checking provider credentials", () => {
+  it("rejects short flag values", () => {
     expect(() => testing.parseArgs(["--prompt", "-h"])).toThrow("--prompt requires a value");
     expect(() => testing.parseArgs(["--runs", "-h"])).toThrow("--runs requires a value");
-
-    const result = runBenchModel(["--prompt", "-h"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--prompt requires a value");
-    expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
   });
 
-  it("rejects duplicate value flags before checking provider credentials", () => {
+  it("rejects duplicate value flags", () => {
     expect(() => testing.parseArgs(["--runs", "1", "--runs", "2"])).toThrow(
       "--runs was provided more than once",
     );
-
-    const result = runBenchModel(["--runs", "1", "--runs", "2"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--runs was provided more than once");
-    expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
-    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("prints help without checking provider credentials", () => {

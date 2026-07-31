@@ -24,7 +24,7 @@ const SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL =
   "https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections";
 const SLACK_SOCKET_HELLO_MARKER = Buffer.from('"hello"');
 
-export function getSocketEmitter(app: unknown): EmitterLike | null {
+function getSocketEmitter(app: unknown): EmitterLike | null {
   const receiver = (app as { receiver?: unknown }).receiver;
   const client =
     receiver && typeof receiver === "object"
@@ -55,13 +55,16 @@ function isBufferArray(value: unknown): value is Buffer[] {
 }
 
 function resolveSlackSocketModeConnectionCount(message: unknown): number | undefined {
-  const buffer = Buffer.isBuffer(message)
-    ? message
-    : message instanceof ArrayBuffer
+  const buffer =
+    typeof message === "string"
       ? Buffer.from(message)
-      : isBufferArray(message)
-        ? Buffer.concat(message)
-        : undefined;
+      : Buffer.isBuffer(message)
+        ? message
+        : message instanceof ArrayBuffer
+          ? Buffer.from(message)
+          : isBufferArray(message)
+            ? Buffer.concat(message)
+            : undefined;
   if (!buffer?.includes(SLACK_SOCKET_HELLO_MARKER)) {
     return undefined;
   }

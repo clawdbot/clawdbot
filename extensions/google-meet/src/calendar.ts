@@ -119,9 +119,7 @@ function findFirstGoogleMeetCalendarUri(
   return undefined;
 }
 
-export function extractGoogleMeetUriFromCalendarEvent(
-  event: GoogleMeetCalendarEvent,
-): string | undefined {
+function extractGoogleMeetUriFromCalendarEvent(event: GoogleMeetCalendarEvent): string | undefined {
   const hangoutLink = normalizeGoogleMeetCalendarUri(event.hangoutLink);
   if (hangoutLink) {
     return hangoutLink;

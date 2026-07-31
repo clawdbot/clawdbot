@@ -1,30 +1,41 @@
 // Stuck session recovery integration tests cover end-to-end recovery diagnostics.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
-  testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
+import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
-  testing as replyRunTesting,
-  createReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
-import {
-  enqueueCommandInLane,
-  getQueueSize,
-  resetCommandLane,
-  resetCommandQueueStateForTest,
-} from "../process/command-queue.js";
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
+  markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
+  resetDiagnosticRunActivityForTest,
+} from "./diagnostic-run-activity.js";
 import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
-function delay(ms: number): Promise<"blocked"> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve("blocked"), ms);
+async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promise<void> {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
   });
+  expect(settled).toBe(false);
 }
 
 describe("stuck session recovery integration", () => {
@@ -33,6 +44,7 @@ describe("stuck session recovery integration", () => {
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
+    resetDiagnosticRunActivityForTest();
   });
 
   it("does not reset a blocked lane while a reply operation is still active", async () => {
@@ -61,7 +73,7 @@ describe("stuck session recovery integration", () => {
       queueDepth: 1,
     });
 
-    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+    await expectPendingAfterEventLoopTurn(queued);
     expect(getQueueSize(lane)).toBe(2);
 
     operation.complete();
@@ -105,7 +117,7 @@ describe("stuck session recovery integration", () => {
       reason: "active_embedded_run",
       activeSessionId,
     });
-    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+    await expectPendingAfterEventLoopTurn(queued);
     expect(getQueueSize(lane)).toBe(2);
 
     clearActiveEmbeddedRun(activeSessionId, handle, activeSessionKey, sessionFile);
@@ -161,6 +173,79 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(0);
   });
 
+  it("reclaims continuous argument churn after its semantic progress clock becomes stale", async () => {
+    const sessionKey = "agent:main:argument-churn";
+    const sessionId = "argument-churn-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    let markActiveStarted!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActiveStarted = resolve;
+    });
+
+    const active = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markActiveStarted();
+          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    await activeStarted;
+
+    const proofNow = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(proofNow - 6 * 60_000);
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    markDiagnosticArgumentChurnObservation({
+      sessionId,
+      sessionKey,
+      runId: sessionId,
+      active: true,
+    });
+    for (let step = 1; step <= 12; step += 1) {
+      vi.setSystemTime(proofNow - 6 * 60_000 + step * 30_000);
+      markDiagnosticRunProgress({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        reason: "model_call:stream_progress",
+      });
+      markDiagnosticArgumentChurnObservation({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        active: true,
+      });
+    }
+    vi.useRealTimers();
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 6 * 60_000,
+      queueDepth: 1,
+      staleActiveProgressAbortMs: 5 * 60_000,
+    });
+
+    await expect(active).resolves.toBe("aborted");
+    await expect(queued).resolves.toBe("drained");
+    expect(outcome).toMatchObject({ status: "aborted", action: "abort_embedded_run" });
+    expect(getQueueSize(lane)).toBe(0);
+  });
+
   it("releases a wedged lane after a clean abort when session work remains queued (#91700)", async () => {
     const sessionKey = "agent:main:wedged-delivery";
     const sessionId = "wedged-delivery-session";
@@ -202,7 +287,7 @@ describe("stuck session recovery integration", () => {
     const queued = enqueueCommandInLane(lane, async () => "drained", {
       warnAfterMs: Number.MAX_SAFE_INTEGER,
     });
-    await expect(Promise.race([queued, delay(100)])).resolves.toBe("drained");
+    await expect(queued).resolves.toBe("drained");
   });
 
   it("does not reset a lane that unwedged and started a queued turn during the abort (#91700)", async () => {
@@ -265,7 +350,8 @@ describe("stuck session recovery integration", () => {
     const third = enqueueCommandInLane(lane, async () => "third", {
       warnAfterMs: Number.MAX_SAFE_INTEGER,
     });
-    await expect(Promise.race([third, delay(100)])).resolves.toBe("blocked");
+    await expectPendingAfterEventLoopTurn(third);
+    expect(getQueueSize(lane)).toBe(2);
     releaseFreshTurn("done");
     await expect(freshTurn).resolves.toBe("done");
     await expect(third).resolves.toBe("third");
@@ -292,7 +378,7 @@ describe("stuck session recovery integration", () => {
       queueDepth: 1,
     });
 
-    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+    await expectPendingAfterEventLoopTurn(queued);
     expect(getQueueSize(lane)).toBe(2);
 
     expect(resetCommandLane(lane)).toBe(1);

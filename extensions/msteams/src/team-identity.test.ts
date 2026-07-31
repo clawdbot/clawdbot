@@ -1,24 +1,28 @@
 // Msteams tests cover canonical team identity resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { _teamGroupIdCacheForTest, resolveTeamGroupId } from "./team-identity.js";
+import { resolveTeamGroupId } from "./team-identity.js";
 
 describe("resolveTeamGroupId", () => {
   const getTeamDetails = vi.fn<(teamId: string) => Promise<{ aadGroupId?: string }>>();
+  let testSequence = 0;
+  let teamIdPrefix = "";
+  const teamId = (value: string) => `${teamIdPrefix}:${value}`;
 
   beforeEach(() => {
+    teamIdPrefix = `team-identity-test-${++testSequence}`;
     getTeamDetails.mockReset();
     getTeamDetails.mockResolvedValue({ aadGroupId: "group-guid" });
-    _teamGroupIdCacheForTest.clear();
   });
 
   it("uses and caches the activity AAD group ID without a Teams API lookup", async () => {
+    const conversationTeamId = teamId("activity-aad");
     const result = await resolveTeamGroupId({
-      conversationTeamId: "team-123",
+      conversationTeamId,
       aadGroupId: " group-guid-1 ",
       getTeamDetails,
     });
     const cached = await resolveTeamGroupId({
-      conversationTeamId: "team-123",
+      conversationTeamId,
       getTeamDetails,
     });
 
@@ -28,19 +32,20 @@ describe("resolveTeamGroupId", () => {
   });
 
   it("resolves a missing AAD group ID through the Teams API", async () => {
+    const conversationTeamId = teamId("api-lookup");
     getTeamDetails.mockResolvedValueOnce({ aadGroupId: " group-guid-2 " });
 
     const result = await resolveTeamGroupId({
-      conversationTeamId: "19:team@thread.skype",
+      conversationTeamId,
       getTeamDetails,
     });
 
     expect(result).toBe("group-guid-2");
-    expect(getTeamDetails).toHaveBeenCalledWith("19:team@thread.skype");
+    expect(getTeamDetails).toHaveBeenCalledWith(conversationTeamId);
   });
 
   it("returns cached value without calling the Teams API again", async () => {
-    const params = { conversationTeamId: "team-456", getTeamDetails };
+    const params = { conversationTeamId: teamId("cached"), getTeamDetails };
 
     await resolveTeamGroupId(params);
     await resolveTeamGroupId(params);
@@ -53,7 +58,7 @@ describe("resolveTeamGroupId", () => {
     try {
       getTeamDetails.mockImplementationOnce(() => new Promise(() => {}));
       const result = resolveTeamGroupId({
-        conversationTeamId: "team-stalled",
+        conversationTeamId: teamId("stalled"),
         getTeamDetails,
         deadline: {
           label: "MS Teams inbound preprocessing",
@@ -75,7 +80,7 @@ describe("resolveTeamGroupId", () => {
 
     await expect(
       resolveTeamGroupId({
-        conversationTeamId: "19:team@thread.skype",
+        conversationTeamId: teamId("missing-aad"),
         getTeamDetails,
       }),
     ).resolves.toBeUndefined();
@@ -83,19 +88,21 @@ describe("resolveTeamGroupId", () => {
 
   it("returns undefined when no per-activity Teams resolver is available", async () => {
     await expect(
-      resolveTeamGroupId({ conversationTeamId: "19:team@thread.skype" }),
+      resolveTeamGroupId({ conversationTeamId: teamId("missing-resolver") }),
     ).resolves.toBeUndefined();
   });
 
   it("caps cache at 500 entries and evicts the oldest team", async () => {
     for (let i = 0; i < 500; i++) {
-      await resolveTeamGroupId({ conversationTeamId: `team-${i}`, getTeamDetails });
+      await resolveTeamGroupId({ conversationTeamId: teamId(`eviction-${i}`), getTeamDetails });
     }
 
-    await resolveTeamGroupId({ conversationTeamId: "team-500", getTeamDetails });
+    await resolveTeamGroupId({ conversationTeamId: teamId("eviction-500"), getTeamDetails });
 
-    expect(_teamGroupIdCacheForTest.size).toBe(500);
-    expect(_teamGroupIdCacheForTest.has("team-0")).toBe(false);
-    expect(_teamGroupIdCacheForTest.has("team-500")).toBe(true);
+    expect(getTeamDetails).toHaveBeenCalledTimes(501);
+    await resolveTeamGroupId({ conversationTeamId: teamId("eviction-0"), getTeamDetails });
+    expect(getTeamDetails).toHaveBeenCalledTimes(502);
+    await resolveTeamGroupId({ conversationTeamId: teamId("eviction-500"), getTeamDetails });
+    expect(getTeamDetails).toHaveBeenCalledTimes(502);
   });
 });

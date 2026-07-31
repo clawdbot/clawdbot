@@ -8,6 +8,7 @@ import {
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -22,7 +23,6 @@ import type {
 } from "./types.js";
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
-const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
@@ -30,9 +30,13 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 
-// Reads a cloned capture response body under a byte cap. Returns truncated=true
-// (and discards the partial buffer) once the cap is exceeded so oversized or
-// hostile/endless bodies are recorded as metadata-only instead of buffered.
+type CapturedResponseBodyResult =
+  | { status: "captured"; buffer: Buffer }
+  | { status: "too-large" | "unavailable" };
+
+// Reads a cloned capture response body under a byte cap. Oversized or
+// non-streaming Response-like bodies return a metadata-only status instead of
+// allocating the full body.
 //
 // Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
 // the body here is one branch of a Response.clone() tee whose sibling (the
@@ -43,15 +47,15 @@ const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 async function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
-): Promise<{ buffer: Buffer; truncated: boolean }> {
+): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
   const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body || typeof body.getReader !== "function") {
-    // Non-streaming clone (e.g. test doubles): bounded arrayBuffer fallback.
-    const bytes = Buffer.from(await clone.arrayBuffer());
-    return bytes.length > maxBytes
-      ? { buffer: Buffer.alloc(0), truncated: true }
-      : { buffer: bytes, truncated: false };
+    // A real null-body Response consumes as empty. Response-like objects without
+    // a stream cannot be read under a byte cap, so never call arrayBuffer().
+    return clone instanceof Response && clone.body === null
+      ? { status: "captured", buffer: Buffer.alloc(0) }
+      : { status: "unavailable" };
   }
   const reader = body.getReader();
   const chunks: Buffer[] = [];
@@ -84,31 +88,20 @@ async function readCapturedResponseBodyBounded(
     }
   }
   return truncated
-    ? { buffer: Buffer.alloc(0), truncated: true }
-    : { buffer: Buffer.concat(chunks, total), truncated: false };
+    ? { status: "too-large" }
+    : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
+
+function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
+  if (raw === null || raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  return BigInt(trimmed);
+}
 
 // Runtime capture records HTTP/fetch and websocket events into the SQLite store,
 // redacting sensitive headers and persisting bodies in capture_blobs.
@@ -178,36 +171,6 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
     return input.url;
   }
   return null;
-}
-
-function isSensitiveCaptureHeaderName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
-}
-
-function redactedCaptureHeaders(
-  headers: Headers | Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const entries =
-    headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
-  const redacted: Record<string, string> = {};
-  for (const [name, value] of entries) {
-    // Header names are matched exactly and by sensitive fragments because
-    // providers use many token/key naming variants.
-    redacted[name] = isSensitiveCaptureHeaderName(name)
-      ? REDACTED_CAPTURE_HEADER_VALUE
-      : redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
-  }
-  return redacted;
 }
 
 function redactCaptureUrl(rawUrl: string): string {
@@ -551,11 +514,7 @@ export function captureHttpExchange(
       metaJson: redactedCaptureJson({ ...params.meta, bodyCapture }, runtime.safeJsonString),
     });
   };
-  const cloneable =
-    params.response &&
-    typeof params.response.clone === "function" &&
-    typeof params.response.arrayBuffer === "function";
-  if (!cloneable) {
+  if (typeof params.response.clone !== "function") {
     // Some Response-like objects cannot be cloned. Still record status/headers
     // rather than forcing capture to consume or mutate the original response.
     recordResponseMetadataOnly("unavailable");
@@ -564,26 +523,25 @@ export function captureHttpExchange(
   // Fast path: when the provider declares an oversized Content-Length, skip the
   // body entirely instead of buffering it. Missing/chunked lengths fall through
   // to the bounded streaming read below, which cancels on overflow.
-  const declaredLength = Number(
+  const declaredLength = parseDeclaredCaptureContentLength(
     typeof params.response.headers?.get === "function"
       ? params.response.headers.get("content-length")
       : undefined,
   );
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_CAPTURED_RESPONSE_BODY_BYTES) {
+  if (declaredLength !== undefined && declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)) {
     recordResponseMetadataOnly("too-large");
     return;
   }
   void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
-    .then(({ buffer, truncated }) => {
-      if (truncated) {
-        // Body exceeded the cap mid-stream (chunked / understated length). The
-        // bounded reader already cancelled the clone and discarded the partial
-        // buffer; record metadata only instead of persisting an oversized blob.
-        recordResponseMetadataOnly("too-large");
+    .then((result) => {
+      if (result.status !== "captured") {
+        // The body either exceeded the cap or offered no bounded streaming path.
+        // Preserve the exchange as metadata instead of allocating the whole body.
+        recordResponseMetadataOnly(result.status);
         return;
       }
       const responsePayload = runtime.persistEventPayload(store, {
-        data: redactCapturePayload(buffer),
+        data: redactCapturePayload(result.buffer),
         contentType: responseContentType,
       });
       store.recordEvent({

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { toRetryError } from "@openclaw/retry";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -15,7 +16,6 @@ import {
   type LlamaModel,
 } from "./node-llama.js";
 // Memory Host SDK module implements embeddings behavior.
-import { normalizeOptionalString } from "./string-utils.js";
 
 type DisposableResource = {
   dispose?: () => Promise<void> | void;

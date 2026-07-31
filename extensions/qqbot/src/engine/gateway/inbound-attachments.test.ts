@@ -1,6 +1,7 @@
 // Qqbot tests cover inbound attachments plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { processAttachments, type AudioConvertPort } from "./inbound-attachments.js";
+import type { AudioConvertPort } from "../adapter/audio.port.js";
+import { processAttachments } from "./inbound-attachments.js";
 
 const downloadFileMock = vi.hoisted(() => vi.fn());
 const resolveSTTConfigMock = vi.hoisted(() => vi.fn());

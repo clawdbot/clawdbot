@@ -11,6 +11,7 @@ const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 function runApprovalScript(
   run: Record<string, unknown>,
   env: {
+    ALLOW_COMPLETED_SUCCESSFUL_PARENT?: string;
     CHILD_WORKFLOW_SHA?: string;
     DIRECT_RELEASE_RECOVERY?: string;
     EXPECTED_WORKFLOW_BRANCH?: string;
@@ -29,6 +30,7 @@ function runApprovalScript(
     encoding: "utf8",
     env: {
       ...process.env,
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: env.ALLOW_COMPLETED_SUCCESSFUL_PARENT ?? "false",
       CHILD_WORKFLOW_SHA: env.CHILD_WORKFLOW_SHA ?? "b".repeat(40),
       DIRECT_RELEASE_RECOVERY: env.DIRECT_RELEASE_RECOVERY ?? "false",
       EXPECTED_WORKFLOW_BRANCH: env.EXPECTED_WORKFLOW_BRANCH ?? "release/2026.6.21",
@@ -129,6 +131,29 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Referenced release publish run 123 must still be in_progress, got completed.",
     );
     expect(result.stdout).toBe("");
+  });
+
+  it("accepts a successful completed parent for detached publication", () => {
+    const result = runApprovalScript(approvalRun({ conclusion: "success", status: "completed" }), {
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Using successful completed release publish run 123: https://github.com/openclaw/openclaw/actions/runs/123",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects a failed completed parent for detached publication", () => {
+    const result = runApprovalScript(approvalRun({ conclusion: "failure", status: "completed" }), {
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Referenced release publish run 123 must still be in_progress, got completed.",
+    );
   });
 
   it("accepts an exact attested Android release approval", () => {

@@ -1,6 +1,28 @@
 // Tests for exec output rendering helpers.
 import { describe, expect, it } from "vitest";
-import { renderExecOutputText, renderExecUpdateText } from "./bash-tools.exec-output.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  renderExecOutputText,
+  renderExecUpdateText,
+} from "./bash-tools.exec-output.js";
+
+describe("appendExecTimeoutRetryGuidance", () => {
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
+    "warns that %s may already have produced side effects",
+    (exitReason) => {
+      const text = appendExecTimeoutRetryGuidance("Command timed out.", exitReason);
+
+      expect(text).toContain("external side effects may already have completed");
+      expect(text).toContain("Verify the resulting state before retrying");
+      expect(text).toContain("Do not automatically rerun non-idempotent commands");
+      expect(text).toContain("known to be safe to retry");
+    },
+  );
+
+  it("leaves non-timeout exits unchanged", () => {
+    expect(appendExecTimeoutRetryGuidance("Command failed.", "signal")).toBe("Command failed.");
+  });
+});
 
 describe("renderExecOutputText", () => {
   it("returns placeholder for undefined input", () => {

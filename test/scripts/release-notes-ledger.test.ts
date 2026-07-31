@@ -7,7 +7,7 @@ import {
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
 describe("renderContributionRecordEntry", () => {
-  it("keeps source and linked issue references without repeating PR titles", () => {
+  it("keeps external and linked issue references without repeating PR title references", () => {
     expect(
       renderContributionRecordEntry({
         number: 123,
@@ -18,14 +18,14 @@ describe("renderContributionRecordEntry", () => {
     ).toBe("- **PR #123** Related #45, openclaw/imsg#141, #67. Thanks @alice and @bob.");
   });
 
-  it("deduplicates title references and retains seeded cross-repository references", () => {
+  it("deduplicates resolved issues and retains seeded cross-repository references", () => {
     expect(
       renderContributionRecordEntry({
         number: 124,
         title: "Fix #45, #45, and OpenClaw/imsg#141",
         externalReferences: ["openclaw/imsg#141"],
         priorReferences: [67],
-        linkedIssues: [{ number: 45 }],
+        linkedIssues: [{ number: 45 }, { number: 67 }],
         thanks: [],
       }),
     ).toBe("- **PR #124** Related #45, OpenClaw/imsg#141, #67.");
@@ -68,7 +68,7 @@ describe("renderContributionRecordEntry", () => {
         title: "Title changed after release",
         priorReferences: seeded?.references,
         externalReferences: seeded?.externalReferences,
-        linkedIssues: [],
+        linkedIssues: [{ number: 45 }],
         thanks: seeded?.thanks ?? [],
       }),
     ).toBe(line);
@@ -141,7 +141,7 @@ describe("renderContributionRecordEntry", () => {
     });
   });
 
-  it("requires complete reference tokens rather than matching substrings", () => {
+  it("requires complete resolved issue tokens rather than matching substrings", () => {
     const source = [
       "## 2026.7.1",
       "",
@@ -167,9 +167,9 @@ describe("renderContributionRecordEntry", () => {
       number: 456,
       title: "Internal cleanup",
       editorialEligible: false,
-      priorReferences: [45, 141],
+      priorReferences: [],
       externalReferences: [],
-      linkedIssues: [],
+      linkedIssues: [{ number: 45 }, { number: 141 }],
       thanks: [],
     };
 
@@ -179,6 +179,45 @@ describe("renderContributionRecordEntry", () => {
       "missing #45 on contribution record for PR #456",
       "missing #141 on contribution record for PR #456",
     ]);
+  });
+
+  it("does not require an out-of-range PR referenced by a PR title", () => {
+    const line = "- **PR #456**";
+    const source = [
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- Highlight one.",
+      "- Highlight two.",
+      "- Highlight three.",
+      "- Highlight four.",
+      "- Highlight five.",
+      "",
+      "### Changes",
+      "",
+      "### Fixes",
+      "",
+      "### Complete contribution record",
+      "",
+      "#### Pull requests",
+      "",
+      line,
+    ].join("\n");
+    const entry = {
+      number: 456,
+      title: "docs: align backup rules (#123)",
+      editorialEligible: false,
+      priorReferences: [123],
+      externalReferences: [],
+      linkedIssues: [],
+      thanks: [],
+    };
+
+    expect(renderContributionRecordEntry(entry)).toBe(line);
+    expect(
+      ledgerChecks({ source }, [entry], new Map([[456, { __typename: "PullRequest" }]]), []),
+    ).toEqual([]);
   });
 
   it("accepts case-only differences in cross-repository references", () => {

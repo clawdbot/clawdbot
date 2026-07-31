@@ -12,10 +12,12 @@ export async function upsertAuthProfileWithLock(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
+  stateDir?: string;
 }): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    stateDir: params.stateDir,
     saveOptions: {
       filterExternalAuthProfiles: false,
       syncExternalCli: false,

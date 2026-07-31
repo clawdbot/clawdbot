@@ -133,11 +133,11 @@ export class OpenClawStdioClientTransport implements Transport {
       }
       await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       if (processToClose.exitCode === null && processToClose.pid) {
-        killProcessTree(processToClose.pid);
+        killProcessTree(processToClose.pid, { detached: true });
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
         if (processToClose.exitCode === null && processToClose.pid) {
           // SIGKILL synchronously: killProcessTree's setTimeout is .unref()'d and races shutdown (#86412).
-          signalProcessTree(processToClose.pid, "SIGKILL");
+          signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
           await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
         }
       }
@@ -155,7 +155,7 @@ export class OpenClawStdioClientTransport implements Transport {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
-      signalProcessTree(processToClose.pid, "SIGKILL");
+      signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
       await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
     }
     if (this.closingProcess === processToClose) {

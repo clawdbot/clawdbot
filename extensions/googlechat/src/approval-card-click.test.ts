@@ -1,9 +1,9 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleChatApprovalActionParameters,
-  clearGoogleChatApprovalCardBindingsForTest,
   registerGoogleChatApprovalCardBinding,
+  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import type { WebhookTarget } from "./monitor-types.js";
@@ -67,13 +67,13 @@ function createTarget(): WebhookTarget {
       enabled: true,
       credentialSource: "inline",
       config: {
-        dm: { allowFrom: ["users/123"] },
+        allowFrom: ["users/123"],
       },
     },
     config: {
       channels: {
         googlechat: {
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     },
@@ -81,6 +81,7 @@ function createTarget(): WebhookTarget {
     core: {} as never,
     path: "/googlechat",
     mediaMaxMb: 20,
+    ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
   };
 }
 
@@ -99,7 +100,6 @@ function createCardClickEvent(token: string, userName = "users/123"): GoogleChat
 
 describe("maybeHandleGoogleChatApprovalCardClick", () => {
   beforeEach(() => {
-    clearGoogleChatApprovalCardBindingsForTest();
     resolveApprovalOverGateway
       .mockReset()
       .mockImplementation(
@@ -120,6 +120,19 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     updateGoogleChatMessage.mockReset().mockResolvedValue({
       messageName: "spaces/AAA/messages/msg-1",
     });
+  });
+
+  afterEach(() => {
+    unregisterGoogleChatApprovalCardBindings([
+      "token-1",
+      "token-2",
+      "token-addon",
+      "token-common",
+      "token-loser",
+      "token-retry",
+      "token-update-retry",
+      "token-url",
+    ]);
   });
 
   it("authorizes the Chat actor and resolves the bound approval over the gateway", async () => {

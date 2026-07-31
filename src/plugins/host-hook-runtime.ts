@@ -461,6 +461,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   preserveJobIds?: ReadonlySet<string>;
   excludeJobKeys?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
+  cleanupOwnerRegistry?: PluginRegistry;
   preserveOwnerRegistry?: PluginRegistry | null;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
@@ -561,6 +562,14 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         return failures;
       }
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      // Dynamic jobs share a process-global index. Registry retirement must only
+      // clean its own records or it can delete jobs owned by another live surface.
+      if (
+        params.cleanupOwnerRegistry !== undefined &&
+        record.ownerRegistry !== params.cleanupOwnerRegistry
+      ) {
         continue;
       }
       if (registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey))) {

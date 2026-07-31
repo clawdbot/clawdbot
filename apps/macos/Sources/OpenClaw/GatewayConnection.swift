@@ -4,63 +4,8 @@ import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
-import Security
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
-
-private enum GatewayActivationBindingKeyStore {
-    private static let service = "ai.openclaw.onboarding-route-binding"
-    private static let account = "credential-binding-v1"
-    private static let byteCount = 32
-
-    static func loadOrCreate() -> SymmetricKey? {
-        if let data = load() {
-            return SymmetricKey(data: data)
-        }
-
-        var data = Data(count: byteCount)
-        let randomStatus = data.withUnsafeMutableBytes { bytes in
-            guard let baseAddress = bytes.baseAddress else { return errSecAllocate }
-            return SecRandomCopyBytes(kSecRandomDefault, self.byteCount, baseAddress)
-        }
-        guard randomStatus == errSecSuccess else { return nil }
-
-        var query = self.baseQuery
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let addStatus = SecItemAdd(query as CFDictionary, nil)
-        if addStatus == errSecSuccess {
-            return SymmetricKey(data: data)
-        }
-        // Another process can win the first-launch create race. Only accept the
-        // secret after reading the Keychain item back through normal ACL checks.
-        if addStatus == errSecDuplicateItem, let existing = load() {
-            return SymmetricKey(data: existing)
-        }
-        return nil
-    }
-
-    private static func load() -> Data? {
-        var query = self.baseQuery
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              data.count == byteCount
-        else { return nil }
-        return data
-    }
-
-    private static var baseQuery: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrSynchronizable as String: false,
-        ]
-    }
-}
 
 /// Single, shared Gateway websocket connection for the whole app.
 ///
@@ -69,22 +14,27 @@ private enum GatewayActivationBindingKeyStore {
 actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
+    nonisolated static let operatorClientCaps =
+        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets]
 
     typealias Config = (url: URL, token: String?, password: String?)
 
     struct EndpointSnapshot {
         let config: Config
+        let tls: GatewayTLSRoute?
         let routeAuthority: UInt64?
         let deviceAuthGatewayID: String?
         let revision: UInt64?
 
         init(
             config: Config,
+            tls: GatewayTLSRoute? = nil,
             routeAuthority: UInt64?,
             deviceAuthGatewayID: String? = nil,
             revision: UInt64? = nil)
         {
             self.config = config
+            self.tls = tls
             self.routeAuthority = routeAuthority
             self.deviceAuthGatewayID = deviceAuthGatewayID
             self.revision = revision
@@ -92,40 +42,36 @@ actor GatewayConnection {
     }
 
     typealias EndpointProvider = @Sendable () async throws -> EndpointSnapshot
+    typealias SessionProvider = @Sendable (GatewayTLSRoute?) -> WebSocketSessionBox?
 
-    struct Route: Equatable {
+    struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
-        fileprivate let url: URL
+        let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
+        let tls: GatewayTLSRoute?
         fileprivate let deviceAuthGatewayID: String?
         let activationOwnershipFingerprint: String?
 
-        fileprivate func matches(
-            _ config: Config,
-            authority: UInt64?,
-            deviceAuthGatewayID: String?) -> Bool
-        {
-            self.authority == authority &&
-                self.url == config.url &&
-                self.token == config.token &&
-                self.password == config.password &&
-                self.deviceAuthGatewayID == deviceAuthGatewayID
+        fileprivate func matches(_ endpoint: EndpointSnapshot) -> Bool {
+            self.authority == endpoint.routeAuthority &&
+                self.url == endpoint.config.url &&
+                self.token == endpoint.config.token &&
+                self.password == endpoint.config.password &&
+                GatewayTLSRoute.hasSameConnectionIdentity(self.tls, endpoint.tls) &&
+                self.deviceAuthGatewayID == endpoint.deviceAuthGatewayID
         }
     }
 
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
-    struct ServerLease {
-        fileprivate let route: Route
+    struct ServerLease: Sendable {
+        // Managed-image HTTP reuses this captured route from its focused extension file.
+        // Carrying the snapshot forward prevents endpoint or TLS rediscovery after suspension.
+        let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
-    }
-
-    struct SessionRoutingIdentity: Equatable {
-        let defaultAgentID: String
-        let contract: String
     }
 
     enum Method: String {
@@ -151,6 +97,8 @@ actor GatewayConnection {
         case webLoginWait = "web.login.wait"
         case channelsLogout = "channels.logout"
         case modelsList = "models.list"
+        case agentsList = "agents.list"
+        case agentIdentityGet = "agent.identity.get"
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
@@ -167,6 +115,7 @@ actor GatewayConnection {
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
         case execApprovalResolve = "exec.approval.resolve"
+        case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
         case cronRuns = "cron.runs"
         case cronRun = "cron.run"
@@ -177,8 +126,10 @@ actor GatewayConnection {
     }
 
     private let endpointProvider: EndpointProvider
+    private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
-    private let sessionBox: WebSocketSessionBox?
+    private let includeDeviceIdentity: Bool
+    private let sessionProvider: SessionProvider
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
 
@@ -186,6 +137,8 @@ actor GatewayConnection {
     private var configuredURL: URL?
     private var configuredToken: String?
     private var configuredPassword: String?
+    private var configuredTLS: GatewayTLSRoute?
+    private var configuredTLSMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
     private var configuredDeviceAuthGatewayID: String?
     private var configuredRouteAuthority: UInt64?
     private var configuredShutdownGeneration: UInt64?
@@ -202,57 +155,33 @@ actor GatewayConnection {
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
+    var canvasPluginSurfaceURL: String?
 
-    private struct LossyDecodable<Value: Decodable>: Decodable {
-        let value: Value?
-
-        init(from decoder: Decoder) throws {
-            do {
-                self.value = try Value(from: decoder)
-            } catch {
-                self.value = nil
-            }
-        }
+    struct CanvasPluginSurfaceRefresh {
+        let id: UUID
+        let task: Task<GatewayCanvasHostRoute?, Never>
     }
 
-    private struct LossyCronListResponse: Decodable {
-        let jobs: [LossyDecodable<CronJob>]
-
-        enum CodingKeys: String, CodingKey {
-            case jobs
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.jobs = try container.decodeIfPresent([LossyDecodable<CronJob>].self, forKey: .jobs) ?? []
-        }
-    }
-
-    private struct LossyCronRunsResponse: Decodable {
-        let entries: [LossyDecodable<CronRunLogEntry>]
-
-        enum CodingKeys: String, CodingKey {
-            case entries
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.entries = try container.decodeIfPresent([LossyDecodable<CronRunLogEntry>].self, forKey: .entries) ?? []
-        }
-    }
+    var canvasPluginSurfaceRefresh: CanvasPluginSurfaceRefresh?
 
     init(
         endpointProvider: @escaping EndpointProvider = GatewayConnection.defaultEndpointProvider,
+        supportsSharedEndpointRecovery: Bool = true,
         activationBindingKeyProvider: @escaping @Sendable () -> SymmetricKey? =
             GatewayConnection.defaultActivationBindingKey,
         sessionBox: WebSocketSessionBox? = nil,
+        sessionProvider: SessionProvider? = nil,
         clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
             await client.shutdown()
         })
     {
         self.endpointProvider = endpointProvider
+        self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
-        self.sessionBox = sessionBox
+        self.includeDeviceIdentity = true
+        self.sessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: sessionProvider)
         self.clientShutdown = clientShutdown
     }
 
@@ -265,6 +194,7 @@ actor GatewayConnection {
             GatewayConnection.testingActivationBindingKey
         },
         sessionBox: WebSocketSessionBox? = nil,
+        sessionProvider: SessionProvider? = nil,
         clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
             await client.shutdown()
         })
@@ -272,11 +202,32 @@ actor GatewayConnection {
         self.endpointProvider = {
             try await EndpointSnapshot(config: configProvider(), routeAuthority: nil)
         }
+        self.supportsSharedEndpointRecovery = false
         self.activationBindingKeyProvider = activationBindingKeyProvider
-        self.sessionBox = sessionBox
+        // Mock WebSocket routes do not exercise device authentication and must not
+        // depend on the process-global persisted identity store.
+        self.includeDeviceIdentity = false
+        self.sessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: sessionProvider)
         self.clientShutdown = clientShutdown
     }
     #endif
+
+    private static func resolveSessionProvider(
+        sessionBox: WebSocketSessionBox?,
+        sessionProvider: SessionProvider?) -> SessionProvider
+    {
+        if let sessionProvider {
+            return sessionProvider
+        }
+        if let sessionBox {
+            return { _ in sessionBox }
+        }
+        return { route in
+            route.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0.params)) }
+        }
+    }
 
     // MARK: - Low-level request
 
@@ -286,6 +237,21 @@ actor GatewayConnection {
         timeoutMs: Double? = nil,
         retryTransportFailures: Bool = true) async throws -> Data
     {
+        try await self.request(
+            method: method,
+            params: params,
+            timeoutMs: timeoutMs,
+            retryTransportFailures: retryTransportFailures,
+            allowTLSRepair: true)
+    }
+
+    private func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?,
+        retryTransportFailures: Bool,
+        allowTLSRepair: Bool) async throws -> Data
+    {
         let shutdownGeneration = shutdownGeneration
         let endpoint = try await currentEndpoint()
         let cfg = endpoint.config
@@ -293,6 +259,7 @@ actor GatewayConnection {
             url: cfg.url,
             token: cfg.token,
             password: cfg.password,
+            tls: endpoint.tls,
             deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
             routeAuthority: endpoint.routeAuthority,
             shutdownGeneration: shutdownGeneration)
@@ -300,10 +267,27 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
+            if allowTLSRepair,
+               let tlsError = error as? GatewayTLSValidationError,
+               await GatewayTLSRepairCoordinator.shared.repair(
+                   route: endpoint.tls,
+                   url: cfg.url,
+                   failure: tlsError.failure)
+            {
+                return try await self.request(
+                    method: method,
+                    params: params,
+                    timeoutMs: timeoutMs,
+                    retryTransportFailures: retryTransportFailures,
+                    allowTLSRepair: false)
+            }
             if !retryTransportFailures || error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
             try requireCurrentShutdownGeneration(shutdownGeneration)
+            // Profile-bound windows own a fixed endpoint. Shared recovery reads global
+            // connection-mode state and may legitimately retarget only the primary app route.
+            guard self.supportsSharedEndpointRecovery else { throw error }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
@@ -337,6 +321,7 @@ actor GatewayConnection {
                         url: fallbackConfig.url,
                         token: fallbackConfig.token,
                         password: fallbackConfig.password,
+                        tls: fallback.tls,
                         deviceAuthGatewayID: fallback.deviceAuthGatewayID,
                         routeAuthority: fallback.routeAuthority,
                         shutdownGeneration: shutdownGeneration)
@@ -382,6 +367,7 @@ actor GatewayConnection {
                             url: cfg.url,
                             token: cfg.token,
                             password: cfg.password,
+                            tls: endpoint.tls,
                             deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                             routeAuthority: endpoint.routeAuthority,
                             shutdownGeneration: shutdownGeneration)
@@ -410,15 +396,12 @@ actor GatewayConnection {
         distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
     {
         let endpoint = try await currentEndpoint()
-        let cfg = endpoint.config
         guard route.generation == self.routeGeneration,
-              route.matches(
-                  cfg,
-                  authority: endpoint.routeAuthority,
-                  deviceAuthGatewayID: endpoint.deviceAuthGatewayID),
+              route.matches(endpoint),
               self.configuredURL == route.url,
               self.configuredToken == route.token,
               self.configuredPassword == route.password,
+              GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls),
               self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID,
               self.configuredRouteAuthority == route.authority,
               let client
@@ -428,7 +411,11 @@ actor GatewayConnection {
             }
             throw CancellationError()
         }
-        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        guard await self.isCurrentRoute(route), self.client === client else {
+            throw CancellationError()
+        }
+        return data
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -443,11 +430,15 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         do {
-            return try await lease.client.request(
+            let data = try await lease.client.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
+            guard await self.isCurrentServerLease(lease) else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            return data
         } catch is CancellationError {
             if Task.isCancelled {
                 throw CancellationError()
@@ -523,6 +514,30 @@ extension GatewayConnection {
         try await self.request(method: method.rawValue, params: params, timeoutMs: timeoutMs)
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            retryTransportFailures: retryTransportFailures)
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentRoute route: Route,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
     func requestRaw(
         method: String,
         params: [String: AnyCodable]? = nil,
@@ -556,6 +571,9 @@ extension GatewayConnection {
             timeoutMs: timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
+        guard await self.isCurrentRoute(route) else {
+            throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+        }
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {
@@ -580,6 +598,7 @@ extension GatewayConnection {
             url: cfg.url,
             token: cfg.token,
             password: cfg.password,
+            tls: endpoint.tls,
             deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
             routeAuthority: endpoint.routeAuthority,
             shutdownGeneration: shutdownGeneration)
@@ -594,6 +613,7 @@ extension GatewayConnection {
                 url: cfg.url,
                 token: cfg.token,
                 password: cfg.password,
+                tls: endpoint.tls,
                 deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                 routeAuthority: endpoint.routeAuthority,
                 shutdownGeneration: shutdownGeneration)
@@ -603,6 +623,7 @@ extension GatewayConnection {
                 url: cfg.url,
                 token: cfg.token,
                 password: cfg.password,
+                tls: endpoint.tls,
                 deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                 activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
                     config: cfg,
@@ -618,6 +639,18 @@ extension GatewayConnection {
     /// recover before onboarding freezes the successful physical connection.
     func acquireServerLease() async throws -> ServerLease {
         try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    /// Captures the currently connected physical socket without probing or
+    /// reconnecting. Queued mutations use this so waiting cannot retarget them.
+    func captureServerLease() async -> ServerLease? {
+        guard let route = await self.captureRoute(),
+              let client = self.client,
+              let socketGeneration = self.activeSocketGeneration
+        else { return nil }
+        let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return lease
     }
 
     private func acquireServerLease(
@@ -637,6 +670,7 @@ extension GatewayConnection {
             url: cfg.url,
             token: cfg.token,
             password: cfg.password,
+            tls: endpoint.tls,
             deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
             routeAuthority: endpoint.routeAuthority,
             shutdownGeneration: shutdownGeneration)
@@ -658,6 +692,7 @@ extension GatewayConnection {
                 url: cfg.url,
                 token: cfg.token,
                 password: cfg.password,
+                tls: endpoint.tls,
                 deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                 activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
                     config: cfg,
@@ -689,6 +724,7 @@ extension GatewayConnection {
               replacement.route.url == previous.route.url,
               replacement.route.token == previous.route.token,
               replacement.route.password == previous.route.password,
+              GatewayTLSRoute.hasSameConnectionIdentity(replacement.route.tls, previous.route.tls),
               replacement.route.deviceAuthGatewayID == previous.route.deviceAuthGatewayID
         else {
             throw OpenClawChatTransportSendError.notDispatched
@@ -698,15 +734,12 @@ extension GatewayConnection {
 
     func isCurrentRoute(_ route: Route) async -> Bool {
         guard let endpoint = try? await currentEndpoint() else { return false }
-        let cfg = endpoint.config
         return route.generation == self.routeGeneration &&
-            route.matches(
-                cfg,
-                authority: endpoint.routeAuthority,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID) &&
+            route.matches(endpoint) &&
             self.configuredURL == route.url &&
             self.configuredToken == route.token &&
             self.configuredPassword == route.password &&
+            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls) &&
             self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID &&
             self.configuredRouteAuthority == route.authority
     }
@@ -716,16 +749,13 @@ extension GatewayConnection {
         ifCurrentRoute route: Route) async -> Bool?
     {
         guard let endpoint = try? await currentEndpoint() else { return nil }
-        let cfg = endpoint.config
         guard
             route.generation == self.routeGeneration,
-            route.matches(
-                cfg,
-                authority: endpoint.routeAuthority,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID),
+            route.matches(endpoint),
             self.configuredURL == route.url,
             self.configuredToken == route.token,
             self.configuredPassword == route.password,
+            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls),
             self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID,
             self.configuredRouteAuthority == route.authority,
             let snapshot = lastSnapshot
@@ -744,13 +774,22 @@ extension GatewayConnection {
         return snapshot.supportsServerCapability(capability)
     }
 
+    func supportsServerMethod(
+        _ method: String,
+        ifCurrentServerLease lease: ServerLease) async -> Bool?
+    {
+        guard await self.isCurrentServerLease(lease),
+              self.serverLeaseMatchesCurrentState(lease),
+              let snapshot = lastSnapshot
+        else { return nil }
+        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
+        return methods.contains { ($0.value as? String) == method }
+    }
+
     func isCurrentServerLease(_ lease: ServerLease) async -> Bool {
         guard let endpoint = try? await currentEndpoint(),
               serverLeaseMatchesCurrentState(lease),
-              lease.route.matches(
-                  endpoint.config,
-                  authority: endpoint.routeAuthority,
-                  deviceAuthGatewayID: endpoint.deviceAuthGatewayID),
+              lease.route.matches(endpoint),
               await lease.client.currentConnectionGeneration() == lease.socketGeneration,
               serverLeaseMatchesCurrentState(lease)
         else { return false }
@@ -769,6 +808,7 @@ extension GatewayConnection {
             lease.route.url == self.configuredURL &&
             lease.route.token == self.configuredToken &&
             lease.route.password == self.configuredPassword &&
+            GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, self.configuredTLS) &&
             lease.route.deviceAuthGatewayID == self.configuredDeviceAuthGatewayID &&
             lease.route.authority == self.configuredRouteAuthority &&
             self.client === lease.client &&
@@ -776,47 +816,21 @@ extension GatewayConnection {
             self.lastSnapshot != nil
     }
 
-    func sessionRoutingIdentity(ifCurrentRoute route: Route) async throws -> SessionRoutingIdentity {
-        let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: 15000,
-            ifCurrentRoute: route)
-        return try Self.decodeSessionRoutingIdentity(data)
-    }
-
-    static func decodeSessionRoutingIdentity(_ data: Data) throws -> SessionRoutingIdentity {
-        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        guard let contract = OpenClawChatSessionRoutingContract.make(
-            scope: result.scope.value as? String,
-            mainKey: result.mainkey,
-            defaultAgentID: result.defaultid)
-        else { throw CancellationError() }
-        return SessionRoutingIdentity(defaultAgentID: result.defaultid, contract: contract)
-    }
-
-    func configuredInferenceModel(
-        ifCurrentRoute route: Route,
-        timeoutMs: Double = 15000) async throws -> String?
+    func sessionRoutingIdentity(
+        ifCurrentRoute route: Route) async throws -> OpenClawChatSessionRoutingIdentity
     {
         let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: timeoutMs,
+            OpenClawChatGatewayRequests.agentsList(),
             ifCurrentRoute: route)
-        guard await self.isCurrentRoute(route) else {
-            throw CancellationError()
-        }
-        return try Self.decodeConfiguredInferenceModel(data)
+        return try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
     }
 
-    static func decodeConfiguredInferenceModel(_ data: Data) throws -> String? {
-        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        let primary = result.agents
-            .first(where: { $0.id == result.defaultid })?
-            .model?["primary"]?.value as? String
-        let trimmed = primary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+    func configuredGatewayURL() -> URL? {
+        self.configuredURL
+    }
+
+    func configuredTLSFingerprintSHA256() -> String? {
+        self.configuredTLSMetadataProvider?.effectiveTLSFingerprintSHA256
     }
 
     func authSource() async -> GatewayAuthSource? {
@@ -829,11 +843,14 @@ extension GatewayConnection {
         self.routeGeneration &+= 1
         resetSocketGeneration()
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
         let client = client
         self.client = nil
         self.configuredURL = nil
         self.configuredToken = nil
         self.configuredPassword = nil
+        self.configuredTLS = nil
+        self.configuredTLSMetadataProvider = nil
         self.configuredDeviceAuthGatewayID = nil
         self.configuredRouteAuthority = nil
         self.configuredShutdownGeneration = nil
@@ -847,6 +864,7 @@ extension GatewayConnection {
         url: URL,
         token: String?,
         password: String?,
+        tls: GatewayTLSRoute?,
         deviceAuthGatewayID: String?,
         routeAuthority: UInt64?,
         shutdownGeneration: UInt64) async throws -> GatewayChannelActor
@@ -856,6 +874,7 @@ extension GatewayConnection {
             url: url,
             token: token,
             password: password,
+            tls: tls,
             deviceAuthGatewayID: deviceAuthGatewayID,
             routeAuthority: routeAuthority,
             shutdownGeneration: shutdownGeneration)
@@ -867,12 +886,15 @@ extension GatewayConnection {
         self.routeGeneration &+= 1
         resetSocketGeneration()
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
         let configuredRouteGeneration = self.routeGeneration
         let previousClient = client
         client = nil
         self.configuredURL = nil
         self.configuredToken = nil
         self.configuredPassword = nil
+        self.configuredTLS = nil
+        self.configuredTLSMetadataProvider = nil
         self.configuredDeviceAuthGatewayID = nil
         self.configuredRouteAuthority = nil
         self.configuredShutdownGeneration = nil
@@ -886,6 +908,7 @@ extension GatewayConnection {
                 url: url,
                 token: token,
                 password: password,
+                tls: tls,
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 routeAuthority: routeAuthority,
                 shutdownGeneration: shutdownGeneration)
@@ -895,6 +918,7 @@ extension GatewayConnection {
             throw CancellationError()
         }
         let activationBindingKey = self.activationBindingKeyProvider()
+        let sessionBox = self.sessionProvider(tls)
         let client = GatewayChannelActor(
             url: url,
             token: token,
@@ -916,12 +940,13 @@ extension GatewayConnection {
             connectOptions: GatewayConnectOptions(
                 role: "operator",
                 scopes: GatewayChannelActor.defaultOperatorConnectScopes,
-                caps: [],
+                caps: Self.operatorClientCaps,
                 commands: [],
                 permissions: [:],
                 clientId: "openclaw-macos",
                 clientMode: "ui",
                 clientDisplayName: InstanceIdentity.displayName,
+                includeDeviceIdentity: self.includeDeviceIdentity,
                 allowStoredDeviceAuth: deviceAuthGatewayID != nil,
                 deviceAuthGatewayID: deviceAuthGatewayID),
             disconnectHandler: { [weak self] _, socketGeneration in
@@ -933,6 +958,8 @@ extension GatewayConnection {
         self.configuredURL = url
         self.configuredToken = token
         self.configuredPassword = password
+        self.configuredTLS = tls
+        self.configuredTLSMetadataProvider = sessionBox?.session as? GatewayTLSRouteMetadataProviding
         self.configuredDeviceAuthGatewayID = deviceAuthGatewayID
         self.configuredRouteAuthority = routeAuthority
         self.configuredShutdownGeneration = shutdownGeneration
@@ -944,6 +971,7 @@ extension GatewayConnection {
         url: URL,
         token: String?,
         password: String?,
+        tls: GatewayTLSRoute?,
         deviceAuthGatewayID: String?,
         routeAuthority: UInt64?,
         shutdownGeneration: UInt64) -> GatewayChannelActor?
@@ -952,6 +980,7 @@ extension GatewayConnection {
               self.configuredURL == url,
               self.configuredToken == token,
               self.configuredPassword == password,
+              GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, tls),
               self.configuredDeviceAuthGatewayID == deviceAuthGatewayID,
               self.configuredRouteAuthority == routeAuthority
         else { return nil }
@@ -986,6 +1015,7 @@ extension GatewayConnection {
               admitSocketGeneration(socketGeneration)
         else { return }
         self.lastSnapshot = snapshot
+        self.installCanvasPluginSurfaceURL(from: snapshot)
     }
 
     private func handleDisconnect(routeGeneration: UInt64, socketGeneration: UInt64) {
@@ -993,6 +1023,7 @@ extension GatewayConnection {
               retireSocketGeneration(socketGeneration)
         else { return }
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
     }
 }
 
@@ -1107,13 +1138,6 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
-    func canvasPluginSurfaceUrl() async -> String? {
-        guard let snapshot = lastSnapshot else { return nil }
-        let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     func controlUiAutoAuthToken(config: Config) async -> String? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.config.url == config.url,
@@ -1123,6 +1147,7 @@ extension GatewayConnection {
               let socketGeneration = activeSocketGeneration,
               controlUiRouteIsLive(
                   config: config,
+                  tls: endpoint.tls,
                   routeAuthority: endpoint.routeAuthority,
                   deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                   client: client,
@@ -1130,6 +1155,7 @@ extension GatewayConnection {
               await client.currentConnectionGeneration() == socketGeneration,
               controlUiRouteIsLive(
                   config: config,
+                  tls: endpoint.tls,
                   routeAuthority: endpoint.routeAuthority,
                   deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                   client: client,
@@ -1138,6 +1164,7 @@ extension GatewayConnection {
                   ifCurrentConnectionGeneration: socketGeneration),
               controlUiRouteIsLive(
                   config: config,
+                  tls: endpoint.tls,
                   routeAuthority: endpoint.routeAuthority,
                   deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                   client: client,
@@ -1156,7 +1183,7 @@ extension GatewayConnection {
             {
                 return token
             }
-            let identity = DeviceIdentityStore.loadOrCreate()
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
             return DeviceAuthStore.loadToken(
                 deviceId: identity.deviceId,
                 role: "operator",
@@ -1169,6 +1196,7 @@ extension GatewayConnection {
 
     private func controlUiRouteIsLive(
         config: Config,
+        tls: GatewayTLSRoute?,
         routeAuthority: UInt64?,
         deviceAuthGatewayID: String?,
         client: GatewayChannelActor,
@@ -1177,6 +1205,7 @@ extension GatewayConnection {
         self.configuredURL == config.url &&
             self.configuredToken == config.token &&
             self.configuredPassword == config.password &&
+            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, tls) &&
             self.configuredRouteAuthority == routeAuthority &&
             self.configuredDeviceAuthGatewayID == deviceAuthGatewayID &&
             self.configuredShutdownGeneration == self.shutdownGeneration &&
@@ -1201,6 +1230,11 @@ extension GatewayConnection {
         let raw = snapshot.server["version"]?.value as? String
         let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return self.cachedGatewayVersion()
     }
 
     func snapshotPaths() -> (configPath: String?, stateDir: String?) {
@@ -1234,6 +1268,9 @@ extension GatewayConnection {
     private func broadcast(_ push: GatewayPush) {
         if case let .snapshot(snapshot) = push {
             self.lastSnapshot = snapshot
+            if self.canvasPluginSurfaceURL == nil {
+                self.installCanvasPluginSurfaceURL(from: snapshot)
+            }
             if let mainSessionKey = cachedMainSessionKey() {
                 Task { @MainActor in
                     WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
@@ -1293,6 +1330,10 @@ extension GatewayConnection {
         if let cached = cachedMainSessionKey() {
             return cached
         }
+        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
             let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
@@ -1466,6 +1507,15 @@ extension GatewayConnection {
 
     // MARK: - Chat
 
+    func agentIdentity(sessionKey: String, timeoutMs: Double = 10000) async throws -> AgentIdentityResult {
+        // Identity and chat.send must resolve aliases to the same canonical session target.
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
+        return try await self.requestDecoded(
+            method: .agentIdentityGet,
+            params: ["sessionKey": AnyCodable(resolvedKey)],
+            timeoutMs: timeoutMs)
+    }
+
     func chatHistory(
         sessionKey: String,
         agentID: String? = nil,
@@ -1475,26 +1525,20 @@ extension GatewayConnection {
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
-        if let maxChars {
-            params["maxChars"] = AnyCodable(maxChars)
-        }
-        let timeout = timeoutMs.map { Double($0) }
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            limit: limit,
+            maxChars: maxChars,
+            timeoutMs: timeoutMs)
         if let route {
-            let data = try await request(
-                method: Method.chatHistory.rawValue,
-                params: params,
-                timeoutMs: timeout,
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route)
             return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
         }
-        return try await self.requestDecoded(method: .chatHistory, params: params, timeoutMs: timeout)
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
     }
 
     func chatSend(
@@ -1511,54 +1555,26 @@ extension GatewayConnection {
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(resolvedKey),
-            "message": AnyCodable(message),
-            "idempotencyKey": AnyCodable(idempotencyKey),
-        ]
-        if let runTimeoutMs {
-            params["timeoutMs"] = AnyCodable(runTimeoutMs)
-        }
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let expectedSessionRoutingContract = expectedSessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionRoutingContract.isEmpty
-        {
-            params["expectedSessionRoutingContract"] = AnyCodable(expectedSessionRoutingContract)
-        }
-        if let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !thinking.isEmpty
-        {
-            params["thinking"] = AnyCodable(thinking)
-        }
-
-        if !attachments.isEmpty {
-            let encoded = attachments.map { att in
-                [
-                    "type": att.type,
-                    "mimeType": att.mimeType,
-                    "fileName": att.fileName,
-                    "content": att.content,
-                ]
-            }
-            params["attachments"] = AnyCodable(encoded)
-        }
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            expectedSessionRoutingContract: expectedSessionRoutingContract,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments,
+            runTimeoutMs: runTimeoutMs,
+            requestTimeoutMs: requestTimeoutMs)
 
         if let route {
-            let data = try await request(
-                method: Method.chatSend.rawValue,
-                params: params,
-                timeoutMs: Double(requestTimeoutMs),
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
             return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
         }
-        return try await self.requestDecoded(
-            method: .chatSend,
-            params: params,
-            timeoutMs: Double(requestTimeoutMs))
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {
@@ -1670,25 +1686,5 @@ extension GatewayConnection {
 
     func cronAdd(payload: [String: AnyCodable]) async throws {
         try await self.requestVoid(method: .cronAdd, params: payload)
-    }
-
-    nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
-        let decoded = try JSONDecoder().decode(LossyCronListResponse.self, from: data)
-        let jobs = decoded.jobs.compactMap(\.value)
-        let skipped = decoded.jobs.count - jobs.count
-        if skipped > 0 {
-            gatewayConnectionLogger.warning("cron.list skipped \(skipped, privacy: .public) malformed jobs")
-        }
-        return jobs
-    }
-
-    nonisolated static func decodeCronRunsResponse(_ data: Data) throws -> [CronRunLogEntry] {
-        let decoded = try JSONDecoder().decode(LossyCronRunsResponse.self, from: data)
-        let entries = decoded.entries.compactMap(\.value)
-        let skipped = decoded.entries.count - entries.count
-        if skipped > 0 {
-            gatewayConnectionLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
-        }
-        return entries
     }
 }

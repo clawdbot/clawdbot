@@ -9,8 +9,8 @@ const TALK_CAPABILITY = "talk";
 const TALK_COMMAND_PREFIX = "talk.";
 
 /** Returns true when any connected node can handle talk routing. */
-export function hasConnectedTalkNode(registry: NodeRegistry): boolean {
-  return registry.listConnected().some(isTalkCapableNode);
+export async function hasConnectedTalkNode(registry: NodeRegistry): Promise<boolean> {
+  return (await registry.listCurrentConnected()).some(isTalkCapableNode);
 }
 
 function isTalkCapableNode(node: NodeSession): boolean {

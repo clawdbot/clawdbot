@@ -4,7 +4,7 @@ import {
   isPidDefinitelyDead as defaultIsPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 
-export type LockFileOwnerPayload = {
+type LockFileOwnerPayload = {
   pid?: number;
   createdAt?: string;
   starttime?: number;

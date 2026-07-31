@@ -57,28 +57,11 @@ function resolveDecryptRetryKey(roomId: string, eventId: string): string | null 
   return `${roomId}|${eventId}`;
 }
 
-function isDecryptionFailure(event: MatrixEvent): boolean {
-  return (
-    typeof (event as { isDecryptionFailure?: () => boolean }).isDecryptionFailure === "function" &&
-    (event as { isDecryptionFailure: () => boolean }).isDecryptionFailure()
-  );
-}
-
-function getDecryptionFailureReason(event: MatrixEvent): DecryptionFailureCode | null {
-  const reason = (event as { decryptionFailureReason?: unknown }).decryptionFailureReason;
-  return typeof reason === "string" && reason in DecryptionFailureCode
-    ? (reason as DecryptionFailureCode)
-    : null;
-}
-
 function shouldRetryDecryptionFailure(event: MatrixEvent): boolean {
-  if (!isDecryptionFailure(event)) {
+  if (!event.isDecryptionFailure()) {
     return false;
   }
-  const reason = getDecryptionFailureReason(event);
-  if (!reason) {
-    return true;
-  }
+  const reason = event.decryptionFailureReason;
   return (
     reason === DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID ||
     reason === DecryptionFailureCode.OLM_UNKNOWN_MESSAGE_INDEX ||
@@ -256,7 +239,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       return;
     }
 
-    if (isDecryptionFailure(params.decryptedEvent)) {
+    if (params.decryptedEvent.isDecryptionFailure()) {
       this.emitFailedDecryptionOnce(
         retryKey,
         decryptedRoomId,
@@ -407,7 +390,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     if (this.stopped) {
       return;
     }
-    if (isDecryptionFailure(state.event)) {
+    if (state.event.isDecryptionFailure()) {
       if (!shouldRetryDecryptionFailure(state.event)) {
         this.clearDecryptRetry(retryKey);
         return;

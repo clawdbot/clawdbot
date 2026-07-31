@@ -2,10 +2,11 @@
  * Shared command execution utilities for extensions and custom tools.
  */
 
-import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
+import { spawnCommand } from "../../process/exec.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
@@ -41,6 +42,10 @@ type OutputCapture = {
   text: string;
   truncatedChars: number;
 };
+
+function decodeCapturedOutput(decoder: StringDecoder, chunk: Buffer | string): string {
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : `${decoder.end()}${chunk}`;
+}
 
 function clampMaxOutputChars(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -84,16 +89,19 @@ export async function execCommand(
   options?: ExecOptions,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const proc = spawn(command, args, {
+    const proc = spawnCommand([command, ...args], {
+      buffer: false,
       cwd,
       detached: process.platform !== "win32",
-      shell: false,
+      reject: false,
       stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
     });
+    const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -120,6 +128,16 @@ export async function execCommand(
       }
       if (options?.signal) {
         options.signal.removeEventListener("abort", killProcess);
+      }
+      const stdoutBeforeFlush = stdout.truncatedChars;
+      stdout = appendCapturedOutput(stdout, stdoutDecoder.end(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stdout.truncatedChars > stdoutBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stdout";
+      }
+      const stderrBeforeFlush = stderr.truncatedChars;
+      stderr = appendCapturedOutput(stderr, stderrDecoder.end(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stderr.truncatedChars > stderrBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stderr";
       }
       if (outputLimitExceeded) {
         stderr = appendCapturedOutput(
@@ -183,7 +201,12 @@ export async function execCommand(
 
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
-      stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);
+      stdout = appendCapturedOutput(
+        stdout,
+        decodeCapturedOutput(stdoutDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stdout.truncatedChars > before) {
         markOutputLimitExceeded("stdout");
       }
@@ -191,20 +214,24 @@ export async function execCommand(
 
     proc.stderr?.on("data", (data) => {
       const before = stderr.truncatedChars;
-      stderr = appendCapturedOutput(stderr, data, maxOutputChars, truncateOutput);
+      stderr = appendCapturedOutput(
+        stderr,
+        decodeCapturedOutput(stderrDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stderr.truncatedChars > before) {
         markOutputLimitExceeded("stderr");
       }
     });
 
-    // Wait for process termination without hanging on inherited stdio handles
-    // held open by detached descendants.
-    waitForChildProcess(proc)
-      .then((code) => {
-        finish(code ?? 0);
+    void proc
+      .then((result) => {
+        finish(result.exitCode ?? (result.failed ? 1 : 0));
       })
       .catch(() => {
         finish(1);
-      });
+      })
+      .finally(releaseOutput);
   });
 }

@@ -10,7 +10,7 @@ import {
   randomAsciiString as randomJunk,
   randomlyCased,
 } from "./oauth-test-utils.js";
-import { isRefreshTokenReusedError } from "./oauth.js";
+import { isRefreshTokenReusedError } from "./oauth.test-support.js";
 
 describe("isRefreshTokenReusedError", () => {
   describe("positive cases", () => {

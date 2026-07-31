@@ -7,6 +7,7 @@ included:
   - WatchApp
   - ../shared/OpenClawKit/Sources/OpenClawChatUI
   - ../shared/OpenClawKit/Sources/OpenClawKit
+  - ../shared/OpenClawKit/Sources/OpenClawNativeState
   - ../shared/OpenClawKit/Sources/OpenClawProtocol
   - ../swabble/Sources/SwabbleKit
 

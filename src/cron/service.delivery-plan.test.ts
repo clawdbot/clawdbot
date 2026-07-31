@@ -1,6 +1,6 @@
 // Cron service delivery plan tests cover target selection for scheduled job output.
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,

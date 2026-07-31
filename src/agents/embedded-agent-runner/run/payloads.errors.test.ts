@@ -180,6 +180,28 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
   });
 
+  it("suppresses streamed assistant text and reasoning when the assistant errored", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["provider error details"],
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "provider failed",
+        content: [
+          { type: "thinking", thinking: "partial hidden reasoning" },
+          { type: "text", text: "provider error details" },
+        ],
+      }),
+      reasoningLevel: "on",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "provider error details");
+    expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
+  });
+
   it("surfaces a terminal error after only a message-tool progress update", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
@@ -923,6 +945,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("leaves exec metadata unwrapped for plain tool results", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "plain",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
+      isError: true,
+    });
+  });
+
   it("preserves raw exec context before trailing raw command metadata", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -1202,3 +1241,4 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

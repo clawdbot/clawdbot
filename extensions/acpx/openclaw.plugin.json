@@ -49,6 +49,16 @@
         "type": "number",
         "minimum": 0
       },
+      "piSessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
       "mcpServers": {
         "type": "object",
         "additionalProperties": {
@@ -133,6 +143,10 @@
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
       "advanced": true
+    },
+    "piSessionCatalog.enabled": {
+      "label": "Pi Session Catalog",
+      "help": "Auto-detect Pi sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
     },
     "probeAgent": {
       "label": "Health Probe Agent",

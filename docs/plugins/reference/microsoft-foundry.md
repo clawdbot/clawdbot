@@ -16,7 +16,7 @@ Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Surface
 
-providers: microsoft-foundry; contracts: imageGenerationProviders
+providers: `microsoft-foundry`; contracts: `imageGenerationProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

@@ -1,13 +1,7 @@
 // Setup group access tests cover group access setup flow decisions and outputs.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
-import {
-  formatAllowlistEntries,
-  parseAllowlistEntries,
-  promptChannelAccessConfig,
-  promptChannelAllowlist,
-  promptChannelAccessPolicy,
-} from "./setup-group-access.js";
+import { promptChannelAccessConfig } from "./setup-group-access.js";
 
 function createPrompter(params?: {
   confirm?: boolean;
@@ -33,60 +27,6 @@ function createPrompter(params?: {
     text,
   };
 }
-
-describe("parseAllowlistEntries", () => {
-  it("splits comma/newline/semicolon-separated entries", () => {
-    expect(parseAllowlistEntries("alpha, beta\n gamma;delta")).toEqual([
-      "alpha",
-      "beta",
-      "gamma",
-      "delta",
-    ]);
-  });
-});
-
-describe("formatAllowlistEntries", () => {
-  it("formats compact comma-separated output", () => {
-    expect(formatAllowlistEntries([" alpha ", "", "beta"])).toBe("alpha, beta");
-  });
-});
-
-describe("promptChannelAllowlist", () => {
-  it("uses existing entries as initial value", async () => {
-    const prompter = createPrompter({
-      text: "one,two",
-    });
-
-    const result = await promptChannelAllowlist({
-      prompter,
-      label: "Test",
-      currentEntries: ["alpha", "beta"],
-    });
-
-    expect(result).toEqual(["one", "two"]);
-    expect(prompter.text).toHaveBeenCalledWith({
-      message: "Test allowlist (comma-separated)",
-      placeholder: undefined,
-      initialValue: "alpha, beta",
-    });
-  });
-});
-
-describe("promptChannelAccessPolicy", () => {
-  it("returns selected policy", async () => {
-    const prompter = createPrompter({
-      select: "open",
-    });
-
-    const result = await promptChannelAccessPolicy({
-      prompter,
-      label: "Discord",
-      currentPolicy: "allowlist",
-    });
-
-    expect(result).toBe("open");
-  });
-});
 
 describe("promptChannelAccessConfig policy-only entries", () => {
   it("skips the allowlist text prompt when entries are policy-only", async () => {

@@ -481,14 +481,22 @@ describe("telegramOutbound", () => {
       blocks: [
         {
           type: "buttons" as const,
-          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+          buttons: [
+            {
+              label: "Launch",
+              action: {
+                type: "web-app" as const,
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
         },
       ],
     };
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Open app:" },
       presentation,
-      ctx: {} as never,
+      ctx: { to: "12345" } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");
@@ -504,7 +512,14 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
     expect(options.buttons).toEqual([
-      [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
+      [
+        {
+          text: "Launch",
+          web_app: {
+            url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+          },
+        },
+      ],
     ]);
   });
 

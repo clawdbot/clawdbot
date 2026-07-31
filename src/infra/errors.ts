@@ -71,28 +71,7 @@ export function formatErrorMessage(err: unknown): string {
   return formatSharedErrorMessage(err, { redact: redactSensitiveText });
 }
 
-/**
- * Render a non-Error `cause` value (string, number, plain object, etc.) for inclusion in
- * a flattened error chain. Returns `[object Object]`-free text without throwing.
- */
-export function stringifyNonErrorCause(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
-
-export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {

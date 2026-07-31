@@ -71,6 +71,7 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
   await ensureCliCommandBootstrap({
@@ -87,5 +88,6 @@ export async function ensureCliExecutionBootstrap(params: {
     ...(params.skipPristineStartupStateMigrations
       ? { skipPristineStartupStateMigrations: true }
       : {}),
+    ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
   });
 }

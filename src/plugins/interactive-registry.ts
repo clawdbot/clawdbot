@@ -15,7 +15,7 @@ import {
 import type { PluginInteractiveHandlerRegistration } from "./types.js";
 
 /** Registration result for plugin interactive namespace handlers. */
-export type InteractiveRegistrationResult = {
+type InteractiveRegistrationResult = {
   ok: boolean;
   error?: string;
 };

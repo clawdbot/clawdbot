@@ -4,7 +4,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Minimal descriptor shape used before a command is fully registered. */
-type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
+type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description" | "hidden">;
 
 const SAFE_COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
@@ -37,23 +37,19 @@ export function sanitizeCommandDescriptorDescription(description: string): strin
 }
 
 /** Return descriptor names in registration order. */
-export function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
+function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
   return descriptors.map((descriptor) => descriptor.name);
 }
 
 /** Return descriptor names that should remain parent commands with subcommands. */
-export function getCommandsWithSubcommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getCommandsWithSubcommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
 /** Return descriptors whose parent command should show help by default. */
-export function getParentDefaultHelpCommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getParentDefaultHelpCommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name);
@@ -101,7 +97,9 @@ export function addCommandDescriptorsToProgram(
     if (existingCommands.has(name)) {
       continue;
     }
-    program.command(name).description(sanitizeCommandDescriptorDescription(descriptor.description));
+    program
+      .command(name, { hidden: descriptor.hidden })
+      .description(sanitizeCommandDescriptorDescription(descriptor.description));
     existingCommands.add(name);
   }
   return existingCommands;

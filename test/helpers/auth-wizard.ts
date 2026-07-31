@@ -68,15 +68,6 @@ export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
   };
 }
 
-/** Return OPENCLAW_AGENT_DIR or fail the test clearly. */
-export function requireOpenClawAgentDir(): string {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-}
-
 /** Resolve the auth profile JSON path for an agent directory. */
 function authProfilePathForAgent(agentDir: string): string {
   return path.join(agentDir, "auth-profiles.json");

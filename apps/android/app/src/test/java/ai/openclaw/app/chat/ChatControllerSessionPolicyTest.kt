@@ -179,4 +179,73 @@ class ChatControllerSessionPolicyTest {
     assertEquals(10L, merged.lastReadAt)
     assertEquals(20L, merged.lastActivityAt)
   }
+
+  @Test
+  fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        status = "done",
+        startedAt = 100L,
+        endedAt = 200L,
+        runtimeMs = 100L,
+        outputTokens = 12L,
+      )
+    val running =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "running",
+        startedAt = 300L,
+        hasRunMetadata = true,
+      )
+
+    val merged = mergeChatSessionEntry(existing, running)
+
+    assertEquals("running", merged.status)
+    assertEquals(300L, merged.startedAt)
+    assertEquals(null, merged.endedAt)
+    assertEquals(null, merged.runtimeMs)
+    assertEquals(null, merged.outputTokens)
+  }
+
+  @Test
+  fun activeRunSelectionPrefersAdvertisedOverlapThenDeterministicLocalThenAdvertised() {
+    assertEquals(
+      "local-b",
+      resolvePreferredActiveRunId(
+        localRunIds = listOf("local-a", "local-b"),
+        advertisedRunIds = listOf("server", "local-b", "local-a"),
+      ),
+    )
+    assertEquals(
+      "local-a",
+      resolvePreferredActiveRunId(
+        localRunIds = listOf("local-b", "local-a"),
+        advertisedRunIds = listOf("server"),
+      ),
+    )
+    assertEquals("server", resolvePreferredActiveRunId(emptyList(), listOf("server", "later")))
+  }
+
+  @Test
+  fun activeRunCountIncludesBooleanFallbackWithoutAnId() {
+    assertEquals(
+      1,
+      resolveSelectedActiveRunCount(
+        localRunIds = emptyList(),
+        advertisedRunIds = emptyList(),
+        hasAdvertisedRun = true,
+      ),
+    )
+    assertEquals(
+      3,
+      resolveSelectedActiveRunCount(
+        localRunIds = listOf("local", "overlap"),
+        advertisedRunIds = listOf("overlap", "server"),
+        hasAdvertisedRun = true,
+      ),
+    )
+  }
 }

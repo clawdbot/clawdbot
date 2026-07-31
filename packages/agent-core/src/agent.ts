@@ -7,7 +7,7 @@ import type {
   TextContent,
   ThinkingBudgets,
   Transport,
-} from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
@@ -20,6 +20,7 @@ import {
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
+  AfterToolOutcomeContext,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -29,6 +30,7 @@ import type {
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
+  PrepareNextTurnContext,
   QueueMode,
   StreamFn,
   ToolExecutionMode,
@@ -129,8 +131,18 @@ export interface AgentOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Hook that may alter any finalized tool outcome, including pre-execution failures. */
+  afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
   /** Hook that may update model, reasoning, or context after a turn. */
   prepareNextTurn?: (
+    signal?: AbortSignal,
+  ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+  /** Context-aware turn hook. Takes precedence over `prepareNextTurn` when both are provided. */
+  prepareNextTurnWithContext?: (
+    context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
   /** Queue drain mode for steering messages injected before the next assistant response. */
@@ -225,7 +237,15 @@ export class Agent {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  public afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
   public prepareNextTurn?: (
+    signal?: AbortSignal,
+  ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+  public prepareNextTurnWithContext?: (
+    context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
   private activeRun?: ActiveRun;
@@ -252,7 +272,9 @@ export class Agent {
     this.beforeToolCall = options.beforeToolCall;
     this.resolveDeferredTool = options.resolveDeferredTool;
     this.afterToolCall = options.afterToolCall;
+    this.afterToolOutcome = options.afterToolOutcome;
     this.prepareNextTurn = options.prepareNextTurn;
+    this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
     this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
     this.sessionId = options.sessionId;
@@ -394,7 +416,7 @@ export class Agent {
       throw new Error("No messages to continue from");
     }
 
-    if (lastMessage.role === "assistant") {
+    if (lastMessage.role === "assistant" || lastMessage.role === "toolResult") {
       const queuedSteering = this.steeringQueue.drain();
       if (queuedSteering.length > 0) {
         await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
@@ -406,7 +428,9 @@ export class Agent {
         await this.runPromptMessages(queuedFollowUps);
         return;
       }
+    }
 
+    if (lastMessage.role === "assistant") {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 
@@ -487,9 +511,16 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
-      prepareNextTurn: this.prepareNextTurn
-        ? async () => await this.prepareNextTurn?.(this.signal)
-        : undefined,
+      afterToolOutcome: this.afterToolOutcome,
+      prepareNextTurn:
+        this.prepareNextTurnWithContext || this.prepareNextTurn
+          ? async (context) => {
+              if (this.prepareNextTurnWithContext) {
+                return await this.prepareNextTurnWithContext(context, this.signal);
+              }
+              return await this.prepareNextTurn?.(this.signal);
+            }
+          : undefined,
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
       getApiKey: this.getApiKey,

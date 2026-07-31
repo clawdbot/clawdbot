@@ -3,6 +3,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -31,12 +33,11 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
+import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { log } from "./logger.js";
-import {
-  rewriteTranscriptEntriesInRuntimeTranscript,
-  rewriteTranscriptEntriesInSessionManager,
-} from "./transcript-rewrite.js";
+import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
+import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
 
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
@@ -132,7 +133,7 @@ async function disposeDeferredMaintenanceContextEngine(
   }
 }
 
-export function createDeferredTurnMaintenanceAbortSignal(params?: {
+function createDeferredTurnMaintenanceAbortSignal(params?: {
   processLike?: DeferredTurnMaintenanceProcessLike;
 }): {
   abortSignal?: AbortSignal;
@@ -197,7 +198,7 @@ export function createDeferredTurnMaintenanceAbortSignal(params?: {
   };
 }
 
-export function resetDeferredTurnMaintenanceStateForTest(): void {
+function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
   const processLike = process as DeferredTurnMaintenanceProcessLike;
   const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
@@ -207,6 +208,15 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   state.controllers.clear();
   unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
+  ] = {
+    createDeferredTurnMaintenanceAbortSignal,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
 }
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
@@ -276,7 +286,7 @@ function promoteTurnMaintenanceTaskVisibility(params: {
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
@@ -303,29 +313,36 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
-      if (params.sessionManager) {
-        const sessionManager = params.sessionManager;
-        const rewriteSessionManagerEntries = () =>
-          rewriteTranscriptEntriesInSessionManager({
-            sessionManager,
-            replacements: request.replacements,
-          });
-        return params.withSessionManagerRewriteLock
-          ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
-          : rewriteSessionManagerEntries();
-      }
-      const rewriteRuntimeTranscriptEntries = async () =>
-        await rewriteTranscriptEntriesInRuntimeTranscript({
-          scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
-            sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          },
-          request,
-          config: params.config,
+      const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
+      const runtimeStorePath =
+        params.sessionTarget?.storePath ??
+        (runtimeAgentId
+          ? resolveStorePath(params.config?.session?.store, { agentId: runtimeAgentId })
+          : undefined);
+      let runtimeTarget: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>> | undefined;
+      let sessionManager = params.sessionManager;
+      if (!sessionManager) {
+        runtimeTarget = await resolveRuntimeTranscriptReadTarget({
+          sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+          sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
+          sessionFile: params.sessionFile,
+          ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
+          ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
         });
-      return await rewriteRuntimeTranscriptEntries();
+        sessionManager = SessionManager.open(runtimeTarget);
+      }
+      const rewriteSessionManagerEntries = () =>
+        rewriteTranscriptEntriesInSessionManager({
+          sessionManager,
+          replacements: request.replacements,
+        });
+      const result = params.withSessionManagerRewriteLock
+        ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
+        : rewriteSessionManagerEntries();
+      if (result.changed && runtimeTarget) {
+        await publishTranscriptUpdate(runtimeTarget);
+      }
+      return result;
     },
   };
 }

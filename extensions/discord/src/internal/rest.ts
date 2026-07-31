@@ -62,7 +62,7 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-export type QueuedRequest = {
+type QueuedRequest = {
   method: string;
   path: string;
   data?: RequestData;

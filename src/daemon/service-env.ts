@@ -3,10 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isNodeVersionManagerRuntime,
-  resolveLinuxSystemCaBundle,
-} from "../bootstrap/node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import { VERSION } from "../version.js";
 import {
@@ -22,9 +18,8 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
-
-export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
 type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -339,7 +334,7 @@ function resolveLinuxUserBinDirs(
   return dirs;
 }
 
-export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
+function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     // Windows scheduled tasks inherit PATH from the task host; generated cmd
@@ -392,7 +387,7 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   });
 }
 
-export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
+function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
@@ -413,6 +408,7 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
+  existingNodeOptions?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -433,6 +429,7 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),

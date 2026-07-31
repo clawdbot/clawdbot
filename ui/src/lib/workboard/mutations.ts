@@ -4,6 +4,7 @@ import {
   removeCardAndReferences,
   replaceCard,
   resetDraftState,
+  selectedWorkboardBoardParams,
 } from "./card-state.ts";
 import { clearPendingStatusTransition, recordPendingStatusTransition } from "./lifecycle.ts";
 import { formatError, isRecord } from "./normalization-utils.ts";
@@ -33,7 +34,7 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-export async function createWorkboardCard(params: {
+async function createWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
@@ -54,7 +55,10 @@ export async function createWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const payload = await params.client.request("workboard.cards.create", draftPayload(state));
+    const payload = await params.client.request("workboard.cards.create", {
+      ...draftPayload(state),
+      ...selectedWorkboardBoardParams(state),
+    });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
@@ -287,7 +291,10 @@ export async function dispatchWorkboard(params: {
   state.lastDispatchSummary = null;
   params.requestUpdate?.();
   try {
-    const dispatchResult = await params.client.request("workboard.cards.dispatch", {});
+    const dispatchResult = await params.client.request(
+      "workboard.cards.dispatch",
+      selectedWorkboardBoardParams(state),
+    );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
     state.cards = normalized.cards;

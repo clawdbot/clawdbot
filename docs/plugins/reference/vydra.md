@@ -12,11 +12,11 @@ Adds Vydra model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/vydra-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/vydra-provider`
 
 ## Surface
 
-providers: vydra; contracts: imageGenerationProviders, speechProviders, videoGenerationProviders
+providers: `vydra`; contracts: `imageGenerationProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 

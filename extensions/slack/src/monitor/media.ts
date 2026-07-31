@@ -8,9 +8,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap, { pMapSkip } from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+export type { SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
 import { logVerbose } from "./thread.runtime.js";
@@ -18,8 +19,6 @@ export {
   resetSlackThreadStarterCacheForTest,
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
-  type SlackThreadMessage,
-  type SlackThreadStarter,
 } from "./thread.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -300,33 +299,6 @@ function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string
   }
 }
 
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
-  }
-  const results: R[] = [];
-  results.length = items.length;
-  const pendingItems = items.entries();
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (true) {
-        const next = pendingItems.next();
-        if (next.done) {
-          return;
-        }
-        const [idx, item] = next.value;
-        results[idx] = await fn(item);
-      }
-    }),
-  );
-  return results;
-}
-
 /**
  * Downloads all files attached to a Slack message and returns them as an array.
  * Returns `null` when no files could be downloaded.
@@ -345,10 +317,9 @@ export async function resolveSlackMedia(params: {
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
 
-  const resolved = await mapLimit<SlackFile, SlackMediaResult | null>(
+  const resolved = await pMap(
     limitedFiles,
-    MAX_SLACK_MEDIA_CONCURRENCY,
-    async (file) => {
+    async (file): Promise<SlackMediaResult | typeof pMapSkip> => {
       // Audio preflight keys the original event file object so admission can
       // reuse that exact download without turning this into a persistent cache.
       const preloaded = params.preloadedMedia?.get(file);
@@ -358,7 +329,7 @@ export async function resolveSlackMedia(params: {
       const eventUrl = file.url_private_download ?? file.url_private;
       const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
       if (!url) {
-        return null;
+        return pMapSkip;
       }
       const result = await downloadSlackMediaFile({
         file,
@@ -370,14 +341,14 @@ export async function resolveSlackMedia(params: {
         abortSignal: params.abortSignal,
       }).catch(() => null);
       if (result || !eventUrl) {
-        return result;
+        return result ?? pMapSkip;
       }
 
       const freshUrl = await fetchFreshSlackFileUrl({ file, client: params.client });
       if (!freshUrl) {
-        return null;
+        return pMapSkip;
       }
-      return await downloadSlackMediaFile({
+      const retryResult = await downloadSlackMediaFile({
         file,
         url: freshUrl,
         token: params.token,
@@ -386,11 +357,12 @@ export async function resolveSlackMedia(params: {
         totalTimeoutMs: params.totalTimeoutMs,
         abortSignal: params.abortSignal,
       }).catch(() => null);
+      return retryResult ?? pMapSkip;
     },
+    { concurrency: MAX_SLACK_MEDIA_CONCURRENCY, stopOnError: true },
   );
 
-  const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
-  return results.length > 0 ? results : null;
+  return resolved.length > 0 ? resolved : null;
 }
 
 /** Extracts text and media from forwarded-message attachments. Returns null when empty. */

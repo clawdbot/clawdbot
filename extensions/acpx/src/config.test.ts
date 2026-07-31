@@ -226,6 +226,16 @@ describe("embedded acpx plugin config", () => {
           type: "number",
           minimum: 0,
         },
+        piSessionCatalog: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: {
+              type: "boolean",
+              default: true,
+            },
+          },
+        },
         probeAgent: {
           type: "string",
           minLength: 1,

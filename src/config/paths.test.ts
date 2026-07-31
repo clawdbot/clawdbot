@@ -2,10 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isDefaultInstallIdentity,
+  isDefaultStateDir,
   isNixMode,
   normalizeStateDirEnv,
   pinRuntimePaths,
@@ -15,7 +18,6 @@ import {
   resolveGatewayPort,
   resolveIncludeRoots,
   resolveOAuthDir,
-  resolveOAuthPath,
   resolveStateDir,
   STATE_DIR,
 } from "./paths.js";
@@ -23,6 +25,61 @@ import {
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return { ...overrides };
 }
+
+describe("default state directory", () => {
+  it("matches filesystem aliases of the default state directory", async () => {
+    await withTempDir({ prefix: "openclaw-default-state-" }, async (root) => {
+      const home = path.join(root, "home");
+      const defaultStateDir = path.join(home, ".openclaw");
+      const stateAlias = path.join(home, "state-alias");
+      await fs.mkdir(defaultStateDir, { recursive: true });
+      await fs.symlink(defaultStateDir, stateAlias, "dir");
+
+      expect(isDefaultStateDir({ HOME: home, OPENCLAW_STATE_DIR: stateAlias }, () => home)).toBe(
+        true,
+      );
+    });
+  });
+});
+
+describe("default install identity", () => {
+  it("accepts default paths and equivalent explicit overrides", () => {
+    const home = "/home/test";
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    expect(isDefaultInstallIdentity({ HOME: home }, () => home)).toBe(true);
+    expect(
+      isDefaultInstallIdentity(
+        { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        () => home,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects non-default state or config paths", () => {
+    const home = "/home/test";
+
+    expect(
+      isDefaultInstallIdentity({ HOME: home, OPENCLAW_STATE_DIR: "/tmp/copied-state" }, () => home),
+    ).toBe(false);
+    expect(
+      isDefaultInstallIdentity(
+        { HOME: home, OPENCLAW_CONFIG_PATH: "/tmp/copied-openclaw.json" },
+        () => home,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects process home overrides that relocate the implicit install", () => {
+    const accountHome = "/home/test";
+
+    expect(isDefaultInstallIdentity({ HOME: "/tmp/copied-home" }, () => accountHome)).toBe(false);
+    expect(isDefaultInstallIdentity({ OPENCLAW_HOME: "/tmp/copied-home" }, () => accountHome)).toBe(
+      false,
+    );
+  });
+});
 
 describe("oauth paths", () => {
   it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {
@@ -32,7 +89,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
   });
@@ -43,7 +100,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );
   });

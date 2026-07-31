@@ -14,6 +14,7 @@ import {
   type GatewayRequestHandlerOptions,
   type OpenClawPluginApi,
 } from "./api.js";
+import { VOICE_CALL_CLI_DESCRIPTOR } from "./cli-output-mode.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
@@ -81,7 +82,11 @@ const voiceCallConfigSchema = {
       label: "Allow ngrok Free Tier (Loopback Bypass)",
       advanced: true,
     },
-    "streaming.enabled": { label: "Enable Streaming", advanced: true },
+    "streaming.enabled": {
+      label: "Enable Streaming",
+      help: "Classic streaming transcription currently requires the Twilio call provider.",
+      advanced: true,
+    },
     "streaming.provider": {
       label: "Streaming Provider",
       help: "Uses the first registered realtime transcription provider when unset.",
@@ -152,7 +157,7 @@ const voiceCallConfigSchema = {
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      help: "Deep-merges with tts (Microsoft is ignored for calls).",
       advanced: true,
     },
     "tts.providers": { label: "TTS Provider Config", advanced: true },
@@ -854,7 +859,7 @@ export default definePluginEntry({
           stateRuntime: api.runtime.state,
           logger: api.logger,
         }),
-      { commands: ["voicecall"] },
+      { commands: ["voicecall"], descriptors: [VOICE_CALL_CLI_DESCRIPTOR] },
     );
 
     api.registerService({
@@ -904,3 +909,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

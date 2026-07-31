@@ -4,7 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   applySessionPatchProjection,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
@@ -19,7 +19,7 @@ import type {
 
 const NAME_COMMAND_PREFIX = "/name";
 
-export function parseNameCommand(raw: string): { title: string } | null {
+function parseNameCommand(raw: string): { title: string } | null {
   const trimmed = raw.trim();
   const commandEnd = trimmed.search(/\s/);
   const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
@@ -38,7 +38,10 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
   if (!params.sessionStore || !params.sessionKey || !params.storePath) {
     return;
   }
-  const entry = loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  const entry = loadSessionEntryReadOnly({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   if (!entry) {
     return;
   }
@@ -69,7 +72,7 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
   // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
   if (!title) {
     const entry =
-      loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
+      loadSessionEntryReadOnly({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
       params.sessionEntry;
     const current = normalizeOptionalString(entry?.label);
     const suggestionEntry = entry ? { ...entry, label: undefined } : undefined;

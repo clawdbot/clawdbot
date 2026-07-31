@@ -27,15 +27,15 @@ function resolveChannelEnvVars(
   });
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
-    if (!plugin.channelEnvVars) {
+    const channelId = plugin.packageChannel?.id?.trim();
+    const channelEnv = plugin.packageChannel?.configuredState?.env;
+    if (!channelId || !channelEnv) {
       continue;
     }
-    // Sort channel ids before merging so prompt/test snapshots do not depend on manifest order.
-    for (const [channelId, keys] of Object.entries(plugin.channelEnvVars).toSorted(
-      ([left], [right]) => left.localeCompare(right),
-    )) {
-      appendUniqueEnvVarCandidates(candidates, channelId, keys);
-    }
+    appendUniqueEnvVarCandidates(candidates, channelId, [
+      ...(channelEnv.allOf ?? []),
+      ...(channelEnv.anyOf ?? []),
+    ]);
   }
   return candidates;
 }

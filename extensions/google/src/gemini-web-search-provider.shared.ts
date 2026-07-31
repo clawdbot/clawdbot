@@ -20,17 +20,6 @@ export function resolveGeminiConfig(searchConfig?: Record<string, unknown>): Gem
   return isRecord(gemini) ? gemini : {};
 }
 
-export function resolveGeminiApiKey(
-  gemini?: GeminiConfig,
-  env: Record<string, string | undefined> = process.env,
-): string | undefined {
-  return (
-    trimToUndefined(gemini?.apiKey) ??
-    trimToUndefined(env.GEMINI_API_KEY) ??
-    trimToUndefined(gemini?.providerApiKey)
-  );
-}
-
 export function resolveGeminiModel(gemini?: GeminiConfig): string {
   return trimToUndefined(gemini?.model) ?? DEFAULT_GEMINI_WEB_SEARCH_MODEL;
 }

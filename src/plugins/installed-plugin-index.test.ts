@@ -157,13 +157,7 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
     contracts: {
       tools: ["demo-tool"],
     },
-    providerAuthEnvVars: {
-      demo: ["DEMO_API_KEY"],
-    },
     syntheticAuthRefs: ["demo", "demo-cli"],
-    channelEnvVars: {
-      "demo-chat": ["DEMO_CHAT_TOKEN"],
-    },
     activation: {
       onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
@@ -244,8 +238,6 @@ describe("installed plugin index", () => {
         "activation-agent-harness-hint",
         "activation-channel-hint",
         "activation-provider-hint",
-        "channel-env-vars",
-        "provider-auth-env-vars",
       ],
     });
     expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
@@ -1158,3 +1150,4 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

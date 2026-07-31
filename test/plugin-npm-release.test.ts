@@ -2,11 +2,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
   collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
@@ -21,9 +22,27 @@ import {
 } from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
+type ExecFileSync = typeof import("node:child_process").execFileSync;
+
+const childProcessMock = vi.hoisted(() => ({
+  execFileSyncOverride: undefined as ExecFileSync | undefined,
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const execFileSync = ((...args: unknown[]) => {
+    const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
+      ...args: unknown[]
+    ) => unknown;
+    return implementation(...args);
+  }) as ExecFileSync;
+  return { ...actual, execFileSync };
+});
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  childProcessMock.execFileSyncOverride = undefined;
   cleanupTempDirs(tempDirs);
 });
 
@@ -448,6 +467,75 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ).toEqual([
       "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: registry unavailable",
     ]);
+  });
+
+  it("fails closed when the npm latest lookup times out", () => {
+    childProcessMock.execFileSyncOverride = ((
+      command: string,
+      args?: readonly string[],
+      options?: unknown,
+    ) => {
+      expect(command).toBe("npm");
+      expect(args).toEqual([
+        "view",
+        "@openai/codex",
+        "dist-tags.latest",
+        "--json",
+        "--userconfig",
+        expect.stringContaining("openclaw-plugin-npm-view-"),
+      ]);
+      expect(options).toMatchObject({
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      });
+      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }) as unknown as ExecFileSync;
+
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([
+      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: npm view timed out after 60000ms.",
+    ]);
+  });
+});
+
+describe("collectPluginReleasePlan", () => {
+  it("fails closed when the published-version lookup times out", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      type: "module",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
+      expect(command).toBe("npm");
+      expect(args).toEqual([
+        "view",
+        "@openclaw/demo-plugin@2026.4.10",
+        "version",
+        "--userconfig",
+        expect.stringContaining("openclaw-plugin-npm-view-"),
+      ]);
+      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }) as unknown as ExecFileSync;
+
+    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
+      "npm view timed out after 60000ms.",
+    );
   });
 });
 

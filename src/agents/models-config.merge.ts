@@ -3,9 +3,38 @@
  * preserved secret fields. Setup and doctor flows use this boundary to update
  * model catalogs without discarding existing credentials.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+export function normalizeProviderMapKeys<T>(
+  providers: Record<string, T> | null | undefined,
+): Record<string, T> {
+  const normalized: Record<string, T> = {};
+  const canonicalKeys = new Set<string>();
+  for (const [key, value] of Object.entries(providers ?? {})) {
+    const providerKey = normalizeProviderId(key);
+    if (!providerKey) {
+      continue;
+    }
+    if (key === providerKey) {
+      canonicalKeys.add(providerKey);
+      // A prior alias inserted this key at the alias's position. Reinsert it so
+      // canonical spelling also controls deterministic provider order.
+      delete normalized[providerKey];
+      normalized[providerKey] = value;
+      continue;
+    }
+    // Exact canonical spelling wins over aliases regardless of object order.
+    // Without one, the later variant wins, matching existing trim-collision behavior.
+    if (!canonicalKeys.has(providerKey)) {
+      normalized[providerKey] = value;
+    }
+  }
+  return normalized;
+}
 
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
@@ -103,6 +132,19 @@ export function mergeProviderModels(
       explicitValue: explicitModel.maxTokens,
       implicitValue: implicitModel.maxTokens,
     });
+    const compat = resolveCatalogOwnedModelCompat({
+      catalogRoute: {
+        api: implicitModel.api ?? implicit.api,
+        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+      },
+      catalogCompat: implicitModel.compat,
+      configuredRoute: {
+        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
+        baseUrl:
+          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
+      },
+      configuredCompat: explicitModel.compat,
+    });
 
     return Object.assign(
       {},
@@ -114,6 +156,7 @@ export function mergeProviderModels(
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
+      { compat },
     );
   });
 
@@ -146,12 +189,8 @@ export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
-  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = normalizeOptionalString(key) ?? "";
-    if (!providerKey) {
-      continue;
-    }
+  const out = normalizeProviderMapKeys(params.implicit);
+  for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
     out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
   }
@@ -234,15 +273,18 @@ export function mergeWithExistingProviderSecrets(params: {
   secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
+  const normalizedNextProviders = normalizeProviderMapKeys(nextProviders);
+
   const mergedProviders: Record<string, ProviderConfig> = {};
-  for (const [key, entry] of Object.entries(existingProviders)) {
+  for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
     if (!isExistingProviderSelfContained(entry)) {
       continue;
     }
     mergedProviders[key] = entry;
   }
-  for (const [key, newEntry] of Object.entries(nextProviders)) {
-    const existing = existingProviders[key];
+  for (const [key, newEntry] of Object.entries(normalizedNextProviders)) {
+    const existing = normalizedExistingProviders[key];
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;

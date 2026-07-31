@@ -5,7 +5,6 @@ import type { SlackMonitorContext } from "./context.js";
 const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
 let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
 let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
-let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
 let resolveSlackCommandIngress: typeof import("./auth.js").resolveSlackCommandIngress;
 
@@ -58,16 +57,12 @@ function makeAuthorizeCtx(params?: {
 
 describe("resolveSlackEffectiveAllowFrom", () => {
   beforeAll(async () => {
-    ({
-      authorizeSlackSystemEventSender,
-      clearSlackAllowFromCacheForTest,
-      resolveSlackEffectiveAllowFrom,
-    } = await import("./auth.js"));
+    ({ authorizeSlackSystemEventSender, resolveSlackEffectiveAllowFrom } =
+      await import("./auth.js"));
   });
 
   beforeEach(() => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
-    clearSlackAllowFromCacheForTest();
   });
 
   it("falls back to channel config allowFrom when pairing store throws", async () => {
@@ -112,16 +107,11 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 
 describe("authorizeSlackSystemEventSender", () => {
   beforeAll(async () => {
-    ({
-      authorizeSlackBotRoomMessage,
-      authorizeSlackSystemEventSender,
-      clearSlackAllowFromCacheForTest,
-    } = await import("./auth.js"));
+    ({ authorizeSlackBotRoomMessage, authorizeSlackSystemEventSender } = await import("./auth.js"));
   });
 
   beforeEach(() => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
-    clearSlackAllowFromCacheForTest();
     delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
   });
 
@@ -494,11 +484,7 @@ describe("authorizeSlackSystemEventSender", () => {
 
 describe("resolveSlackCommandIngress", () => {
   beforeAll(async () => {
-    ({ resolveSlackCommandIngress, clearSlackAllowFromCacheForTest } = await import("./auth.js"));
-  });
-
-  beforeEach(() => {
-    clearSlackAllowFromCacheForTest();
+    ({ resolveSlackCommandIngress } = await import("./auth.js"));
   });
 
   it("does not authorize commands when sender denial stops before the command gate", async () => {
@@ -553,12 +539,7 @@ describe("resolveSlackCommandIngress", () => {
 
 describe("authorizeSlackSystemEventSender interactiveEvent", () => {
   beforeAll(async () => {
-    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
-      await import("./auth.js"));
-  });
-
-  beforeEach(() => {
-    clearSlackAllowFromCacheForTest();
+    ({ authorizeSlackSystemEventSender } = await import("./auth.js"));
   });
 
   it("rejects interactive events when expectedSenderId is not provided", async () => {

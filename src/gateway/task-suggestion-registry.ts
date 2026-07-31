@@ -7,7 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 
 const MAX_TASK_SUGGESTIONS = 100;
-export const MAX_TASK_SUGGESTION_RETAINED_BYTES = 2 * 1024 * 1024;
+const MAX_TASK_SUGGESTION_RETAINED_BYTES = 2 * 1024 * 1024;
 type TaskSuggestionRecord =
   | { status: "pending" | "accepting" | "dismissed"; suggestion: TaskSuggestion }
   | { status: "accepted"; suggestion: TaskSuggestion; sessionKey: string };
@@ -21,7 +21,7 @@ function retainedBytesForSuggestion(suggestion: TaskSuggestion): number {
   return Buffer.byteLength(JSON.stringify(suggestion)) + 1;
 }
 
-export type CreateTaskSuggestionResult =
+type CreateTaskSuggestionResult =
   | { status: "created"; suggestion: TaskSuggestion; evictedPendingTaskIds: string[] }
   | { status: "full" };
 
@@ -91,7 +91,7 @@ export function listTaskSuggestions(params: TaskSuggestionsListParams): TaskSugg
     .toReversed();
 }
 
-export type TaskSuggestionAcceptance =
+type TaskSuggestionAcceptance =
   | { status: "claimed"; suggestion: TaskSuggestion }
   | { status: "accepted"; sessionKey: string }
   | { status: "accepting" | "dismissed" | "missing" };
@@ -148,10 +148,4 @@ export function dismissTaskSuggestion(taskId: string): boolean {
   }
   suggestions.set(taskId, { status: "dismissed", suggestion: record.suggestion });
   return true;
-}
-
-/** Test-only reset for the intentionally process-local registry. */
-export function resetTaskSuggestionsForTest(): void {
-  suggestions.clear();
-  retainedSuggestionBytes = 0;
 }

@@ -18,8 +18,8 @@ describe("ConsoleLogger", () => {
     );
 
     const message = spy.mock.calls[0]?.[0];
-    expect(message).toBe(
-      "[MatrixHttpClient] Authorization: Bearer ***:abcdefghijklmnopqrstuvwxyzABCDEFG",
-    );
+    expect(message).toContain("[MatrixHttpClient] Authorization: Bearer ");
+    expect(message).not.toContain("123456:abcdefghijklmnopqrstuvwxyzABCDEFG");
+    expect(message).not.toContain("abcdefghijklmnopqrstuvwxyzABCDEFG");
   });
 });

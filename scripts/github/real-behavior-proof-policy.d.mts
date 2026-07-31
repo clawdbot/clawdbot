@@ -1,8 +1,6 @@
 export const PROOF_OVERRIDE_LABEL: "proof: override";
 export const PROOF_SUFFICIENT_LABEL: "proof: sufficient";
 export const NEEDS_PR_CONTEXT_LABEL: "triage: needs-pr-context";
-export const DEFAULT_GITHUB_API_TIMEOUT_MS: 30000;
-
 type PullRequest = Record<string, unknown>;
 type Comment = Record<string, unknown>;
 type Evaluation = {

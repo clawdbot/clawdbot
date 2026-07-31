@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthChoiceLoadedPluginProvider,
+  prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -231,6 +232,52 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       pluginId: entry?.pluginId ?? "missing-plugin",
       status: "skipped",
     }));
+  });
+
+  it("stages provider profiles until the caller commits them", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+    });
+
+    const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(prepared?.authProfiles).toEqual([
+      {
+        profileId: LOCAL_PROFILE_ID,
+        credential: {
+          type: "api_key",
+          provider: LOCAL_PROVIDER_ID,
+          key: LOCAL_API_KEY,
+        },
+      },
+    ]);
+    expect(upsertAuthProfile).not.toHaveBeenCalled();
+
+    await prepared?.persistAuthProfiles([
+      {
+        profileId: LOCAL_PROFILE_ID,
+        credential: {
+          type: "api_key",
+          provider: LOCAL_PROVIDER_ID,
+          key: "test-key",
+        },
+      },
+    ]);
+    await prepared?.persistAuthProfiles();
+
+    expect(upsertAuthProfile).toHaveBeenCalledOnce();
+    expect(upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: LOCAL_PROFILE_ID,
+      credential: {
+        type: "api_key",
+        provider: LOCAL_PROVIDER_ID,
+        key: "test-key",
+      },
+      agentDir: "/tmp/agent",
+    });
   });
 
   it("returns an agent model override when default model application is deferred", async () => {
@@ -531,7 +578,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     })) as never);
 
-    const note = vi.fn(async () => {});
+    const events: string[] = [];
+    const note = vi.fn(async () => {
+      events.push("note");
+    });
     const method: ProviderAuthMethod = {
       id: "local",
       label: "Local",
@@ -576,6 +626,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         note,
       } as unknown as ApplyAuthChoiceParams["prompter"],
       method,
+      beforePersistentEffect: () => {
+        events.push("lock");
+      },
     });
 
     expect(result.defaultModel).toBe(LOCAL_DEFAULT_MODEL);
@@ -592,6 +645,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
+    expect(events).toEqual(["note", "lock"]);
   });
 
   it("normalizes retired Google Gemini default models returned by auth methods", async () => {

@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 const QQBOT_PLUGIN_PKG_NAME = "@openclaw/qqbot";
 
 /** Sentinel used when the version cannot be resolved. */
-export const QQBOT_PLUGIN_VERSION_UNKNOWN = "unknown";
+const QQBOT_PLUGIN_VERSION_UNKNOWN = "unknown";
 
 /**
  * Resolve the QQBot plugin version from `package.json`.

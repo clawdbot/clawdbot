@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import * as replaceFile from "../infra/replace-file.js";
@@ -39,7 +40,7 @@ type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & 
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
-export type SessionSqliteMigrationManifest = {
+type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
@@ -459,14 +460,13 @@ export function createSessionSqliteMigrationFailureIssue(
     "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
     "",
     reportBody,
-  ]
-    .join("\n")
-    .slice(0, 20_000);
+  ].join("\n");
+  const boundedBody = truncateUtf16Safe(body, 20_000);
   return {
-    body,
+    body: boundedBody,
     ...(bodyPath ? { bodyPath } : {}),
     title,
-    url: createPrefilledGithubIssueUrl(title, body),
+    url: createPrefilledGithubIssueUrl(title, boundedBody),
   };
 }
 
@@ -862,7 +862,7 @@ function manifestSortTime(manifest: SessionSqliteMigrationManifest): number {
 function createPrefilledGithubIssueUrl(title: string, body: string): string {
   const urlBody =
     body.length > 6_000
-      ? `${body.slice(0, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
+      ? `${truncateUtf16Safe(body, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
       : body;
   const params = new URLSearchParams({
     body: urlBody,
@@ -946,11 +946,11 @@ function renderFailureMarkdown(payload: {
 }
 
 function sanitizeFailureReportText(value: string): string {
-  return value
+  const sanitized = value
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]")
     .replace(/(api[_-]?key|token|secret|password)[=-][A-Za-z0-9._-]+/gi, "$1-[redacted]")
-    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]")
-    .slice(0, 500);
+    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]");
+  return truncateUtf16Safe(sanitized, 500);
 }
 
 function shortenFailureReportPath(filePath: string): string {
@@ -996,3 +996,4 @@ function redactAbsoluteHomePaths(value: string): string {
   }
   return value.split(home).join("~");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

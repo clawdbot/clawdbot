@@ -30,21 +30,13 @@ export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecisio
   return null;
 }
 
-export function formatSystemRunAllowlistMissMessage(params?: {
-  shellWrapperBlocked?: boolean;
+function formatSystemRunAllowlistMissMessage(params?: {
   windowsShellWrapperBlocked?: boolean;
 }): string {
   if (params?.windowsShellWrapperBlocked) {
     return (
       "SYSTEM_RUN_DENIED: allowlist miss " +
       "(Windows shell wrappers like cmd.exe /c require approval; " +
-      "approve once/always or run with --ask on-miss|always)"
-    );
-  }
-  if (params?.shellWrapperBlocked) {
-    return (
-      "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(shell wrappers like sh/bash/zsh -c require approval; " +
       "approve once/always or run with --ask on-miss|always)"
     );
   }
@@ -132,7 +124,6 @@ export function evaluateSystemRunPolicy(params: {
       allowed: false,
       eventReason: "allowlist-miss",
       errorMessage: formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked,
         windowsShellWrapperBlocked,
       }),
       analysisOk,

@@ -5,7 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
+import {
+  isUnscopedSessionKeySentinel,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -220,9 +225,20 @@ async function handleTtsLatestAction(
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return stopWithText("🎤 No active chat session is available for `/tts latest`.");
   }
-  const latest = await readLatestAssistantTextFromSessionTranscript(
-    params.sessionEntry.sessionFile,
-  );
+  const targetSessionEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
+  const targetAgentId = isUnscopedSessionKeySentinel(params.sessionKey)
+    ? params.agentId
+    : resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
+  const latest = await readLatestAssistantTextFromSessionTranscript({
+    agentId: targetAgentId,
+    sessionId: targetSessionEntry.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: resolveSessionStorePathForScope({
+      agentId: targetAgentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }),
+  });
   const latestText = latest?.text.trim();
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
@@ -238,7 +254,7 @@ async function handleTtsLatestAction(
     channel: params.command.channel,
     accountId,
     prefsPath,
-    agentId: params.agentId,
+    agentId: targetAgentId,
   });
   if ("error" in audio) {
     return stopWithText(`❌ Error generating audio: ${audio.error}`);

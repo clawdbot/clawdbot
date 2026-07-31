@@ -3,13 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import type { ConfigUiHints } from "./schema.js";
 
 describe("restoreRedactedValues", () => {
   it("restores redacted URL endpoint fields on round-trip", () => {

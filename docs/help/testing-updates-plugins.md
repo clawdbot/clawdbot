@@ -57,7 +57,7 @@ pnpm release:check
 ```
 
 `release:check` runs config/docs/API drift checks (config schema, config docs
-baseline, plugin SDK API baseline and exports, plugin versions/inventory),
+baseline, plugin SDK API contract manifest and exports, plugin versions/inventory),
 writes the package dist inventory, runs `npm pack --dry-run`, rejects forbidden
 packed files, installs the tarball into a temp prefix, runs postinstall, and
 smokes bundled channel entrypoints.

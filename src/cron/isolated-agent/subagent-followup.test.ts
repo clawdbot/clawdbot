@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
 vi.hoisted(() => {
-  process.env.OPENCLAW_TEST_FAST = "1";
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
@@ -31,8 +31,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
-const { testing: runWaitTesting, readLatestAssistantReply } =
-  await import("../../agents/run-wait.js");
+const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -285,14 +284,10 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
-    runWaitTesting.setDepsForTest({
-      callGateway: ((opts) => vi.mocked(callGateway)(opts as never)) as typeof callGateway,
-    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    runWaitTesting.setDepsForTest();
   });
 
   it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {

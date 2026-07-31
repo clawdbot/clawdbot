@@ -397,10 +397,13 @@ describe("doctor-contract-registry module loader", () => {
     const raw = {
       tools: {
         media: {
-          models: [{ provider: " xAI " }, { provider: " " }],
-          audio: { models: [{ provider: "XAI", model: "grok-stt" }] },
-          image: { models: [{ provider: "openai", model: "gpt-5.5" }] },
-          video: { models: [{ provider: "gemini", model: "veo" }] },
+          models: [
+            { provider: " xAI " },
+            { provider: " " },
+            { provider: "XAI", model: "grok-stt", capabilities: ["audio"] },
+            { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+            { provider: "gemini", model: "veo", capabilities: ["video"] },
+          ],
         },
       },
     };
@@ -409,7 +412,7 @@ describe("doctor-contract-registry module loader", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
         raw,
-        touchedPaths: [["tools", "media", "audio", "models", "0", "model"]],
+        touchedPaths: [["tools", "media", "models", "2", "model"]],
       }),
     ).toEqual(["gemini", "openai", "xai"]);
   });

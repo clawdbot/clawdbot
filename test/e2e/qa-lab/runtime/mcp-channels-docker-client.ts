@@ -103,7 +103,11 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
-  const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  const gateway = await connectGateway({
+    url: gatewayUrl,
+    token: gatewayToken,
+    bindFreshDevice: true,
+  });
   assertGatewayScopes(gateway, {
     include: ["operator.admin", "operator.pairing", "operator.write"],
     label: "owner gateway",
@@ -230,7 +234,8 @@ async function main() {
       "expected one seeded attachment",
     );
 
-    const waited = (await Promise.all([
+    const waitMessage = `wait event ${randomUUID()}`;
+    const [waited, waitRun] = await Promise.all([
       callTool<{
         structuredContent?: { event?: Record<string, unknown> };
       }>({
@@ -238,22 +243,34 @@ async function main() {
         arguments: {
           session_key: "agent:main:main",
           after_cursor: 0,
-          timeout_ms: 10_000,
+          timeout_ms: 120_000,
         },
       }),
-      gateway.request("chat.inject", {
+      gateway.request<{ runId?: string; status?: string }>("chat.send", {
         sessionKey: "agent:main:main",
-        message: "assistant live event",
+        message: waitMessage,
+        idempotencyKey: randomUUID(),
       }),
-    ]).then(([result]) => result)) as {
-      structuredContent?: { event?: Record<string, unknown> };
-    };
-    const assistantEvent = waited.structuredContent?.event;
-    assert(assistantEvent, "expected events_wait result");
-    assert(assistantEvent.type === "message", "expected message event");
-    assert(assistantEvent.role === "assistant", "expected assistant event role");
-    assert(assistantEvent.text === "assistant live event", "expected assistant event text");
-    const assistantCursor = typeof assistantEvent.cursor === "number" ? assistantEvent.cursor : 0;
+    ]);
+    const waitEvent = waited.structuredContent?.event;
+    assert(waitEvent, "expected events_wait result");
+    assert(waitEvent.type === "message", "expected message event");
+    assert(waitEvent.role === "user", "expected user event role");
+    assert(waitEvent.text === waitMessage, "expected wait event text");
+    const waitCursor = typeof waitEvent.cursor === "number" ? waitEvent.cursor : 0;
+    assert(
+      waitRun.status === "started" && typeof waitRun.runId === "string",
+      `chat.send did not start: ${JSON.stringify(waitRun)}`,
+    );
+    const waitRunResult = await gateway.request<{ status?: string }>(
+      "agent.wait",
+      { runId: waitRun.runId, timeoutMs: 240_000 },
+      { timeoutMs: 245_000 },
+    );
+    assert(
+      waitRunResult.status === "ok",
+      `agent.wait failed for ${waitRun.runId}: ${JSON.stringify(waitRunResult)}`,
+    );
 
     const polled = await callTool<{
       structuredContent?: { events?: Array<Record<string, unknown>> };
@@ -262,18 +279,20 @@ async function main() {
       arguments: { session_key: "agent:main:main", after_cursor: 0, limit: 10 },
     });
     assert(
-      (polled.structuredContent?.events ?? []).some(
-        (entry) => entry.text === "assistant live event",
-      ),
-      "expected assistant event in events_poll",
+      (polled.structuredContent?.events ?? []).some((entry) => entry.text === waitMessage),
+      "expected wait event in events_poll",
     );
 
     const channelMessage = `hello from docker ${randomUUID()}`;
-    await gateway.request("chat.send", {
+    const channelRun = await gateway.request<{ runId?: string; status?: string }>("chat.send", {
       sessionKey: "agent:main:main",
       message: channelMessage,
       idempotencyKey: randomUUID(),
     });
+    assert(
+      channelRun.status === "started" && typeof channelRun.runId === "string",
+      `channel chat.send did not start: ${JSON.stringify(channelRun)}`,
+    );
     const rawGatewayUserMessage = await waitFor(
       "raw gateway user session.message",
       () =>
@@ -292,7 +311,7 @@ async function main() {
           structuredContent?: { events?: Array<Record<string, unknown>> };
         }>({
           name: "events_poll",
-          arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
+          arguments: { session_key: "agent:main:main", after_cursor: waitCursor, limit: 50 },
         });
         return findEventByText(polledValue.structuredContent?.events, channelMessage);
       },
@@ -304,7 +323,7 @@ async function main() {
         structuredContent?: { events?: Array<Record<string, unknown>> };
       }>({
         name: "events_poll",
-        arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
+        arguments: { session_key: "agent:main:main", after_cursor: waitCursor, limit: 50 },
       });
       finalPolledEvents = polledLocal.structuredContent?.events ?? [];
       const finalUserEvent = findEventByText(finalPolledEvents, channelMessage);
@@ -355,6 +374,15 @@ async function main() {
       );
     }
     assert(helpNotification.content === channelMessage, "expected Claude channel content");
+    const channelRunResult = await gateway.request<{ status?: string }>(
+      "agent.wait",
+      { runId: channelRun.runId, timeoutMs: 240_000 },
+      { timeoutMs: 245_000 },
+    );
+    assert(
+      channelRunResult.status === "ok",
+      `agent.wait failed for ${channelRun.runId}: ${JSON.stringify(channelRunResult)}`,
+    );
 
     await mcp.notification({
       method: "notifications/claude/channel/permission_request",

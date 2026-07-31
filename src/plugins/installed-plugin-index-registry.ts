@@ -15,34 +15,22 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
   candidates: readonly PluginCandidate[];
   discovery?: PluginDiscoveryResult;
 } {
-  if (params.candidates) {
-    return {
-      candidates: params.candidates,
-      registry: loadPluginManifestRegistry({
-        config: params.config,
+  const suppliedCandidates = params.candidates;
+  const installRecords = suppliedCandidates
+    ? params.installRecords
+    : (params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env }));
+  const discovery = suppliedCandidates
+    ? { candidates: suppliedCandidates, diagnostics: params.diagnostics ?? [] }
+    : (params.discovery ??
+      discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
+        extraPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
         env: params.env,
-        candidates: params.candidates,
-        diagnostics: params.diagnostics,
-        installRecords: params.installRecords,
-      }),
-    };
-  }
-
-  const normalized = normalizePluginsConfig(params.config?.plugins);
-  const installRecords =
-    params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
-  const discovery =
-    params.discovery ??
-    discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      extraPaths: normalized.loadPaths,
-      env: params.env,
-      installRecords,
-    });
+        installRecords,
+      }));
   return {
     candidates: discovery.candidates,
-    discovery,
+    ...(suppliedCandidates ? {} : { discovery }),
     registry: loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,

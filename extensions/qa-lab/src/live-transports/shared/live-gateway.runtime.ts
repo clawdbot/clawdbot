@@ -49,7 +49,6 @@ function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entr
 }
 
 function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const defaults = cfg.agents?.defaults ?? {};
   return {
     ...cfg,
     plugins: cfg.plugins
@@ -67,20 +66,11 @@ function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig 
             memory: "none",
           },
         },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        memorySearch: {
-          ...defaults.memorySearch,
-          enabled: false,
-          sync: {
-            ...defaults.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
+    memory: {
+      ...cfg.memory,
+      search: {
+        ...cfg.memory?.search,
+        enabled: false,
       },
     },
   };

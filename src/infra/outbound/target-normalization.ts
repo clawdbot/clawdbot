@@ -78,14 +78,6 @@ export function resolveReservedTargetLiteral(params: {
   return reserved.has(normalized) ? normalized : undefined;
 }
 
-function resetTargetNormalizerCacheForTests(): void {
-  targetNormalizerCacheByChannelId.clear();
-}
-
-export const testing = {
-  resetTargetNormalizerCacheForTests,
-} as const;
-
 function resolveTargetNormalizer(
   channelId: ChannelId,
   preparedPlugin?: ChannelPlugin,
@@ -142,12 +134,12 @@ export function normalizeTargetForProvider(
 /**
  * Directory target kinds accepted by plugin-backed target resolution.
  */
-export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-export type ResolvedPluginMessagingTarget = {
+type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;

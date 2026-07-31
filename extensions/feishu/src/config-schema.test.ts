@@ -1,6 +1,6 @@
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
+import { FeishuChannelConfigSchema, FeishuConfigSchema } from "./config-schema.js";
 
 // The NEGATIVE webhook fixtures below spread these bases and add
 // verificationToken separately so the GHSA-G353-MGV3-8PCJ opengrep pattern —
@@ -60,6 +60,34 @@ describe("FeishuConfigSchema webhook validation", () => {
     });
 
     expect(result.groupPolicy).toBe("open");
+  });
+
+  it("accepts the canonical disabled DM policy", () => {
+    expect(FeishuConfigSchema.parse({ dmPolicy: "disabled" }).dmPolicy).toBe("disabled");
+    expect(
+      FeishuConfigSchema.parse({ accounts: { work: { dmPolicy: "disabled" } } }).accounts?.work
+        ?.dmPolicy,
+    ).toBe("disabled");
+  });
+
+  it("exports legacy groupPolicy as a typed config input", () => {
+    const expected = {
+      anyOf: [
+        { type: "string", enum: ["open", "disabled", "allowlist"] },
+        { type: "string", const: "allowall" },
+      ],
+    };
+
+    expect(FeishuChannelConfigSchema.schema).toMatchObject({
+      properties: {
+        groupPolicy: expected,
+        accounts: {
+          additionalProperties: {
+            properties: { groupPolicy: expected },
+          },
+        },
+      },
+    });
   });
 
   it("rejects top-level webhook mode without verificationToken", () => {
@@ -202,8 +230,10 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 
   it("accepts replyInThread in group config", () => {
-    const result = FeishuGroupSchema.parse({ replyInThread: "enabled" });
-    expect(result.replyInThread).toBe("enabled");
+    const result = FeishuConfigSchema.parse({
+      groups: { "oc-group": { replyInThread: "enabled" } },
+    });
+    expect(result.groups?.["oc-group"]?.replyInThread).toBe("enabled");
   });
 
   it("accepts replyInThread in account config", () => {
@@ -221,6 +251,23 @@ describe("FeishuConfigSchema optimization flags", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts only boolean bot ingress", () => {
+    expect(FeishuConfigSchema.parse({ allowBots: true }).allowBots).toBe(true);
+    expect(() => FeishuConfigSchema.parse({ allowBots: "mentions" })).toThrow();
+  });
+
+  it("keeps VC auto-join default-off without forcing account overrides", () => {
+    const result = FeishuConfigSchema.parse({ accounts: { main: {} } });
+    expect(result.vcAutoJoin).toBeUndefined();
+    expect(result.accounts?.main?.vcAutoJoin).toBeUndefined();
+
+    expect(FeishuConfigSchema.parse({ vcAutoJoin: true }).vcAutoJoin).toBe(true);
+    expect(
+      FeishuConfigSchema.parse({ accounts: { main: { vcAutoJoin: true } } }).accounts?.main
+        ?.vcAutoJoin,
+    ).toBe(true);
   });
 
   it("accepts top-level and account-level nested streaming config", () => {

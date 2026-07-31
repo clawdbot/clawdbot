@@ -1,7 +1,3 @@
-export const ACTIONS_ARTIFACT_API_VERSION: "2026-03-10";
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES: number;
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES: number;
-
 export type ArtifactArchivePolicy = {
   expectedEntries?: readonly string[];
   minEntries?: number;
