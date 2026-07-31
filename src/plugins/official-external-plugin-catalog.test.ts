@@ -2147,6 +2147,30 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists Mistral with its model and capability provider contracts", () => {
+    const mistral = expectCatalogEntry("mistral");
+    const manifest = getOfficialExternalPluginCatalogManifest(mistral);
+
+    expect(resolveOfficialExternalPluginId(mistral)).toBe("mistral");
+    expect(resolveOfficialExternalPluginInstall(mistral)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/mistral-provider",
+      npmSpec: "@openclaw/mistral-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers).toEqual([
+      expect.objectContaining({
+        id: "mistral",
+        envVars: ["MISTRAL_API_KEY"],
+      }),
+    ]);
+    expect(manifest?.contracts).toMatchObject({
+      memoryEmbeddingProviders: ["mistral"],
+      mediaUnderstandingProviders: ["mistral"],
+      realtimeTranscriptionProviders: ["mistral"],
+    });
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],

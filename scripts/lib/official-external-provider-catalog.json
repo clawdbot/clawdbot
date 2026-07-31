@@ -860,6 +860,59 @@
       }
     },
     {
+      "name": "@openclaw/mistral-provider",
+      "description": "OpenClaw Mistral provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "mistral",
+          "label": "Mistral"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "mistral-public",
+            "hosts": ["api.mistral.ai"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "mistral",
+            "name": "Mistral",
+            "docs": "/providers/mistral",
+            "categories": ["cloud", "llm"],
+            "envVars": ["MISTRAL_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "mistral-api-key",
+                "choiceLabel": "Mistral API key",
+                "groupId": "mistral",
+                "groupLabel": "Mistral AI",
+                "groupHint": "API key",
+                "optionKey": "mistralApiKey",
+                "cliFlag": "--mistral-api-key",
+                "cliOption": "--mistral-api-key <key>",
+                "cliDescription": "Mistral API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "memoryEmbeddingProviders": ["mistral"],
+          "mediaUnderstandingProviders": ["mistral"],
+          "realtimeTranscriptionProviders": ["mistral"]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/mistral-provider",
+          "npmSpec": "@openclaw/mistral-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",

@@ -342,7 +342,7 @@ describe("bundled plugin build entries", () => {
   it("excludes externalized model providers from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["byteplus", "cohere", "meta", "xiaomi"]) {
+    for (const pluginId of ["byteplus", "cohere", "meta", "mistral", "xiaomi"]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);

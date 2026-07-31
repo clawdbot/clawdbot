@@ -167,6 +167,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
   it.each([
     ["byteplus", "@openclaw/byteplus-provider", true],
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
+    ["mistral", "@openclaw/mistral-provider", true],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
     ["volcengine", "@openclaw/volcengine-provider", true],
