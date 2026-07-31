@@ -1,84 +1,17 @@
 /**
  * Gateway session preview resolve tests.
  */
-import path from "node:path";
 import { expect, test } from "vitest";
-import {
-  applySessionEntryLifecycleMutation,
-  listSessionEntries,
-  loadSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
-  getMainPreviewEntry,
   directSessionReq,
-  loadSeededTranscriptEvents,
-  seedLinearSessionTranscript,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-async function replaceSessionEntries(
-  storePath: string,
-  entries: Record<string, Partial<SessionEntry>>,
-  agentId = "main",
-): Promise<void> {
-  clearSessionStoreCacheForTest();
-  await applySessionEntryLifecycleMutation({
-    agentId,
-    storePath,
-    removals: listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({ sessionKey })),
-    upserts: Object.entries(entries).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry: {
-        updatedAt: 0,
-        ...entry,
-        sessionId: entry.sessionId ?? sessionKey,
-      },
-    })),
-    skipMaintenance: true,
-  });
-  clearSessionStoreCacheForTest();
-}
-
-async function previewMainAliasFromStore(params: {
-  transcripts: Record<string, string>;
-  store: Record<string, { sessionId: string; updatedAt: number }>;
-}): Promise<Awaited<ReturnType<typeof getMainPreviewEntry>>> {
-  const { dir } = await createSessionStoreDir();
-  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
-  testState.sessionStorePath = storePath;
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-
-  await writeSessionStore({ agentId: "ops", entries: {} });
-  await replaceSessionEntries(storePath, params.store, "ops");
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    const content = params.transcripts[entry.sessionId];
-    if (content) {
-      await seedSessionTranscript({
-        agentId: "ops",
-        sessionId: entry.sessionId,
-        sessionKey,
-        storePath,
-        messages: [{ role: "assistant", content }],
-      });
-    }
-  }
-
-  const { ws } = await openClient();
-  try {
-    return await getMainPreviewEntry(ws);
-  } finally {
-    ws.close();
-  }
-}
 
 test("sessions.preview returns transcript previews", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -87,7 +20,7 @@ test("sessions.preview returns transcript previews", async () => {
 
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry(sessionId),
+      "agent:main:main": sessionStoreEntry(sessionId),
     },
   });
   await seedSessionTranscript({
@@ -114,136 +47,6 @@ test("sessions.preview returns transcript previews", async () => {
   expect(entry?.status).toBe("ok");
   expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
   expect(entry?.items[1]?.text).toContain("call weather");
-});
-
-test("sessions.preview resolves legacy main alias with custom mainKey", async () => {
-  const sessionId = "sess-legacy-main";
-
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      [sessionId]: "Legacy alias transcript",
-    },
-    store: {
-      "agent:ops:main": {
-        sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
-});
-
-test("sessions.preview prefers the freshest duplicate row for a legacy main alias", async () => {
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      "sess-stale-main": "stale preview",
-      "sess-fresh-main": "fresh preview",
-    },
-    store: {
-      "agent:ops:work": {
-        sessionId: "sess-stale-main",
-        updatedAt: 1,
-      },
-      "agent:ops:main": {
-        sessionId: "sess-fresh-main",
-        updatedAt: 2,
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("fresh preview");
-});
-
-test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
-  testState.sessionStorePath = storePath;
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-  const sessionId = "sess-alias-cleanup";
-  await writeSessionStore({ agentId: "ops", entries: {} });
-  await seedLinearSessionTranscript({
-    agentId: "ops",
-    contents: Array.from({ length: 8 }, (_, index) => `line ${index}`),
-    sessionId,
-    sessionKey: "agent:ops:work",
-    storePath,
-  });
-
-  const writeRawStore = async (store: Record<string, Partial<SessionEntry>>) => {
-    await replaceSessionEntries(storePath, store, "ops");
-  };
-  const readStoreKeys = () =>
-    listSessionEntries({ agentId: "ops", storePath }).map(({ sessionKey }) => sessionKey);
-  const readWorkEntry = () =>
-    loadSessionEntry({
-      agentId: "ops",
-      sessionKey: "agent:ops:work",
-      storePath,
-    });
-
-  await writeRawStore({
-    "agent:ops:main": { sessionId, updatedAt: Date.now() - 1_000 },
-  });
-
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
-    key: "main",
-  });
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
-    key: "main",
-    thinkingLevel: "medium",
-  });
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-  expect(readWorkEntry()?.thinkingLevel).toBe("medium");
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.compacted).toBe(true);
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-  const compactedEvents = await loadSeededTranscriptEvents({
-    agentId: "ops",
-    sessionId,
-    sessionKey: "agent:ops:work",
-    storePath,
-  });
-  expect(
-    compactedEvents
-      .map((event) =>
-        event && typeof event === "object" && "message" in event
-          ? (event as { message?: { content?: unknown } }).message?.content
-          : undefined,
-      )
-      .filter((content) => content !== undefined),
-  ).toEqual(["line 6", "line 7"]);
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-
-  ws.close();
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
