@@ -218,9 +218,7 @@ function resolveManagedConnectionUrl(
   return matchesBindEndpoint ? undefined : normalizedUrl;
 }
 
-function inferManagedPortFromHttpUrl(
-  value: (key: string) => unknown,
-): number | undefined {
+function inferManagedPortFromHttpUrl(value: (key: string) => unknown): number | undefined {
   const httpUrl = optionalString(value("httpUrl"));
   if (!httpUrl) {
     return undefined;
