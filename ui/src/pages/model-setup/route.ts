@@ -17,21 +17,22 @@ async function loadModelSetupRouteData(
   const firstRun = new URLSearchParams(location.search).get("firstRun") === "1";
   const snapshot = context.gateway.snapshot;
   const client = snapshot.phase === "connected" ? snapshot.client : null;
+  const connection = { client, hello: snapshot.hello };
   if (
     !client ||
     !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
     isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
   ) {
-    return { state: { phase: "loading" }, client, firstRun };
+    return { state: { phase: "loading" }, connection, firstRun };
   }
-  const cached = consumeCachedModelSetupDetection(client);
+  const cached = consumeCachedModelSetupDetection(connection);
   if (cached) {
-    return { state: { phase: "ready", result: cached }, client, firstRun };
+    return { state: { phase: "ready", result: cached }, connection, firstRun };
   }
   try {
     return {
       state: { phase: "ready", result: await detectModelSetup(client) },
-      client,
+      connection,
       firstRun,
     };
   } catch (error) {
@@ -39,7 +40,7 @@ async function loadModelSetupRouteData(
       error instanceof Error && error.message.trim()
         ? error.message
         : t("modelSetup.errors.requestFailed");
-    return { state: { phase: "detect-error", message }, client, firstRun };
+    return { state: { phase: "detect-error", message }, connection, firstRun };
   }
 }
 
