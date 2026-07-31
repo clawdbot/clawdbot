@@ -20,11 +20,14 @@ describe("provider-catalog-live-runtime provider configs", () => {
   });
 
   it("rejects malformed UTF-8 bytes in live catalog responses and falls back to static rows", async () => {
+    // Build raw bytes with a 0xFE byte inside the JSON payload — 0xFE is never
+    // a valid UTF-8 lead byte, so fatal:true throws before JSON.parse.
     const encoder = new TextEncoder();
     const prefix = encoder.encode('{"data":[{"id":"model-a","label":"test-');
     const suffix = encoder.encode('"}]}');
     const body = new Uint8Array(prefix.length + 1 + suffix.length);
     body.set(prefix, 0);
+    // Inject an invalid UTF-8 byte before the suffix
     body[prefix.length] = 0xfe;
     body.set(suffix, prefix.length + 1);
 
@@ -49,6 +52,8 @@ describe("provider-catalog-live-runtime provider configs", () => {
       models,
     });
 
+    // The malformed UTF-8 causes readLiveModelCatalogJson to throw.
+    // buildLiveModelProviderConfig should catch it and return the static catalog.
     expect(result.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
     expect(result.apiKey).toBe("PROVIDER_API_KEY");
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);

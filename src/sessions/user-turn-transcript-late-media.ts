@@ -1,8 +1,6 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import type {
-  PersistedUserTurnMediaInput,
-  PersistedUserTurnMessage,
-} from "./user-turn-transcript.types.js";
+import { buildPersistedUserTurnMediaInputsFromFields } from "./user-turn-transcript.media-normalize.js";
+import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
 
 export function readUserTurnMessageMeta(
   message: AgentMessage,
@@ -15,13 +13,13 @@ export function readUserTurnMessageMeta(
 
 export function buildLateResolvedMediaMessage(params: {
   admittedMessage?: PersistedUserTurnMessage;
-  admittedMedia: PersistedUserTurnMediaInput[];
   resolvedMessage: PersistedUserTurnMessage;
-  resolvedMedia: PersistedUserTurnMediaInput[];
 }): PersistedUserTurnMessage | undefined {
+  const admittedMedia = buildPersistedUserTurnMediaInputsFromFields(params.admittedMessage);
+  const resolvedMedia = buildPersistedUserTurnMediaInputsFromFields(params.resolvedMessage);
   if (
-    params.resolvedMedia.length === 0 ||
-    JSON.stringify(params.resolvedMedia) === JSON.stringify(params.admittedMedia)
+    resolvedMedia.length === 0 ||
+    JSON.stringify(resolvedMedia) === JSON.stringify(admittedMedia)
   ) {
     return undefined;
   }

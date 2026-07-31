@@ -7,11 +7,11 @@ import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/session-entry-runtime.js";
-import {
-  type AcpSessionRuntimeOptions,
-  type SessionAcpIdentity,
-  type SessionAcpMeta,
-  type SessionEntry,
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpMeta,
+  SessionEntry,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

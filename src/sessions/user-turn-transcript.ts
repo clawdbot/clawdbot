@@ -1,5 +1,4 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
@@ -11,14 +10,10 @@ import {
   buildLateResolvedMediaMessage,
   readUserTurnMessageMeta,
 } from "./user-turn-transcript-late-media.js";
-import {
-  normalizeStructuredMediaEntryForTranscript,
-  resolveTranscriptMediaPath,
-} from "./user-turn-transcript.media-normalize.js";
+import { normalizeStructuredMediaEntryForTranscript } from "./user-turn-transcript.media-normalize.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
-  PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
   UserTurnMessagePersistenceParams,
   UserTurnInput,
@@ -34,6 +29,7 @@ export type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
+export { buildPersistedUserTurnMediaInputsFromFields } from "./user-turn-transcript.media-normalize.js";
 
 export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
@@ -55,66 +51,6 @@ export function resolvePersistedUserTurnText(value: string | null | undefined): 
     return undefined;
   }
   return normalized;
-}
-
-function resolveTranscriptMediaType(params: {
-  explicitType: string | undefined;
-  mediaPath: string | undefined;
-  mediaUrl: string | undefined;
-}): string | undefined {
-  return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
-}
-
-export function buildPersistedUserTurnMediaInputsFromFields(
-  fields: PersistedUserTurnMessage | null | undefined,
-): PersistedUserTurnMediaInput[] {
-  if (!fields) {
-    return [];
-  }
-
-  const facts = readPersistedMediaFacts(fields) ?? [];
-  const normalizedMedia = facts.map((fact) => {
-    const rawPath = normalizeOptionalText(fact.path);
-    const mediaPath = rawPath
-      ? resolveTranscriptMediaPath(rawPath, normalizeOptionalText(fact.workspaceDir))
-      : undefined;
-    const url = normalizeOptionalText(fact.url);
-    if (!mediaPath && !url) {
-      return {};
-    }
-    const contentType = resolveTranscriptMediaType({
-      explicitType: normalizeOptionalText(fact.contentType),
-      mediaPath,
-      mediaUrl: url,
-    });
-    const media: PersistedUserTurnMediaInput = { contentType };
-    if (mediaPath) {
-      media.path = mediaPath;
-    }
-    if (url) {
-      media.url = url;
-    }
-    if (fact.kind) {
-      media.kind = fact.kind;
-    }
-    if (fact.fileName) {
-      media.fileName = fact.fileName;
-    }
-    if (fact.sizeBytes !== undefined) {
-      media.sizeBytes = fact.sizeBytes;
-    }
-    if (fact.durationMs !== undefined) {
-      media.durationMs = fact.durationMs;
-    }
-    if (fact.width !== undefined) {
-      media.width = fact.width;
-    }
-    if (fact.height !== undefined) {
-      media.height = fact.height;
-    }
-    return media;
-  });
-  return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
 }
 
 export function buildLateMediaAttachedProjection(message: AgentMessage): {
@@ -598,11 +534,7 @@ export function createUserTurnTranscriptRecorder(
         sentToProvider && !resolvedBeforeProvider
           ? buildLateResolvedMediaMessage({
               admittedMessage: runtimePersistedMessage ?? message,
-              admittedMedia: buildPersistedUserTurnMediaInputsFromFields(
-                runtimePersistedMessage ?? message,
-              ),
               resolvedMessage,
-              resolvedMedia: buildPersistedUserTurnMediaInputsFromFields(resolvedMessage),
             })
           : undefined;
       if (lateMediaMessage) {
