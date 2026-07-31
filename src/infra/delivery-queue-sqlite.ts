@@ -678,6 +678,8 @@ export function failPendingDeliveryQueueEntry(params: {
   lastError: string;
   entry: DeliveryQueueEntryState;
   failedEntry?: DeliveryQueueEntryState;
+  /** Persisted text to guard on when the caller cannot re-serialize the row. */
+  expectedEntryJson?: string;
   stateDir?: string;
 }): FailPendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
@@ -706,7 +708,7 @@ export function failPendingDeliveryQueueEntry(params: {
       .where("queue_name", "=", params.queueName)
       .where("id", "=", params.id)
       .where("status", "=", params.expectedStatus)
-      .where("entry_json", "=", JSON.stringify(params.entry)),
+      .where("entry_json", "=", params.expectedEntryJson ?? JSON.stringify(params.entry)),
   );
   return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
 }
