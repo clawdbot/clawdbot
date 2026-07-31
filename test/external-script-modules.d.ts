@@ -278,6 +278,7 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     checkout: string,
     expectedSha: string,
     sleep?: (ms: number) => void,
+    deployment?: GatewayDeployment | null,
   ): void;
   export function findExactMacTarget(
     processes: string,
