@@ -15,6 +15,46 @@ function fixtureHtml(): string {
   return `
     <main style="max-width: 1180px; margin: 0 auto; padding: 20px">
       <div class="claws-page stack">
+        <div class="claws-lifecycle-stack">
+          <section class="claws-lifecycle">
+            <div class="claws-lifecycle__heading">
+              <div><div class="claws-detail__heading">Discover Claws</div></div>
+            </div>
+            <form class="claws-catalog-search">
+              <input class="input" value="financial planning" aria-label="Search ClawHub" />
+              <button class="btn" type="button">Search</button>
+            </form>
+            <div class="claws-catalog-results">
+              <button class="claws-catalog-result" type="button">
+                <span>
+                  <strong>Financial Analyst</strong>
+                  <span class="muted">@openclaw/a-very-long-financial-analyst-package-name</span>
+                </span>
+                <span class="claws-catalog-result__meta"><span class="chip">1.2.0</span></span>
+              </button>
+            </div>
+            <div class="claws-catalog-detail">
+              <div><div class="claws-detail__title">Financial Analyst</div></div>
+              <dl class="claws-catalog-counts">
+                <div><dt>Workspace files</dt><dd>5</dd></div>
+                <div><dt>Skills</dt><dd>2</dd></div>
+                <div><dt>Plugins</dt><dd>1</dd></div>
+                <div><dt>MCP servers</dt><dd>1</dd></div>
+                <div><dt>Scheduled work</dt><dd>2</dd></div>
+              </dl>
+            </div>
+          </section>
+          <section class="claws-plan">
+            <div class="claws-lifecycle__heading"><strong>Change preview</strong><span class="chip">Ready</span></div>
+            <div class="claws-plan__actions-list">
+              <div class="claws-plan-action">
+                <span><strong>update</strong> workspace-file</span>
+                <span class="claws-plan-action__id">schemas/financial-quarterly-report-with-a-long-name.json</span>
+              </div>
+            </div>
+            <label class="claws-consent-row"><input type="checkbox" /><span>I reviewed the package risk</span></label>
+          </section>
+        </div>
         <section class="claws-summary">
           ${["Healthy", "Needs attention", "Managed", "Referenced"]
             .map(
@@ -101,7 +141,7 @@ describeBrowserLayout("Claws responsive layout", () => {
         .map((file) => readStyleSheet(file))
         .join("\n");
       await page.setContent(
-        `<!doctype html><html><head><style>${css}</style></head><body>${fixtureHtml()}</body></html>`,
+        `<!doctype html><html><head><style>${css}\nhtml, body { overflow: visible; height: auto; min-height: 100%; }</style></head><body>${fixtureHtml()}</body></html>`,
       );
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -110,8 +150,16 @@ describeBrowserLayout("Claws responsive layout", () => {
 
       const inventory = await page.locator(".claws-inventory").boundingBox();
       const detail = await page.locator(".claws-detail").boundingBox();
+      const catalog = await page.locator(".claws-catalog-detail").boundingBox();
+      const summary = await page.locator(".claws-summary").boundingBox();
+      const resource = await page.locator(".claws-resource").boundingBox();
       expect(inventory).not.toBeNull();
       expect(detail).not.toBeNull();
+      expect(catalog).not.toBeNull();
+      expect(summary).not.toBeNull();
+      expect(resource).not.toBeNull();
+      expect(summary!.y).toBeGreaterThan(catalog!.y);
+      expect(resource!.y).toBeGreaterThanOrEqual(detail!.y);
       if (width <= 760) {
         expect(detail!.y).toBeGreaterThanOrEqual(inventory!.y + inventory!.height - 1);
       } else {
