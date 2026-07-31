@@ -5747,8 +5747,10 @@ td.data-table-key-col {
   color: #4285f4;
 }
 
-.provider-brand-icon[data-provider-icon="llamacpp"] {
-  color: #ff8236;
+.provider-brand-icon[data-provider-icon="llamacpp"],
+.provider-brand-icon[data-provider-icon="lmstudio"],
+.provider-brand-icon[data-provider-icon="ollama"] {
+  color: var(--text-strong);
 }
 
 .provider-brand-icon[data-provider-icon="opencode"],

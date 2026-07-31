@@ -114,6 +114,13 @@ export function providerDisplayLabel(provider: string): string {
   return PROVIDER_DISPLAY_LABELS[provider] ?? formatRawProviderLabel(provider);
 }
 
+/** Provider id from a canonical `provider/model` reference, or null when absent. */
+export function providerIdFromModelRef(modelRef: string): string | null {
+  const separator = modelRef.indexOf("/");
+  const provider = separator > 0 ? modelRef.slice(0, separator).trim().toLowerCase() : "";
+  return provider || null;
+}
+
 /** Icon asset name for a (normalized, lowercase) provider id, or null when no brand mark ships. */
 function resolveProviderIconName(provider: string): string | null {
   const normalized = provider.trim().toLowerCase();
