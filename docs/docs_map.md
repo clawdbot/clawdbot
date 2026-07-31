@@ -3420,6 +3420,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: `agents.entries.*.contextLimits`
   - H4: skills.limits.maxSkillsPromptChars
   - H4: `agents.entries.*.skillsLimits.maxSkillsPromptChars`
+  - H3: agents.defaults.usageBudget
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
