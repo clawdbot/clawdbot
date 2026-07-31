@@ -440,7 +440,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(dictationButton.waitForExistence(timeout: 5))
         let composerSurface = app.otherElements["chat-composer-surface"]
         XCTAssertTrue(composerSurface.waitForExistence(timeout: 5))
-        let agentIdentity = try self.agentIdentity(in: app)
+        let agentIdentity = self.agentIdentity(in: app)
         XCTAssertTrue(agentIdentity.waitForExistence(timeout: 5))
         XCTAssertEqual(agentIdentity.value as? String, "Collapsed")
         agentIdentity.tap()
