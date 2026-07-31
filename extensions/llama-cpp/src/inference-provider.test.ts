@@ -235,6 +235,194 @@ describe("llama.cpp inference provider", () => {
       maxTokens: 2048,
       customStopTriggers: ["END"],
     });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("onResponseChunk");
+  });
+
+  it("streams reasoning and text before a result-only native tool call", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "First ",
+        tokens: [1],
+      });
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "reason.",
+        tokens: [2],
+      });
+      options.onTextChunk("Answer.");
+      return {
+        response: "Answer.",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(
+        { ...model, reasoning: true },
+        {
+          messages: [{ role: "user", content: "Why?", timestamp: 1 }],
+          tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
+        },
+      ),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        content: [
+          { type: "thinking", thinking: "First reason." },
+          { type: "text", text: "Answer." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+        ],
+      },
+    });
+    expect(events.find((event) => event.type === "thinking_delta")).toMatchObject({
+      contentIndex: 0,
+      partial: { content: [{ type: "thinking", thinking: "First " }] },
+    });
+    expect(events.find((event) => event.type === "toolcall_start")).toMatchObject({
+      contentIndex: 2,
+    });
+  });
+
+  it("closes native reasoning before streaming a completed tool call", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "Need current weather.",
+        tokens: [1],
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":"Paris"}',
+        done: true,
+      });
+      return {
+        response: "",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(
+        { ...model, reasoning: true },
+        {
+          messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+          tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
+        },
+      ),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "toolcall_start")).toMatchObject({
+      contentIndex: 1,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "thinking", thinking: "Need current weather." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+        ],
+      },
+    });
+  });
+
+  it("opens a new indexed block for every thought segment after visible text", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "First thought.",
+        tokens: [1],
+        segmentEndTime: new Date(1),
+      });
+      options.onTextChunk("First answer.");
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "Second thought.",
+        tokens: [2],
+        segmentEndTime: new Date(2),
+      });
+      options.onTextChunk("Second answer.");
+      return {
+        response: "First answer.Second answer.",
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(
+        { ...model, reasoning: true },
+        { messages: [{ role: "user", content: "Reason twice", timestamp: 1 }] },
+      ),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "thinking_start" || event.type === "text_start")
+        .map((event) => event.contentIndex),
+    ).toEqual([0, 1, 2, 3]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        content: [
+          { type: "thinking", thinking: "First thought." },
+          { type: "text", text: "First answer." },
+          { type: "thinking", thinking: "Second thought." },
+          { type: "text", text: "Second answer." },
+        ],
+      },
+    });
   });
 
   it("builds a JSON Schema grammar for tool-free responseFormat requests", async () => {
@@ -443,6 +631,11 @@ describe("llama.cpp inference provider", () => {
       "done",
     ]);
     const toolDeltas = events.filter((event) => event.type === "toolcall_delta");
+    expect(
+      events.find((event) => event.type === "toolcall_start")?.partial.content[1],
+    ).toMatchObject({
+      arguments: {},
+    });
     expect(toolDeltas).toMatchObject([
       { contentIndex: 1, delta: '{"city":', partial: { content: [{}, { arguments: {} }] } },
       {
@@ -549,6 +742,48 @@ describe("llama.cpp inference provider", () => {
       type: "done",
       reason: "length",
       message: { content: [], stopReason: "length" },
+    });
+  });
+
+  it("never lets completed native calls override the authoritative token-limit terminal", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":"Paris"}',
+        done: true,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 1,
+        functionName: "calendar",
+        paramsChunk: '{"day":',
+        done: false,
+      });
+      return {
+        response: "",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "maxTokens" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(model, {
+        messages: [{ role: "user", content: "Check both", timestamp: 1 }],
+        tools: [
+          { name: "weather", description: "Weather", parameters: { type: "object" } },
+          { name: "calendar", description: "Calendar", parameters: { type: "object" } },
+        ],
+      }),
+    );
+
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: {
+        stopReason: "length",
+        content: [],
+      },
     });
   });
 
@@ -707,6 +942,47 @@ describe("llama.cpp inference provider", () => {
 
     expect(mocks.context.getSequence).toHaveBeenCalledTimes(1);
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      scenario: "a smaller advertised model window",
+      model: { ...model, contextWindow: 4096, contextTokens: undefined },
+      expectedContextSize: { max: 4096 },
+      expectedGpuFit: 4096,
+    },
+    {
+      scenario: "the safe default below a larger advertised window",
+      model: { ...model, contextWindow: 32_768, contextTokens: undefined },
+      expectedContextSize: { max: 8192 },
+      expectedGpuFit: 8192,
+    },
+    {
+      scenario: "an explicit practical runtime cap",
+      model: { ...model, contextWindow: 8192, contextTokens: 3072 },
+      expectedContextSize: { max: 3072 },
+      expectedGpuFit: 3072,
+    },
+    {
+      scenario: "an explicitly configured native context size",
+      model: { ...model, contextTokens: 4096, params: { ...model.params, contextSize: 2048 } },
+      expectedContextSize: 2048,
+      expectedGpuFit: 2048,
+    },
+  ])("bounds native context and GPU allocation by $scenario", async (scenario) => {
+    await collectEvents(
+      await createLlamaCppStreamFn({})(scenario.model, {
+        messages: [{ role: "user", content: "Hi", timestamp: 1 }],
+      }),
+    );
+    expect(mocks.model.createContext).toHaveBeenCalledWith(
+      expect.objectContaining({ contextSize: scenario.expectedContextSize }),
+    );
+    expect(mocks.llama.loadModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gpuLayers: { fitContext: { contextSize: scenario.expectedGpuFit } },
+      }),
+    );
   });
 
   it("expands home-relative local model paths before resolving the file", async () => {

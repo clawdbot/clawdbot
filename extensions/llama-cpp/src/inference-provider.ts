@@ -5,6 +5,7 @@ import type {
   Llama,
   LlamaContext,
   LlamaContextSequence,
+  LlamaChatResponseChunk,
   LlamaChatResponseFunctionCallParamsChunk,
   LlamaModel,
 } from "node-llama-cpp";
@@ -221,10 +222,16 @@ function resolveContextSize(
   if (typeof configured === "number") {
     return configured;
   }
+  const advertisedCap =
+    typeof model.contextWindow === "number" && model.contextWindow > 0
+      ? Math.floor(model.contextWindow)
+      : DEFAULT_LLAMA_CPP_CONTEXT_SIZE;
+  // Advertised capacity is a ceiling, not permission to silently exceed the
+  // established local-memory default; explicit runtime caps can still opt in.
   const modelCap =
     typeof model.contextTokens === "number" && model.contextTokens > 0
       ? Math.floor(model.contextTokens)
-      : DEFAULT_LLAMA_CPP_CONTEXT_SIZE;
+      : Math.min(advertisedCap, DEFAULT_LLAMA_CPP_CONTEXT_SIZE);
   return { max: modelCap };
 }
 
@@ -298,6 +305,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
   return createPlainTextToolCallCompatWrapper((model, context, options) => {
     const stream = createAssistantMessageEventStream();
     let streamedText = "";
+    const streamedContent: AssistantMessage["content"] = [];
     let generationAborted = false;
     let started = false;
     let ended = false;
@@ -350,15 +358,12 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           { toolCall: ToolCall; contentIndex: number; partialArgs: string }
         >();
         let streamStarted = false;
-        let textStarted = false;
-        let textEnded = false;
+        let activeThinking: { contentIndex: number; thinking: string } | undefined;
+        let activeText: { contentIndex: number; text: string } | undefined;
         const partial = () =>
           buildMessage({
             model,
-            content: [
-              ...(streamedText ? [{ type: "text" as const, text: streamedText }] : []),
-              ...Array.from(streamedToolCalls.values(), ({ toolCall }) => toolCall),
-            ],
+            content: [...streamedContent],
             stopReason: "stop",
           });
         const ensureStreamStarted = () => {
@@ -368,31 +373,90 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           streamStarted = true;
           stream.push({ type: "start", partial: partial() });
         };
-        const closeTextBlock = () => {
-          if (!textStarted || textEnded) {
+        const closeThinkingBlock = () => {
+          if (!activeThinking) {
             return;
           }
-          textEnded = true;
+          const thinking = activeThinking;
+          activeThinking = undefined;
           stream.push({
-            type: "text_end",
-            contentIndex: 0,
-            content: streamedText,
+            type: "thinking_end",
+            contentIndex: thinking.contentIndex,
+            content: thinking.thinking,
             partial: partial(),
           });
+        };
+        const closeTextBlock = () => {
+          if (!activeText) {
+            return;
+          }
+          const text = activeText;
+          activeText = undefined;
+          stream.push({
+            type: "text_end",
+            contentIndex: text.contentIndex,
+            content: text.text,
+            partial: partial(),
+          });
+        };
+        const appendThinkingChunk = (chunk: LlamaChatResponseChunk) => {
+          if (chunk.type !== "segment" || chunk.segmentType !== "thought") {
+            return;
+          }
+          if (chunk.text) {
+            closeTextBlock();
+            if (!activeThinking) {
+              ensureStreamStarted();
+              activeThinking = { contentIndex: streamedContent.length, thinking: "" };
+              streamedContent.push({ type: "thinking", thinking: "" });
+              stream.push({
+                type: "thinking_start",
+                contentIndex: activeThinking.contentIndex,
+                partial: partial(),
+              });
+            }
+            activeThinking.thinking += chunk.text;
+            streamedContent[activeThinking.contentIndex] = {
+              type: "thinking",
+              thinking: activeThinking.thinking,
+            };
+            stream.push({
+              type: "thinking_delta",
+              contentIndex: activeThinking.contentIndex,
+              delta: chunk.text,
+              partial: partial(),
+            });
+          }
+          if (chunk.segmentEndTime) {
+            closeThinkingBlock();
+          }
         };
         const appendTextDelta = (delta: string) => {
           if (!delta) {
             return;
           }
-          if (!textStarted) {
+          closeThinkingBlock();
+          if (!activeText) {
             ensureStreamStarted();
-            textStarted = true;
-            stream.push({ type: "text_start", contentIndex: 0, partial: partial() });
+            activeText = { contentIndex: streamedContent.length, text: "" };
+            streamedContent.push({ type: "text", text: "" });
+            stream.push({
+              type: "text_start",
+              contentIndex: activeText.contentIndex,
+              partial: partial(),
+            });
           }
           streamedText += delta;
-          stream.push({ type: "text_delta", contentIndex: 0, delta });
+          activeText.text += delta;
+          streamedContent[activeText.contentIndex] = { type: "text", text: activeText.text };
+          stream.push({
+            type: "text_delta",
+            contentIndex: activeText.contentIndex,
+            delta,
+          });
         };
         const appendFunctionCallParamsChunk = (chunk: LlamaChatResponseFunctionCallParamsChunk) => {
+          closeThinkingBlock();
           closeTextBlock();
           let state = streamedToolCalls.get(chunk.callIndex);
           if (!state) {
@@ -404,10 +468,11 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
                 name: chunk.functionName,
                 arguments: {},
               },
-              contentIndex: (streamedText ? 1 : 0) + streamedToolCalls.size,
+              contentIndex: streamedContent.length,
               partialArgs: "",
             };
             streamedToolCalls.set(chunk.callIndex, state);
+            streamedContent.push(state.toolCall);
             stream.push({
               type: "toolcall_start",
               contentIndex: state.contentIndex,
@@ -422,6 +487,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
               ...state.toolCall,
               arguments: parseStreamingJson(state.partialArgs),
             };
+            streamedContent[state.contentIndex] = state.toolCall;
             stream.push({
               type: "toolcall_delta",
               contentIndex: state.contentIndex,
@@ -446,6 +512,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
             temperature: options?.temperature,
             customStopTriggers: options?.stop,
             onTextChunk: appendTextDelta,
+            ...(model.reasoning ? { onResponseChunk: appendThinkingChunk } : {}),
             ...(functions
               ? {
                   functions,
@@ -468,8 +535,13 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           if (!streamedText && result.response) {
             appendTextDelta(result.response);
           }
+          closeThinkingBlock();
           closeTextBlock();
-          const toolCalls: ToolCall[] = (result.functionCalls ?? []).map((call, callIndex) => {
+          // A max-token result can contain previously completed calls while a
+          // later call was truncated. Its terminal owns the entire generation.
+          const confirmedCalls =
+            result.metadata.stopReason === "maxTokens" ? [] : (result.functionCalls ?? []);
+          const toolCalls: ToolCall[] = confirmedCalls.map((call, callIndex) => {
             let state = streamedToolCalls.get(callIndex);
             const argumentsObject = normalizeArguments(call.params);
             if (!state) {
@@ -489,6 +561,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
               name: call.functionName,
               arguments: argumentsObject,
             };
+            streamedContent[state.contentIndex] = state.toolCall;
             // The dependency reports its final argument chunk before checking the
             // token budget; only this authoritative result can complete a call.
             stream.push({
@@ -499,17 +572,15 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
             });
             return state.toolCall;
           });
-          // A length terminal cancels unfinished argument blocks. Emitting an
-          // artificial toolcall_end here would expose a partial call as executable.
-          const content: AssistantMessage["content"] = [
-            ...(streamedText ? [{ type: "text" as const, text: streamedText }] : []),
-            ...toolCalls,
-          ];
+          const confirmedToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+          const content = streamedContent.filter(
+            (block) => block.type !== "toolCall" || confirmedToolCallIds.has(block.id),
+          );
           const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-            toolCalls.length > 0
-              ? "toolUse"
-              : result.metadata.stopReason === "maxTokens"
-                ? "length"
+            result.metadata.stopReason === "maxTokens"
+              ? "length"
+              : toolCalls.length > 0
+                ? "toolUse"
                 : "stop";
           const message = buildMessage({
             model,
@@ -530,7 +601,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           reason,
           error: buildMessage({
             model,
-            content: streamedText ? [{ type: "text", text: streamedText }] : [],
+            content: streamedContent.filter((block) => block.type !== "toolCall"),
             stopReason: reason,
             errorMessage,
           }),
