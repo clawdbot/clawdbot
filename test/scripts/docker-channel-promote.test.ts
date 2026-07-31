@@ -380,7 +380,12 @@ describe("Docker channel promotion", () => {
       "cancel-in-progress": false,
       queue: "max",
     });
-    expect(verifyAttestations.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(verifyAttestations.permissions).toEqual({
+      contents: "read",
+      packages: "write",
+      "security-events": "write",
+      actions: "read",
+    });
 
     const manifestTagStep = createManifest.steps?.find(
       (step) => step.name === "Resolve manifest tags",
