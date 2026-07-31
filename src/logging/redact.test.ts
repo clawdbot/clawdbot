@@ -967,6 +967,17 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("masks sig and x-* auth form body fields shared with the sibling redaction lists", () => {
+    const input =
+      "sig=short-sig-123&x-api-key=short-key-123&x-access-token=short-at-123&x-auth-token=short-authtok&safe=value";
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).toBe(
+      "sig=***&x-api-key=***&x-access-token=***&x-auth-token=***&safe=value",
+    );
+    expect(output).not.toContain("short-sig-123");
+    expect(output).not.toContain("short-key-123");
+  });
+
   it("masks URL userinfo and database connection-string passwords", () => {
     const input = [
       "https://browser-user:browser-password-1234567890@api.example.test/v1",
