@@ -386,16 +386,21 @@ describe("normalizeProviders", () => {
   it("fills missing cost.cacheRead and cost.cacheWrite with 0", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      type ConfigModel = NonNullable<
+        NonNullable<OpenClawConfig["models"]>["providers"]
+      >[string]["models"][number];
+      // Config accepts partial cost objects before catalog normalization; cast
+      // so the test can exercise the partial-cost-to-complete-cost path.
+      const partialCostModel = {
+        ...createModel({ id: "claude-sonnet-5" }),
+        cost: { input: 10, output: 50 },
+      } as ConfigModel;
+      const providers = {
         anthropic: {
-          models: [
-            createModel({
-              id: "claude-sonnet-5",
-              cost: { input: 10, output: 50 },
-            }),
-          ],
+          baseUrl: "https://api.anthropic.com",
+          models: [partialCostModel],
         },
-      };
+      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
       const normalized = normalizeProviders({ providers, agentDir });
       const models = normalized?.anthropic?.models;
@@ -409,8 +414,9 @@ describe("normalizeProviders", () => {
   it("does not touch a cost object that already has all fields", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      const providers = {
         anthropic: {
+          baseUrl: "https://api.anthropic.com",
           models: [
             createModel({
               id: "claude-sonnet-5",
@@ -418,7 +424,7 @@ describe("normalizeProviders", () => {
             }),
           ],
         },
-      };
+      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
       const normalized = normalizeProviders({ providers, agentDir });
       const models = normalized?.anthropic?.models;
@@ -432,8 +438,9 @@ describe("normalizeProviders", () => {
   it("does not add cost when the model has no cost", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      const providers = {
         anthropic: {
+          baseUrl: "https://api.anthropic.com",
           models: [
             createModel({
               id: "claude-sonnet-5",
@@ -441,7 +448,7 @@ describe("normalizeProviders", () => {
             }),
           ],
         },
-      };
+      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
       const normalized = normalizeProviders({ providers, agentDir });
       const models = normalized?.anthropic?.models;
