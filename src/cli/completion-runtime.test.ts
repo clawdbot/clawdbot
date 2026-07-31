@@ -2,7 +2,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -11,6 +11,7 @@ import {
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
@@ -113,6 +114,154 @@ describe("completion-runtime", () => {
     ).toBe(path.join(path.sep, ".zshrc"));
   });
 
+  it.skipIf(process.platform === "win32")(
+    "preserves Zsh and Fish symlink traversal before parent path components",
+    async () => {
+      for (const testCase of [
+        { shell: "zsh" as const, variable: "ZDOTDIR", profileName: ".zshrc" },
+        {
+          shell: "fish" as const,
+          variable: "XDG_CONFIG_HOME",
+          profileName: path.join("fish", "config.fish"),
+        },
+      ]) {
+        await withBashCompletionHome(async ({ homeDir }) => {
+          const profileParent = tempDirs.make(`openclaw-${testCase.shell}-symlink-profiles-`);
+          const nestedProfiles = path.join(profileParent, "nested");
+          const linkedProfiles = path.join(homeDir, "linked-profiles");
+          await fs.mkdir(nestedProfiles, { recursive: true });
+          await fs.symlink(nestedProfiles, linkedProfiles, "dir");
+
+          await withEnvAsync(
+            { [testCase.variable]: `${linkedProfiles}${path.sep}..` },
+            async () => {
+              const cachePath = resolveCompletionCachePath(testCase.shell, "openclaw");
+              await fs.mkdir(path.dirname(cachePath), { recursive: true });
+              await fs.writeFile(cachePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf8");
+
+              await installCompletion(testCase.shell, true, "openclaw");
+
+              const profilePath = path.join(profileParent, testCase.profileName);
+              await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
+              expect(resolveCompletionProfileHint(testCase.shell)).toBe(
+                `~${path.sep}linked-profiles${path.sep}..${path.sep}${testCase.profileName}`,
+              );
+            },
+          );
+        });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves every shell's default profile traversal through a symlinked HOME",
+    async () => {
+      const fixtureRoot = tempDirs.make("openclaw-completion-home-symlink-");
+      const realHome = path.join(fixtureRoot, "real-home");
+      const nestedHome = path.join(realHome, "nested");
+      const linkedHome = path.join(fixtureRoot, "linked-home");
+      await fs.mkdir(nestedHome, { recursive: true });
+      await fs.symlink(nestedHome, linkedHome, "dir");
+
+      for (const testCase of [
+        { shell: "zsh" as const, profileName: ".zshrc" },
+        { shell: "bash" as const, profileName: ".bash_profile" },
+        { shell: "fish" as const, profileName: path.join(".config", "fish", "config.fish") },
+        {
+          shell: "powershell" as const,
+          profileName: path.join(".config", "powershell", "Microsoft.PowerShell_profile.ps1"),
+        },
+      ]) {
+        const stateDir = tempDirs.make(`openclaw-${testCase.shell}-home-symlink-state-`);
+        await withEnvAsync(
+          {
+            HOME: `${linkedHome}${path.sep}..`,
+            USERPROFILE: `${linkedHome}${path.sep}..`,
+            OPENCLAW_STATE_DIR: stateDir,
+            XDG_CONFIG_HOME: undefined,
+            ZDOTDIR: undefined,
+          },
+          async () => {
+            const cachePath = resolveCompletionCachePath(testCase.shell, "openclaw");
+            await fs.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.writeFile(cachePath, `# cached ${testCase.shell} completion\n`, "utf8");
+
+            await installCompletion(testCase.shell, true, "openclaw");
+
+            const actualStartupProfile = path.join(realHome, testCase.profileName);
+            await expect(fs.readFile(actualStartupProfile, "utf8")).resolves.toContain(cachePath);
+            expect(resolveCompletionProfileHint(testCase.shell)).toBe(
+              testCase.shell === "powershell"
+                ? `${linkedHome}${path.sep}..${path.sep}${testCase.profileName}`
+                : `~/${testCase.profileName}`,
+            );
+          },
+        );
+      }
+    },
+  );
+
+  it.each(["relative-xdg", "~/relative-xdg"])(
+    "ignores invalid relative Fish XDG configuration roots: %s",
+    (configHome) => {
+      const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+      expect(
+        resolveCompletionProfilePath("fish", {
+          env: { HOME: homeDir, XDG_CONFIG_HOME: configHome },
+          homeDir: () => homeDir,
+        }),
+      ).toBe(path.join(homeDir, ".config", "fish", "config.fish"));
+    },
+  );
+
+  it("preserves significant trailing whitespace in an absolute Fish XDG directory", () => {
+    const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+    const configHome = path.join(path.sep, "tmp", "Fish Config ");
+    expect(
+      resolveCompletionProfilePath("fish", {
+        env: { HOME: homeDir, XDG_CONFIG_HOME: configHome },
+        homeDir: () => homeDir,
+      }),
+    ).toBe(path.join(configHome, "fish", "config.fish"));
+  });
+
+  it.each([
+    {
+      configHome: "C:\\Users\\Ada\\Fish Config",
+      expected: "C:\\Users\\Ada\\Fish Config\\fish\\config.fish",
+    },
+    {
+      configHome: "relative-fish",
+      expected: "C:\\Users\\Ada\\.config\\fish\\config.fish",
+    },
+    {
+      configHome: "\\\\fileserver\\profiles\\Fish Config",
+      expected: "\\\\fileserver\\profiles\\Fish Config\\fish\\config.fish",
+    },
+  ])("resolves Windows Fish profiles with Windows separators: $configHome", (testCase) => {
+    const homeDir = "C:\\Users\\Ada";
+    expect(
+      resolveCompletionProfilePath("fish", {
+        env: { HOME: homeDir, XDG_CONFIG_HOME: testCase.configHome },
+        homeDir: () => homeDir,
+        platform: "win32",
+      }),
+    ).toBe(testCase.expected);
+  });
+
+  it.each(["~/literal startup", "~root/startup", "-startup", "../startup"])(
+    "keeps relative Zsh profile hints literal: %s",
+    async (profileRoot) => {
+      await withEnvAsync({ HOME: "/tmp/openclaw-home", ZDOTDIR: profileRoot }, async () => {
+        const profilePath = path.join(profileRoot, ".zshrc");
+        const expected = profilePath.startsWith(`..${path.sep}`)
+          ? profilePath
+          : `.${path.sep}${profilePath}`;
+        expect(resolveCompletionProfileHint("zsh")).toBe(expected);
+      });
+    },
+  );
+
   it("resolves the documented Bash login profile when .bashrc is absent", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       expect(resolveCompletionProfilePath("bash")).toBe(path.join(homeDir, ".bash_profile"));
@@ -147,6 +296,25 @@ describe("completion-runtime", () => {
       expect(shell.stderr).toBe("");
       expect(shell.status).toBe(0);
       expect(shell.stdout).toContain("complete -W 'status' openclaw");
+    });
+  });
+
+  it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf8");
+      await fs.writeFile(path.join(homeDir, ".zshrc"), "", "utf8");
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        await installCompletion("zsh", false, "openclaw");
+        expect(log).toHaveBeenCalledWith(
+          "Completion installed. Restart your shell or run: source ~/.zshrc",
+        );
+      } finally {
+        log.mockRestore();
+      }
     });
   });
 
