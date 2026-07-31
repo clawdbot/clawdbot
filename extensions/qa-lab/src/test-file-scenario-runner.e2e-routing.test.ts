@@ -31,6 +31,9 @@ describe("QA native Vitest scenario routing", () => {
     };
 
     try {
+      const requestedTestFile = path.join(repoRoot, testPath);
+      await fs.mkdir(path.dirname(requestedTestFile), { recursive: true });
+      await fs.writeFile(requestedTestFile, "// native scenario fixture\n", "utf8");
       const result = await runQaTestFileScenarios({
         repoRoot,
         outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", scenario.id),

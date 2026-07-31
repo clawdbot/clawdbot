@@ -121,13 +121,24 @@ async function makeTempRepo(prefix: string) {
 
 async function writeNativeVitestReport(
   command: QaScenarioCommandExecution,
-  counts: { failed?: number; passed: number; testFilePath?: string; testName?: string },
+  counts: {
+    createRequestedTestFile?: boolean;
+    failed?: number;
+    passed: number;
+    testFilePath?: string;
+    testName?: string;
+  },
 ) {
   const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
   if (!reportArg) {
     return;
   }
   const requestedTestPath = command.args.find((arg) => arg.endsWith(".test.ts"));
+  if (requestedTestPath && counts.createRequestedTestFile !== false) {
+    const requestedTestFile = path.resolve(command.cwd, requestedTestPath);
+    await fs.mkdir(path.dirname(requestedTestFile), { recursive: true });
+    await fs.writeFile(requestedTestFile, "// native scenario fixture\n", "utf8");
+  }
   const testNamePatternIndex = command.args.indexOf("--testNamePattern");
   const testName =
     counts.testName ??
@@ -491,6 +502,37 @@ describe("qa test file scenario runner", () => {
 
       expect(result.results[0]).toMatchObject({
         failureMessage: expect.stringContaining("requested test file"),
+        status: "fail",
+      });
+      expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    },
+  );
+
+  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
+    "rejects a passing $executionKind report when the requested test file does not exist",
+    async ({ executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-missing-requested-test-`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command) => {
+          await writeNativeVitestReport(command, {
+            createRequestedTestFile: false,
+            passed: 1,
+          });
+          return { exitCode: 0, stdout: "missing test reportedly passed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage: expect.stringContaining("existing requested test file"),
         status: "fail",
       });
       expect(result.evidence.entries[0]?.result.status).toBe("fail");

@@ -67,12 +67,13 @@ export async function readNativeVitestExecutionFailure(params: {
   ) {
     return "Vitest exited successfully without reporting a successfully executed test.";
   }
+  const expectedTestPath = await fs
+    .realpath(path.resolve(params.repoRoot, params.scenario.execution.path))
+    .catch(() => undefined);
+  if (!expectedTestPath) {
+    return `Vitest exited successfully without an existing requested test file ${params.scenario.execution.path}.`;
+  }
   const canonicalRepoRoot = await fs.realpath(params.repoRoot);
-  const expectedTestPath = await canonicalizeNativeTestFilePath({
-    canonicalRepoRoot,
-    repoRoot: params.repoRoot,
-    testPath: params.scenario.execution.path,
-  });
   const matchingTestResult = (
     await Promise.all(
       (Array.isArray(testResults) ? testResults : []).map(async (result) => {
