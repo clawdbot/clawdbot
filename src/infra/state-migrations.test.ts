@@ -806,9 +806,9 @@ describe("state migrations", () => {
             // The host hands out only owner-bound lanes; a foreign channel has no entry.
             offeredChannelIds.push(queues.map((entry) => entry.channelId));
             const line = queues.find((entry) => entry.channelId === "line");
-            const queue = line?.openIngressQueue<{ note: string }>({ accountId: "default" });
+            const queue = line?.openChannelIngressQueue<{ note: string }>({ accountId: "default" });
             await queue?.enqueue("ingress-scope-test", { note: "owned" });
-            discovered.push(...(line?.listIngressQueueAccountIds() ?? []));
+            discovered.push(...(line?.listChannelIngressQueueAccountIds() ?? []));
             return null;
           },
           migrateLegacyState: () => ({ changes: [], warnings: [] }),

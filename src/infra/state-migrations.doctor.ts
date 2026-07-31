@@ -312,13 +312,20 @@ function createPluginDoctorStateMigrationContext(params: {
     },
     channelIngressQueues: ownedChannelIds.map((channelId) => ({
       channelId,
-      openIngressQueue: <TPayload>(options?: { accountId?: string }) =>
-        createChannelIngressQueue<TPayload>({
+      openChannelIngressQueue: <
+        TPayload,
+        TMetadata = unknown,
+        TCompletedMetadata = unknown,
+      >(options?: {
+        accountId?: string;
+      }) =>
+        createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
           channelId,
           ...(options?.accountId === undefined ? {} : { accountId: options.accountId }),
           stateDir,
         }),
-      listIngressQueueAccountIds: () => listChannelIngressQueueAccountIds({ channelId, stateDir }),
+      listChannelIngressQueueAccountIds: () =>
+        listChannelIngressQueueAccountIds({ channelId, stateDir }),
     })),
   };
 }

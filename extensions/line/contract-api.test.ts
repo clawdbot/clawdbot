@@ -23,13 +23,19 @@ function contextFor(stateDir: string): PluginDoctorStateMigrationContext {
     channelIngressQueues: [
       {
         channelId: "line",
-        openIngressQueue: <TPayload>(options?: { accountId?: string }) =>
-          createChannelIngressQueue<TPayload>({
+        openChannelIngressQueue: <
+          TPayload,
+          TMetadata = unknown,
+          TCompletedMetadata = unknown,
+        >(options?: {
+          accountId?: string;
+        }) =>
+          createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
             channelId: "line",
             ...(options?.accountId === undefined ? {} : { accountId: options.accountId }),
             stateDir,
           }),
-        listIngressQueueAccountIds: () =>
+        listChannelIngressQueueAccountIds: () =>
           listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
       },
     ],
