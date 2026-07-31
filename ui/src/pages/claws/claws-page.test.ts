@@ -14,6 +14,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import type { PendingClawOperation } from "./lifecycle-request.ts";
 import "./claws-page.ts";
 
 const status: ClawsStatusResult = {
@@ -39,7 +40,9 @@ type TestClawsPage = HTMLElement & {
   selectedAgentId: string | null;
   selectedAgentExplicit: boolean;
   plan: ClawLifecyclePlanResult | null;
+  pending: PendingClawOperation | null;
   operationGeneration: number;
+  applyPlan: () => Promise<void>;
   previewUpdate: () => void;
   selectInstalledAgent: (agentId: string | null, explicit: boolean) => void;
   searchCatalog: () => Promise<void>;
@@ -286,5 +289,63 @@ describe("ClawsPage", () => {
         source: { packageName: "financial-analyst", version: "1.1.0" },
       }),
     );
+  });
+
+  it("clears busy state when remove refresh auto-selects a remaining Claw", async () => {
+    let statusCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "claws.status") {
+        statusCalls += 1;
+        return {
+          ...status,
+          records:
+            statusCalls === 1
+              ? [installedRecord("analyst-a"), installedRecord("analyst-b")]
+              : [installedRecord("analyst-b")],
+        };
+      }
+      if (method === "claws.doctor") {
+        return doctor;
+      }
+      if (method === "claws.remove.apply") {
+        return {
+          schemaVersion: "openclaw.clawsGatewayApply.v1",
+          operation: "remove",
+          status: "complete",
+          agentId: "analyst-a",
+          message: "Removed.",
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createHarness({
+      methods: [
+        "claws.status",
+        "claws.doctor",
+        "claws.add.apply",
+        "claws.update.apply",
+        "claws.remove.apply",
+      ],
+      request: request as GatewayBrowserClient["request"],
+    });
+    const page = await mount(harness.context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("claws.doctor", {}));
+    page.selectedAgentId = "analyst-a";
+    page.pending = { operation: "remove", target: "analyst-a" };
+    page.plan = {
+      schemaVersion: "openclaw.clawsGatewayPlan.v1",
+      operation: "remove",
+      planIntegrity: "sha256:remove-plan",
+      target: { agentId: "analyst-a" },
+      actions: [],
+      capabilities: [],
+      blockers: [],
+      riskAcknowledgementRequired: false,
+    };
+
+    await page.applyPlan();
+
+    expect(page.operationBusy).toBe(false);
+    expect(page.selectedAgentId).toBe("analyst-b");
   });
 });

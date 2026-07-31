@@ -157,11 +157,18 @@ class ClawsPage extends OpenClawLightDomElement {
     return this.status?.records.find((record) => record.agentId === this.selectedAgentId) ?? null;
   }
 
-  private selectInstalledAgent(agentId: string | null, explicit: boolean) {
+  private selectInstalledAgent(
+    agentId: string | null,
+    explicit: boolean,
+    options: { invalidateOperation?: boolean } = {},
+  ) {
     if (this.selectedAgentId === agentId && this.selectedAgentExplicit === explicit) {
       return;
     }
-    this.operationGeneration += 1;
+    if (options.invalidateOperation !== false) {
+      this.operationGeneration += 1;
+      this.operationBusy = false;
+    }
     this.selectedAgentId = agentId;
     this.selectedAgentExplicit = explicit;
     this.cancelPlan();
@@ -209,7 +216,9 @@ class ClawsPage extends OpenClawLightDomElement {
       this.status = statusPayload;
       this.doctor = doctorPayload;
       if (!statusPayload.records.some((record) => record.agentId === this.selectedAgentId)) {
-        this.selectInstalledAgent(statusPayload.records[0]?.agentId ?? null, false);
+        this.selectInstalledAgent(statusPayload.records[0]?.agentId ?? null, false, {
+          invalidateOperation: false,
+        });
       }
     } catch (error) {
       if (this.generation === generation) {
