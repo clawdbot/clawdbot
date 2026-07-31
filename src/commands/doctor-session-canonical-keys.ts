@@ -360,12 +360,11 @@ async function repairCanonicalSessionGroup(
   const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
   const preArchivedDirectories: string[] = [];
   if (winner.sqlitePath !== destination.sqlitePath) {
-    const winnerStore = byDatabase.get(winner.sqlitePath) ?? [winner];
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
         agentId: winner.agentId,
         canonicalKey: winner.canonicalKey,
-        sourceKeys: winnerStore.map((candidate) => candidate.sessionKey),
+        sourceKeys: [winner.sessionKey],
         storePath: winner.storePath,
       }),
       winner.entry.sessionId,
@@ -377,9 +376,6 @@ async function repairCanonicalSessionGroup(
       const destinationCollision = destinationStore.find(
         (candidate) => candidate.entry.sessionId === sessionId,
       );
-      const sourceCollision = winnerStore.find(
-        (candidate) => candidate.entry.sessionId === sessionId,
-      );
       const [destinationEvents, sourceEvents] = await Promise.all([
         loadTranscriptEvents({
           agentId: destinationCollision?.agentId ?? destination.agentId,
@@ -388,10 +384,10 @@ async function repairCanonicalSessionGroup(
           storePath: destinationCollision?.storePath ?? destination.storePath,
         }),
         loadTranscriptEvents({
-          agentId: sourceCollision?.agentId ?? winner.agentId,
+          agentId: winner.agentId,
           sessionId,
-          sessionKey: sourceCollision?.sessionKey ?? winner.sessionKey,
-          storePath: sourceCollision?.storePath ?? winner.storePath,
+          sessionKey: winner.sessionKey,
+          storePath: winner.storePath,
         }),
       ]);
       const destinationContent = serializeJsonlLines(
@@ -460,15 +456,14 @@ async function repairCanonicalSessionGroup(
         );
       }
       if (winner.sqlitePath !== destination.sqlitePath) {
-        const winnerStore = byDatabase.get(winner.sqlitePath) ?? [winner];
         copySessionOwnedStateForCanonicalRepair({
           canonicalKey: winner.canonicalKey,
           destinationDatabase,
           preferredEntry: selected.entry,
           preferredSessionKey: winner.sessionKey,
           source: winner,
-          sourceEntries: winnerStore.map((candidate) => candidate.entry),
-          sourceKeys: winnerStore.map((candidate) => candidate.sessionKey),
+          sourceEntries: [winner.entry],
+          sourceKeys: [winner.sessionKey],
         });
       }
     },

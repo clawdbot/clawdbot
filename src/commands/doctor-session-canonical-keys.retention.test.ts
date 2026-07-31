@@ -16,7 +16,7 @@ import { insertLegacySession } from "./doctor-session-canonical-keys.test-suppor
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("doctor canonical session-key retention repair", () => {
-  it("archives a cross-store loser before deleting it", async () => {
+  it("copies only a cross-store winner and archives its stale same-store duplicate", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-cross-store-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
@@ -28,12 +28,12 @@ describe("doctor canonical session-key retention repair", () => {
       } as OpenClawConfig;
 
       insertLegacySession({
-        agentId: "main",
+        agentId: "ops",
         entry: { sessionId: "winner", updatedAt: 20 },
         env,
         eventText: "winner history",
-        sessionKey: "agent:main:shared",
-        storePath: mainStore,
+        sessionKey: "agent:main:main",
+        storePath: opsStore,
       });
       insertLegacySession({
         agentId: "ops",
@@ -48,9 +48,9 @@ describe("doctor canonical session-key retention repair", () => {
 
       expect(report).toMatchObject({
         foundGroups: 1,
-        removedRows: 1,
+        removedRows: 2,
         repairedGroups: 1,
-        scannedStores: 2,
+        scannedStores: 1,
       });
       expect(
         loadExactSessionEntryReadOnly({
@@ -60,6 +60,14 @@ describe("doctor canonical session-key retention repair", () => {
           storePath: mainStore,
         })?.entry.sessionId,
       ).toBe("winner");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "ops",
+          env,
+          sessionKey: "agent:main:main",
+          storePath: opsStore,
+        }),
+      ).toBeUndefined();
       expect(
         loadExactSessionEntryReadOnly({
           agentId: "ops",
@@ -81,6 +89,15 @@ describe("doctor canonical session-key retention repair", () => {
           message: expect.objectContaining({ content: "winner history" }),
         }),
       ]);
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          env,
+          sessionId: "loser",
+          sessionKey: "agent:main:shared",
+          storePath: mainStore,
+        }),
+      ).resolves.toEqual([]);
       const loserArchive = report.archivedTranscriptDirectories
         .flatMap((directory) =>
           fs
