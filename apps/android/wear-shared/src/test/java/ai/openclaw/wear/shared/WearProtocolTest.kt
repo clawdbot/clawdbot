@@ -105,6 +105,12 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
+    assertEquals(10_000L, WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+    assertEquals(15_000L, WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS)
+    assertTrue(
+      WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS >
+        WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS,
+    )
     val realtimePath = WearProtocol.realtimeAudioChannelPath("attempt-7")
     assertEquals(
       "/openclaw/wear/v1/realtime/audio/9804dc90c374fd8e83c9b95a75611f9bec6e0c6ecdcbed5319d6491208417521",

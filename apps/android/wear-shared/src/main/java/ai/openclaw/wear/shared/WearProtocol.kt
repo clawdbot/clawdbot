@@ -29,6 +29,11 @@ object WearProtocol {
   const val MAX_REALTIME_AUDIO_FRAME_BYTES = 8 * 1024
   const val REALTIME_AUDIO_SAMPLE_RATE_HZ = 24_000
   const val REALTIME_AUDIO_FRAME_MILLIS = 20
+  const val RPC_REQUEST_TIMEOUT_MILLIS = 10_000L
+
+  // The Watch opens the audio channel before sending talk.start. Keep the
+  // pending phone-side channel through that RPC deadline plus setup margin.
+  const val REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS = RPC_REQUEST_TIMEOUT_MILLIS + 5_000L
 
   // Bound recursive JSON parsing at the untrusted Data Layer boundary.
   const val MAX_JSON_DEPTH = 32

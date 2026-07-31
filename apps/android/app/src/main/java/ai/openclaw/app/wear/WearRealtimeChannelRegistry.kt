@@ -82,7 +82,7 @@ internal class WearRealtimeChannelRegistry(
   private val scope: CoroutineScope,
   private val transport: WearRealtimeChannelTransport,
   private val connectionReadyTimeoutMillis: Long = DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS,
-  private val pendingConnectionTimeoutMillis: Long = DEFAULT_PENDING_CONNECTION_TIMEOUT_MILLIS,
+  private val pendingConnectionTimeoutMillis: Long = WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS,
   private val retireCallbackTimeoutMillis: Long = DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS,
 ) {
   private data class ChannelKey(
@@ -519,7 +519,6 @@ internal class WearRealtimeChannelRegistry(
   private companion object {
     const val CONNECTION_POLL_MILLIS = 25L
     const val DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS = 3_000L
-    const val DEFAULT_PENDING_CONNECTION_TIMEOUT_MILLIS = 3_000L
     const val DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS = 1_000L
     const val RETIRE_COMPLETION_TIMEOUT_MILLIS = 2_500L
   }
