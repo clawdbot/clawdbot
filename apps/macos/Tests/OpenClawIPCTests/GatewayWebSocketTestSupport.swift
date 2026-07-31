@@ -9,12 +9,15 @@ extension WebSocketTasking {
 }
 
 enum GatewayWebSocketTestSupport {
-    static func connectChallengeData(nonce: String = "test-nonce") -> Data {
+    static func connectChallengeData(
+        nonce: String = "test-nonce",
+        ts: Int64 = 1_800_000_000_000) -> Data
+    {
         let json = """
         {
           "type": "event",
           "event": "connect.challenge",
-          "payload": { "nonce": "\(nonce)" }
+          "payload": { "nonce": "\(nonce)", "ts": \(ts) }
         }
         """
         return Data(json.utf8)

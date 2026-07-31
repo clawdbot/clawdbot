@@ -1430,7 +1430,7 @@ function installControlUiMockGateway(
       this.dispatchEvent(new Event("open"));
       this.deliver({
         event: "connect.challenge",
-        payload: { nonce: "control-ui-e2e-nonce" },
+        payload: { nonce: "control-ui-e2e-nonce", ts: Date.now() },
         type: "event",
       });
     }

@@ -1915,7 +1915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1034,
+      "line": 1039,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Accept",
       "surface": "android",
@@ -1923,7 +1923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1834,
+      "line": 1849,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -1931,7 +1931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1834,
+      "line": 1849,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -28683,7 +28683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 64,
+      "line": 84,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Gateway HTTP error (%@)",
       "surface": "apple",
@@ -28691,7 +28691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 121,
+      "line": 141,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Ready to connect",
       "surface": "apple",
@@ -28699,7 +28699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 132,
+      "line": 152,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Ignored an expired direct connection setup. Send setup again from iPhone.",
       "surface": "apple",
@@ -28707,7 +28707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 145,
+      "line": 165,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Direct mode requires a trusted HTTPS Gateway endpoint.",
       "surface": "apple",
@@ -28715,7 +28715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 163,
+      "line": 183,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Could not save direct connection securely.",
       "surface": "apple",
@@ -28723,7 +28723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 180,
+      "line": 200,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Setup received. Connecting…",
       "surface": "apple",
@@ -28731,7 +28731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 196,
+      "line": 216,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Direct connection is off",
       "surface": "apple",
@@ -28739,7 +28739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 197,
+      "line": 217,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Use iPhone Settings to enable direct connection.",
       "surface": "apple",
@@ -28747,7 +28747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 225,
+      "line": 245,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Reconnects when OpenClaw is active",
       "surface": "apple",
@@ -28755,7 +28755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 279,
+      "line": 299,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Direct connection failed: %@",
       "surface": "apple",
@@ -28763,7 +28763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 281,
+      "line": 301,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "No usable Gateway endpoint",
       "surface": "apple",
@@ -28771,7 +28771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 297,
+      "line": 317,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Connecting directly…",
       "surface": "apple",
@@ -28779,7 +28779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 301,
+      "line": 321,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Could not save the watch device identity",
       "surface": "apple",
@@ -28787,7 +28787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 351,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "No watch device credential",
       "surface": "apple",
@@ -28795,7 +28795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 348,
+      "line": 368,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Could not save the watch device credential",
       "surface": "apple",
@@ -28803,7 +28803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 362,
+      "line": 382,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Connected directly",
       "surface": "apple",
@@ -28811,7 +28811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 466,
+      "line": 488,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Could not sign watch identity",
       "surface": "apple",
@@ -28819,7 +28819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 559,
+      "line": 581,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Invalid Gateway response",
       "surface": "apple",
@@ -28827,7 +28827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 584,
+      "line": 606,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Paired, but could not finish secure setup",
       "surface": "apple",
@@ -39939,7 +39939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 470,
+      "line": 474,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initial)]",
       "surface": "apple",
@@ -39947,7 +39947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 517,
+      "line": 521,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " — \\(option.hint!)",
       "surface": "apple",
@@ -39955,7 +39955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 524,
+      "line": 528,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initialIndices.map(String.init).joined(separator: \",\"))]",
       "surface": "apple",
