@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelayOptOutConfig,
   emitCodexNativePreToolUseFailureDiagnostic,
 } from "./native-hook-relay.js";
 
@@ -372,6 +373,34 @@ describe("Codex native hook relay config", () => {
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
+    });
+  });
+
+  it("builds an opt-out config that clears only the relay's own hooks", () => {
+    const config = buildCodexNativeHookRelayOptOutConfig();
+    // Disabling `features.hooks` switches off the whole Codex hook engine, which
+    // also suppresses independent user, project, plugin, and managed hooks the
+    // relay never installed. The opt-out must leave that flag alone, and must
+    // not force it back on either: the overlay merges last, so an explicit
+    // `true` would re-enable hooks for callers that deliberately disabled them.
+    expect(Object.hasOwn(config, "features.hooks")).toBe(false);
+    expect(config).toEqual({
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+      // Exact OpenClaw session-layer command keys, so lower-precedence copies of
+      // the injected commands cannot reappear through hook discovery.
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+        "<session-flags>/config.toml:stop:0:0": { enabled: false },
+      },
     });
   });
 

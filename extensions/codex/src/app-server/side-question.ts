@@ -68,9 +68,10 @@ import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js"
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
-  buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelayOptOutConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
   emitCodexNativePreToolUseFailureDiagnostic,
+  resolveCodexNativeHookRelayForApprovalPolicy,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
 import {
@@ -544,13 +545,20 @@ export async function runCodexAppServerSideQuestion(
     };
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
-    const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
-      configuredEvents: options.nativeHookRelay?.events,
+    // `approvalPolicy` is the effective policy for this fork, including any forced
+    // prompting override, so guard the operator's relay shape before any consumer
+    // reads it rather than at plugin-config parse time.
+    const guardedNativeHookRelay = resolveCodexNativeHookRelayForApprovalPolicy({
+      requested: options.nativeHookRelay,
       approvalPolicy,
     });
-    nativeHookRelay = options.nativeHookRelay
+    const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
+      configuredEvents: guardedNativeHookRelay?.events,
+      approvalPolicy,
+    });
+    nativeHookRelay = guardedNativeHookRelay
       ? registerCodexSideNativeHookRelay({
-          options: options.nativeHookRelay,
+          options: guardedNativeHookRelay,
           events: nativeHookRelayEvents,
           agentId: sessionAgentId,
           sessionId: params.sessionId,
@@ -588,12 +596,12 @@ export async function runCodexAppServerSideQuestion(
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
           events: nativeHookRelayEvents,
-          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          hookTimeoutSec: guardedNativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
         })
-      : options.nativeHookRelay?.enabled === false
-        ? buildCodexNativeHookRelayDisabledConfig()
+      : guardedNativeHookRelay?.enabled === false
+        ? buildCodexNativeHookRelayOptOutConfig()
         : undefined;
     const runtimeThreadConfig = buildCodexRuntimeThreadConfig(webSearchPlan.threadConfig, {
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,

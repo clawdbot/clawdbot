@@ -110,6 +110,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
       "src/gateway/android-node.capabilities.live.test.ts",
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
+      "src/gateway/gateway-codex-harness.native-hook-relay-proof.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
       "src/system-agent/rescue-channel.live.test.ts",
       "src/system-agent/setup-app-recommendations.live.test.ts",
