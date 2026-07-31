@@ -813,69 +813,112 @@ export function stripDowngradedToolCallText(text: string): string {
     return end;
   };
 
-  const stripToolCalls = (input: string): string => {
-    const toolCallRe = /\[Tool Call:[^\]]*\]/gi;
-    let result = "";
-    let cursor = 0;
-    for (const match of input.matchAll(toolCallRe)) {
-      const start = match.index ?? 0;
-      if (start < cursor) {
-        continue;
-      }
-      result += input.slice(cursor, start);
-      let index = start + match[0].length;
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input[index] === "\r") {
-        index += 1;
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      } else if (input[index] === "\n") {
-        index += 1;
-      }
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
-        index += 9;
-        if (input[index] === ":") {
-          index += 1;
-        }
-        if (input[index] === " ") {
-          index += 1;
-        }
-        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
-        if (end !== null) {
-          index = end;
-        }
-      }
-      if (
-        (input[index] === "\n" || input[index] === "\r") &&
-        (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
-      ) {
-        if (input[index] === "\r") {
-          index += 1;
-        }
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      }
-      cursor = index;
+  const codeRegions = findCodeRegions(text);
+
+  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments,
+  // skipping matches inside fenced code regions.
+  let cleaned = text;
+  const toolCallRe = /\[Tool Call:[^\]]*\]/gi;
+  let result = "";
+  let cursor = 0;
+  const toolCallMatches = [...cleaned.matchAll(toolCallRe)];
+  for (const match of toolCallMatches) {
+    const start = match.index ?? 0;
+    if (start < cursor) {
+      continue;
     }
-    result += input.slice(cursor);
-    return result;
-  };
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += cleaned.slice(cursor, start);
+    let index = start + match[0].length;
+    while (index < cleaned.length && (cleaned[index] === " " || cleaned[index] === "\t")) {
+      index += 1;
+    }
+    if (cleaned[index] === "\r") {
+      index += 1;
+      if (cleaned[index] === "\n") {
+        index += 1;
+      }
+    } else if (cleaned[index] === "\n") {
+      index += 1;
+    }
+    while (index < cleaned.length && (cleaned[index] === " " || cleaned[index] === "\t")) {
+      index += 1;
+    }
+    if (normalizeLowercaseStringOrEmpty(cleaned.slice(index, index + 9)) === "arguments") {
+      index += 9;
+      if (cleaned[index] === ":") {
+        index += 1;
+      }
+      if (cleaned[index] === " ") {
+        index += 1;
+      }
+      const end = consumeJsonish(cleaned, index, { allowLeadingNewlines: true });
+      if (end !== null) {
+        index = end;
+      }
+    }
+    if (
+      (cleaned[index] === "\n" || cleaned[index] === "\r") &&
+      (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
+    ) {
+      if (cleaned[index] === "\r") {
+        index += 1;
+      }
+      if (cleaned[index] === "\n") {
+        index += 1;
+      }
+    }
+    cursor = index;
+  }
+  result += cleaned.slice(cursor);
+  cleaned = result;
 
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
+  // Remove [Tool Result for ID ...] blocks and their content,
+  // skipping matches inside fenced code regions.
+  const toolResultRe = /\[Tool Result for ID[^\]]*\]\n?/gi;
+  result = "";
+  cursor = 0;
+  const toolResultMatches = [...cleaned.matchAll(toolResultRe)];
+  for (const match of toolResultMatches) {
+    const start = match.index ?? 0;
+    if (start < cursor) {
+      continue;
+    }
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += cleaned.slice(cursor, start);
+    let idx = start + match[0].length;
+    const tail = cleaned.slice(idx);
+    const nextTool = /\n*\[Tool /gi.exec(tail);
+    const skipLen = nextTool ? nextTool.index : cleaned.length - idx;
+    idx += skipLen;
+    cursor = idx;
+  }
+  result += cleaned.slice(cursor);
+  cleaned = result;
 
-  // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] markers (self-contained within brackets).
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+  // Remove [Historical context: ...] markers (self-contained within brackets),
+  // skipping matches inside fenced code regions.
+  const histRe = /\[Historical context:[^\]]*\]\n?/gi;
+  result = "";
+  cursor = 0;
+  const histMatches = [...cleaned.matchAll(histRe)];
+  for (const match of histMatches) {
+    const start = match.index ?? 0;
+    if (start < cursor) {
+      continue;
+    }
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += cleaned.slice(cursor, start);
+    cursor = start + match[0].length;
+  }
+  result += cleaned.slice(cursor);
+  cleaned = result;
 
   return cleaned.trim();
 }
