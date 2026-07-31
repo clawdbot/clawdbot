@@ -211,10 +211,13 @@ describe("ensureConfigReady", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
-  it("keeps logs config guard reads non-observing", async () => {
+  it("keeps logs config guard reads non-observing and independent of plugin state", async () => {
     await runEnsureConfigReady(["logs"]);
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
   });
 
   it("keeps remote gateway call config reads non-observing", async () => {
