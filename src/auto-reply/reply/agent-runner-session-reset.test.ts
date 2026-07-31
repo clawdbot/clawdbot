@@ -291,7 +291,6 @@ describe("resetReplyRunSession", () => {
 
   it("uses the same SQLite marker and appends a boundary over the kept DM tail", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "agent:main:main";
     const oldSessionId = "old-session";
     const oldSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
@@ -358,7 +357,6 @@ describe("resetReplyRunSession", () => {
 
   it("migrates an unreadable legacy transcript target to the SQLite reset boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "agent:main:main";
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
     await fs.mkdir(unreadableReplaySource);
     const sessionEntry: SessionEntry = {
@@ -400,7 +398,6 @@ describe("resetReplyRunSession", () => {
 
   it("replaces a SQLite marker for a different transcript target", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "agent:main:main";
     const sessionId = "current-session";
     const staleMarker = formatSqliteSessionFileMarker({
       agentId: "main",

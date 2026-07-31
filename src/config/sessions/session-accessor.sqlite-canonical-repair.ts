@@ -353,7 +353,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...windows.flatMap((row) => (row.primary_conversation_id ? [row.primary_conversation_id] : [])),
     ...sessionLinks.map((row) => row.conversation_id),
   ]);
-  const sourceKeyReferences = new Set(sourceKeys.flatMap((key) => [key, key.trim()]));
+  const sourceKeyReferences = new Set(sourceKeys);
   const deliverySourceKeys = [...sourceKeyReferences].filter(Boolean);
   const deliveries = executeSqliteQuerySync(
     params.source.db,

@@ -9,8 +9,12 @@ import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
@@ -53,6 +57,26 @@ describe("doctor canonical session-key retention repair", () => {
         sessionKey: "agent:main:main ",
         storePath: opsStore,
       });
+      const sourceDatabase = openOpenClawAgentDatabase({
+        agentId: "ops",
+        env,
+        path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
+      });
+      for (const [label, sourceSessionKey] of [
+        ["winner", "agent:main:main "],
+        ["loser", "agent:main:main"],
+      ] as const) {
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES (?, 'webchat', 'default', 'direct', ?, ?, '{}', 10, 10)",
+          )
+          .run(`${label}-conversation`, label, label);
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES (?, 'turn', ?, ?, ?, 'sent', 10, 10)",
+          )
+          .run(`${label}-operation`, `${label}-conversation`, sourceSessionKey, `${label}-hash`);
+      }
       insertLegacySession({
         agentId: "ops",
         entry: { sessionId: "loser", updatedAt: 10 },
@@ -116,6 +140,18 @@ describe("doctor canonical session-key retention repair", () => {
           storePath: mainStore,
         }),
       ).resolves.toEqual([]);
+      const destinationDatabase = openOpenClawAgentDatabase({
+        agentId: "main",
+        env,
+        path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
+      });
+      expect(
+        destinationDatabase.db
+          .prepare(
+            "SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id",
+          )
+          .all(),
+      ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
       const loserArchive = report.archivedTranscriptDirectories
         .flatMap((directory) =>
           fs
