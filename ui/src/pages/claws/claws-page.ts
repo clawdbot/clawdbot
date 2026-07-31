@@ -167,7 +167,6 @@ class ClawsPage extends OpenClawLightDomElement {
     }
     if (options.invalidateOperation !== false) {
       this.operationGeneration += 1;
-      this.operationBusy = false;
     }
     this.selectedAgentId = agentId;
     this.selectedAgentExplicit = explicit;
@@ -183,7 +182,7 @@ class ClawsPage extends OpenClawLightDomElement {
     return matches.length > 1 && !this.selectedAgentExplicit;
   }
 
-  private async refresh() {
+  private async refresh(options: { preserveOperation?: boolean } = {}) {
     const gateway = this.gatewaySource;
     const client = this.client;
     if (
@@ -217,7 +216,7 @@ class ClawsPage extends OpenClawLightDomElement {
       this.doctor = doctorPayload;
       if (!statusPayload.records.some((record) => record.agentId === this.selectedAgentId)) {
         this.selectInstalledAgent(statusPayload.records[0]?.agentId ?? null, false, {
-          invalidateOperation: false,
+          invalidateOperation: options.preserveOperation === true ? false : undefined,
         });
       }
     } catch (error) {
@@ -405,7 +404,7 @@ class ClawsPage extends OpenClawLightDomElement {
       this.selectedAgentId = payload.operation === "remove" ? null : payload.agentId;
       this.selectedAgentExplicit = false;
       this.cancelPlan();
-      await this.refresh();
+      await this.refresh({ preserveOperation: true });
     });
   }
 
@@ -438,7 +437,7 @@ class ClawsPage extends OpenClawLightDomElement {
             class="btn"
             type="button"
             title=${t("clawsPage.refresh")}
-            ?disabled=${!this.connected || !this.available || this.loading}
+            ?disabled=${!this.connected || !this.available || this.loading || this.operationBusy}
             @click=${() => void this.refresh()}
           >
             ${this.loading ? t("common.refreshing") : t("common.refresh")}
@@ -500,6 +499,7 @@ class ClawsPage extends OpenClawLightDomElement {
             connected: this.connected,
             available: this.available,
             loading: this.loading,
+            busy: this.operationBusy,
             error: this.connected && this.available ? null : this.error,
             status: this.status,
             doctor: this.doctor,
