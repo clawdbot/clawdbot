@@ -26,6 +26,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { hasReplayableChatSend } from "./chat-send-pre-admission.js";
 import { chatHandlers } from "./chat.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -353,7 +354,14 @@ async function handleSessionSend(params: {
   }
 
   let interruptedActiveRun = false;
-  if (params.interruptIfActive) {
+  // An explicit retry may already own a chat.send that the handler will replay.
+  // Interrupting first aborts whatever is running now - an unrelated turn, or the
+  // very run this retry is replaying - and clears its queued follow-ups, so let
+  // the owning handler replay before steering, as the archive guard does above.
+  const replaysExistingChatSend =
+    explicitIdempotencyKey !== undefined &&
+    hasReplayableChatSend(params.context, explicitIdempotencyKey);
+  if (params.interruptIfActive && !replaysExistingChatSend) {
     const interruptResult = await interruptSessionRunIfActive({
       req: params.req,
       context: params.context,
