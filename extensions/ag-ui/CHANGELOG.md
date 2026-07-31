@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Security
+- **Dropped the retired `CLAWDBOT_GATEWAY_TOKEN` fallback** from gateway-secret
+  resolution. The gateway ignores legacy `CLAWDBOT_*` / `MOLTBOT_*` names
+  everywhere else, so accepting one here gave this authenticated HTTP surface a
+  second, undocumented credential source that the rest of the gateway rejects.
+  Only `gateway.auth.token` and `OPENCLAW_GATEWAY_TOKEN` are honoured now.
+
 ### Fixed
 - **Frontend-tool transcript order** — the assistant's closing text rendered
   ABOVE its own frontend-tool card, inverting the reference integrations. Tool
