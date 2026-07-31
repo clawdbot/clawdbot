@@ -72,13 +72,21 @@ const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 
 async function acquireEmbeddingProviderLease(
   scopeKey: string,
+  signal: AbortSignal,
   create: () => Promise<MemoryEmbeddingProvider>,
   holdForCleanup: (provider: MemoryEmbeddingProvider) => boolean,
 ): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
   const createLease = async () => {
+    signal.throwIfAborted();
     await drainEmbeddingProviderRetirements(scopeKey);
+    // Keep the cleanup fence intact, but do not create a provider for an aborted waiter.
+    signal.throwIfAborted();
     const provider = await create();
+    if (signal.aborted) {
+      await closeEmbeddingProvider(scopeKey, provider);
+      signal.throwIfAborted();
+    }
     if (!holdForCleanup(provider)) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
@@ -138,6 +146,18 @@ function retainEmbeddingProviderForRetirement(
   const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
   pending.add(provider);
   EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
+}
+
+async function closeEmbeddingProvider(
+  scopeKey: string,
+  provider: MemoryEmbeddingProvider,
+): Promise<void> {
+  try {
+    await provider.close?.();
+  } catch (closeErr) {
+    retainEmbeddingProviderForRetirement(scopeKey, provider);
+    logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
+  }
 }
 
 export async function drainRetainedOpenAiEmbeddingProviders(): Promise<void> {
@@ -458,6 +478,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   try {
     const { provider, release } = await acquireEmbeddingProviderLease(
       providerScopeKey,
+      abortController.signal,
       async () =>
         await createConfiguredEmbeddingProvider({
           cfg,
@@ -500,12 +521,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       });
     } finally {
       try {
-        await provider.close?.();
-      } catch (closeErr) {
-        retainEmbeddingProviderForRetirement(providerScopeKey, provider);
-        logWarn(
-          `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
-        );
+        await closeEmbeddingProvider(providerScopeKey, provider);
       } finally {
         release();
       }

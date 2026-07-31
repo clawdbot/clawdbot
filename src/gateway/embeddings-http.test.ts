@@ -723,6 +723,67 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
   });
 
+  it("does not create a provider for a disconnected request waiting behind cleanup", async () => {
+    Reflect.set(openAiAdapter, "transport", "local");
+    let releaseClose: () => void = () => {};
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+      await closeGate;
+    });
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
+    let secondRequest: ReturnType<typeof httpRequest> | undefined;
+
+    try {
+      await vi.waitFor(() =>
+        expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
+      );
+
+      const body = JSON.stringify({ model: "openclaw/default", input: "second" });
+      secondRequest = httpRequest({
+        host: "127.0.0.1",
+        port: enabledPort,
+        path: "/v1/embeddings",
+        method: "POST",
+        headers: {
+          authorization: "******",
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          ...WRITE_SCOPE_HEADER,
+        },
+      });
+      secondRequest.on("error", () => {});
+      const secondRequestFinished = createDeferred();
+      secondRequest.once("finish", secondRequestFinished.resolve);
+      const secondRequestClosed = createDeferred();
+      secondRequest.once("close", secondRequestClosed.resolve);
+      secondRequest.end(body);
+      await secondRequestFinished.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      secondRequest.destroy();
+      await secondRequestClosed.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      releaseClose();
+      expect((await firstPromise).status).toBe(200);
+
+      const next = await postEmbeddings({ model: "openclaw/default", input: "next" });
+      expect(next.status).toBe(200);
+      expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+    } finally {
+      releaseClose();
+      secondRequest?.destroy();
+      Reflect.set(openAiAdapter, "transport", "remote");
+    }
+  });
+
   it("serializes cleanup when a remote request creates a local provider", async () => {
     let releaseClose: () => void = () => {};
     const closeGate = new Promise<void>((resolve) => {
