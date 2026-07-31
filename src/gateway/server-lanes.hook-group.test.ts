@@ -119,6 +119,67 @@ describe("cron+hook capacity group", () => {
     await Promise.all(runs);
   });
 
+  it("hooks-off immediately drains cron work released by the teardown", async () => {
+    // Teardown must WAKE the lanes it frees, not merely delete membership.
+    // Asserting only `group === undefined` on an idle lane would pass even if
+    // clearGroups forgot to add its former members to the commit-drain set,
+    // leaving released work stuck until some unrelated enqueue pokes the lane.
+    publish(HOOKS_ON);
+
+    const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
+    const runs = gates.map((g) =>
+      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
+        warnAfterMs: 10_000,
+      }),
+    );
+    await settle();
+
+    // One short of the budget, with the last entry queued behind the hook's
+    // reservation rather than running.
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
+    );
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBe("sibling-reservation");
+
+    // Turning hooks off returns the reserved slot to cron. The queued entry
+    // must start on the publish itself.
+    publish(HOOKS_OFF);
+    await settle();
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(0);
+
+    for (const g of gates) g.release();
+    await Promise.all(runs);
+  });
+
+  it("clears the group on hooks-off even when the grouped lane is suspended", async () => {
+    // The teardown path publishes only lanes that are NOT suspended. With hooks
+    // off, `cron-nested` is the only lane that can be published, so if it is
+    // suspended the lane map is empty — and a guard that skips publication on
+    // an empty map would skip the group teardown with it. The stale group
+    // survives, and the suspended member resumes still paying a reservation for
+    // a hook lane that no longer receives work.
+    publish(HOOKS_ON);
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBe("cron-hooks");
+
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    seedClearedLaneResumeForTest(CommandLane.CronNested, {
+      resumeConcurrency: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+      resumeAtMs: Date.now() + 60_000,
+    });
+
+    // gatewayStart consults the cleared-resume map for the suspended set.
+    applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(HOOKS_OFF), { gatewayStart: true });
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
+  });
+
   it("removes the group when hooks are turned off by a config reload", async () => {
     publish(HOOKS_ON);
     expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBe("cron-hooks");

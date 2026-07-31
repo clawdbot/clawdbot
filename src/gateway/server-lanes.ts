@@ -85,7 +85,12 @@ export function applyGatewayLaneConcurrency(
     // saturation, not that hooks run concurrently with each other.
     grouped[CommandLane.HookDispatch] = concurrency.hookDispatch;
   }
-  if (Object.keys(grouped).length > 0) {
+  // Publish even when `grouped` is empty. With hooks off, `cron-nested` is the
+  // only lane that can enter `grouped`, so if it happens to be suspended the
+  // guard would skip publication entirely — leaving a previously installed
+  // `cron-hooks` group alive. The suspended member would then resume still
+  // paying a reservation for a hook lane that no longer receives work.
+  if (Object.keys(grouped).length > 0 || !hooksEnabled) {
     publishLaneConfiguration({
       lanes: grouped,
       // Opt-in. With hooks disabled there is no hook work to protect, so no

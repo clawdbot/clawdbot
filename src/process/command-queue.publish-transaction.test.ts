@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+  clearCommandLane,
   clearCommandLaneGroup,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -126,9 +127,54 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
 
     for (const g of gates) g.release();
-    // The lane never opened, so these stay queued; clear them for teardown.
-    resetAllLanes();
+    // The lane never opened, so this work is still queued. resetAllLanes
+    // PRESERVES queued entries by design, so it would never settle these —
+    // clearCommandLane rejects them instead.
+    clearCommandLane(CRON);
     await Promise.allSettled(runs);
+  });
+
+  test("a rejected configuration does not leave lane maxima mutated", async () => {
+    // Stronger than asserting activeCount === 0 after the throw: that only
+    // proves no commit-time drain ran, not that the lane was left alone. If
+    // phase 1 widens a lane and group validation then throws, the lane sits at
+    // the new width governed by NO group, and the next unrelated drain trigger
+    // dispatches the preserved queue ungoverned.
+    setCommandLaneConcurrency(CRON, 0);
+    const gates = Array.from({ length: 4 }, () => gate());
+    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    await settle();
+    expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
+
+    expect(() =>
+      publishLaneConfiguration({
+        lanes: { [CRON]: 8 },
+        groups: {
+          [GROUP]: {
+            budget: 2,
+            members: [CRON, HOOK],
+            reservations: { [CRON]: 2, [HOOK]: 1 },
+          },
+        },
+      }),
+    ).toThrow(/reserves 3 slots but its budget is 2/);
+    await settle();
+
+    // The lane must be exactly as it was before the rejected publish.
+    expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
+    expect(getCommandLaneSnapshot(CRON).group).toBeUndefined();
+
+    // And a later drain trigger must not dispatch the queue that was preserved
+    // across the failed publish.
+    const extra = gate();
+    const extraRun = enqueueCommandInLane(CRON, async () => await extra.promise);
+    await settle();
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
+
+    for (const g of gates) g.release();
+    extra.release();
+    clearCommandLane(CRON);
+    await Promise.allSettled([...runs, extraRun]);
   });
 
   test("republishing a narrower budget does not admit beyond the new cap", async () => {
@@ -161,7 +207,7 @@ describe("publishLaneConfiguration", () => {
 
     for (const g of gates) g.release();
     extra.release();
-    resetAllLanes();
+    clearCommandLane(CRON);
     await Promise.allSettled([...runs, blocked]);
   });
 });

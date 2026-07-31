@@ -647,7 +647,7 @@ function drainGroupSiblings(lane: string): void {
  * from its group, or session suspend/resume would silently restore a member to
  * ungoverned concurrency.
  */
-export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): void {
+function validateCommandLaneGroupSpec(group: string, spec: CommandLaneGroupSpec): LaneGroupState {
   const members = spec.members.map((member) => normalizeLane(member));
   for (const member of members) {
     assertGroupEligibleLane(member);
@@ -671,17 +671,35 @@ export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): 
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
+  return { group, budget, members: new Set(members), reservations };
+}
+
+/** Install a validated group, detaching its members from any previous owner. */
+function installCommandLaneGroup(next: LaneGroupState): void {
   const { groups, groupByLane } = getGroupRegistry();
-  const previous = groups.get(group);
+  const previous = groups.get(next.group);
   if (previous) {
     for (const member of previous.members) {
       groupByLane.delete(member);
     }
   }
-  groups.set(group, { group, budget, members: new Set(members), reservations });
-  for (const member of members) {
-    groupByLane.set(member, group);
+  for (const member of next.members) {
+    // A lane may belong to at most one group. Without this, the old owner's
+    // `members` would still contain the lane and would keep counting its active
+    // tasks toward a budget it no longer participates in.
+    const owner = groupByLane.get(member);
+    if (owner && owner !== next.group) {
+      groups.get(owner)?.members.delete(member);
+    }
   }
+  groups.set(next.group, next);
+  for (const member of next.members) {
+    groupByLane.set(member, next.group);
+  }
+}
+
+export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): void {
+  installCommandLaneGroup(validateCommandLaneGroupSpec(group, spec));
 }
 
 /** Remove a group and release its members back to lane-local admission. */
@@ -836,6 +854,15 @@ export function publishLaneConfiguration(config: {
   /** Groups to remove as part of the same transaction. */
   clearGroups?: readonly string[];
 }): void {
+  // Phase 0 — validate EVERYTHING before mutating anything. Validating inside
+  // the install loop would leave already-widened lanes behind on a throw:
+  // governed by no group, and dispatching their preserved queue on the next
+  // unrelated drain trigger. Rejection must be a no-op, not a partial apply.
+  const validated: LaneGroupState[] = [];
+  for (const [group, spec] of Object.entries(config.groups ?? {})) {
+    validated.push(validateCommandLaneGroupSpec(group, spec));
+  }
+
   const touched = new Set<string>();
   // Phase 1 — install state with dispatch suppressed. Nothing may start here.
   for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
@@ -856,12 +883,10 @@ export function publishLaneConfiguration(config: {
       groups.delete(group);
     }
   }
-  for (const [group, spec] of Object.entries(config.groups ?? {})) {
-    // Validation throws BEFORE any drain, so a rejected configuration cannot
-    // leave lanes widened and dispatching under no group at all.
-    setCommandLaneGroup(group, spec);
-    for (const member of spec.members) {
-      touched.add(normalizeLane(member));
+  for (const next of validated) {
+    installCommandLaneGroup(next);
+    for (const member of next.members) {
+      touched.add(member);
     }
   }
   // Phase 2 — commit. Group membership and budgets are now final, so every
