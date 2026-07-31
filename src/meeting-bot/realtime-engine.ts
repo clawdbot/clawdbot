@@ -128,6 +128,7 @@ export async function startMeetingRealtimeEngine(params: {
   let clearCount = 0;
   let outputGeneration = 0;
   let outputWriteActive = false;
+  let outputTransportWriteStarted = false;
   let outputClearPending = 0;
   let outputClearAfterActive = false;
   let outputPendingBytes = 0;
@@ -277,6 +278,7 @@ export async function startMeetingRealtimeEngine(params: {
         if (stopped || next.generation !== outputGeneration) {
           return;
         }
+        outputTransportWriteStarted = true;
         await params.transport.writeOutput(audio);
       })
       .catch((error: unknown) => {
@@ -290,6 +292,7 @@ export async function startMeetingRealtimeEngine(params: {
       })
       .finally(() => {
         outputWriteActive = false;
+        outputTransportWriteStarted = false;
         if (next.generation === outputGeneration) {
           outputPendingBytes -= batchBytes;
           outputPendingFrames -= batchFrames;
@@ -316,7 +319,7 @@ export async function startMeetingRealtimeEngine(params: {
     }
     const token = Symbol("meeting-realtime-output-blocked");
     outputBlocked = { token };
-    outputClearAfterActive = outputWriteActive;
+    outputClearAfterActive = outputTransportWriteStarted;
     invalidateOutputQueue();
     return { blocked: true, token };
   };
