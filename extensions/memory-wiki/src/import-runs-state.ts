@@ -11,7 +11,7 @@ import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
 const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
 
-export type ChatGptImportRunEntry = {
+type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
   contentHash?: string;

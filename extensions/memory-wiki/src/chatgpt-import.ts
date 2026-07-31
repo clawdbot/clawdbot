@@ -116,7 +116,7 @@ export type ChatGptImportResult = {
   indexUpdatedFiles: string[];
 };
 
-export type ChatGptRollbackPreservedPage = {
+type ChatGptRollbackPreservedPage = {
   path: string;
   recoveryPath: string;
 };
@@ -723,10 +723,13 @@ async function writeTrackedImportPage(params: {
   if (params.existing === params.rendered) {
     return "skip";
   }
+  // Hash the exact import-owned bytes before writing. A later compile must not
+  // let a concurrent user save become the recorded rollback baseline.
+  const contentHash = hashChatGptImportContent(params.rendered);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   if (!params.existing) {
     await fs.writeFile(absolutePath, params.rendered, "utf8");
-    params.record.createdPaths.push({ path: params.relativePath });
+    params.record.createdPaths.push({ path: params.relativePath, contentHash });
     return "create";
   }
   const snapshotHash = createHash("sha1").update(params.relativePath).digest("hex").slice(0, 12);
@@ -738,6 +741,7 @@ async function writeTrackedImportPage(params: {
   params.record.updatedPaths.push({
     path: params.relativePath,
     snapshotPath: snapshotRelativePath,
+    contentHash,
   });
   return "update";
 }
@@ -843,10 +847,6 @@ export async function importChatGptConversations(params: {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
       const compile = await compileMemoryWikiVault(params.config);
       indexUpdatedFiles = compile.updatedFiles;
-      for (const entry of [...importRunRecord.createdPaths, ...importRunRecord.updatedPaths]) {
-        const written = await fs.readFile(path.join(params.config.vault.path, entry.path), "utf8");
-        entry.contentHash = hashChatGptImportContent(written);
-      }
       await writeImportRunRecord(params.config.vault.path, importRunRecord);
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
