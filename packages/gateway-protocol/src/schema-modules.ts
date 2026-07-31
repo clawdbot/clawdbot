@@ -25,6 +25,7 @@ export * from "./schema/frames.js";
 export * from "./schema/fs.js";
 export * from "./schema/gateway-suspend.js";
 export * from "./schema/logs-chat.js";
+export * from "./schema/memory.js";
 export * from "./schema/migrations.js";
 export * from "./schema/nodes.js";
 export * from "./schema/push.js";

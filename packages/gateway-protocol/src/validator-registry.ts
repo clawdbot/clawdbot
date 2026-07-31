@@ -290,6 +290,7 @@ import {
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsNodeSnapshotSchema,
   LogsTailParamsSchema,
+  MemoryListParamsSchema,
   ModelsProbeParamsSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
@@ -681,6 +682,7 @@ export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
 export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
 export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
+export const validateMemoryListParams = lazyCompile(MemoryListParamsSchema);
 export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);

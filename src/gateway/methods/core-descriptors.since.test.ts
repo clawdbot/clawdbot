@@ -75,6 +75,7 @@ const CURRENT_TRAIN_METHODS = [
   "memory.search",
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
+  "memory.list",
 ] as const;
 
 describe("core gateway method release trains", () => {

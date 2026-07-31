@@ -165,6 +165,10 @@ const loadMemorySearchHandlers = lazyHandlerModule(
   () => import("./server-methods/memory-search.js"),
   (module) => module.memorySearchHandlers,
 );
+const loadMemoryHandlers = lazyHandlerModule(
+  () => import("./server-methods/memory.js"),
+  (module) => module.memoryHandlers,
+);
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
@@ -394,6 +398,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["memory.list"],
+    loadHandlers: loadMemoryHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["openclaw.changes.list"],

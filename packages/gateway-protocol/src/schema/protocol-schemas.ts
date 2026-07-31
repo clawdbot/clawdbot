@@ -5,6 +5,7 @@ import { ApprovalProtocolSchemas } from "./protocol-schema-fragment-approvals.js
 import { BoardProtocolSchemas } from "./protocol-schema-fragment-board.js";
 import { ChannelProtocolSchemas } from "./protocol-schema-fragment-channels.js";
 import { IntegrationProtocolSchemas } from "./protocol-schema-fragment-integrations.js";
+import { MemoryProtocolSchemas } from "./protocol-schema-fragment-memory.js";
 import { NodeProtocolSchemas } from "./protocol-schema-fragment-nodes.js";
 import { OperationsProtocolSchemas } from "./protocol-schema-fragment-operations.js";
 import { PluginLifecycleProtocolSchemas } from "./protocol-schema-fragment-plugins-lifecycle.js";
@@ -30,6 +31,7 @@ export const ProtocolSchemas = composeProtocolSchemaFragments([
   SchedulerProtocolSchemas,
   ApprovalProtocolSchemas,
   PluginLifecycleProtocolSchemas,
+  MemoryProtocolSchemas,
 ] as const);
 
 export {
