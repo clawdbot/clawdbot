@@ -170,6 +170,23 @@ function isPowerShellOpenClawFilter(argv: readonly string[], allowUnresolved: bo
   );
 }
 
+function powerShellIdentityFilterKeepsOpenClaw(
+  argv: readonly string[],
+  allowUnresolved: boolean,
+): boolean {
+  const negativeIndex = argv.findIndex((token) =>
+    ["-ne", "-notcontains", "-notin", "-notlike", "-notmatch"].includes(token.trim().toLowerCase()),
+  );
+  if (negativeIndex === -1) {
+    return isPowerShellOpenClawFilter(argv, allowUnresolved);
+  }
+  const operands = argv.slice(negativeIndex + 1);
+  if (operands.some((token) => /[$@][A-Za-z_][A-Za-z0-9_]*/u.test(token))) {
+    return true;
+  }
+  return !operands.some((token) => looksLikeOpenClawSelector(token, allowUnresolved));
+}
+
 function isPowerShellIdentityFilter(argv: readonly string[]): boolean {
   return (
     ["?", "where", "where-object"].includes(normalizeExecutableToken(argv[0] ?? "")) &&
@@ -231,7 +248,7 @@ export function commandHasPowerShellLifecyclePipeline(
       continue;
     }
     if (processOrServiceSource && isPowerShellIdentityFilter(argv)) {
-      selectedOpenClaw = isPowerShellOpenClawFilter(argv, allowUnresolved);
+      selectedOpenClaw = powerShellIdentityFilterKeepsOpenClaw(argv, allowUnresolved);
       continue;
     }
     if (selectedOpenClaw && isPowerShellPipelineMutation(argv)) {

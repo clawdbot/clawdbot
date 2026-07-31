@@ -58,6 +58,9 @@ function findClosingParen(
       if (char === quote) {
         quote = null;
       }
+      // Parentheses inside a quoted fragment do not close this outer
+      // substitution. The complete fragment remains in the returned slice and
+      // is recursively scanned for its own `$()` or backtick substitutions.
       continue;
     }
     if (char === "'" || char === '"') {
