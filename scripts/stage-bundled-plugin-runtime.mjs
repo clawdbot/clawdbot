@@ -178,7 +178,7 @@ function ensureOpenClawExtensionAlias(params) {
     repoRoot: params.repoRoot,
     pluginSdkDir,
   });
-  const aliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
+  const aliasDir = path.join(params.extensionsRoot, "node_modules", "openclaw");
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
   fs.mkdirSync(aliasDir, { recursive: true });
   writeJsonFile(path.join(aliasDir, "package.json"), {
@@ -332,7 +332,9 @@ export function stageBundledPluginRuntime(params = {}) {
 
   removePathIfExists(runtimeRoot);
   fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
-  ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot });
+  // Built bundled plugins and copied static assets resolve from separate extension roots.
+  ensureOpenClawExtensionAlias({ repoRoot, extensionsRoot: distExtensionsRoot });
+  ensureOpenClawExtensionAlias({ repoRoot, extensionsRoot: runtimeExtensionsRoot });
 
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory() || dirent.name === "node_modules") {
