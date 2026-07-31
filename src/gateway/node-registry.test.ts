@@ -88,9 +88,7 @@ function makeClient(
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket:
-      opts.socket ??
-      (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
+    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
