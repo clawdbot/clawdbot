@@ -8,7 +8,6 @@ import {
   readTransportTranscript,
   waitForNoOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
 
 describe("qa suite transport helpers", () => {
@@ -278,22 +277,27 @@ describe("qa suite transport helpers", () => {
     expect(formatted).toContain("ASSISTANT OpenClaw QA: working on it");
   });
 
-  it("waits for outbound replies through the generic transport alias", async () => {
+  it("applies account filtering after the global outbound cursor", async () => {
     const state = createQaBusState();
-    const pending = waitForTransportOutboundMessage(
-      state,
-      (candidate) => candidate.conversation.id === "qa-operator" && candidate.text.includes("done"),
-      5_000,
-    );
-
     state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:qa-operator",
+      text: "previous account reply",
+    });
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    const expected = state.addOutboundMessage({
+      accountId: "default",
       to: "dm:qa-operator",
       text: "done",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
     });
 
-    const message = await pending;
-    expect(message.text).toBe("done");
+    await expect(
+      waitForOutboundMessage(state, (candidate) => candidate.text === "done", 50, {
+        accountId: "default",
+        sinceIndex,
+      }),
+    ).resolves.toMatchObject({ accountId: "default", id: expected.id });
   });
 });

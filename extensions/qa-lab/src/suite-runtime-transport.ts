@@ -141,22 +141,6 @@ function formatConversationTranscript(
   return formatTransportTranscript(state, params);
 }
 
-async function waitForTransportOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForOutboundMessage(state, predicate, timeoutMs);
-}
-
-async function waitForChannelOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
-}
-
 async function waitForNoTransportOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
@@ -170,9 +154,7 @@ export {
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 };

@@ -216,8 +216,6 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     randomUUID,
     runScenario: params.runScenario,
     waitForOutboundMessage: waitForAccountOutboundMessage,
-    waitForTransportOutboundMessage: waitForAccountOutboundMessage,
-    waitForChannelOutboundMessage: waitForAccountOutboundMessage,
     waitForNoOutbound,
     waitForNoTransportOutbound,
     recentOutboundSummary,
