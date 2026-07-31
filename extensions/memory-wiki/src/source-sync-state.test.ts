@@ -38,6 +38,22 @@ function openStore(env: NodeJS.ProcessEnv) {
   );
 }
 
+function createImportedSourceState(pagePath: string, group: "bridge" | "unsafe-local" = "bridge") {
+  return {
+    version: 1 as const,
+    entries: {
+      "sync-key": {
+        group,
+        pagePath,
+        sourcePath: "/tmp/source.md",
+        sourceUpdatedAtMs: 0,
+        sourceSize: 0,
+        renderFingerprint: "fp",
+      },
+    },
+  };
+}
+
 function createCountingStore(options?: { maxEntries?: number }) {
   const values = new Map<string, unknown>();
   const calls = { register: 0, delete: 0, entries: 0 };
@@ -443,19 +459,7 @@ describe("memory wiki source sync state", () => {
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
     await fs.writeFile(externalPath, "external human Notes must not be read\n", "utf-8");
     await fs.symlink(externalPath, pageAbsPath);
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "bridge" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath);
 
     const removed = await pruneImportedSourceEntries({
       vaultRoot,
@@ -500,19 +504,7 @@ describe("memory wiki source sync state", () => {
       ].join("\n"),
       "utf-8",
     );
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "bridge" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath);
 
     await expect(
       pruneImportedSourceEntries({
@@ -554,19 +546,7 @@ describe("memory wiki source sync state", () => {
       ].join("\n"),
       "utf8",
     );
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "unsafe-local" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath, "unsafe-local");
 
     await expect(
       pruneImportedSourceEntries({
@@ -604,19 +584,7 @@ describe("memory wiki source sync state", () => {
       ].join("\n"),
       "utf8",
     );
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "bridge" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath);
 
     await expect(
       pruneImportedSourceEntries({
@@ -659,19 +627,7 @@ describe("memory wiki source sync state", () => {
       ].join("\n"),
       "utf8",
     );
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "unsafe-local" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath, "unsafe-local");
 
     await expect(
       pruneImportedSourceEntries({
@@ -699,19 +655,7 @@ describe("memory wiki source sync state", () => {
       "utf8",
     );
     await fs.truncate(pageAbsPath, 33 * 1024 * 1024);
-    const state = {
-      version: 1 as const,
-      entries: {
-        "sync-key": {
-          group: "unsafe-local" as const,
-          pagePath,
-          sourcePath: "/tmp/source.md",
-          sourceUpdatedAtMs: 0,
-          sourceSize: 0,
-          renderFingerprint: "fp",
-        },
-      },
-    };
+    const state = createImportedSourceState(pagePath, "unsafe-local");
 
     await expect(
       pruneImportedSourceEntries({

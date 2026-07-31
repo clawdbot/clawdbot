@@ -386,6 +386,7 @@ async function readImportedSourcePageForNotes(
       if (!text) {
         return;
       }
+      let notesText = text;
       if (!foundNotesBoundary) {
         pending += text;
         const boundary = notesBoundary.exec(pending);
@@ -394,14 +395,14 @@ async function readImportedSourcePageForNotes(
           return;
         }
         foundNotesBoundary = true;
-        text = pending.slice(boundary.index);
+        notesText = pending.slice(boundary.index);
         pending = "";
       }
-      notesBytes += Buffer.byteLength(text, "utf8");
+      notesBytes += Buffer.byteLength(notesText, "utf8");
       if (headerBytes + notesBytes > MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES) {
         throw new Error("Memory Wiki human Notes exceed the bounded recovery limit");
       }
-      notes += text;
+      notes += notesText;
     };
 
     consume(header);
