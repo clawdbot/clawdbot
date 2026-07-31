@@ -22,7 +22,6 @@ import {
   embeddedRunMock,
   installGatewayTestHooks,
   agentDiscoveryMock,
-  rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
