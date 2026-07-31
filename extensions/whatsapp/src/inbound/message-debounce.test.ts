@@ -7,9 +7,10 @@ describe("createWhatsAppInboundMessageDebouncer", () => {
   it("flushes a zero-window conversation immediately without pending timer work", async () => {
     const onMessage = vi.fn(async () => {});
     const onPendingWorkChanged = vi.fn();
+    const resolveDebounceMs = vi.fn(() => 0);
     const debouncer = createWhatsAppInboundMessageDebouncer({
       debounceMs: 1000,
-      resolveDebounceMs: () => 0,
+      resolveDebounceMs,
       onMessage,
       markRead: async () => {},
       onPendingWorkChanged,
@@ -24,6 +25,7 @@ describe("createWhatsAppInboundMessageDebouncer", () => {
     expect(debouncer.hasPendingWork()).toBe(false);
     expect(debouncer.pendingWorkCount()).toBe(0);
     expect(onPendingWorkChanged).toHaveBeenCalledTimes(2);
+    expect(resolveDebounceMs).toHaveBeenCalledOnce();
 
     await debouncer.drain();
   });
