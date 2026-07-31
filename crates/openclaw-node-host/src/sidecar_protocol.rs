@@ -310,6 +310,11 @@ impl AuthenticatedSidecarChannel {
         self.max_frame_bytes
     }
 
+    #[must_use]
+    pub fn max_payload_bytes(&self) -> usize {
+        self.max_frame_bytes as usize - FIXED_HEADER_BYTES - self.session_id.len() - AUTH_TAG_BYTES
+    }
+
     /// Apply the negotiated frame ceiling without resetting channel sequence.
     ///
     /// # Errors
@@ -836,6 +841,7 @@ mod tests {
             exact_minimum,
         )
         .unwrap();
+        assert_eq!(channel.max_payload_bytes(), 1);
         assert!(matches!(
             channel.lower_frame_limit(exact_minimum - 1),
             Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"))

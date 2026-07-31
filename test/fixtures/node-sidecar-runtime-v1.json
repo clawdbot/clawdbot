@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "messages": [
+    {
+      "type": "configure",
+      "configuration": {
+        "manifestGeneration": 3,
+        "capabilities": ["native.settings", "native.status"],
+        "commands": [
+          { "name": "product.settings" },
+          { "name": "product.status" }
+        ],
+        "maxConcurrency": 2,
+        "maxInputBytes": 1024,
+        "maxOutputBytes": 1024,
+        "defaultTimeoutMs": 1000,
+        "maxTimeoutMs": 5000,
+        "resultGraceMs": 50
+      }
+    },
+    {
+      "type": "configured",
+      "manifest": {
+        "manifestGeneration": 3,
+        "capabilities": ["native.settings", "native.status"],
+        "commands": ["product.settings", "product.status"]
+      }
+    },
+    {
+      "type": "admission-request",
+      "invocation": {
+        "id": "invoke-1",
+        "nodeId": "node-1",
+        "command": "product.status",
+        "params": { "verbose": true },
+        "timeoutMs": 1000,
+        "idempotencyKey": "idem-1",
+        "sessionKey": "agent:main:main"
+      }
+    },
+    {
+      "type": "admission-decision",
+      "invocationId": "invoke-1",
+      "decision": { "outcome": "allow" }
+    },
+    {
+      "type": "invoke",
+      "invocation": {
+        "id": "invoke-1",
+        "nodeId": "node-1",
+        "command": "product.status",
+        "params": { "verbose": true },
+        "timeoutMs": 1000,
+        "idempotencyKey": "idem-1",
+        "sessionKey": "agent:main:main"
+      }
+    },
+    {
+      "type": "result",
+      "invocationId": "invoke-1",
+      "result": {
+        "outcome": "success",
+        "payload": { "ready": true }
+      }
+    },
+    { "type": "cancel", "invocationId": "invoke-1" },
+    {
+      "type": "status",
+      "status": {
+        "state": "ready",
+        "manifestGeneration": 3,
+        "runtimeVersion": "1.0.0",
+        "attempt": 1,
+        "reason": null
+      }
+    }
+  ],
+  "canonicalJson": [
+    "{\"type\":\"configure\",\"configuration\":{\"manifestGeneration\":3,\"capabilities\":[\"native.settings\",\"native.status\"],\"commands\":[{\"name\":\"product.settings\"},{\"name\":\"product.status\"}],\"maxConcurrency\":2,\"maxInputBytes\":1024,\"maxOutputBytes\":1024,\"defaultTimeoutMs\":1000,\"maxTimeoutMs\":5000,\"resultGraceMs\":50}}",
+    "{\"type\":\"configured\",\"manifest\":{\"manifestGeneration\":3,\"capabilities\":[\"native.settings\",\"native.status\"],\"commands\":[\"product.settings\",\"product.status\"]}}",
+    "{\"type\":\"admission-request\",\"invocation\":{\"id\":\"invoke-1\",\"nodeId\":\"node-1\",\"command\":\"product.status\",\"params\":{\"verbose\":true},\"timeoutMs\":1000,\"idempotencyKey\":\"idem-1\",\"sessionKey\":\"agent:main:main\"}}",
+    "{\"type\":\"admission-decision\",\"invocationId\":\"invoke-1\",\"decision\":{\"outcome\":\"allow\"}}",
+    "{\"type\":\"invoke\",\"invocation\":{\"id\":\"invoke-1\",\"nodeId\":\"node-1\",\"command\":\"product.status\",\"params\":{\"verbose\":true},\"timeoutMs\":1000,\"idempotencyKey\":\"idem-1\",\"sessionKey\":\"agent:main:main\"}}",
+    "{\"type\":\"result\",\"invocationId\":\"invoke-1\",\"result\":{\"outcome\":\"success\",\"payload\":{\"ready\":true}}}",
+    "{\"type\":\"cancel\",\"invocationId\":\"invoke-1\"}",
+    "{\"type\":\"status\",\"status\":{\"state\":\"ready\",\"manifestGeneration\":3,\"runtimeVersion\":\"1.0.0\",\"attempt\":1,\"reason\":null}}"
+  ]
+}

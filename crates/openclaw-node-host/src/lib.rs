@@ -16,6 +16,7 @@ mod reconnect;
 mod runtime;
 mod sidecar_handshake;
 mod sidecar_protocol;
+mod sidecar_runtime;
 
 pub use duplex::InvocationIo;
 pub use host::{run_host, AuthKind, HostConfig, HostCredentials, HostError};
@@ -47,4 +48,11 @@ pub use sidecar_protocol::{
     SidecarLimits, SidecarPeerIdentity, SidecarPeerRole, SidecarProtocolError,
     SidecarProtocolOffer, SidecarSessionKey, SIDECAR_MAX_FEATURE_BITS, SIDECAR_PROTOCOL_MAJOR,
     SIDECAR_PROTOCOL_MINOR,
+};
+pub use sidecar_runtime::{
+    SidecarAdapterError, SidecarAdapterFuture, SidecarAdmissionDecision, SidecarCapabilityAdapter,
+    SidecarCommandRegistration, SidecarConfigurationError, SidecarConfigurationExchange,
+    SidecarConfigurationState, SidecarInvocation, SidecarInvocationResult, SidecarRuntimeBridge,
+    SidecarRuntimeBridgeError, SidecarRuntimeConfiguration, SidecarRuntimeManifest,
+    SidecarRuntimeMessage, SidecarRuntimeReason, SidecarRuntimeState, SidecarRuntimeStatus,
 };

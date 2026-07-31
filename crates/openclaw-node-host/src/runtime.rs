@@ -606,7 +606,7 @@ impl CommandRuntime {
     }
 
     #[cfg(test)]
-    async fn evaluate(&self, invocation: NodeInvocation) -> InvocationResult {
+    pub(crate) async fn evaluate(&self, invocation: NodeInvocation) -> InvocationResult {
         let Ok(permit) = self.inner.permits.clone().try_acquire_owned() else {
             return failure("OVERLOADED", "command runtime is at its concurrency limit");
         };

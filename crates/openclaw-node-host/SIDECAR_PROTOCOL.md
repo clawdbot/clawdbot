@@ -120,11 +120,59 @@ contains both offers, the independently derived selection, and exact offer and
 accept frames. Rust tests reproduce and decode every vector. Every non-Rust
 adapter must consume the same vectors before it can be selected as a runtime.
 
+[`node-sidecar-runtime-v1.json`](../../test/fixtures/node-sidecar-runtime-v1.json)
+contains the typed configuration, configured acknowledgement, admission,
+invocation, result, cancellation, and status messages plus their exact compact
+JSON encodings. These payloads travel inside the already authenticated,
+sequenced frames; the message corpus does not replace the frame vectors.
+
+## Runtime bridge
+
+`SidecarRuntimeBridge` can be constructed only from the runtime side of a
+validated configuration exchange awaiting acknowledgement. It accepts one
+immutable connection manifest and requires its concurrency/input/output limits
+to remain within the negotiated sidecar envelope. Command and capability names
+use the shared ASCII grammar `[A-Za-z0-9._-]{1,128}`, are duplicate-free, and
+are sorted bytewise before acknowledgement; the OpenClaw-owned `system.*`
+namespace remains reserved.
+
+`SidecarConfigurationExchange` permits exactly one supervisor configuration
+followed by the runtime's acknowledgement of the independently derived
+manifest. Wrong order, channel role, malformed or unknown fields, invalid
+limits/names, and a forged acknowledgement retire the exchange and channel.
+It also proves the worst-case secret-free status envelope—including the runtime
+version from the authenticated offer—fits the lowered live-channel budget. No
+admission or invocation message is accepted by this exchange.
+
+The bridge builds the existing bounded `CommandRuntime`. Every invocation
+therefore passes its normal Gateway-manifest, input, concurrency, timeout,
+admission, handler, output, and cancellation gates. The product-owned
+`SidecarCapabilityAdapter` receives an untrusted typed invocation first for
+local admission and only then for native dispatch. A denial or adapter failure
+becomes a bounded structured handler failure. The runtime cancellation token is
+passed through both waits so product adapter work can stop on Gateway cancel,
+timeout, disconnect, or shutdown.
+
+Logical parameter and result limits are not treated as complete-frame limits.
+Before cloning Gateway JSON into an adapter request, and without cloning an
+adapter decision/result, the bridge runs a borrowed non-allocating serialization
+preflight for the complete admission, invocation, decision, or result message
+against the live channel's exact payload budget
+(frame ceiling minus fixed header, session identifier, and authentication tag).
+A value that fits its logical JSON limit but not its full envelope receives the
+stable `SIDECAR_MESSAGE_TOO_LARGE` result without attempting transport.
+
+The bridge also maps secret-free `NodeLifecycle` events into stable status
+states and reasons correlated with the immutable manifest generation. A
+capability change requires a new bridge and connection/process generation;
+registrations cannot be mutated in place after advertisement.
+
 ## Not yet implemented
 
-This slice deliberately excludes post-handshake configuration and invocation
-messages, the node-runtime bridge, native capability dispatch, product audit
-adapter, process supervision, restart/rollback policy, and production
-credential storage. Those concerns build on this framing and handshake
-contract; they must not weaken its authentication, bounds, generation,
-sequencing, or fail-closed behavior.
+This stack still excludes a concrete IPC driver, protected credential/config
+delivery, duplex input/progress transport, a product audit adapter, process
+supervision, artifact verification, restart/rollback policy, and production
+credential storage. The typed runtime messages and adapter boundary do not by
+themselves claim production sidecar readiness. Those remaining concerns must
+not weaken authentication, bounds, generation, sequencing, cancellation, or
+fail-closed behavior.

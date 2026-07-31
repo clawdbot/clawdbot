@@ -82,6 +82,16 @@ impl SidecarHandshake {
     }
 
     #[must_use]
+    pub const fn local_role(&self) -> SidecarPeerRole {
+        self.local_offer.peer.role
+    }
+
+    #[must_use]
+    pub const fn local_peer(&self) -> &crate::SidecarPeerIdentity {
+        &self.local_offer.peer
+    }
+
+    #[must_use]
     pub const fn negotiated(&self) -> Option<&NegotiatedSidecarProtocol> {
         self.negotiated.as_ref()
     }
