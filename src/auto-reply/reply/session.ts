@@ -102,6 +102,7 @@ import type {
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
+import { resolveCurrentMessageContentStart } from "./history.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -138,6 +139,100 @@ type ReplySessionEndReason = Extract<
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+}
+
+function resolveResetPayloadFromOriginal(params: {
+  source: string;
+  trigger: string;
+}): string | undefined {
+  const trigger = normalizeOptionalString(params.trigger);
+  if (!trigger) {
+    return undefined;
+  }
+  const triggerLower = trigger.toLowerCase();
+
+  let searchStart = resolveCurrentMessageContentStart(params.source) ?? 0;
+  let cursor = searchStart;
+  while (/\s/.test(params.source[cursor] ?? "")) {
+    cursor += 1;
+  }
+  let removedEnvelope = false;
+  while (params.source[cursor] === "[") {
+    const envelopeEnd = params.source.indexOf("]", cursor + 1);
+    if (envelopeEnd === -1) {
+      break;
+    }
+    removedEnvelope = true;
+    cursor = envelopeEnd + 1;
+    while (/\s/.test(params.source[cursor] ?? "")) {
+      cursor += 1;
+    }
+  }
+  if (removedEnvelope) {
+    const lineEnd = params.source.indexOf("\n", cursor);
+    const senderPrefixEnd = params.source.indexOf(":", cursor);
+    const effectiveLineEnd = lineEnd === -1 ? params.source.length : lineEnd;
+    if (
+      senderPrefixEnd !== -1 &&
+      senderPrefixEnd < effectiveLineEnd &&
+      senderPrefixEnd - cursor <= 120
+    ) {
+      cursor = senderPrefixEnd + 1;
+      while (/\s/.test(params.source[cursor] ?? "")) {
+        cursor += 1;
+      }
+    }
+  }
+  searchStart = cursor;
+  let bracketDepth = 0;
+
+  for (let index = searchStart; index < params.source.length; index += 1) {
+    const char = params.source[index];
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+    if (
+      bracketDepth > 0 ||
+      params.source.slice(index, index + trigger.length).toLowerCase() !== triggerLower
+    ) {
+      continue;
+    }
+
+    let payloadStart = index + trigger.length;
+    if (params.source[payloadStart] === "@") {
+      payloadStart += 1;
+      const suffixStart = payloadStart;
+      while (
+        params.source[payloadStart] !== undefined &&
+        params.source[payloadStart] !== ":" &&
+        !/\s/.test(params.source[payloadStart] ?? "")
+      ) {
+        payloadStart += 1;
+      }
+      if (payloadStart === suffixStart) {
+        continue;
+      }
+    }
+
+    const delimiter = params.source[payloadStart];
+    if (delimiter === undefined) {
+      return "";
+    }
+    if (delimiter === ":") {
+      payloadStart += 1;
+    } else if (!/\s/.test(delimiter)) {
+      continue;
+    }
+
+    return params.source.slice(payloadStart).trimStart();
+  }
+
+  return undefined;
 }
 
 function resolveSessionDefaultAccountId(params: {
@@ -573,19 +668,24 @@ async function initSessionStateAttemptLocked(
       break;
     }
     const triggerPrefixLower = `${triggerLower} `;
+    const rawPrefixMatched = trimmedBodyLower.startsWith(triggerPrefixLower);
+    const strippedPrefixMatched = strippedForResetLower.startsWith(triggerPrefixLower);
+    const normalizedPrefixMatched = normalizedResetBodyLower.startsWith(triggerPrefixLower);
     if (
       !softReset.matched &&
-      (trimmedBodyLower.startsWith(triggerPrefixLower) ||
-        strippedForResetLower.startsWith(triggerPrefixLower) ||
-        normalizedResetBodyLower.startsWith(triggerPrefixLower))
+      (rawPrefixMatched || strippedPrefixMatched || normalizedPrefixMatched)
     ) {
+      // Detection projections discard wrappers, mentions, and whitespace. Payload bytes must
+      // come from the original range so bracketed and multiline user text stays intact.
+      const resetPayload = resolveResetPayloadFromOriginal({
+        source: commandSource,
+        trigger,
+      });
+      if (resetPayload === undefined) {
+        continue;
+      }
       isNewSession = true;
-      const matchedBody = trimmedBodyLower.startsWith(triggerPrefixLower)
-        ? trimmedBody
-        : strippedForResetLower.startsWith(triggerPrefixLower)
-          ? strippedForReset
-          : normalizedResetBody;
-      bodyStripped = matchedBody.slice(trigger.length).trimStart();
+      bodyStripped = resetPayload;
       resetTriggered = true;
       matchedResetTriggerLower = triggerLower;
       break;

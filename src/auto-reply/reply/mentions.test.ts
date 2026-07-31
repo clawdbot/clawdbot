@@ -48,6 +48,14 @@ describe("stripStructuralPrefixes", () => {
     expect(stripStructuralPrefixes("just a message")).toBe("just a message");
   });
 
+  it("does not treat a payload marker literal as a history envelope", () => {
+    expect(
+      stripStructuralPrefixes(
+        "@openclaw /new review [Current message - respond to this] and /new syntax",
+      ),
+    ).toBe("@openclaw /new review and /new syntax");
+  });
+
   it("preserves real line breaks in slash commands for downstream command parsing", () => {
     expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
       "/reset soft\nre-read persona files",
