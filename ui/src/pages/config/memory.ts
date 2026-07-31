@@ -16,6 +16,7 @@ import { t } from "../../i18n/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
+  DEFAULT_MEMORY_ENGINE_ID,
   MEMORY_BACKEND_ANCHOR_ID,
   type MemoryBackend,
   type MemoryEngineSelection,
@@ -41,6 +42,49 @@ export type MemoryCatalogState =
   | { kind: "loading" }
   | { kind: "unavailable" }
   | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
+
+export function buildMemoryEngineOptions(
+  catalog: MemoryCatalogState,
+  selection: MemoryEngineSelection,
+): MemoryEngineOption[] {
+  if (catalog.kind !== "ready") {
+    return [];
+  }
+  const options = catalog.plugins
+    .filter((plugin) => plugin.installed && plugin.kind?.includes("memory") === true)
+    .map((plugin) => ({
+      id: plugin.id,
+      label:
+        plugin.id === DEFAULT_MEMORY_ENGINE_ID
+          ? t("memoryPage.engine.openClawMemory")
+          : plugin.name,
+      available: true,
+    }))
+    .toSorted((left, right) => {
+      const leftIsDefault = left.id === DEFAULT_MEMORY_ENGINE_ID;
+      const rightIsDefault = right.id === DEFAULT_MEMORY_ENGINE_ID;
+      return leftIsDefault === rightIsDefault
+        ? left.label.localeCompare(right.label)
+        : leftIsDefault
+          ? -1
+          : 1;
+    });
+  const selected = selectedEngineId(selection);
+  if (selected && !options.some((option) => option.id === selected)) {
+    const unavailable = {
+      id: selected,
+      label:
+        selected === DEFAULT_MEMORY_ENGINE_ID ? t("memoryPage.engine.openClawMemory") : selected,
+      available: false,
+    };
+    if (selected === DEFAULT_MEMORY_ENGINE_ID) {
+      options.unshift(unavailable);
+    } else {
+      options.push(unavailable);
+    }
+  }
+  return options;
+}
 
 export function resolveMemoryPluginState(
   catalog: MemoryCatalogState,
@@ -84,6 +128,7 @@ export function buildMemoryAddonRows(
     busy: ReadonlySet<string>;
     errors: ReadonlyMap<string, string>;
     notices: ReadonlyMap<string, { message: string }>;
+    refreshWarnings: ReadonlyMap<string, string>;
   },
 ): MemoryAddonRow[] {
   return MEMORY_ADDON_PLUGINS.map((addon) => {
@@ -95,7 +140,10 @@ export function buildMemoryAddonRows(
       state: resolveMemoryPluginState(catalog, entry),
       busy: state.busy.has(addon.id),
       error: state.errors.get(addon.id) ?? null,
-      notice: state.notices.get(addon.id)?.message ?? null,
+      notice:
+        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+          .filter(Boolean)
+          .join(" ") || null,
     };
   });
 }

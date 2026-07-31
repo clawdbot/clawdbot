@@ -20,7 +20,6 @@ import {
   loadPluginCatalog,
   runPluginConfigMutation,
   setPluginEnabled,
-  type PluginCatalogItem,
 } from "../../lib/plugins/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -35,7 +34,6 @@ import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-drea
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
   canonicalMemoryRouteLocation,
-  DEFAULT_MEMORY_ENGINE_ID,
   memoryTabForRoute,
   memorySchemaKeysForTab,
   resolveMemoryBackend,
@@ -46,12 +44,12 @@ import {
 } from "./memory-schema.ts";
 import {
   buildMemoryAddonRows,
+  buildMemoryEngineOptions,
   renderMemory,
   findMemoryCatalogPlugin as findMemoryPlugin,
   resolveMemoryPluginState as pluginState,
   type MemoryCatalogState as MemoryCatalog,
   type MemoryEngineOutcome,
-  type MemoryEngineOption,
   type MemoryPluginState,
 } from "./memory.ts";
 import type { ConfigRouteData } from "./route-data.ts";
@@ -83,10 +81,6 @@ type MemoryPageProps = {
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
 
-function isMemoryEngine(plugin: PluginCatalogItem): boolean {
-  return plugin.installed && plugin.kind?.includes("memory") === true;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -108,6 +102,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private addonBusy = new Set<string>();
   @state() private addonErrors = new Map<string, string>();
   @state() private addonNotices = new Map<string, MemoryAddonNotice>();
+  @state() private addonRefreshWarnings = new Map<string, string>();
   @state() private selectedAgentId: string | null = null;
   @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
   @state() private probingEmbeddings = false;
@@ -226,6 +221,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.engineBusy = false;
     this.engineOutcome = null;
     this.addonBusy = new Set();
+    this.addonRefreshWarnings = new Map();
     this.overviewRequest = null;
     this.probingEmbeddings = false;
     if (!client || !connected) {
@@ -389,45 +385,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private engineOptions(): MemoryEngineOption[] {
-    if (this.catalog.kind !== "ready") {
-      return [];
-    }
-    const options = this.catalog.plugins
-      .filter(isMemoryEngine)
-      .map((plugin) => ({
-        id: plugin.id,
-        label:
-          plugin.id === DEFAULT_MEMORY_ENGINE_ID
-            ? t("memoryPage.engine.openClawMemory")
-            : plugin.name,
-        available: true,
-      }))
-      .toSorted((left, right) => {
-        const leftIsDefault = left.id === DEFAULT_MEMORY_ENGINE_ID;
-        const rightIsDefault = right.id === DEFAULT_MEMORY_ENGINE_ID;
-        if (leftIsDefault !== rightIsDefault) {
-          return leftIsDefault ? -1 : 1;
-        }
-        return left.label.localeCompare(right.label);
-      });
-    const selected = selectedEngineId(resolveMemoryEngineSelection(this.configObject));
-    if (selected && !options.some((option) => option.id === selected)) {
-      const unavailable = {
-        id: selected,
-        label:
-          selected === DEFAULT_MEMORY_ENGINE_ID ? t("memoryPage.engine.openClawMemory") : selected,
-        available: false,
-      };
-      if (selected === DEFAULT_MEMORY_ENGINE_ID) {
-        options.unshift(unavailable);
-      } else {
-        options.push(unavailable);
-      }
-    }
-    return options;
-  }
-
   private engineState(selection: MemoryEngineSelection): MemoryPluginState {
     const engineId = selectedEngineId(selection);
     return engineId === null
@@ -458,6 +415,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const errors = new Map(this.addonErrors);
     errors.delete(pluginId);
     this.addonErrors = errors;
+    const refreshWarnings = new Map(this.addonRefreshWarnings);
+    refreshWarnings.delete(pluginId);
+    this.addonRefreshWarnings = refreshWarnings;
     try {
       const mutation = await runPluginConfigMutation(
         this.context.runtimeConfig,
@@ -476,18 +436,30 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       const notice = [
         result.restartRequired ? t(key, { name: result.plugin.name }) : null,
         ...warnings,
-        mutation.refreshError && this.connection === connection
-          ? t("pluginsPage.configRefreshFailed", { error: mutation.refreshError })
-          : null,
       ]
         .filter(Boolean)
         .join(" ");
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
+        if (this.connection === connection) {
+          const currentWarnings = new Map(this.addonRefreshWarnings);
+          if (mutation.refreshError) {
+            currentWarnings.set(
+              pluginId,
+              t("pluginsPage.configRefreshFailed", { error: mutation.refreshError }),
+            );
+          } else {
+            currentWarnings.delete(pluginId);
+          }
+          this.addonRefreshWarnings = currentWarnings;
+        }
         const noticeProcessInstanceId = notice ? await processInstanceId : null;
         if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
           const notices = new Map(this.addonNotices);
           if (notice) {
-            notices.set(pluginId, { message: notice, processInstanceId: noticeProcessInstanceId });
+            notices.set(pluginId, {
+              message: notice,
+              processInstanceId: noticeProcessInstanceId,
+            });
           } else {
             notices.delete(pluginId);
           }
@@ -664,7 +636,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     return renderMemory({
       activeTab,
       onTabChange: (tab) => this.navigateTab(tab),
-      engineOptions: this.engineOptions(),
+      engineOptions: buildMemoryEngineOptions(this.catalog, engineSelection),
       engineSelection,
       engineState: this.engineState(engineSelection),
       engineBusy: this.engineBusy || engineMutationDisabled,
@@ -681,6 +653,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         busy: this.addonBusy,
         errors: this.addonErrors,
         notices: this.addonNotices,
+        refreshWarnings: this.addonRefreshWarnings,
       }),
       canToggleAddons:
         this.catalog.kind === "ready" &&
