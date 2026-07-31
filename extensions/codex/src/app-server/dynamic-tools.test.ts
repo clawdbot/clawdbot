@@ -745,7 +745,7 @@ describe("createCodexDynamicToolBridge", () => {
         createTool({
           name: "pdf",
           execute: vi.fn(async () => ({
-            content: [{ type: "text", text: "remote PDF text" }],
+            content: [{ type: "text" as const, text: "remote PDF text" }],
             details: {},
             resultContentSource: "network" as const,
           })),

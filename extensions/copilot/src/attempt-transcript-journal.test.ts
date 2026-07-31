@@ -584,7 +584,7 @@ describe("Copilot attempt transcript journal", () => {
 
     const toolResults = journal
       .snapshot()
-      .messagesSnapshot.filter((message) => message.role === "toolResult") as Array<
+      .messagesSnapshot.filter((message) => message.role === "toolResult") as unknown as Array<
       Record<string, unknown>
     >;
     expect(toolResults).toEqual([
