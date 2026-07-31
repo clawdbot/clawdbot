@@ -34,14 +34,6 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
-function postJsonRequest(index = 0): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
-  if (!request) {
-    throw new Error(`expected postJsonRequest call ${index}`);
-  }
-  return request;
-}
-
 function postMultipartRequest(index = 0): Record<string, unknown> {
   const request = postMultipartRequestMock.mock.calls[index]?.[0] as
     | Record<string, unknown>
@@ -188,8 +180,8 @@ describe("openai video generation provider", () => {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
-  it("uses JSON for text-only Sora requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
+  it("uses SDK-compatible multipart for text-only Sora requests", async () => {
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_123",
         model: "sora-2",
@@ -221,7 +213,13 @@ describe("openai video generation provider", () => {
       durationSeconds: 4,
     });
 
-    expect(postJsonRequest().url).toBe("https://api.openai.com/v1/videos");
+    const createRequest = postMultipartRequest();
+    expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
+    const form = createRequest.body as FormData;
+    expect(form.get("prompt")).toBe("A paper airplane gliding through golden hour light");
+    expect(form.get("model")).toBe("sora-2");
+    expect(form.get("seconds")).toBe("4");
+    expect(form.get("input_reference")).toBeNull();
     const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
     expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_123");
     expect(pollInit?.method).toBe("GET");
@@ -238,7 +236,7 @@ describe("openai video generation provider", () => {
     "surfaces an immediately failed OpenAI submission before polling or validating id (%s)",
     async (videoId) => {
       const release = vi.fn(async () => {});
-      postJsonRequestMock.mockResolvedValue({
+      postMultipartRequestMock.mockResolvedValueOnce({
         response: streamedJsonResponse({
           ...(videoId ? { id: videoId } : {}),
           status: "failed",
@@ -264,7 +262,7 @@ describe("openai video generation provider", () => {
 
   it("downloads an immediately completed OpenAI submission without polling it again", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_completed",
         model: "sora-2",
@@ -296,7 +294,7 @@ describe("openai video generation provider", () => {
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_too_large",
         model: "sora-2",
@@ -325,8 +323,8 @@ describe("openai video generation provider", () => {
     ).rejects.toThrow("OpenAI generated video download exceeds 1 bytes");
   });
 
-  it("uses JSON input_reference.image_url for image-to-video requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
+  it("uploads the SDK-compatible image reference in a multipart video request", async () => {
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_456",
         model: "sora-2",
@@ -356,11 +354,15 @@ describe("openai video generation provider", () => {
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
     });
 
-    const createRequest = postJsonRequest();
+    const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
-    expect((createRequest.body as Record<string, unknown>).input_reference).toEqual({
-      image_url: "data:image/png;base64,cG5nLWJ5dGVz",
-    });
+    const form = createRequest.body as FormData;
+    const reference = form.get("input_reference");
+    expect(reference).toBeInstanceOf(File);
+    const referenceFile = reference as File;
+    expect(referenceFile.name).toBe("reference-image.png");
+    expect(referenceFile.type).toBe("image/png");
+    expect(Buffer.from(await referenceFile.arrayBuffer())).toEqual(Buffer.from("png-bytes"));
     const [pollUrl, pollInit, pollTimeout, pollFetch] = fetchWithTimeoutCall(0);
     expect(pollUrl).toBe("https://api.openai.com/v1/videos/vid_456");
     expect(pollInit?.method).toBe("GET");
@@ -369,7 +371,7 @@ describe("openai video generation provider", () => {
   });
 
   it("keeps configured local baseUrl private-network blocked unless explicitly enabled", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_local",
         model: "sora-2",
@@ -409,13 +411,13 @@ describe("openai video generation provider", () => {
 
     expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(providerHttpConfigRequest().request).toBeUndefined();
-    const createRequest = postJsonRequest();
+    const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(false);
   });
 
   it("honors configured request allowPrivateNetwork for local video providers", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_local",
         model: "sora-2",
@@ -459,7 +461,7 @@ describe("openai video generation provider", () => {
     });
     expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(providerHttpConfigRequest().request).toEqual({ allowPrivateNetwork: true });
-    const createRequest = postJsonRequest();
+    const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(true);
     const statusRequest = pollProviderOperationRequest();
@@ -490,7 +492,7 @@ describe("openai video generation provider", () => {
         throw new Error(label);
       })
       .mockImplementationOnce(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_local",
         model: "sora-2",
@@ -559,7 +561,7 @@ describe("openai video generation provider", () => {
       .mockImplementationOnce(async (_response, label) => {
         throw new Error(label);
       });
-    postJsonRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_local",
         model: "sora-2",
