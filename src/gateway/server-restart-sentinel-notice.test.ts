@@ -118,6 +118,7 @@ describe("restart sentinel notice recovery", () => {
   }
 
   it("reuses an existing stable notice without preparing another owner", async () => {
+    mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
     const first = await enqueueRestartSentinelNotice({
       cfg: {},
       channel: "whatsapp",
@@ -137,6 +138,7 @@ describe("restart sentinel notice recovery", () => {
 
     expect(first.created).toBe(true);
     expect(second).toEqual({ id: first.id, created: false });
+    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
   });
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {

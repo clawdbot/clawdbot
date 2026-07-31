@@ -94,6 +94,9 @@ async function enqueueRestartSentinelNoticeOwned(
   deliveryIntentId: string,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
+    if (findDeliveryIntentOwner(deliveryIntentId)) {
+      return { id: deliveryIntentId, created: false };
+    }
     const preparation = await withStableDeliveryIntentFence({
       id: deliveryIntentId,
       completionRetention: "permanent",
@@ -151,6 +154,12 @@ async function enqueueRestartSentinelNoticeClaimed(
     intentFenceOwner.fence ? { intentFence: intentFenceOwner.fence } : undefined,
   );
   if (!queued?.created) {
+    // Another Gateway may win the stable-id race after our initial lookup.
+    // Its durable owner is the authoritative notice; do not report a failure
+    // or run preparation again merely because this producer lost admission.
+    if (findDeliveryIntentOwner(deliveryIntentId)) {
+      return { id: deliveryIntentId, created: false };
+    }
     throw new Error("Restart sentinel notice could not acquire durable queue custody");
   }
   if (intentFenceOwner.fence) {
