@@ -199,6 +199,32 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
+  // Documented widening, pinned deliberately: past the retained prefix the local mirror
+  // holds nothing to compare against, so a changed tail on an oversized message is
+  // accepted. main rejected it, but only by rejecting every oversized message.
+  it("accepts an oversized message whose discarded tail differs", async () => {
+    const suffix = "\n\n[Message truncated during Codex history import.]";
+    const retained = "x".repeat(64 * 1024 - Buffer.byteLength(suffix, "utf8"));
+    const importedFromAnEarlierTail = `${retained}${suffix}`;
+
+    const result = await resolveFromTurns({
+      // The tail must exceed the suffix length, or the total stays under the cap and
+      // nothing is truncated.
+      turns: [turn("turn-1", [user(`${retained}${"a tail that differs. ".repeat(20)}`)])],
+      userMessageOrdinal: 0,
+      localPrefixTexts: [importedFromAnEarlierTail],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-1",
+        targetTurnId: "turn-1",
+        retainedMarker: { turnId: null, userMessageCount: 0 },
+      },
+    });
+  });
+
   it("still rejects drift that trimming cannot explain", async () => {
     const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("  upstream  ")])],
