@@ -317,6 +317,87 @@ suite.define(() => {
     }
   });
 
+  it("retains the selected session and one observer while reconnecting across route changes", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const firstKey = "agent:main:reconnect-first";
+    const selectedKey = "agent:main:reconnect-selected";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(selectedKey, "Selected session", Date.parse("2026-07-01T15:59:00.000Z")),
+        ]),
+      },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
+      const firstRow = page.locator(`.sidebar-recent-session[data-session-key="${firstKey}"]`);
+      const selectedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${selectedKey}"]`,
+      );
+      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible" });
+      await gateway.waitForRequest("sessions.subscribe");
+
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+
+      await gateway.deferNext("sessions.subscribe");
+      await gateway.deferNext("sessions.list");
+      await gateway.closeLatest(1006, "session route reconnect");
+      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {
+          timeout: 15_000,
+        })
+        .toBe(initialObserverCount + 1);
+
+      await firstRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+
+      await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
+        .toBeGreaterThan(initialListCount);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            selectedKey,
+            "Selected session recovered",
+            Date.parse("2026-07-01T16:01:00.000Z"),
+          ),
+        ]),
+      );
+      await expect.poll(() => selectedRow.textContent()).toContain("Selected session recovered");
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+      await captureUiProof(page, "sidebar-selected-session-route-reconnect.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("does not duplicate the active chat when its only session is pinned", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

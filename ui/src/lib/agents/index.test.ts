@@ -189,6 +189,54 @@ describe("createAgentCapability lifecycle", () => {
     agents.dispose();
   });
 
+  it("retires existing file loading state before dropping disconnected owners", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const load = agents.refreshFiles("main");
+    const status = agents.files("main");
+    expect(status.loading).toBe(true);
+
+    harness.publish(false);
+
+    expect(status.loading).toBe(false);
+    expect(agents.files("main").loading).toBe(false);
+
+    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
+    await load;
+    agents.dispose();
+  });
+
+  it("keeps a replacement list request owned while its predecessor completes", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const staleLoad = agents.refreshList();
+    const currentLoad = agents.refreshList();
+
+    first.resolve({ defaultId: "old", agents: [{ id: "old" }] });
+    await staleLoad;
+    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsLoading).toBe(true);
+
+    const current = { defaultId: "main", agents: [{ id: "main" }] };
+    second.resolve(current);
+    await currentLoad;
+    expect(agents.state.agentsList).toEqual(current);
+    expect(agents.state.agentsLoading).toBe(false);
+    agents.dispose();
+  });
+
   it("invalidates cached and in-flight file lists for changed agents", async () => {
     const pending = deferred<unknown>();
     const request = vi

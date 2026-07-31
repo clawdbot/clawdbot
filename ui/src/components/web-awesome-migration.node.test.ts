@@ -58,7 +58,7 @@ describe("Web Awesome control ownership", () => {
     // Web Awesome split panel owns exactly two panes; these layouts coordinate
     // sidebar, inspector, and responsive dock state across more than two panes.
     expect(await matchingFiles(/<resizable-divider\b/u)).toEqual([
-      "app/app-host.ts",
+      "app/app-shell-view.ts",
       "pages/chat/chat-page.ts",
       "pages/chat/components/chat-resizable-divider.ts",
     ]);

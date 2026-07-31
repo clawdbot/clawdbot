@@ -270,15 +270,16 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     return;
   }
   const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
   try {
     const result = await loadModelAuthStatus(client, opts);
-    if (host.client !== client || !host.connected) {
+    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
     host.modelAuthStatusResult = result;
     host.modelAuthStatusError = null;
   } catch (err) {
-    if (host.client !== client || !host.connected) {
+    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };

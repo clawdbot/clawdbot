@@ -6,6 +6,7 @@ import {
   sessionMatchesArchivedFilter,
   type SessionArchivedFilter,
 } from "./navigation.ts";
+import type { SessionRunTerminal } from "./session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -504,4 +505,63 @@ export function reconcileSessionHistory(
     count: sessions.length,
     sessions,
   };
+}
+
+export function reconcileSessionRunTerminal(
+  result: SessionsListResult | null,
+  terminal: SessionRunTerminal,
+): SessionsListResult | null {
+  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  if (!result || keys.length === 0) {
+    return result;
+  }
+  const runId = terminal.runId?.trim() || null;
+  let changed = false;
+  const sessions = result.sessions.map((row): GatewaySessionRow => {
+    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
+      return row;
+    }
+    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+      // Active identity belongs to the originating model run, not a newer overlap.
+      if (!runId || !row.activeRunIds?.includes(runId)) {
+        return row;
+      }
+    }
+    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
+    if (remainingRunIds?.length) {
+      changed = true;
+      return { ...row, activeRunIds: remainingRunIds, hasActiveRun: true, status: "running" };
+    }
+    const endedAt = row.endedAt ?? terminal.endedAt;
+    const runtimeMs =
+      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
+    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
+    const abortedLastRun =
+      terminal.status === "killed"
+        ? true
+        : terminal.status === "running"
+          ? false
+          : row.abortedLastRun;
+    if (
+      row.hasActiveRun === false &&
+      row.status === terminal.status &&
+      row.endedAt === endedAt &&
+      row.runtimeMs === runtimeMs &&
+      row.activeRunIds === activeRunIds &&
+      row.abortedLastRun === abortedLastRun
+    ) {
+      return row;
+    }
+    changed = true;
+    return {
+      ...row,
+      activeRunIds,
+      hasActiveRun: false,
+      status: terminal.status,
+      endedAt,
+      runtimeMs,
+      abortedLastRun,
+    };
+  });
+  return changed ? { ...result, sessions } : result;
 }

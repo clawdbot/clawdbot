@@ -14,6 +14,7 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import {
   approveDevicePairing,
@@ -80,7 +81,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
 
   @state() client: NodesPageDataState["client"] = null;
   @state() connected = false;
-  requestGeneration = 0;
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
   @state() presence: PresenceEntry[] = [];
@@ -103,6 +103,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   private routeDataInitialized = false;
   private hasBoundGateway = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private readonly connectionLifecycle = createGatewayConnectionLifecycle({
+    client: null,
+    phase: "stopped",
+  });
   private readonly presenceTask = new Task(this, {
     autoRun: false,
     // Gateway identity invalidates same-client reconnects and source replacements.
@@ -199,8 +203,8 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   override disconnectedCallback() {
+    this.connectionLifecycle.transition({ client: null, phase: "stopped" });
     this.subscriptions.clear();
-    this.requestGeneration += 1;
     void this.presenceTask.run([null, null]);
     this.client = null;
     this.connected = false;
@@ -210,6 +214,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     super.disconnectedCallback();
   }
 
+  get requestGeneration(): number {
+    return this.connectionLifecycle.epoch;
+  }
+
   private applyGatewaySnapshot(
     snapshot: ApplicationGatewaySnapshot,
     forceReset: boolean,
@@ -217,8 +225,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   ) {
     const clientChanged = this.client !== snapshot.client;
     const connectionChanged = this.connected !== (snapshot.phase === "connected");
-    if (forceReset || clientChanged || connectionChanged || snapshot.phase !== "connected") {
-      this.requestGeneration += 1;
+    const lifecycleChanged = this.connectionLifecycle.transition(snapshot);
+    if (forceReset && !lifecycleChanged) {
+      // Provider ownership can change while its client and phase stay identical.
+      this.connectionLifecycle.invalidate();
     }
     this.syncGatewayState(snapshot);
     if (forceReset || (!initialBind && (clientChanged || snapshot.phase !== "connected"))) {
@@ -253,6 +263,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     this.routeDataInitialized = true;
     const gateway = this.context.gateway;
     const snapshot = gateway.snapshot;
+    this.connectionLifecycle.transition(snapshot);
     if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.resetServerState(snapshot);
       this.presence = readPresence(snapshot.hello?.snapshot) ?? [];
