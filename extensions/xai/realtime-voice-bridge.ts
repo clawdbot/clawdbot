@@ -478,14 +478,13 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   private enqueuePendingAudio(audio: Buffer): void {
-    const queuedAudio = Buffer.from(audio);
     if (
       this.pendingAudio.length >= XaiRealtimeVoiceBridge.MAX_PENDING_AUDIO_CHUNKS ||
-      this.pendingAudioBytes + queuedAudio.byteLength >
-        XaiRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
+      this.pendingAudioBytes + audio.byteLength > XaiRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
     ) {
       return;
     }
+    const queuedAudio = Buffer.from(audio);
     this.pendingAudio.push(queuedAudio);
     this.pendingAudioBytes += queuedAudio.byteLength;
   }
