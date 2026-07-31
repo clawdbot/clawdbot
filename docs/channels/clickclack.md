@@ -398,12 +398,12 @@ ClickClack before enabling media-producing agent replies.
 
 ## Native progress and agent activity rows
 
-By default, a ClickClack channel shows transient native progress while an agent
-turn runs. The `Agent is responding` status and progress lines use ephemeral
-`agent.progress` events and are cleared when the turn ends; only the final reply
-is durable. Set `agentActivity: true` on an account to additionally publish
-durable `agent_commentary` and `agent_tool` message rows while the turn is in
-progress:
+Native progress is opt-in per account. Set `nativeProgress: true` to show
+transient `Agent is responding` status and progress lines while an agent turn
+runs. These use ephemeral `agent.progress` events and are cleared when the turn
+ends; only the final reply is durable. Set `agentActivity: true` separately to
+publish durable `agent_commentary` and `agent_tool` message rows while the turn
+is in progress:
 
 ```json5
 {
@@ -420,13 +420,10 @@ progress:
 
 Requirements and behavior:
 
-- **Durable activity is off by default.** Native ephemeral progress remains
-  available with the normal ClickClack bot delivery path; stock setups do not
-  persist activity rows unless this option is enabled.
-- **Native progress is best effort.** Progress publication uses the ephemeral
-  realtime endpoint and a bounded request timeout. A failed or stalled progress
-  request is logged and cannot block final text delivery.
-- **Requires the `agent_activity:write` token scope.** This scope is separate from `bot:write` and is not inherited by it; create the bot token with `--scopes bot:write,agent_activity:write` (or grant the scope to an existing token) before enabling the option.
+- **Native progress is off by default.** Set `nativeProgress: true` only for ClickClack deployments that support the ephemeral realtime endpoint.
+- **Durable activity is separately off by default.** Set `agentActivity: true` to persist activity rows; this does not enable native progress by itself.
+- **Native progress is best effort.** Progress publication uses the ephemeral realtime endpoint and a bounded request timeout. A failed or stalled progress request is logged and cannot block final text delivery.
+- **Durable activity requires the `agent_activity:write` token scope.** This scope is separate from `bot:write` and is not inherited by it; create the bot token with `--scopes bot:write,agent_activity:write` before enabling `agentActivity`.
 - **Best-effort degradation.** If the token lacks `agent_activity:write` or the server rejects activity writes, failures are logged and the final reply still delivers normally; no activity rows appear.
 - Rows are grouped per turn (`turn_id`), coalesced so one logical step is one row, and tool rows use the same progress formatting as Discord/Slack/Telegram (tool name plus command detail).
 - **Attribution metadata.** Agent-authored posts (activity rows and the final reply) carry `author_model` and `author_thinking` fields resolved from the actual model used for the turn (including after fallback). Servers that do not define these columns ignore the unknown JSON fields; servers that persist them can answer "which model said this line, at which thinking level" per message.
