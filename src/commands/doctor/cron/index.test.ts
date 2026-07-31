@@ -418,6 +418,68 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.thinking).toBe("high");
   });
 
+  it("excludes disabled jobs from cron model override counts", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      {
+        id: "enabled-pinned",
+        name: "Enabled pinned",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+          model: "anthropic/claude-sonnet-4-6",
+        },
+        state: {},
+      },
+      {
+        id: "disabled-pinned",
+        name: "Disabled pinned",
+        enabled: false,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Evening brief",
+          model: "openai/gpt-5.4",
+        },
+        state: {},
+      },
+    ]);
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-8", fallbacks: [] },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      options: {},
+      prompter,
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    // The disabled job must not be counted: only 1 enabled override, not 2.
+    expectNoteContaining("Cron model overrides detected", "Cron");
+    expectNoteContaining("1 job", "Cron");
+    // The disabled openai/gpt-5.4 override must not appear.
+    expectNoNoteContaining("openai", "Cron");
+    expectNoNoteContaining("gpt-5.4", "Cron");
+    // The enabled anthropic override must appear.
+    expectNoteContaining("anthropic=1", "Cron");
+  });
+
   it("does not surface cron model override diagnostics when jobs inherit the default", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, [

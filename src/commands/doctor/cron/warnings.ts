@@ -85,6 +85,12 @@ export function noteCronModelOverrides(params: {
     if (kind && kind !== "agentturn") {
       continue;
     }
+    // Disabled jobs are dormant and will never run; their model overrides
+    // don't affect active behavior. Skip them so the counts reflect the
+    // live configuration the operator can actually observe in `cron list`.
+    if (rawJob.enabled === false) {
+      continue;
+    }
     const model = normalizeOptionalString(payload?.model);
     if (!model) {
       continue;
