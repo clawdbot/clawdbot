@@ -113,6 +113,18 @@ export function projectMainSessionRecoveryLifecycle(params: {
       )
     : runs;
   if (settlesRecovery) {
+    if (
+      matchesFence &&
+      lifecycleGeneration !== params.currentLifecycleGeneration &&
+      remaining?.some(
+        (run) =>
+          run.runId === runId && run.lifecycleGeneration === params.currentLifecycleGeneration,
+      )
+    ) {
+      // Older generations share the live owner's run id. Consume only their
+      // fence; recording that id as terminal would also tombstone its replacement.
+      return { action: "apply", patch: { restartRecoveryRuns: remaining } };
+    }
     const foregroundClaims = params.entry?.mainRestartRecovery?.foregroundClaims;
     const foregroundOwnerClaimId =
       runId &&

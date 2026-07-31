@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 
-function recoveryEntry(params?: { hasCurrentOwner?: boolean }): SessionEntry {
+function recoveryEntry(params?: {
+  hasCurrentOwner?: boolean;
+  ownsDelivery?: boolean;
+}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
     status: "running",
     abortedLastRun: false,
+    ...(params?.ownsDelivery ? { restartRecoveryDeliveryRunId: "recovery" } : {}),
     restartRecoveryRuns: [
       { runId: "recovery", lifecycleGeneration: "generation-old" },
       { runId: "recovery", lifecycleGeneration: "generation-current" },
@@ -52,11 +56,14 @@ describe("main-session recovery run ownership", () => {
     });
   });
 
-  it("does not let an older same-id terminal settle its replacement generation", () => {
+  it.each([
+    { name: "admitted delivery owner", params: { ownsDelivery: true } },
+    { name: "foreground owner", params: { hasCurrentOwner: true, ownsDelivery: true } },
+  ])("does not let an older same-id terminal settle or tombstone its $name", ({ params }) => {
     expect(
       projectMainSessionRecoveryLifecycle({
         currentLifecycleGeneration: "generation-current",
-        entry: recoveryEntry({ hasCurrentOwner: true }),
+        entry: recoveryEntry(params),
         event: {
           runId: "recovery",
           lifecycleGeneration: "generation-old",
@@ -68,8 +75,25 @@ describe("main-session recovery run ownership", () => {
       action: "apply",
       patch: {
         restartRecoveryRuns: [{ runId: "recovery", lifecycleGeneration: "generation-current" }],
-        restartRecoveryTerminalRunIds: ["recovery"],
       },
     });
+  });
+
+  it("suppresses a duplicate older terminal after its fence has been consumed", () => {
+    const entry = recoveryEntry({ ownsDelivery: true });
+    entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-current" }];
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-current",
+        entry,
+        event: {
+          runId: "recovery",
+          lifecycleGeneration: "generation-old",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({ action: "suppress" });
   });
 });
