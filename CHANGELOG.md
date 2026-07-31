@@ -57,7 +57,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Ollama setup response cleanup:** cancel failed model-list, model-inspection, and pull response bodies before returning so repeated setup failures do not strand HTTP connections. (#111802) Thanks @dwc1997.
 - **Control UI session refreshes:** preserve explicitly queued list filters and background hydration across later Gateway event invalidation, while keeping append pagination followed by a canonical refresh. Fixes #116697. Thanks @shakkernerd.
 - **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding redundant route-loader work during startup. Thanks @shakkernerd.
 - **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
