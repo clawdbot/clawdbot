@@ -153,6 +153,64 @@ describe("together video generation provider", () => {
     });
   });
 
+  it.each(["video_failed", undefined])(
+    "surfaces an immediately failed Together submission before polling or validating id (%s)",
+    async (videoId) => {
+      const release = vi.fn(async () => {});
+      postJsonRequestMock.mockResolvedValue({
+        response: streamedJsonResponse({
+          ...(videoId ? { id: videoId } : {}),
+          status: "failed",
+          error: { message: "Together video quota exhausted" },
+        }),
+        release,
+      });
+
+      await expect(
+        buildTogetherVideoGenerationProvider().generateVideo({
+          provider: "together",
+          model: "Wan-AI/Wan2.2-T2V-A14B",
+          prompt: "A scene that cannot be generated",
+          cfg: {},
+        }),
+      ).rejects.toThrow("Together video quota exhausted");
+
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("downloads an immediately completed Together submission without polling it again", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "video_completed",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        status: "completed",
+        outputs: { video_url: "https://example.com/completed.mp4" },
+      }),
+      release,
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      headers: new Headers({ "content-type": "video/mp4" }),
+      arrayBuffer: async () => Buffer.from("completed-video"),
+    });
+
+    const result = await buildTogetherVideoGenerationProvider().generateVideo({
+      provider: "together",
+      model: "Wan-AI/Wan2.2-T2V-A14B",
+      prompt: "A scene already generated",
+      cfg: {},
+    });
+
+    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      model: "Wan-AI/Wan2.2-T2V-A14B",
+      metadata: { status: "completed", videoId: "video_completed" },
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("bounds an unbounded successful Together create JSON body and cancels the stream", async () => {
     const oversized = oversizedJsonResponse();
     postJsonRequestMock.mockResolvedValue({
