@@ -722,6 +722,11 @@ describe("doctor canonical session-key repair", () => {
         .run(repairConversation.conversationRef);
       database.db
         .prepare(
+          "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES ('agent:main:main ', 'profile-1', 'profile-1', 10)",
+        )
+        .run();
+      database.db
+        .prepare(
           `UPDATE session_windows
              SET agent_harness_id = 'codex', chat_type = 'group', ended_at = 24,
                  model = 'gpt-5.4', model_provider = 'openai',
@@ -790,6 +795,13 @@ describe("doctor canonical session-key repair", () => {
           )
           .get(),
       ).toEqual({ source_session_key: "agent:main:work" });
+      expect(
+        database.db
+          .prepare(
+            "SELECT session_key, identity_id FROM session_members WHERE identity_id = 'profile-1'",
+          )
+          .get(),
+      ).toEqual({ session_key: "agent:main:work", identity_id: "profile-1" });
       expect(() =>
         replaceSessionEntrySync(
           { agentId: "main", env, sessionKey: "agent:main:main", storePath },
