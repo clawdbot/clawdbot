@@ -515,7 +515,7 @@ ClickClack token scopes are enforced by the ClickClack API.
 - `commands:write`: publish the bot's command menu. Included in current `bot:write` and `bot:admin` bundles and grantable individually.
 - `agent_activity:write`: durable agent activity rows (`agent_commentary` / `agent_tool`). Not inherited by `bot:write` or `bot:admin`; required only when `agentActivity: true` is set.
 
-OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
+OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [native progress and agent activity rows](#native-progress-and-agent-activity-rows).
 
 ## Troubleshooting
 

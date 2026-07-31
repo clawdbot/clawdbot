@@ -143,7 +143,7 @@ export function createClickClackClient(options: ClientOptions) {
   async function request<T>(
     path: string,
     init: RequestInit = {},
-    options: { timeoutMs?: number } = {},
+    requestOptions: { timeoutMs?: number } = {},
   ): Promise<T> {
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
@@ -156,9 +156,9 @@ export function createClickClackClient(options: ClientOptions) {
       requestHeaders.set("Content-Type", "application/json");
     }
     const controller =
-      options.timeoutMs !== undefined && !init.signal ? new AbortController() : undefined;
+      requestOptions.timeoutMs !== undefined && !init.signal ? new AbortController() : undefined;
     const timeout = controller
-      ? setTimeout(() => controller.abort(), options.timeoutMs)
+      ? setTimeout(() => controller.abort(), requestOptions.timeoutMs)
       : undefined;
     try {
       const response = await fetcher(`${baseUrl}${path}`, {
@@ -180,7 +180,9 @@ export function createClickClackClient(options: ClientOptions) {
         maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
       });
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
   }
 

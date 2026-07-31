@@ -63,7 +63,9 @@ function progressText(payload: ClickClackItemEventPayload): string {
     progressText: payload.progressText,
     meta: payload.meta,
   })?.text?.trim();
-  if (line) return line;
+  if (line) {
+    return line;
+  }
   return (
     payload.progressText?.trim() ||
     payload.summary?.trim() ||
@@ -111,7 +113,7 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
     const anonymousLines = anonymousLinesByKind.get(kind) ?? [];
     const phase = payload.phase?.trim().toLowerCase();
     const existingAnonymous =
-      phase === "start" ? undefined : [...anonymousLines].reverse().find((line) => line.active);
+      phase === "start" ? undefined : anonymousLines.toReversed().find((line) => line.active);
     const line =
       existingAnonymous ??
       (() => {
@@ -127,7 +129,7 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   };
 }
 
-export type ClickClackAgentProgressPublisher = {
+type ClickClackAgentProgressPublisher = {
   start(): void;
   onItemEvent(payload: ClickClackItemEventPayload): void;
   finalize(): Promise<void>;
@@ -157,11 +159,15 @@ export function createClickClackAgentProgressPublisher(params: {
   const resolveLineId = createLineIdResolver();
 
   const drain = (): Promise<void> => {
-    if (drainPromise) return drainPromise;
+    if (drainPromise) {
+      return drainPromise;
+    }
     drainPromise = (async () => {
       while (queue.length > 0) {
         const frame = queue.shift();
-        if (!frame) continue;
+        if (!frame) {
+          continue;
+        }
         if (frame.lineId) {
           queuedLines.delete(frame.lineId);
         }
@@ -206,7 +212,9 @@ export function createClickClackAgentProgressPublisher(params: {
   };
 
   const scheduleLineDrain = (): void => {
-    if (lineDrainTimer) return;
+    if (lineDrainTimer) {
+      return;
+    }
     lineDrainTimer = setTimeout(() => {
       lineDrainTimer = undefined;
       flushQueuedLines();
@@ -235,7 +243,9 @@ export function createClickClackAgentProgressPublisher(params: {
 
   return {
     start() {
-      if (started) return;
+      if (started) {
+        return;
+      }
       started = true;
       enqueue({
         op: "append",
@@ -243,7 +253,9 @@ export function createClickClackAgentProgressPublisher(params: {
       });
     },
     onItemEvent(payload) {
-      if (!started || cleared) return;
+      if (!started || cleared) {
+        return;
+      }
       const id = resolveLineId(payload);
       const final = isFinal(payload);
       const line: Record<string, unknown> = {
@@ -262,7 +274,9 @@ export function createClickClackAgentProgressPublisher(params: {
       seenLines.add(id);
     },
     async finalize() {
-      if (!started || cleared) return;
+      if (!started || cleared) {
+        return;
+      }
       cleared = true;
       if (lineDrainTimer) {
         clearTimeout(lineDrainTimer);
