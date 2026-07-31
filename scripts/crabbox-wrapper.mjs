@@ -918,21 +918,23 @@ function shouldRequireBrokeredCloud(commandArgs, providerName) {
     // coordinator auth required by brokered cloud capacity.
     return false;
   }
+  // Route policy wins before explicit-provider and direct-debug exemptions.
   if (requestedWorkload(commandArgs)) {
     return true;
   }
   if (directCloudOverrideEnabled(providerName)) {
     return false;
   }
+  const explicitProvider = Boolean(commandProvider(commandArgs) || envProvider());
   if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
     // Workload routing never consumes local cloud credentials. Keep the
     // shipped direct Azure/Daytona path only for commands outside that policy.
-    return canonicalProvider === "aws" || managedBrokerRequested();
+    return canonicalProvider === "aws" || (!explicitProvider && managedBrokerRequested());
   }
   return (
     commandArgs[0] === "actions" &&
     commandArgs[1] === "hydrate" &&
-    (canonicalProvider === "aws" || managedBrokerRequested())
+    (canonicalProvider === "aws" || (!explicitProvider && managedBrokerRequested()))
   );
 }
 

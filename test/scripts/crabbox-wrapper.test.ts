@@ -1145,6 +1145,26 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).not.toContain("route workload=");
   });
 
+  it("requires broker auth for explicit providers inside workload routing", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--provider", "azure", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "azure",
+          coordinator: "",
+          brokerMode: "",
+          brokerAuth: "missing",
+        },
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+  });
+
   it("still validates workloads when a provider is explicit", () => {
     const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", [
       "run",
@@ -1161,11 +1181,17 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
   });
 
-  it("requires a compatible Crabbox for explicit brokered Daytona runs", () => {
+  it("requires a compatible Crabbox for configured brokered Daytona runs", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",
-      ["run", "--provider", "daytona", "--", "echo ok"],
+      ["run", "--", "echo ok"],
       {
+        configJson: {
+          provider: "daytona",
+          coordinator: "configured-broker",
+          brokerMode: "managed",
+          brokerAuth: "configured",
+        },
         env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9" },
       },
     );
@@ -1186,8 +1212,8 @@ describe("scripts/crabbox-wrapper", () => {
         {
           configJson: {
             provider,
-            coordinator: "",
-            brokerMode: "",
+            coordinator: "configured-broker",
+            brokerMode: "managed",
             brokerAuth: "missing",
           },
           env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
