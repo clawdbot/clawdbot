@@ -1,5 +1,6 @@
 // Resolves PowerShell Start-Process layouts that launch the OpenClaw CLI.
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
 import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessNamePattern,
@@ -49,6 +50,8 @@ const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
   "-inputobject",
   "-name",
 ]);
+const POWERSHELL_ALIAS_OPTIONS_WITH_VALUE = new Set(["-description", "-option", "-scope"]);
+const POWERSHELL_ALIAS_SETTERS = new Set(["nal", "new-alias", "sal", "set-alias"]);
 
 function optionName(token: string): string {
   return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
@@ -181,6 +184,9 @@ function powerShellIdentityFilterKeepsOpenClaw(
     return isPowerShellOpenClawFilter(argv, allowUnresolved);
   }
   const operands = argv.slice(negativeIndex + 1);
+  if (operands.some((token) => ["&&", "-and", "-or", "-xor", "||"].includes(token.toLowerCase()))) {
+    return true;
+  }
   if (operands.some((token) => /[$@][A-Za-z_][A-Za-z0-9_]*/u.test(token))) {
     return true;
   }
@@ -202,7 +208,7 @@ function isPowerShellIdentityFilter(argv: readonly string[]): boolean {
 }
 
 function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
-  return [
+  const mutations = new Set([
     "kill",
     "remove-service",
     "restart-service",
@@ -215,7 +221,70 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
     "suspend-service",
     "spps",
     "spsv",
-  ].includes(normalizeExecutableToken(argv[0] ?? ""));
+  ]);
+  if (mutations.has(normalizeExecutableToken(argv[0] ?? ""))) {
+    return true;
+  }
+  return (
+    ["%", "foreach", "foreach-object", "where", "where-object"].includes(
+      normalizeExecutableToken(argv[0] ?? ""),
+    ) && argv.slice(1).some((token) => mutations.has(normalizeExecutableToken(token)))
+  );
+}
+
+function parsePowerShellOpenClawAlias(argv: readonly string[]): string | null {
+  if (!POWERSHELL_ALIAS_SETTERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
+    return null;
+  }
+  let name: string | undefined;
+  let value: string | undefined;
+  const positionals: string[] = [];
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const option = optionName(token);
+    if (["-n", "-name"].includes(option)) {
+      name = inlineOptionValue(token) ?? argv[++index];
+    } else if (["-v", "-value"].includes(option)) {
+      value = inlineOptionValue(token) ?? argv[++index];
+    } else if (POWERSHELL_ALIAS_OPTIONS_WITH_VALUE.has(option)) {
+      if (inlineOptionValue(token) === undefined) {
+        index += 1;
+      }
+    } else if (!token.startsWith("-")) {
+      positionals.push(token);
+    }
+  }
+  name ??= positionals[0];
+  value ??= positionals[1];
+  return name && isOpenClawExecutablePattern(value) ? normalizeExecutableToken(name) : null;
+}
+
+/** Return true when a PowerShell alias resolves to a lifecycle-mutating OpenClaw invocation. */
+export function powerShellAliasLifecycleInvocationRequiresApproval(command: string): boolean {
+  const openClawAliases = new Set<string>();
+  for (const fragment of splitLifecycleCommandText(
+    command,
+    new Set([";", "|", "\n", "\r"]),
+    "powershell",
+  )) {
+    const parsed = splitShellArgs(fragment.trim().replace(/^[({\s]+|[)}\s]+$/gu, ""));
+    if (!parsed?.length) {
+      continue;
+    }
+    const alias = parsePowerShellOpenClawAlias(parsed);
+    if (alias) {
+      openClawAliases.add(alias);
+      continue;
+    }
+    const invocation = ["&", "."].includes(parsed[0] ?? "") ? parsed.slice(1) : parsed;
+    if (
+      openClawAliases.has(normalizeExecutableToken(invocation[0] ?? "")) &&
+      classifyOpenClawArgv(["openclaw", ...invocation.slice(1)])
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Return true when a PowerShell pipeline selects and mutates an OpenClaw process or service. */

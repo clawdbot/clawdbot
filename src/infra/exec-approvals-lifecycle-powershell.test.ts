@@ -50,4 +50,50 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
       ]),
     ).toBe(false);
   });
+
+  it("keeps OpenClaw selected by a compound negative filter", () => {
+    const command =
+      "Get-Process | Where-Object { $_.ProcessName -NotLike '*claw*' -or 1 -eq 1 } | Stop-Process";
+    expect(
+      requiresApproval(command, [
+        "Get-Process",
+        "|",
+        "Where-Object",
+        "{",
+        "$_.ProcessName",
+        "-NotLike",
+        "*claw*",
+        "-or",
+        "1",
+        "-eq",
+        "1",
+        "}",
+        "|",
+        "Stop-Process",
+      ]),
+    ).toBe(true);
+  });
+
+  it("inspects mutations nested in pipeline script blocks", () => {
+    const command = "Get-Process OpenClaw | ForEach-Object { Stop-Process -InputObject $_ }";
+    expect(
+      requiresApproval(command, [
+        "Get-Process",
+        "OpenClaw",
+        "|",
+        "ForEach-Object",
+        "{",
+        "Stop-Process",
+        "-InputObject",
+        "$_",
+        "}",
+      ]),
+    ).toBe(true);
+  });
+
+  it("tracks OpenClaw aliases across PowerShell fragments", () => {
+    const command = "Set-Alias oc openclaw; oc exec-policy preset yolo";
+    expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);
+    expect(requiresApproval("Set-Alias oc openclaw; oc status", ["oc", "status"])).toBe(false);
+  });
 });

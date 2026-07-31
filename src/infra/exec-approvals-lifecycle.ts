@@ -24,6 +24,7 @@ import {
 } from "./exec-approvals-lifecycle-patterns.js";
 import {
   commandHasPowerShellLifecyclePipeline,
+  powerShellAliasLifecycleInvocationRequiresApproval,
   resolvePowerShellStartProcessOpenClawArgv,
 } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
@@ -417,7 +418,8 @@ function classifyArgv(
       : undefined;
     if (
       nestedShellContext === "powershell" &&
-      powerShellCalculatedInvocationRequiresApproval(inline)
+      (powerShellCalculatedInvocationRequiresApproval(inline) ||
+        powerShellAliasLifecycleInvocationRequiresApproval(inline))
     ) {
       return true;
     }
@@ -591,6 +593,8 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
   };
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
+    (dialect === "powershell" &&
+      powerShellAliasLifecycleInvocationRequiresApproval(params.command)) ||
     commandHasPowerShellLifecyclePipeline(params.command, !envComplete, transformPowerShellArgv) ||
     commandHasLifecycleSubstitution(params.command, 0, shellContext, params.cwd, environment)
   ) {
