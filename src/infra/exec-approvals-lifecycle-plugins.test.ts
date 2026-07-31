@@ -28,6 +28,22 @@ describe("OpenClaw plugin and hook lifecycle approvals", () => {
     ["openclaw hooks disable audit", ["openclaw", "hooks", "disable", "audit"]],
     ["openclaw hooks install ./pack", ["openclaw", "hooks", "install", "./pack"]],
     ["openclaw hooks update audit", ["openclaw", "hooks", "update", "audit"]],
+    [
+      "openclaw plugins --directory list install memory",
+      ["openclaw", "plugins", "--directory", "list", "install", "memory"],
+    ],
+    [
+      "openclaw plugins --directory=list install memory",
+      ["openclaw", "plugins", "--directory=list", "install", "memory"],
+    ],
+    [
+      "openclaw hooks --event list install ./pack",
+      ["openclaw", "hooks", "--event", "list", "install", "./pack"],
+    ],
+    [
+      "openclaw hooks --event=list install ./pack",
+      ["openclaw", "hooks", "--event=list", "install", "./pack"],
+    ],
   ] as Array<[string, string[]]>)("classifies mutating command: %s", (command, argv) => {
     expect(requiresApproval(command, argv)).toBe(true);
   });

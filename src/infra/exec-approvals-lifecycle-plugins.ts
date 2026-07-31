@@ -34,7 +34,11 @@ const HOOK_OPTIONS_WITH_VALUE = new Set([
 const PLUGIN_READ_ONLY = new Set(["doctor", "info", "inspect", "list", "search", "validate"]);
 const HOOK_READ_ONLY = new Set(["check", "info", "list", "relay"]);
 
-function firstPositional(argv: readonly string[], start: number): number {
+function firstPositional(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string>,
+): number {
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     if (token === "--") {
@@ -42,6 +46,9 @@ function firstPositional(argv: readonly string[], start: number): number {
     }
     if (!token.startsWith("-") || token === "-") {
       return index;
+    }
+    if (optionsWithValue.has(lifecycleOptionName(token)) && !token.includes("=")) {
+      index += 1;
     }
   }
   return argv.length;
@@ -63,7 +70,7 @@ export function classifyOpenClawPluginsArgv(argv: readonly string[], start: numb
   if (hasEffectiveHelpOrVersion(argv, start, PLUGIN_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  const actionIndex = firstPositional(argv, start);
+  const actionIndex = firstPositional(argv, start, PLUGIN_OPTIONS_WITH_VALUE);
   const action = lifecycleOptionName(argv[actionIndex] ?? "");
   if (!action || PLUGIN_READ_ONLY.has(action)) {
     return false;
@@ -93,7 +100,11 @@ export function classifyOpenClawPluginsArgv(argv: readonly string[], start: numb
     );
   }
   if (action === "marketplace") {
-    const marketplaceActionIndex = firstPositional(argv, actionIndex + 1);
+    const marketplaceActionIndex = firstPositional(
+      argv,
+      actionIndex + 1,
+      PLUGIN_OPTIONS_WITH_VALUE,
+    );
     const marketplaceAction = lifecycleOptionName(argv[marketplaceActionIndex] ?? "");
     return marketplaceAction !== "" && !["entries", "list"].includes(marketplaceAction);
   }
@@ -105,7 +116,7 @@ export function classifyOpenClawHooksArgv(argv: readonly string[], start: number
   if (hasEffectiveHelpOrVersion(argv, start, HOOK_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  const actionIndex = firstPositional(argv, start);
+  const actionIndex = firstPositional(argv, start, HOOK_OPTIONS_WITH_VALUE);
   const action = lifecycleOptionName(argv[actionIndex] ?? "");
   if (!action || HOOK_READ_ONLY.has(action)) {
     return false;
@@ -130,7 +141,7 @@ export function unresolvedOpenClawPluginsActionMayMutate(
   if (hasEffectiveHelpOrVersion(argv, start, PLUGIN_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  const actionIndex = firstPositional(argv, start);
+  const actionIndex = firstPositional(argv, start, PLUGIN_OPTIONS_WITH_VALUE);
   const actionToken = argv[actionIndex];
   if (isUnresolved(actionToken)) {
     return true;
@@ -152,7 +163,11 @@ export function unresolvedOpenClawPluginsActionMayMutate(
     return argv.slice(actionIndex + 1).some(isUnresolved);
   }
   if (action === "marketplace") {
-    const marketplaceActionIndex = firstPositional(argv, actionIndex + 1);
+    const marketplaceActionIndex = firstPositional(
+      argv,
+      actionIndex + 1,
+      PLUGIN_OPTIONS_WITH_VALUE,
+    );
     return isUnresolved(argv[marketplaceActionIndex]);
   }
   return false;
@@ -167,7 +182,7 @@ export function unresolvedOpenClawHooksActionMayMutate(
   if (hasEffectiveHelpOrVersion(argv, start, HOOK_OPTIONS_WITH_VALUE)) {
     return false;
   }
-  const actionIndex = firstPositional(argv, start);
+  const actionIndex = firstPositional(argv, start, HOOK_OPTIONS_WITH_VALUE);
   const actionToken = argv[actionIndex];
   if (isUnresolved(actionToken)) {
     return true;
