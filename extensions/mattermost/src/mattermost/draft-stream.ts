@@ -1,6 +1,7 @@
 // Mattermost plugin module implements draft stream behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -119,7 +120,7 @@ export function createMattermostDraftStream(params: {
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
-  let terminalAcceptedDeliveryError: unknown;
+  let terminalAcceptedDeliveryError: Error | undefined;
   const assertNoAcceptedDeliveryFailure = () => {
     if (terminalAcceptedDeliveryError !== undefined) {
       throw terminalAcceptedDeliveryError;
@@ -183,16 +184,18 @@ export function createMattermostDraftStream(params: {
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
       streamState.stopped = true;
-      const acceptedDeliveryFailed = isChannelPartialDeliveryError(err);
-      if (acceptedDeliveryFailed) {
+      const acceptedDeliveryError = isChannelPartialDeliveryError(err)
+        ? toErrorObject(err, "Mattermost accepted delivery failed")
+        : undefined;
+      if (acceptedDeliveryError) {
         // Warning handlers can synchronously re-enter finalization; retain the failure first.
-        terminalAcceptedDeliveryError = err;
+        terminalAcceptedDeliveryError = acceptedDeliveryError;
       }
       params.warn?.(
         `mattermost stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      if (acceptedDeliveryFailed) {
-        throw err;
+      if (acceptedDeliveryError) {
+        throw acceptedDeliveryError;
       }
       return false;
     }
@@ -334,11 +337,13 @@ export function createMattermostDraftStream(params: {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
-        const acceptedDeliveryFailed = isChannelPartialDeliveryError(err);
-        if (acceptedDeliveryFailed) {
+        const acceptedDeliveryError = isChannelPartialDeliveryError(err)
+          ? toErrorObject(err, "Mattermost accepted delivery failed")
+          : undefined;
+        if (acceptedDeliveryError) {
           // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
           streamState.stopped = true;
-          terminalAcceptedDeliveryError = err;
+          terminalAcceptedDeliveryError = acceptedDeliveryError;
         }
         const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
         if (publishedAssistantPrefix) {
@@ -352,8 +357,8 @@ export function createMattermostDraftStream(params: {
         params.warn?.(
           `mattermost stream preview boundary flush failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        if (acceptedDeliveryFailed) {
-          throw err;
+        if (acceptedDeliveryError) {
+          throw acceptedDeliveryError;
         }
       }
     })();

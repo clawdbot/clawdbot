@@ -163,8 +163,11 @@ describe("LINE send helpers", () => {
     replyMessageMock.mockResolvedValue({ sentMessages: [{ id: "reply" }] });
     showLoadingAnimationMock.mockResolvedValue({});
     lineFetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
-      const requestUrl = typeof url === "string" ? url : url.toString();
-      const payload = JSON.parse(String(init?.body));
+      const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (typeof init?.body !== "string") {
+        throw new Error("LINE test fetch requires a JSON string request body");
+      }
+      const payload = JSON.parse(init.body);
       const provider = requestUrl.endsWith("/push") ? pushMessageMock : replyMessageMock;
       const body = await provider(payload);
       return new Response(JSON.stringify(body), {

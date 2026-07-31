@@ -7,6 +7,7 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessageActions } from "./actions.js";
@@ -171,15 +172,18 @@ async function sendLineProviderMessages(
   token: string,
   request: messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest,
 ): Promise<messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse> {
-  const response = await fetch(`https://api.line.me/v2/bot/message/${operation}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+  const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
+    `https://api.line.me/v2/bot/message/${operation}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+      },
+      body: JSON.stringify(request),
     },
-    body: JSON.stringify(request),
-  });
+  );
 
   if (!response.ok) {
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {

@@ -708,7 +708,7 @@ describe("createMattermostPost", () => {
     }
 
     expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
+    if (!isChannelPartialDeliveryError(caught) || !(caught instanceof Error)) {
       throw new Error("expected an accepted Mattermost delivery without an identity");
     }
     expect(caught.message).toBe("Mattermost post creation response did not include a post id");

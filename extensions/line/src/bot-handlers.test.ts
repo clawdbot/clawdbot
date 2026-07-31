@@ -769,7 +769,12 @@ describe("handleLineWebhookEvents", () => {
         : new Error("provider delivery rejected");
       pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(replyError);
       const event = createTestMessageEvent({
-        message: { id: "pairing-final", type: "text", text: "hello" },
+        message: {
+          id: "pairing-final",
+          type: "text",
+          text: "hello",
+          quoteToken: "pairing-final-quote",
+        },
         source: { type: "user", userId: "pairing-user" },
         webhookEventId: "pairing-final-event",
       });

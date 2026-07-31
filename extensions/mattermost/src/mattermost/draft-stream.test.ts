@@ -15,7 +15,7 @@ type RequestRecord = {
 function createMockClient(): {
   client: MattermostClient;
   calls: RequestRecord[];
-  requestMock: ReturnType<typeof vi.fn>;
+  requestMock: ReturnType<typeof vi.fn<MattermostClient["request"]>>;
 } {
   const calls: RequestRecord[] = [];
   let nextId = 1;
