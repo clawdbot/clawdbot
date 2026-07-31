@@ -367,6 +367,18 @@ describe("setup surface helpers", () => {
   describe("setup wizard account routing", () => {
     type FinalizeArgs = Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0];
 
+    async function finalizeDefaultTwitchSetup(cfg: FinalizeArgs["cfg"]) {
+      return await twitchSetupWizard.finalize?.({
+        cfg,
+        accountId: "default",
+        credentialValues: {},
+        runtime: {} as FinalizeArgs["runtime"],
+        prompter: mockPrompter,
+        options: {},
+        forceAllowFrom: false,
+      });
+    }
+
     async function finalizeTwitchSetupForAccount(cfg: FinalizeArgs["cfg"]) {
       return await twitchSetupWizard.finalize?.({
         cfg,
@@ -378,6 +390,31 @@ describe("setup surface helpers", () => {
         forceAllowFrom: false,
       });
     }
+
+    it("uses an environment-only token without sending it to wizard prompts", async () => {
+      const envToken = "oauth:environment-only";
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
+      mockPromptConfirm.mockReset().mockResolvedValueOnce(true as never);
+      mockPromptText
+        .mockReset()
+        .mockResolvedValueOnce("env-bot" as never)
+        .mockResolvedValueOnce("env-client" as never);
+
+      const result = await finalizeDefaultTwitchSetup({});
+
+      expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject({
+        username: "env-bot",
+        accessToken: envToken,
+        clientId: "env-client",
+      });
+      expect(mockPromptConfirm).toHaveBeenCalledWith({
+        message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
+        initialValue: true,
+      });
+      expect(mockPromptText).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(mockPromptConfirm.mock.calls)).not.toContain(envToken);
+      expect(JSON.stringify(mockPromptText.mock.calls)).not.toContain(envToken);
+    });
 
     it("rejects reserved account ids before using them as config keys", () => {
       expect(() =>
