@@ -123,6 +123,19 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(true);
   });
 
+  it("recursively classifies OpenClaw commands in pipeline script blocks", () => {
+    const inline = "1 | % { openclaw gateway restart }";
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
+    expect(
+      requiresApproval("powershell -Command '1 | % { openclaw status }'", [
+        "powershell",
+        "-Command",
+        "1 | % { openclaw status }",
+      ]),
+    ).toBe(false);
+  });
+
   it("tracks OpenClaw aliases across PowerShell fragments", () => {
     const command = "Set-Alias oc openclaw; oc exec-policy preset yolo";
     expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);
@@ -141,4 +154,22 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     const command = "Set-Alias oc $env:TOOL; oc gateway restart";
     expect(requiresApproval(command, ["oc", "gateway", "restart"], {}, false)).toBe(true);
   });
+
+  it.each([
+    [
+      "openclaw onboard --install-daemon --help",
+      ["openclaw", "onboard", "--install-daemon", "--help"],
+    ],
+    [
+      "openclaw configure --section channels --help",
+      ["openclaw", "configure", "--section", "channels", "--help"],
+    ],
+    ["openclaw setup --wizard --help", ["openclaw", "setup", "--wizard", "--help"]],
+    ["openclaw node --help restart", ["openclaw", "node", "--help", "restart"]],
+  ] as Array<[string, string[]]>)(
+    "keeps help-only lifecycle-shaped commands non-blocking: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(false);
+    },
+  );
 });

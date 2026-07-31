@@ -18,6 +18,40 @@ const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
+const SETUP_OPTIONS_WITH_VALUE = new Set([
+  "--auth-choice",
+  "--cloudflare-ai-gateway-account-id",
+  "--cloudflare-ai-gateway-gateway-id",
+  "--custom-api-key",
+  "--custom-base-url",
+  "--custom-compatibility",
+  "--custom-model-id",
+  "--custom-provider-id",
+  "--daemon-runtime",
+  "--flow",
+  "--gateway-auth",
+  "--gateway-bind",
+  "--gateway-password",
+  "--gateway-port",
+  "--gateway-token",
+  "--gateway-token-ref-env",
+  "--import-from",
+  "--import-source",
+  "--message",
+  "--mode",
+  "--node-manager",
+  "--remote-token",
+  "--remote-url",
+  "--reset-scope",
+  "--secret-input-mode",
+  "--section",
+  "--tailscale",
+  "--token",
+  "--token-expires-in",
+  "--token-profile-id",
+  "--token-provider",
+  "--workspace",
+]);
 const DRY_RUN_OPTION = new Set(["--dry-run"]);
 
 function normalizedToken(value: string | undefined): string {
@@ -147,7 +181,7 @@ export function classifyOpenClawArgv(argv: readonly string[]): boolean {
     case "configure":
     case "onboard":
     case "setup":
-      return !HELP_OR_VERSION_FLAGS.has(argv[index + 1]?.trim() ?? "");
+      return !lifecycleHasEffectiveHelpOrVersion(argv, index + 1, SETUP_OPTIONS_WITH_VALUE);
     default:
       return false;
   }

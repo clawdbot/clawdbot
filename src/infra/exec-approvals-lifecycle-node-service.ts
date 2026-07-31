@@ -64,7 +64,7 @@ function hasEffectiveHelpOrVersion(argv: readonly string[], start: number): bool
 export function classifyOpenClawNodeServiceArgv(argv: readonly string[], start: number): boolean {
   const index = actionIndex(argv, start);
   const action = (argv[index] ?? "").trim().toLowerCase();
-  return NODE_SERVICE_MUTATIONS.has(action) && !hasEffectiveHelpOrVersion(argv, index + 1);
+  return NODE_SERVICE_MUTATIONS.has(action) && !hasEffectiveHelpOrVersion(argv, start);
 }
 
 /** Return true when a dynamic value occupies the node-service action position. */

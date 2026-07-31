@@ -6,7 +6,10 @@ import {
   matchesOpenClawProcessNamePattern,
   negativePowerShellProcessNameSelectorExcludesAll,
 } from "./exec-approvals-lifecycle-patterns.js";
-import { splitLifecycleCommandText } from "./exec-approvals-lifecycle-shell.js";
+import {
+  splitLifecycleCommandText,
+  splitLifecycleInlineCommands,
+} from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const START_PROCESS_NAMES = new Set(["saps", "start", "start-process"]);
@@ -274,6 +277,67 @@ function isDynamicPowerShellAliasReference(value: string | undefined): boolean {
   return /^[$@([\]{}]/u.test(normalized) || normalized.includes("$(");
 }
 
+function extractPowerShellPipelineScriptBlocks(command: string): string[] {
+  if (splitLifecycleCommandText(command, new Set(["|"]), "powershell").length < 2) {
+    return [];
+  }
+  const blocks: string[] = [];
+  let blockStart = -1;
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "`") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) {
+        blockStart = index + 1;
+      }
+      depth += 1;
+    } else if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && blockStart !== -1) {
+        blocks.push(command.slice(blockStart, index));
+        blockStart = -1;
+      }
+    }
+  }
+  return blocks;
+}
+
+/** Recursively classify executable fragments embedded in PowerShell pipeline script blocks. */
+export function powerShellPipelineScriptBlocksRequireApproval(
+  command: string,
+  classify: (argv: string[], raw: string) => boolean,
+): boolean {
+  return extractPowerShellPipelineScriptBlocks(command).some(
+    (scriptBlock) =>
+      powerShellAliasLifecycleInvocationRequiresApproval(scriptBlock) ||
+      splitLifecycleInlineCommands(scriptBlock, "powershell").some((part) => {
+        const argv = splitShellArgs(part);
+        return argv ? classify(argv, part) : false;
+      }) ||
+      powerShellPipelineScriptBlocksRequireApproval(scriptBlock, classify),
+  );
+}
+
 /** Return true when a PowerShell alias resolves to a lifecycle-mutating OpenClaw invocation. */
 export function powerShellAliasLifecycleInvocationRequiresApproval(
   command: string,
@@ -337,7 +401,15 @@ export function commandHasPowerShellLifecyclePipeline(
   command: string,
   allowUnresolved = false,
   expandArgv?: (argv: string[]) => { argv: readonly string[]; unresolved: boolean },
+  classifyScriptBlock?: (argv: string[], raw: string) => boolean,
 ): boolean {
+  const classify =
+    classifyScriptBlock ??
+    ((argv: string[]) =>
+      isOpenClawExecutablePattern(argv[0]) && classifyOpenClawArgv(["openclaw", ...argv.slice(1)]));
+  if (powerShellPipelineScriptBlocksRequireApproval(command, classify)) {
+    return true;
+  }
   const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
   if (stages.length < 2) {
     return false;

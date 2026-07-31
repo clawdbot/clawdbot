@@ -430,17 +430,21 @@ function classifyArgv(
     if (
       nestedShellContext === "powershell" &&
       (powerShellCalculatedInvocationRequiresApproval(inline) ||
-        powerShellAliasLifecycleInvocationRequiresApproval(inline, expandNestedPowerShellArgv))
-    ) {
-      return true;
-    }
-    if (
-      nestedShellContext === "powershell" &&
-      commandHasPowerShellLifecyclePipeline(
-        inline,
-        environment ? !environment.envComplete : false,
-        expandNestedPowerShellArgv,
-      )
+        powerShellAliasLifecycleInvocationRequiresApproval(inline, expandNestedPowerShellArgv) ||
+        commandHasPowerShellLifecyclePipeline(
+          inline,
+          environment ? !environment.envComplete : false,
+          expandNestedPowerShellArgv,
+          (nestedArgv, nestedRaw) =>
+            classifyArgv(
+              nestedArgv,
+              nestedRaw,
+              depth + 1,
+              nestedShellContext,
+              cwd,
+              nestedEnvironment,
+            ),
+        ))
     ) {
       return true;
     }
