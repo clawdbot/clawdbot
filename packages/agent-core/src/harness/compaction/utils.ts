@@ -87,7 +87,7 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 
 const TOOL_RESULT_MAX_CHARS = 2000;
 const IMPORTANT_TOOL_RESULT_TAIL =
-  /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code|total|summary|result|complete|finished|done)\b/i;
+  /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/i;
 
 function safeJsonStringify(value: unknown): string {
   try {

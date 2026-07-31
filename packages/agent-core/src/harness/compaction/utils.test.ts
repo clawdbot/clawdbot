@@ -92,4 +92,16 @@ describe("serializeConversation", () => {
 
     expect(serializeConversation(messages)).toContain("ERROR: earlier failure");
   });
+
+  it("does not let routine completion output evict an earlier failure", () => {
+    const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\ndone`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    expect(serializeConversation(messages)).toContain("ERROR: deployment failed");
+  });
 });
