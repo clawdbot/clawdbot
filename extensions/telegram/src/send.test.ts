@@ -4583,6 +4583,120 @@ describe("editMessageTelegram", () => {
     );
     expect(botRawApi.editMessageText).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "inherits the disabled account default",
+      accountLinkPreview: false,
+      linkPreview: undefined,
+      expectedDisabled: true,
+    },
+    {
+      name: "lets an explicit enabled value override the account default",
+      accountLinkPreview: false,
+      linkPreview: true,
+      expectedDisabled: false,
+    },
+    {
+      name: "lets an explicit disabled value override the account default",
+      accountLinkPreview: true,
+      linkPreview: false,
+      expectedDisabled: true,
+    },
+  ])("$name for edited Telegram messages", async (testCase) => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "https://example.com", {
+      token: "tok",
+      cfg: { channels: { telegram: { linkPreview: testCase.accountLinkPreview } } },
+      ...(testCase.linkPreview !== undefined ? { linkPreview: testCase.linkPreview } : {}),
+    });
+
+    const params = requireRecord(
+      firstMockCall(botApi.editMessageText, "editMessageText preview call")[3],
+      "edited Telegram preview params",
+    );
+    if (testCase.expectedDisabled) {
+      expect(params.link_preview_options).toEqual({ is_disabled: true });
+    } else {
+      expect(params).not.toHaveProperty("link_preview_options");
+    }
+  });
+
+  it("preserves disabled previews when editing rich Telegram messages", async () => {
+    botRawApi.editMessageText.mockResolvedValue({
+      message_id: 1,
+      chat: { id: "123", type: "private" },
+      text: "https://example.com",
+    });
+
+    await editMessageTelegram("123", 1, "https://example.com", {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+      linkPreview: false,
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: "123",
+        message_id: 1,
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+
+  it.each([
+    { name: "text", editMode: "text" as const, field: "text" as const },
+    { name: "caption", editMode: "caption" as const, field: "caption" as const },
+  ])("refreshes cached $name from Telegram's authoritative edit response", async (testCase) => {
+    const storePath = `/tmp/openclaw-telegram-edited-context-${process.pid}-${Date.now()}-${testCase.name}.json`;
+    const cfg = { session: { store: storePath } };
+    const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: chat.id,
+      threadId: 77,
+      msg: {
+        chat,
+        message_id: 902,
+        message_thread_id: 77,
+        date: 1_779_394_740,
+        from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+        [testCase.field]: "outdated content",
+      },
+    });
+    const editedMessage = {
+      chat,
+      message_id: 902,
+      message_thread_id: 77,
+      date: 1_779_394_740,
+      edit_date: 1_779_394_750,
+      from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+      [testCase.field]: "authoritative edited content",
+    };
+    if (testCase.editMode === "caption") {
+      botApi.editMessageCaption.mockResolvedValue(editedMessage);
+    } else {
+      botApi.editMessageText.mockResolvedValue(editedMessage);
+    }
+
+    await editMessageTelegram(chat.id, 902, "authoritative edited content", {
+      token: "42:test-token",
+      cfg,
+      editMode: testCase.editMode,
+    });
+
+    const cached = await cache.get({
+      accountId: "default",
+      chatId: chat.id,
+      messageId: "902",
+    });
+    expect(cached?.body).toBe("authoritative edited content");
+    expect(hasProviderObservedTelegramThreadBinding(cached, 77)).toBe(true);
+  });
 });
 
 describe("sendPollTelegram", () => {
