@@ -211,12 +211,7 @@ export async function setupSkills(
     }
   }
   const candidateInstallable = installable;
-  const needsBrewPrompt =
-    supportsHomebrewPrompt(process.platform) &&
-    candidateInstallable.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-    !(await detectBrewOnce());
-  const readyInstallable: typeof installable = [];
-  const skippedInstallable: SkippedInstall[] = [];
+  const readinessBySkillName = new Map<string, SkillInstallReadiness>();
   for (const skill of candidateInstallable) {
     // Onboarding intentionally executes only the primary recipe below. Keep
     // readiness aligned with that recipe instead of silently changing methods.
@@ -225,33 +220,10 @@ export async function setupSkills(
       continue;
     }
     const readiness = await resolveKindReadinessOnce(primaryInstall.kind);
-    if (readiness.ready) {
-      readyInstallable.push(skill);
-    } else {
-      skippedInstallable.push({ skill, reason: readiness.reason });
-    }
-  }
-  installable = readyInstallable;
-  if (needsBrewPrompt) {
-    await prompter.note(
-      [
-        "Many skill dependencies are shipped via Homebrew.",
-        "Without brew, you'll need to build from source or download releases manually.",
-        "",
-        "Install Homebrew:",
-        '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-      ].join("\n"),
-      t("wizard.skills.homebrewRecommendedTitle"),
-    );
-  }
-  if (skippedInstallable.length > 0) {
-    await prompter.note(
-      formatSkippedInstallNote(skippedInstallable),
-      t("wizard.skills.manualPrereqsTitle"),
-    );
+    readinessBySkillName.set(skill.name, readiness);
   }
   let next: OpenClawConfig = cfg;
-  if (installable.length === 0 && missing.length === 0) {
+  if (candidateInstallable.length === 0 && missing.length === 0) {
     await prompter.note(
       [
         "No missing skill dependencies to install.",
@@ -262,7 +234,7 @@ export async function setupSkills(
     );
     return next;
   }
-  if (installable.length > 0) {
+  if (candidateInstallable.length > 0) {
     const selected = await prompter.multiselect({
       message: t("wizard.skills.installDeps"),
       options: [
@@ -271,19 +243,29 @@ export async function setupSkills(
           label: t("common.skipForNow"),
           hint: t("wizard.skills.skipDepsHint"),
         },
-        ...installable.map((skill) => ({
+        ...candidateInstallable.map((skill) => ({
           value: skill.name,
           label: `${skill.emoji ?? "🧩"} ${skill.name}`,
           hint: formatSkillHint(skill),
         })),
       ],
     });
-    const selectedNames = selected.includes("__skip__") ? [] : selected;
+    const selectedNames = selected.filter((name) => name !== "__skip__");
     const selectedSkills = selectedNames
-      .map((name) => installable.find((skill) => skill.name === name))
-      .filter((skill): skill is (typeof installable)[number] => skill !== undefined);
+      .map((name) => candidateInstallable.find((skill) => skill.name === name))
+      .filter((skill): skill is (typeof candidateInstallable)[number] => skill !== undefined);
+    const selectedReadySkills: typeof selectedSkills = [];
+    const selectedSkippedInstallable: SkippedInstall[] = [];
+    for (const skill of selectedSkills) {
+      const readiness = readinessBySkillName.get(skill.name);
+      if (readiness?.ready !== false) {
+        selectedReadySkills.push(skill);
+      } else {
+        selectedSkippedInstallable.push({ skill, reason: readiness.reason });
+      }
+    }
 
-    const needsNodeManagerPrompt = selectedSkills.some((skill) =>
+    const needsNodeManagerPrompt = selectedReadySkills.some((skill) =>
       skill.install.some((option) => option.kind === "node"),
     );
     if (needsNodeManagerPrompt) {
@@ -303,7 +285,7 @@ export async function setupSkills(
     }
 
     const deferredSkippedInstallable: SkippedInstall[] = [];
-    for (const target of selectedSkills) {
+    for (const target of selectedReadySkills) {
       if (target.install.length === 0) {
         continue;
       }
@@ -369,8 +351,26 @@ export async function setupSkills(
       runtime.log(t("wizard.skills.docsLine"));
     }
     if (deferredSkippedInstallable.length > 0) {
+      selectedSkippedInstallable.push(...deferredSkippedInstallable);
+    }
+    if (
+      supportsHomebrewPrompt(process.platform) &&
+      selectedSkippedInstallable.some((item) => item.reason === "brew")
+    ) {
       await prompter.note(
-        formatSkippedInstallNote(deferredSkippedInstallable),
+        [
+          "Many skill dependencies are shipped via Homebrew.",
+          "Without brew, you'll need to build from source or download releases manually.",
+          "",
+          "Install Homebrew:",
+          '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+        ].join("\n"),
+        t("wizard.skills.homebrewRecommendedTitle"),
+      );
+    }
+    if (selectedSkippedInstallable.length > 0) {
+      await prompter.note(
+        formatSkippedInstallNote(selectedSkippedInstallable),
         t("wizard.skills.manualPrereqsTitle"),
       );
     }
