@@ -606,6 +606,12 @@ function normalizeUnion(
     };
   }
 
+  // A native field cannot preserve both literal sentinels and an open typed branch.
+  // Keep the original union for Raw mode instead of silently dropping valid values.
+  if (literals.length > 0 && remaining.length > 0) {
+    return null;
+  }
+
   if (remaining.length === 1) {
     const remainingSchema = remaining[0];
     if (!remainingSchema) {
