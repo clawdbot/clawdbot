@@ -1,4 +1,5 @@
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -608,7 +609,10 @@ export async function upsertAcpSessionMeta(params: {
         currentRow && acpSessionRowMatchesEntry(currentRow, entry)
           ? rowToAcpSessionMeta(currentRow)
           : undefined;
-      preparedEntry = mergeSessionEntry(entry, { updatedAt });
+      preparedEntry = mergeSessionEntry(entry, {
+        updatedAt,
+        ...(entry ? {} : { lifecycleRevision: randomUUID() }),
+      });
       nextMeta = params.mutate(
         current,
         current ? mergeAcpForReturn(preparedEntry, current) : entry,

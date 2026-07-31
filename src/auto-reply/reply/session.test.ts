@@ -1420,10 +1420,18 @@ describe("initSessionState RawBody", () => {
   });
   it.each([
     {
-      name: "rotates local session state for /new on bound ACP sessions",
+      name: "defers /new lifecycle rotation to the bound ACP reset handler",
       body: "/new",
       to: "1478836151241412759",
       includeBinding: true,
+      expectedRotation: false,
+    },
+    {
+      name: "defers /reset lifecycle rotation to the bound ACP reset handler",
+      body: "/reset",
+      to: "1478836151241412759",
+      includeBinding: true,
+      expectedRotation: false,
     },
     {
       name: "rotates local session state for ACP /new when no matching conversation binding exists",
@@ -1431,6 +1439,7 @@ describe("initSessionState RawBody", () => {
       to: "user:12345",
       originatingTo: "user:12345",
       includeBinding: false,
+      expectedRotation: true,
     },
     {
       name: "keeps custom reset triggers working on bound ACP sessions",
@@ -1438,12 +1447,14 @@ describe("initSessionState RawBody", () => {
       to: "1478836151241412759",
       includeBinding: true,
       resetTriggers: ["/fresh"],
+      expectedRotation: true,
     },
     {
       name: "keeps normal /new behavior for unbound ACP-shaped session keys",
       body: "/new",
       to: "1478836151241412759",
       includeBinding: false,
+      expectedRotation: true,
     },
   ])("$name", async (scenario) => {
     const storePath = await createStorePath("openclaw-rawbody-acp-reset-");
@@ -1489,9 +1500,13 @@ describe("initSessionState RawBody", () => {
       commandAuthorized: true,
     });
 
-    expect(result.resetTriggered).toBe(true);
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.resetTriggered).toBe(scenario.expectedRotation);
+    expect(result.isNewSession).toBe(scenario.expectedRotation);
+    if (scenario.expectedRotation) {
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } else {
+      expect(result.sessionId).toBe(existingSessionId);
+    }
   });
   it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");

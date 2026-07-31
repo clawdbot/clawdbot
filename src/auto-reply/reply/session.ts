@@ -246,6 +246,31 @@ function resolveSessionConversationBindingContext(
   };
 }
 
+function resolveBoundAcpSessionForCommandReset(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
+}): string | undefined {
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
+  return resolveEffectiveResetTargetSessionKey({
+    cfg: params.cfg,
+    channel: bindingContext?.channel,
+    accountId: bindingContext?.accountId,
+    conversationId: bindingContext?.conversationId,
+    parentConversationId: bindingContext?.parentConversationId,
+    activeSessionKey: normalizeOptionalString(params.ctx.SessionKey),
+    allowNonAcpBindingSessionKey: false,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: true,
+    fallbackToActiveAcpWhenUnbound: false,
+  });
+}
+
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
@@ -546,6 +571,16 @@ async function initSessionStateAttemptLocked(
     botUsername: ctx.BotUsername,
   });
   const softReset = parseSoftResetCommand(normalizedResetBody);
+  const boundAcpSessionForCommandReset = resolveBoundAcpSessionForCommandReset({
+    cfg,
+    ctx: sessionCtxForState,
+    bindingContext: conversationBindingContext,
+  });
+  const shouldDeferResetToBoundAcpCommand = (triggerLower: string): boolean =>
+    Boolean(boundAcpSessionForCommandReset) &&
+    DEFAULT_RESET_TRIGGERS.some(
+      (defaultTrigger) => normalizeLowercaseStringOrEmpty(defaultTrigger) === triggerLower,
+    );
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
@@ -561,6 +596,9 @@ async function initSessionStateAttemptLocked(
     }
     const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+      if (shouldDeferResetToBoundAcpCommand(triggerLower)) {
+        break;
+      }
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
@@ -573,6 +611,9 @@ async function initSessionStateAttemptLocked(
       (trimmedBodyLower.startsWith(triggerPrefixLower) ||
         strippedForResetLower.startsWith(triggerPrefixLower))
     ) {
+      if (shouldDeferResetToBoundAcpCommand(triggerLower)) {
+        break;
+      }
       isNewSession = true;
       bodyStripped = normalizedResetBody.slice(trigger.length).trimStart();
       resetTriggered = true;

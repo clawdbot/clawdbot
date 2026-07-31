@@ -1632,6 +1632,103 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(baseStore["load"]).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects saves from records loaded before a fresh reset generation", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+    const staleRecord = await wrappedStore.load(sessionKey);
+
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+    expect(staleRecord).toBeDefined();
+    await wrappedStore.save({
+      ...(staleRecord as Record<string, unknown>),
+      closed: true,
+    });
+
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+  });
+
+  it("keeps a fresh generation owned when an older discard close finishes late", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const oldRecord: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    let persisted = oldRecord;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = record;
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): {
+        close: AcpRuntime["close"];
+      };
+    };
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(sessionKey);
+    let releaseClose: (() => void) | undefined;
+    vi.spyOn(scopedDelegate, "close").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      oldRecord.closed = true;
+      await wrappedStore.save(oldRecord);
+    });
+
+    const closePromise = runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    await vi.waitFor(() => expect(releaseClose).toEqual(expect.any(Function)));
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+
+    releaseClose?.();
+    await closePromise;
+
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+    expect(await wrappedStore.load(sessionKey)).toMatchObject({ acpSessionId: "fresh-session" });
+    expect(exposedRuntime.managedToolsSessionDelegates.get(sessionKey)).toBe(scopedDelegate);
+  });
+
   it("marks the session fresh after discardPersistentState close", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
