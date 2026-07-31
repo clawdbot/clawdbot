@@ -312,6 +312,8 @@ function extractChildProcessBindings(source: string): ChildProcessBindings {
   const esmNamedRe = /import\s*\{([^}]+)\}\s*from\s*["'](?:node:)?child_process["']/g;
   // ESM default imports: import cp from "node:child_process"
   const esmDefaultRe = /import\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM namespace imports: import * as cp from "node:child_process"
+  const esmNamespaceRe = /import\s*\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
   // CJS destructuring: const { exec: run } = require("child_process")
   const cjsDestructRe =
     /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
@@ -338,7 +340,7 @@ function extractChildProcessBindings(source: string): ChildProcessBindings {
     }
   }
 
-  for (const namespaceRe of [esmDefaultRe, cjsNamespaceRe]) {
+  for (const namespaceRe of [esmNamespaceRe, esmDefaultRe, cjsNamespaceRe]) {
     let namespaceMatch: RegExpExecArray | null;
     while ((namespaceMatch = namespaceRe.exec(source)) !== null) {
       namespaces.add(namespaceMatch[1]);

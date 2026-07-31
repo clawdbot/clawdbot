@@ -317,6 +317,14 @@ cp["spawn"]("node", ["server.js"]);
     expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
   });
 
+  it("detects child_process exec through ESM namespace import and computed member", () => {
+    const source = `
+import * as cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);
+`;
+    expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
+  });
+
   it("does not flag child_process import without exec/spawn call", () => {
     const source = `
 // This module wraps child_process for safety
