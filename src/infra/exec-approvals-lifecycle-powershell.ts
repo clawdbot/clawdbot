@@ -1,11 +1,13 @@
 // Resolves PowerShell Start-Process layouts that launch the OpenClaw CLI.
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
 import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessNamePattern,
   negativePowerShellProcessNameSelectorExcludesAll,
 } from "./exec-approvals-lifecycle-patterns.js";
+import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   splitLifecycleCommandText,
   splitLifecycleInlineCommands,
@@ -56,6 +58,7 @@ const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
 ]);
 const POWERSHELL_ALIAS_OPTIONS_WITH_VALUE = new Set(["-description", "-option", "-scope"]);
 const POWERSHELL_ALIAS_SETTERS = new Set(["nal", "new-alias", "sal", "set-alias"]);
+const POWERSHELL_ALIAS_PROVIDER_SETTERS = new Set(["new-item", "ni", "set-item", "si"]);
 const POWERSHELL_PIPELINE_OBJECT_MUTATION_RE =
   /(?:\$_|\$psitem)\??\.(?:closemainwindow|continue|kill|pause|start|stop)\(/iu;
 
@@ -255,10 +258,14 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
 function parsePowerShellAlias(
   argv: readonly string[],
 ): { name: string | undefined; value: string | undefined } | null {
-  if (!POWERSHELL_ALIAS_SETTERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const aliasCmdlet = POWERSHELL_ALIAS_SETTERS.has(executable);
+  const providerCmdlet = POWERSHELL_ALIAS_PROVIDER_SETTERS.has(executable);
+  if (!aliasCmdlet && !providerCmdlet) {
     return null;
   }
   let name: string | undefined;
+  let path: string | undefined;
   let value: string | undefined;
   const positionals: string[] = [];
   for (let index = 1; index < argv.length; index += 1) {
@@ -266,6 +273,8 @@ function parsePowerShellAlias(
     const option = optionName(token);
     if (["-n", "-name"].includes(option)) {
       name = inlineOptionValue(token) ?? argv[++index];
+    } else if (["-literalpath", "-path"].includes(option)) {
+      path = inlineOptionValue(token) ?? argv[++index];
     } else if (["-v", "-value"].includes(option)) {
       value = inlineOptionValue(token) ?? argv[++index];
     } else if (POWERSHELL_ALIAS_OPTIONS_WITH_VALUE.has(option)) {
@@ -276,14 +285,68 @@ function parsePowerShellAlias(
       positionals.push(token);
     }
   }
-  name ??= positionals[0];
-  value ??= positionals[1];
+  if (aliasCmdlet) {
+    name ??= positionals[0];
+    value ??= positionals[1];
+  } else {
+    const pathIsPositional = path === undefined;
+    path ??= positionals[0];
+    value ??= positionals[pathIsPositional ? 1 : 0];
+    const providerPath = (path ?? "").trim().replace(/["']/gu, "");
+    const providerMatch = /^alias:(?:[/\\])?(.*)$/iu.exec(providerPath);
+    if (!providerMatch) {
+      return null;
+    }
+    name = providerMatch[1] || name;
+  }
   return { name, value };
 }
 
 function isDynamicPowerShellAliasReference(value: string | undefined): boolean {
   const normalized = (value ?? "").trim();
   return /^[$@([\]{}]/u.test(normalized) || normalized.includes("$(");
+}
+
+function resolvePowerShellAliasTarget(
+  aliasName: string,
+  aliasTargets: ReadonlyMap<string, string>,
+): string | null {
+  let target = aliasTargets.get(aliasName);
+  const seen = new Set([aliasName]);
+  while (target) {
+    const normalized = normalizeExecutableToken(target);
+    if (!aliasTargets.has(normalized)) {
+      return target;
+    }
+    if (seen.has(normalized)) {
+      return null;
+    }
+    seen.add(normalized);
+    target = aliasTargets.get(normalized);
+  }
+  return null;
+}
+
+function classifyPowerShellAliasedInvocation(argv: readonly string[], depth = 0): boolean {
+  if (argv.length === 0 || depth >= 8) {
+    return false;
+  }
+  if (isOpenClawExecutablePattern(argv[0])) {
+    return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
+  }
+  const startProcessArgv = resolvePowerShellStartProcessOpenClawArgv(argv);
+  if (startProcessArgv) {
+    return classifyOpenClawArgv(startProcessArgv);
+  }
+  const runner = resolveLifecyclePackageRunnerArgv(argv);
+  if (runner.kind === "approval-required") {
+    return true;
+  }
+  if (runner.kind === "argv") {
+    return classifyPowerShellAliasedInvocation(runner.argv, depth + 1);
+  }
+  const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
+  return carried?.length ? classifyPowerShellAliasedInvocation(carried, depth + 1) : false;
 }
 
 function extractPowerShellPipelineScriptBlocks(command: string): string[] {
@@ -352,7 +415,7 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(
   command: string,
   expandArgv?: (argv: string[]) => { argv: readonly string[]; unresolved: boolean },
 ): boolean {
-  const openClawAliases = new Set<string>();
+  const aliasTargets = new Map<string, string>();
   const unresolvedAliases = new Set<string>();
   let unresolvedAliasName = false;
   for (const fragment of splitLifecycleCommandText(
@@ -379,25 +442,26 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(
         unresolvedAliasName ||= rawNameIsDynamic;
         continue;
       }
-      openClawAliases.delete(aliasName);
+      aliasTargets.delete(aliasName);
       unresolvedAliases.delete(aliasName);
-      if (isOpenClawExecutablePattern(aliasValue)) {
-        openClawAliases.add(aliasName);
-      } else if (
+      if (
         expanded.unresolved ||
         (isDynamicPowerShellAliasReference(rawAlias.value) &&
           (!resolvedAlias?.value || isDynamicPowerShellAliasReference(resolvedAlias.value)))
       ) {
         unresolvedAliases.add(aliasName);
+      } else if (aliasValue) {
+        aliasTargets.set(aliasName, aliasValue);
       }
       continue;
     }
     const invocation = ["&", "."].includes(parsed[0] ?? "") ? parsed.slice(1) : parsed;
     const aliasName = normalizeExecutableToken(invocation[0] ?? "");
     const lifecycleInvocation = classifyOpenClawArgv(["openclaw", ...invocation.slice(1)]);
+    const aliasTarget = resolvePowerShellAliasTarget(aliasName, aliasTargets);
     if (
-      lifecycleInvocation &&
-      (openClawAliases.has(aliasName) || unresolvedAliases.has(aliasName) || unresolvedAliasName)
+      (aliasTarget && classifyPowerShellAliasedInvocation([aliasTarget, ...invocation.slice(1)])) ||
+      (lifecycleInvocation && (unresolvedAliases.has(aliasName) || unresolvedAliasName))
     ) {
       return true;
     }

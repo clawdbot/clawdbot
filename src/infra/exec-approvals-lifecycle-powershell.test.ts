@@ -27,6 +27,12 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     },
   );
 
+  it("fails closed for calculated invocations inside control blocks", () => {
+    const inline = `if ($true) { & ("open" + "claw") gateway restart }`;
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
+  });
+
   it("scans lifecycle substitutions inside double quotes", () => {
     const command = `Write-Output "$(openclaw gateway restart)"`;
     expect(extractShellSubstitutionCommands(command, "powershell").commands).toContain(
@@ -172,6 +178,30 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);
     expect(requiresApproval("Set-Alias oc openclaw; oc status", ["oc", "status"])).toBe(false);
   });
+
+  it.each([
+    ["Set-Alias nx npx; nx openclaw gateway restart", ["nx", "openclaw", "gateway", "restart"]],
+    [
+      "Set-Alias sp Start-Process; sp openclaw -ArgumentList gateway,restart",
+      ["sp", "openclaw", "-ArgumentList", "gateway,restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "tracks PowerShell aliases to command carriers: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["Set-Item Alias:oc openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+    ["New-Item Alias:oc -Value openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+    ["Set-Item -Path Alias:oc openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+  ] as Array<[string, string[]]>)(
+    "tracks aliases created through the Alias provider: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
 
   it("resolves environment-backed PowerShell alias targets", () => {
     const command = "Set-Alias oc $env:TOOL; oc gateway restart";
