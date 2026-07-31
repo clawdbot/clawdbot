@@ -4,7 +4,10 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  readCodexMirroredSessionHistoryMessages,
+  type CodexMirroredSessionHistoryTarget,
+} from "./session-history.js";
 import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -109,15 +112,13 @@ function buildCodexSettledTurnFinalizationContext(params: {
 }
 
 /** Reads and freezes the current active transcript branch after mirroring has settled. */
-export async function captureCodexSettledTurnFinalizationContext(params: {
-  agentId?: string;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey?: string;
-  mirroredMessages: readonly AgentMessage[];
-  settledMessages: readonly AgentMessage[];
-  turnId: string;
-}): Promise<SettledTurnFinalizationContext | undefined> {
+export async function captureCodexSettledTurnFinalizationContext(
+  params: CodexMirroredSessionHistoryTarget & {
+    mirroredMessages: readonly AgentMessage[];
+    settledMessages: readonly AgentMessage[];
+    turnId: string;
+  },
+): Promise<SettledTurnFinalizationContext | undefined> {
   try {
     const historyMessages = await readCodexMirroredSessionHistoryMessages(params);
     if (!historyMessages) {
