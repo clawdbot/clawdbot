@@ -28,6 +28,14 @@ export type CreateTypingCallbacksParams = {
    * Pass `0` to disable.
    */
   maxDurationMs?: number;
+  /**
+   * Absolute wall-clock ceiling armed once at `onReplyStart` and NOT refreshed by
+   * successful keepalives. Guarantees the typing indicator is torn down even if a
+   * caller's normal cleanup (`onIdle`/`onCleanup`) is missed while `start()` keeps
+   * succeeding, preserving the hard-cap safety contract alongside the idle slide.
+   * Default: 600s (10 min). Pass `0` to disable.
+   */
+  absoluteMaxDurationMs?: number;
 };
 
 const DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES = 2;
@@ -53,9 +61,11 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
   );
   const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
+  const absoluteMaxDurationMs = resolveDurationMsOption(params.absoluteMaxDurationMs, 600_000);
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
+  let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
 
   const startGuard = createTypingStartGuard({
     isSealed: () => closed,
@@ -71,6 +81,29 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       clearTimeout(ttlTimer);
       ttlTimer = undefined;
     }
+  };
+
+  const clearAbsoluteTimer = () => {
+    if (absoluteTimer) {
+      clearTimeout(absoluteTimer);
+      absoluteTimer = undefined;
+    }
+  };
+
+  // Absolute ceiling: armed once per turn, never refreshed by keepalive success.
+  const startAbsoluteTimer = () => {
+    if (absoluteMaxDurationMs <= 0 || closed || absoluteTimer) {
+      return;
+    }
+    absoluteTimer = setTimeout(() => {
+      if (!closed) {
+        console.warn(
+          `[typing] absolute TTL exceeded (${absoluteMaxDurationMs}ms since reply start), auto-stopping typing indicator`,
+        );
+        fireStop();
+      }
+    }, absoluteMaxDurationMs);
+    absoluteTimer.unref?.();
   };
 
   const startTtlTimer = () => {
@@ -112,6 +145,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     stopSent = false;
     startGuard.reset();
     clearTtlTimer();
+    startAbsoluteTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
       if (closed || startGuard.isTripped()) {
@@ -132,6 +166,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     closed = true;
     keepaliveLoop.stop();
     clearTtlTimer();
+    clearAbsoluteTimer();
     if (!stop || stopSent) {
       return;
     }

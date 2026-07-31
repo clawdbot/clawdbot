@@ -71,6 +71,13 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
       : overrides.useDefaultMaxDuration
         ? {}
         : { maxDurationMs: 0 }),
+    // Disable the absolute ceiling by default so idle-TTL focused tests keep
+    // their existing timing expectations; opt in per-test to exercise the cap.
+    ...(overrides.absoluteMaxDurationMs !== undefined
+      ? { absoluteMaxDurationMs: overrides.absoluteMaxDurationMs }
+      : overrides.useDefaultMaxDuration
+        ? {}
+        : { absoluteMaxDurationMs: 0 }),
   });
   activeCallbacks.add(callbacks);
   return { start, stop, onStartError, onStopError, callbacks };
@@ -514,6 +521,58 @@ describe("createTypingCallbacks", () => {
 
         await vi.advanceTimersByTimeAsync(1_000);
         expect(stop).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("enforces absolute ceiling despite healthy keepalive sliding the idle TTL", async () => {
+      await withFakeTimers(async () => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        // Idle TTL slides on each successful keepalive, but the absolute ceiling
+        // is armed once and must still tear typing down.
+        const { stop, callbacks } = createTypingHarness({
+          keepaliveIntervalMs: 3_000,
+          maxDurationMs: 60_000,
+          absoluteMaxDurationMs: 30_000,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        // Keepalives keep succeeding well past the idle TTL window.
+        await vi.advanceTimersByTimeAsync(29_000);
+        expect(stop).not.toHaveBeenCalled();
+
+        // Absolute ceiling fires even though keepalive never went idle.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(consoleWarn).toHaveBeenCalledWith(
+          `[typing] absolute TTL exceeded (30000ms since reply start), auto-stopping typing indicator`,
+        );
+
+        consoleWarn.mockRestore();
+      });
+    });
+
+    it("does not refresh the absolute ceiling on new reply starts within the window", async () => {
+      await withFakeTimers(async () => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { stop, callbacks } = createTypingHarness({
+          keepaliveIntervalMs: 0,
+          maxDurationMs: 0,
+          absoluteMaxDurationMs: 30_000,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        // A second onReplyStart mid-turn must not reset the absolute ceiling.
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(stop).toHaveBeenCalledTimes(1);
+
+        consoleWarn.mockRestore();
       });
     });
 
