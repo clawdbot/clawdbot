@@ -1479,11 +1479,7 @@ function verifyGateway(runCommand, checkout, expectedSha, deployment = null) {
       ["gateway", "status", "--deep", "--require-rpc", "--json"],
       deployment,
     );
-    runBuiltGatewayCli(
-      checkout,
-      ["health", "--verbose", "--json"],
-      deployment,
-    );
+    runBuiltGatewayCli(checkout, ["health", "--verbose", "--json"], deployment);
     return;
   }
   runCommand(
