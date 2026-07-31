@@ -83,7 +83,28 @@ describe("signalCheck", () => {
     await expect(
       signalCheck("http://container:8080", 5_000, { transportKind: "container" }),
     ).resolves.toEqual({ ok: true, status: 200 });
-    expect(containerCheck).toHaveBeenCalledWith("http://container:8080", 5_000);
+    expect(containerCheck).toHaveBeenCalledWith("http://container:8080", 5_000, undefined);
+    expect(nativeCheck).not.toHaveBeenCalled();
+  });
+
+  it("validates the configured container account's receive WebSocket", async () => {
+    containerCheck.mockResolvedValue({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+
+    await expect(
+      signalCheck("http://container:8080", 5_000, {
+        transportKind: "container",
+        account: "+15550001111",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+    expect(containerCheck).toHaveBeenCalledWith("http://container:8080", 5_000, "+15550001111");
     expect(nativeCheck).not.toHaveBeenCalled();
   });
 });
