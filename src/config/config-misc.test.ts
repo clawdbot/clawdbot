@@ -484,16 +484,20 @@ describe("diagnostics.otel.captureContent", () => {
 });
 
 describe("diagnostics.otel.metricNamePrefix", () => {
-  it("accepts strings and rejects other types", () => {
-    const valid = OpenClawSchema.safeParse({
-      diagnostics: { otel: { metricNamePrefix: "acme." } },
-    });
-    const invalid = OpenClawSchema.safeParse({
-      diagnostics: { otel: { metricNamePrefix: 42 } },
-    });
+  it("accepts valid metric name fragments and rejects invalid values", () => {
+    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(true);
+    }
 
-    expect(valid.success).toBe(true);
-    expect(invalid.success).toBe(false);
+    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(false);
+    }
   });
 });
 

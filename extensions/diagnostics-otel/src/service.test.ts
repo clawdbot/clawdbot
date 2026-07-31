@@ -717,6 +717,11 @@ describe("diagnostics-otel service", () => {
       expectedDurationName: "acme.run.duration_ms",
     },
     {
+      metricNamePrefix: "",
+      expectedTokenName: "tokens",
+      expectedDurationName: "run.duration_ms",
+    },
+    {
       metricNamePrefix: "acme.openclaw.",
       expectedTokenName: "acme.openclaw.tokens",
       expectedDurationName: "acme.openclaw.run.duration_ms",
