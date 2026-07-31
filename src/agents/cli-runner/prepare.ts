@@ -914,6 +914,9 @@ export async function prepareCliRunContext(
     };
   }
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const messageToolAvailable = promptTools.some(
+    (tool) => normalizeToolName(tool.name) === "message",
+  );
   const resultContentSourceByToolName = new Map(
     promptTools.flatMap((tool) =>
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
@@ -1345,7 +1348,15 @@ export async function prepareCliRunContext(
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
     let systemPrompt = transformedSystemPrompt;
-    let preparedPrompt = params.prompt;
+    const finalizedTranscriptPrompt =
+      params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
+        ? params.prompt
+        : params.transcriptPrompt;
+    let preparedPrompt =
+      params.finalizePromptForResolvedTools?.({
+        prompt: params.prompt,
+        messageToolAvailable,
+      }) ?? params.prompt;
     if (!isSideQuestion) {
       const hookRunner = getGlobalHookRunner();
       try {
@@ -1496,6 +1507,7 @@ export async function prepareCliRunContext(
         ...params,
         config: contextEngineConfig,
         prompt: preparedPrompt,
+        transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       };
 
@@ -1567,6 +1579,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 

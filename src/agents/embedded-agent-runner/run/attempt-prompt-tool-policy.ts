@@ -16,6 +16,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "./attempt-tool-construction-plan.js";
+import type { ResolvedToolPromptFinalizer } from "./params.js";
 
 type NamedTool = { name: string };
 type PromptToolSession = Pick<AgentSession, "getActiveToolNames" | "setActiveToolsByName">;
@@ -24,6 +25,22 @@ type PromptBuildToolPolicyBaseline = {
   activeToolNames: readonly string[];
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
+
+export function applyResolvedToolPromptFinalizer(params: {
+  prompt: string;
+  activeToolNames: readonly string[];
+  finalize?: ResolvedToolPromptFinalizer;
+}): string {
+  if (!params.finalize) {
+    return params.prompt;
+  }
+  return params.finalize({
+    prompt: params.prompt,
+    messageToolAvailable: params.activeToolNames.some(
+      (toolName) => normalizeToolName(toolName) === "message",
+    ),
+  });
+}
 
 function filterTools<T extends NamedTool>(
   tools: readonly T[],

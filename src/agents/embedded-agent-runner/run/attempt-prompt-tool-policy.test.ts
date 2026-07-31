@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { applyPromptBuildToolsAllow } from "./attempt-prompt-tool-policy.js";
+import {
+  applyPromptBuildToolsAllow,
+  applyResolvedToolPromptFinalizer,
+} from "./attempt-prompt-tool-policy.js";
 
 function catalogEntry(name: string, tool: { name: string } = { name }): ToolSearchCatalogEntry {
   return {
@@ -35,6 +38,25 @@ function createBaseline(activeToolNames: string[], catalogRef?: ToolSearchCatalo
 }
 
 describe("applyPromptBuildToolsAllow", () => {
+  it("finalizes prompt guidance from an empty submitted surface", () => {
+    const finalize = vi.fn(
+      ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+        `${prompt}:${messageToolAvailable}`,
+    );
+
+    expect(
+      applyResolvedToolPromptFinalizer({
+        prompt: "cron",
+        activeToolNames: [],
+        finalize,
+      }),
+    ).toBe("cron:false");
+    expect(finalize).toHaveBeenCalledWith({
+      prompt: "cron",
+      messageToolAvailable: false,
+    });
+  });
+
   it("removes every submitted tool and catalog entry for an empty hook allowlist", () => {
     const fixture = createSession(["tool_search", "message"]);
     const catalogRef: ToolSearchCatalogRef = {
@@ -63,6 +85,13 @@ describe("applyPromptBuildToolsAllow", () => {
     expect(result.tools).toEqual([]);
     expect(catalogRef.current?.entries).toEqual([]);
     expect(fixture.readNames()).toEqual([]);
+    expect(
+      applyResolvedToolPromptFinalizer({
+        prompt: "cron",
+        activeToolNames: result.activeToolNames,
+        finalize: ({ prompt, messageToolAvailable }) => `${prompt}:${messageToolAvailable}`,
+      }),
+    ).toBe("cron:false");
   });
 
   it("keeps host-required tools when a hook denies optional tools", () => {
@@ -83,6 +112,13 @@ describe("applyPromptBuildToolsAllow", () => {
     expect(result.effectiveTools).toEqual([{ name: "message" }]);
     expect(result.uncompactedEffectiveTools).toEqual([{ name: "message" }]);
     expect(result.tools).toEqual([{ name: "message" }]);
+    expect(
+      applyResolvedToolPromptFinalizer({
+        prompt: "cron",
+        activeToolNames: result.activeToolNames,
+        finalize: ({ prompt, messageToolAvailable }) => `${prompt}:${messageToolAvailable}`,
+      }),
+    ).toBe("cron:true");
   });
 
   it("keeps search controls only for catalog entries allowed by the hook", () => {

@@ -1,9 +1,7 @@
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
-import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   SourceDeliveryOutcome,
-  SourceDeliveryPlan,
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -153,27 +151,6 @@ export function buildCronDeliveryTrace(params: {
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
-}
-
-export function canPromptForMessageTool(params: {
-  sourceDelivery: SourceDeliveryPlan;
-  toolsAllow?: string[];
-}): boolean {
-  if (!params.sourceDelivery.messageTool.enabled) {
-    return false;
-  }
-  // The delivery contract forces the tool for message-tool-owned replies. For
-  // optional announce delivery, only assume the run-level allowlist opted in.
-  if (params.sourceDelivery.sourceReplyDeliveryMode === "message_tool_only") {
-    return true;
-  }
-  if (!params.toolsAllow) {
-    return false;
-  }
-  const normalizedToolsAllow = new Set(
-    expandToolGroups(params.toolsAllow).map((toolName) => normalizeToolName(toolName)),
-  );
-  return normalizedToolsAllow.has("*") || normalizedToolsAllow.has("message");
 }
 
 export async function createCronToolsAllowPreflightDiagnostics(params: {

@@ -50,7 +50,6 @@ function makeExecutor(overrides: Record<string, unknown>) {
       await executeCronRun(
         makeExecuteCronRunParams({
           resolvedDeliveryOk: true,
-          messageToolPromptEnabled: true,
           ...overrides,
           resolvedDelivery,
           commandBody,
@@ -327,6 +326,19 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(true);
     expect(args.messageChannel).toBe("messagechat");
+    const finalizePromptForResolvedTools = args.finalizePromptForResolvedTools;
+    expect(finalizePromptForResolvedTools).toBeTypeOf("function");
+    expect(() =>
+      (
+        finalizePromptForResolvedTools as (params: {
+          prompt: string;
+          messageToolAvailable: boolean;
+        }) => string
+      )({
+        prompt: "send a message",
+        messageToolAvailable: false,
+      }),
+    ).toThrow("Cron source delivery requires the message tool");
   });
 
   it("forwards an explicit OpenClaw runtime override to cron execution", async () => {

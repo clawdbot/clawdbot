@@ -32,6 +32,7 @@ import {
   type PromptCacheToolSnapshot,
 } from "../prompt-cache-observability.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -137,6 +138,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolName));
+  const promptBeforeResolvedToolFinalization = effectivePrompt;
+  effectivePrompt = applyResolvedToolPromptFinalizer({
+    prompt: effectivePrompt,
+    activeToolNames: promptCacheToolNames,
+    finalize: attempt.finalizePromptForResolvedTools,
+  });
+  const effectiveTranscriptPrompt =
+    attempt.finalizePromptForResolvedTools && attempt.transcriptPrompt === undefined
+      ? promptBeforeResolvedToolFinalization
+      : attempt.transcriptPrompt;
   const promptCacheTools = input.cache.tools.filter((tool) =>
     promptCacheToolNameSet.has(normalizeToolName(tool.name)),
   );
@@ -240,7 +251,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     `embedded run prompt start: runId=${attempt.runId} sessionId=${attempt.sessionId} ${routingSummary}`,
   );
 
-  const effectiveTranscriptPrompt = attempt.transcriptPrompt;
   let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
   let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
   const leafEntry = input.orphanRepair?.messageEntry;
