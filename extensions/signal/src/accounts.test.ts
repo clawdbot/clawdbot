@@ -46,6 +46,15 @@ describe("resolveSignalAccount", () => {
       expected: { baseUrl: "http://127.0.0.1:8080", httpHost: "0.0.0.0", httpPort: 8080 },
     },
     {
+      // #116165 — legacy httpUrl + autoStart without httpPort must not bind 8080 while probing 8082
+      name: "infers managed bind port from loopback connection URL when httpPort is omitted",
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+      },
+      expected: { baseUrl: "http://127.0.0.1:8082", httpHost: "127.0.0.1", httpPort: 8082 },
+    },
+    {
       name: "preserves a same-port connection URL on a different specific bind address",
       transport: {
         kind: "managed-native",
