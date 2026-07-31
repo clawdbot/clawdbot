@@ -280,18 +280,23 @@ describe("DefaultPackageManager", () => {
 
   it("does not auto-install missing npm package resources", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
-    const manager = new DefaultPackageManager({
-      cwd: root,
-      agentDir: join(root, "agent"),
-      settingsManager: SettingsManager.inMemory({ packages: ["npm:@openclaw/missing-test"] }),
+    const home = join(root, "home");
+    await mkdir(home, { recursive: true });
+    await mkdir(join(root, ".git"));
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined, USERPROFILE: home }, async () => {
+      const manager = new DefaultPackageManager({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: SettingsManager.inMemory({ packages: ["npm:@openclaw/missing-test"] }),
+      });
+
+      const resolved = await manager.resolve();
+
+      expect(resolved.extensions).toEqual([]);
+      expect(resolved.skills).toEqual([]);
+      expect(resolved.prompts).toEqual([]);
+      expect(resolved.themes).toEqual([]);
     });
-
-    const resolved = await manager.resolve();
-
-    expect(resolved.extensions).toEqual([]);
-    expect(resolved.skills).toEqual([]);
-    expect(resolved.prompts).toEqual([]);
-    expect(resolved.themes).toEqual([]);
   });
 
   it("keeps temporary package paths in a private per-agent directory", async () => {

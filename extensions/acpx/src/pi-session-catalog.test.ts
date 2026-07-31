@@ -202,11 +202,15 @@ describe("Pi session catalog", () => {
 
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
     const sessionDirectory = await createPiStore();
-    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-real-"));
-    const symlinkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-link-"));
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(path.dirname(sessionDirectory), "openclaw-pi-agent-"),
+    );
+    const agentDirectory = path.join(fixtureRoot, "real");
+    const symlinkParent = path.join(fixtureRoot, "linked");
     const linkedAgentDirectory = path.join(symlinkParent, "agent");
-    temporaryDirectories.push(agentDirectory, symlinkParent);
+    temporaryDirectories.push(fixtureRoot);
     await fs.mkdir(path.join(agentDirectory, "sessions"), { recursive: true });
+    await fs.mkdir(symlinkParent, { recursive: true });
     await fs.rename(sessionDirectory, path.join(agentDirectory, "sessions", "project"));
     await fs.symlink(
       agentDirectory,
