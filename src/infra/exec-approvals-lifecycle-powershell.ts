@@ -71,6 +71,16 @@ const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
 const POWERSHELL_ALIAS_OPTIONS_WITH_VALUE = new Set(["-description", "-option", "-scope"]);
 const POWERSHELL_ALIAS_SETTERS = new Set(["nal", "new-alias", "sal", "set-alias"]);
 const POWERSHELL_ALIAS_PROVIDER_SETTERS = new Set(["new-item", "ni", "set-item", "si"]);
+const POWERSHELL_EXECUTABLE_SCRIPT_BLOCK_OPTIONS = new Set([
+  "-action",
+  "-begin",
+  "-end",
+  "-filterscript",
+  "-initializationscript",
+  "-parallel",
+  "-process",
+  "-scriptblock",
+]);
 const POWERSHELL_PIPELINE_OBJECT_MUTATION_RE =
   /(?:\$_|\$psitem)\??\.(?:closemainwindow|continue|kill|pause|start|stop)\(/iu;
 
@@ -378,12 +388,28 @@ function classifyPowerShellAliasedInvocation(argv: readonly string[], depth = 0)
   return carried?.length ? classifyPowerShellAliasedInvocation(carried, depth + 1) : false;
 }
 
-function extractPowerShellPipelineScriptBlocks(command: string): string[] {
-  if (splitLifecycleCommandText(command, new Set(["|"]), "powershell").length < 2) {
-    return [];
+function isExecutablePowerShellScriptBlockStart(command: string, blockStart: number): boolean {
+  const prefix = command.slice(0, blockStart).trimEnd();
+  if (/(?:^|\s)[&.]\s*$/u.test(prefix)) {
+    return true;
   }
+  const option = /(?:^|\s)(-[A-Za-z][A-Za-z-]*)(?:\s*[:=])?\s*$/u.exec(prefix)?.[1];
+  if (!option) {
+    return false;
+  }
+  const normalized = optionName(option);
+  return (
+    [...POWERSHELL_EXECUTABLE_SCRIPT_BLOCK_OPTIONS].filter((candidate) =>
+      candidate.startsWith(normalized),
+    ).length === 1
+  );
+}
+
+function extractPowerShellPipelineScriptBlocks(command: string): string[] {
+  const hasPipeline = splitLifecycleCommandText(command, new Set(["|"]), "powershell").length >= 2;
   const blocks: string[] = [];
   let blockStart = -1;
+  let executableBlock = false;
   let depth = 0;
   let quote: "'" | '"' | null = null;
   let escaped = false;
@@ -410,13 +436,17 @@ function extractPowerShellPipelineScriptBlocks(command: string): string[] {
     if (char === "{") {
       if (depth === 0) {
         blockStart = index + 1;
+        executableBlock = hasPipeline || isExecutablePowerShellScriptBlockStart(command, index);
       }
       depth += 1;
     } else if (char === "}" && depth > 0) {
       depth -= 1;
       if (depth === 0 && blockStart !== -1) {
-        blocks.push(command.slice(blockStart, index));
+        if (executableBlock) {
+          blocks.push(command.slice(blockStart, index));
+        }
         blockStart = -1;
+        executableBlock = false;
       }
     }
   }

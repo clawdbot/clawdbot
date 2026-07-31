@@ -185,6 +185,30 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(false);
   });
 
+  it("classifies executable script-block parameters without a pipeline", () => {
+    const command = "ForEach-Object -InputObject 1 -Process { openclaw gateway restart }";
+    expect(
+      requiresApproval(command, [
+        "ForEach-Object",
+        "-InputObject",
+        "1",
+        "-Process",
+        "{",
+        "openclaw",
+        "gateway",
+        "restart",
+        "}",
+      ]),
+    ).toBe(true);
+  });
+
+  it("does not execute PowerShell hashtable literals", () => {
+    const command = "Write-Output @{ Command = 'openclaw gateway restart' }";
+    expect(requiresApproval(command, ["Write-Output", "@{", "Command", "=", "openclaw", "}"])).toBe(
+      false,
+    );
+  });
+
   it("tracks OpenClaw aliases across PowerShell fragments", () => {
     const command = "Set-Alias oc openclaw; oc exec-policy preset yolo";
     expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);

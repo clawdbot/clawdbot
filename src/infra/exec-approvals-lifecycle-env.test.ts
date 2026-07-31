@@ -406,6 +406,27 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
 
   it.each([
     [
+      "npx --dry-run openclaw gateway restart",
+      ["npx", "--dry-run", "openclaw", "gateway", "restart"],
+    ],
+    [
+      "npm --dry-run exec -- openclaw gateway restart",
+      ["npm", "--dry-run", "exec", "--", "openclaw", "gateway", "restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "does not suppress package execution targets with dry-run: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it("still treats package mutation dry-runs as non-mutating", () => {
+    const command = "npm --dry-run install openclaw";
+    expect(requiresApproval(command, ["npm", "--dry-run", "install", "openclaw"])).toBe(false);
+  });
+
+  it.each([
+    [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
     ],

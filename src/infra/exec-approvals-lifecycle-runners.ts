@@ -63,6 +63,7 @@ const PACKAGE_MUTATION_ALIASES = new Set([
   "upgrade",
 ]);
 const PACKAGE_DRY_RUN_OPTION = new Set(["--dry-run"]);
+const PACKAGE_DRY_RUN_SCAN_OPTIONS = new Set(["--dry-run", "--no-dry-run"]);
 const PACKAGE_HELP_OPTIONS = new Set(["-h", "--help"]);
 const PACKAGE_VERSION_OPTIONS = new Set(["-v", "--version"]);
 const JAVASCRIPT_EXECUTABLE_RUNNERS = new Set([
@@ -130,7 +131,7 @@ function scanPackageSubcommand(
       if (!token.includes("=")) {
         index += 1;
       }
-    } else {
+    } else if (!PACKAGE_DRY_RUN_SCAN_OPTIONS.has(name)) {
       ambiguousOption = true;
     }
   }
@@ -234,6 +235,23 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
   );
 }
 
+function hasEffectivePackageInfoOnly(argv: readonly string[], start: number): boolean {
+  return (
+    lifecycleHasEffectiveBooleanOption(
+      argv,
+      start,
+      PACKAGE_HELP_OPTIONS,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    ) ||
+    lifecycleHasEffectiveBooleanOption(
+      argv,
+      start,
+      PACKAGE_VERSION_OPTIONS,
+      PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+    )
+  );
+}
+
 function packageNoExecuteOptionValueMayBeDynamic(
   argv: readonly string[],
   start: number,
@@ -269,10 +287,7 @@ function packageOperationMutatesOpenClaw(
   subcommandIndex: number,
 ): boolean {
   const operation = normalizedToken(argv[subcommandIndex]);
-  if (
-    !PACKAGE_MUTATION_ALIASES.has(operation) ||
-    hasEffectivePackageNoExecute(argv, subcommandIndex + 1)
-  ) {
+  if (!PACKAGE_MUTATION_ALIASES.has(operation) || hasEffectivePackageNoExecute(argv, 1)) {
     return false;
   }
   return packageTargets(argv, subcommandIndex + 1).some(isOpenClawPackageTarget);
@@ -294,7 +309,7 @@ export function resolveLifecyclePackageRunnerArgv(
         ? { kind: "approval-required" }
         : { kind: "not-runner" };
   }
-  if (hasEffectivePackageNoExecute(argv, 1)) {
+  if (hasEffectivePackageInfoOnly(argv, 1)) {
     return { kind: "not-runner" };
   }
   if (["bunx", "npx"].includes(executable)) {
