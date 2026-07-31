@@ -5,6 +5,10 @@ import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./forma
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { isRecoverableTelegramNetworkError, isTelegramServerError } from "./network-errors.js";
 import {
+  recordOutboundMessageForPromptContext,
+  type TelegramOutboundPromptContextMessage,
+} from "./outbound-message-context.js";
+import {
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
   type TelegramEditRichMessageTextParams,
@@ -26,6 +30,7 @@ import {
 import { prepareTelegramOutbound } from "./send-outbound.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 import { resolveMarkdownTableMode } from "./send.runtime.js";
+import { resolveTelegramBotUserIdFromToken } from "./token.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<
@@ -148,6 +153,7 @@ async function editMessageTelegramWithContext(
   ) => request(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
+  const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
   // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.
   const useRichMessages = account.config.richMessages === true && textMode !== "html";
   const tableMode = resolveMarkdownTableMode({
@@ -161,7 +167,7 @@ async function editMessageTelegramWithContext(
   const richRawApi = useRichMessages ? getTelegramRichRawApi(api) : undefined;
   const richMessagePlan = useRichMessages
     ? buildTelegramRichMarkdownPlan(text, {
-        skipEntityDetection: opts.linkPreview === false,
+        skipEntityDetection: !linkPreviewEnabled,
         tableMode,
       })
     : undefined;
@@ -177,14 +183,14 @@ async function editMessageTelegramWithContext(
   const textEditParams: TelegramEditMessageTextParams = {
     parse_mode: "HTML",
   };
-  if (opts.linkPreview === false) {
+  if (!linkPreviewEnabled) {
     textEditParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
     textEditParams.reply_markup = replyMarkup;
   }
   const plainTextParams: TelegramEditMessageTextParams = {};
-  if (opts.linkPreview === false) {
+  if (!linkPreviewEnabled) {
     plainTextParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
@@ -206,8 +212,13 @@ async function editMessageTelegramWithContext(
 
   const performTextEdit = () => {
     if (richRawApi && richMessagePlan) {
-      const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
-        replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
+      const richEditParams: Pick<
+        TelegramEditRichMessageTextParams,
+        "link_preview_options" | "reply_markup"
+      > = {
+        ...(linkPreviewEnabled ? {} : { link_preview_options: { is_disabled: true } }),
+        ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
+      };
       warnTelegramRichBlocksDegradations({
         context: "editMessage",
         reasons: richMessagePlan.degradationReasons,
@@ -282,16 +293,17 @@ async function editMessageTelegramWithContext(
         ),
     });
 
+  let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
   try {
     const editMode = opts.editMode ?? "text";
     if (editMode === "caption") {
-      await performCaptionEdit();
+      editedMessage = await performCaptionEdit();
     } else {
       try {
-        await performTextEdit();
+        editedMessage = await performTextEdit();
       } catch (err) {
         if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
-          await performCaptionEdit();
+          editedMessage = await performCaptionEdit();
         } else {
           throw err;
         }
@@ -303,6 +315,22 @@ async function editMessageTelegramWithContext(
     } else {
       throw err;
     }
+  }
+
+  if (editedMessage && editedMessage !== true && typeof editedMessage.message_id === "number") {
+    const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+    await recordOutboundMessageForPromptContext({
+      cfg,
+      account,
+      chatId,
+      message: editedMessage,
+      messageId: editedMessage.message_id,
+      recordGroupHistory: false,
+      ...(botUserId !== undefined ? { botUserId } : {}),
+      ...(editedMessage.message_thread_id !== undefined
+        ? { messageThreadId: editedMessage.message_thread_id }
+        : {}),
+    });
   }
 
   logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);

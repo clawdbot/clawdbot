@@ -4,6 +4,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildOllamaBaseUrlSsrFPolicy, resolveOllamaApiBase } from "./provider-models.js";
 import { normalizeOllamaModelName } from "./setup-model-selection.js";
+import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
 
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
 const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
@@ -78,6 +79,7 @@ async function pullOllamaModelCore(params: {
     clearTimeout(responseTimeout);
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
       }
       if (!response.body) {
@@ -87,6 +89,7 @@ async function pullOllamaModelCore(params: {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let pendingRecordBytes = 0;
       const layers = new Map<string, { total: number; completed: number }>();
 
       const parseLine = (line: string): OllamaPullResult => {
@@ -124,20 +127,28 @@ async function pullOllamaModelCore(params: {
         return { ok: true };
       };
 
-      for (;;) {
-        const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
-        if (done) {
-          return parseLine(buffer);
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const parsed = parseLine(line);
-          if (!parsed.ok) {
-            return parsed;
+      try {
+        for (;;) {
+          const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
+          if (done) {
+            return parseLine(buffer);
+          }
+          pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const parsed = parseLine(line);
+            if (!parsed.ok) {
+              return parsed;
+            }
           }
         }
+      } finally {
+        // Overflow and parsed-error returns can leave unread response bytes.
+        // Cancel before unlocking so setup never abandons a live pull body.
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
       }
     } finally {
       await release();

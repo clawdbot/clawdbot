@@ -306,6 +306,30 @@ const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
 const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
 const resolvedKeychainSecretRefCache = new Map<string, string>();
 
+function isDirectOpenAIRealtimeWebSocketUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function isOpenAIRealtimeStartupAuthFailure(error: unknown): boolean {
+  const record =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : undefined;
+  const status = record?.status ?? record?.statusCode;
+  const rawCode = record?.code ?? record?.errorCode;
+  const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
+  const message = readRealtimeErrorDetail(error).toLowerCase();
+  return (
+    status === 401 ||
+    code === "invalid_api_key" ||
+    message.includes("invalid_api_key") ||
+    message.includes("incorrect api key provided") ||
+    message.includes("unexpected server response: 401")
+  );
+}
+
 function resolveKeychainSecretRef(value: string): string | undefined {
   const trimmed = value.trim();
   const match = KEYCHAIN_SECRET_REF_RE.exec(trimmed);
@@ -734,10 +758,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     const ws = this.ws;
     this.ws = null;
     ws?.close(1000, "Bridge closed");
@@ -880,7 +907,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           try {
             const event = JSON.parse(data.toString()) as RealtimeEvent;
             if (event.type === "error" && !reachedReady) {
-              rejectStartup(new Error(readRealtimeErrorDetail(event.error)));
+              // Only direct OpenAI auth failures get bounded remediation. Azure,
+              // custom endpoints, and non-auth startup details remain provider-owned.
+              rejectStartup(
+                isDirectOpenAIRealtimeWebSocketUrl(url) &&
+                  isOpenAIRealtimeStartupAuthFailure(event.error)
+                  ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
+                  : new Error(readRealtimeErrorDetail(event.error)),
+              );
               return;
             }
             this.handleEvent(event, lifecycleConnection);
@@ -914,7 +948,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             },
           });
           if (!reachedReady) {
-            rejectStartup(error instanceof Error ? error : new Error(String(error)));
+            const startupError = error instanceof Error ? error : new Error(String(error));
+            rejectStartup(
+              isDirectOpenAIRealtimeWebSocketUrl(url) &&
+                isOpenAIRealtimeStartupAuthFailure(startupError)
+                ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
+                : startupError,
+            );
             return;
           }
           this.config.onError?.(error instanceof Error ? error : new Error(String(error)));

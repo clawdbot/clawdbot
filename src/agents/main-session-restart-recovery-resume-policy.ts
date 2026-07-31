@@ -3,6 +3,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
+  isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "./embedded-agent-runner/message-visibility.js";
@@ -403,7 +404,16 @@ export function resolveMainSessionResumePolicy(
   }
   // `admitted` means no optional hook started. The dispatch boundary reloads
   // the current hook set before it permits this transcript to resume.
-  const meaningfulMessages = messages.toReversed().filter(isMeaningfulTranscriptMessage);
+  // Progress can commit after the recovery mark while the old run is winding
+  // down. It is not a terminal turn boundary; preserve it in the transcript
+  // while classifying the actual user/tool/assistant boundary beneath it.
+  const meaningfulMessages = messages
+    .toReversed()
+    .filter(
+      (message) =>
+        isMeaningfulTranscriptMessage(message) &&
+        !isIntermediateAssistantTranscriptMessage(message),
+    );
   // A restart abort tail without tool calls is lifecycle noise whether or not
   // partial streamed text was persisted with it; the partial output stays in
   // the transcript for the continuation, and the message beneath decides

@@ -876,13 +876,14 @@ export function createGatewayHttpServer(opts: {
       if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
         requestStages.push({
           name: "mcp-app-standalone",
-          run: async () => {
-            const standalone = await getMcpAppStandaloneModule();
-            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-            });
-          },
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () => {
+              const standalone = await getMcpAppStandaloneModule();
+              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+              });
+            }),
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so

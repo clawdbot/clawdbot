@@ -722,6 +722,22 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     );
   });
 
+  it("preserves the abort reason for a late SDK prompt handoff", async () => {
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const reason = new Error("cron setup timed out");
+    reason.name = "TimeoutError";
+
+    expect(controller.isPromptSubmissionBlockedError(undefined)).toBe(false);
+    await controller.releaseHeldLockForAbort({ reason });
+
+    expect(controller.isPromptSubmissionBlockedError(reason)).toBe(true);
+    expect(controller.isPromptSubmissionBlockedError(new Error(reason.message))).toBe(false);
+    await expect(controller.releaseForPrompt()).rejects.toBe(reason);
+  });
+
   it("rejects a late SDK prompt handoff after disposal", async () => {
     const write = vi.fn();
     const release = vi.fn(async () => undefined);

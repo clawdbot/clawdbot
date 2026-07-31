@@ -143,7 +143,122 @@ describe("splitMediaFromOutput", () => {
     ]);
   });
 
+  it("preserves paragraph breaks in ordered media text segments", () => {
+    const result = splitMediaFromOutput(
+      "First paragraph\n\nSecond paragraph\nMEDIA:https://example.com/a.png",
+    );
+
+    expect(result.segments).toEqual([
+      { type: "text", text: "First paragraph\n\nSecond paragraph" },
+      { type: "media", url: "https://example.com/a.png" },
+    ]);
+  });
+
+  it.each([
+    ["before", "First paragraph\n\nMEDIA:https://example.com/a.png\nSecond paragraph"],
+    ["after", "First paragraph\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
+    ["around", "First paragraph\n\nMEDIA:https://example.com/a.png\n\nSecond paragraph"],
+    ["with spaces", "First paragraph\n \nMEDIA:https://example.com/a.png\n  \nSecond paragraph"],
+    ["with tabs", "First paragraph\n\t\nMEDIA:https://example.com/a.png\n\t\nSecond paragraph"],
+  ])("preserves a paragraph separator %s an attachment", (_placement, input) => {
+    const result = splitMediaFromOutput(input);
+
+    expect(result.segments).toEqual([
+      { type: "text", text: "First paragraph\n" },
+      { type: "media", url: "https://example.com/a.png" },
+      { type: "text", text: "Second paragraph" },
+    ]);
+  });
+
+  it.each(["    ", "\t"])("does not emit a whitespace-only media caption: %j", (whitespace) => {
+    const result = splitMediaFromOutput(`${whitespace}\nMEDIA:https://example.com/a.png`);
+
+    expect(result.text).toBe("");
+    expect(result.segments).toEqual([{ type: "media", url: "https://example.com/a.png" }]);
+  });
+
+  it("drops separator-only lines before the caption after extracting leading media", () => {
+    expectParsedMediaOutputCase("MEDIA:https://example.com/a.png\n\nCaption", {
+      text: "Caption",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+  });
+
+  it.each([
+    {
+      name: "a marker carrying trailing text",
+      lines: ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"],
+    },
+    {
+      name: "an unclosed fence",
+      lines: ["```python", "value = 'a  b'", "other = 'c  d'"],
+    },
+    {
+      name: "an indented closing fence",
+      lines: ["```python", "value = 'a  b'", "   ```"],
+    },
+  ])("preserves canonical code fences with $name", ({ lines }) => {
+    const code = lines.join("\n");
+
+    expectParsedMediaOutputCase(`MEDIA:https://example.com/a.png\n${code}`, {
+      text: code,
+      mediaUrls: ["https://example.com/a.png"],
+    });
+    expectParsedMediaOutputCase(`[[audio_as_voice]]\nMEDIA:https://example.com/a.png\n${code}`, {
+      text: code,
+      mediaUrls: ["https://example.com/a.png"],
+      audioAsVoice: true,
+    });
+  });
+
   const extractMarkdownImages = { extractMarkdownImages: true } as const;
+  const formattedMediaReply = [
+    "Here is the code.",
+    "",
+    "```python",
+    "def summarize(rows):",
+    "    totals = {}",
+    "    for row in rows:",
+    "        totals[row] = 1",
+    "    return totals",
+    "```",
+    "",
+    "The attachment is ready.",
+  ].join("\n");
+
+  it.each([
+    {
+      name: "a MEDIA directive",
+      input: `${formattedMediaReply}\n\nMEDIA:https://example.com/config.png`,
+      mediaUrl: "https://example.com/config.png",
+      options: undefined,
+      audioAsVoice: undefined,
+    },
+    {
+      name: "an extracted Markdown image",
+      input: `${formattedMediaReply}\n\n![chart](https://example.com/chart.png)`,
+      mediaUrl: "https://example.com/chart.png",
+      options: extractMarkdownImages,
+      audioAsVoice: undefined,
+    },
+    {
+      name: "an audio directive and media",
+      input: `[[audio_as_voice]]\n${formattedMediaReply}\n\nMEDIA:https://example.com/recording.ogg`,
+      mediaUrl: "https://example.com/recording.ogg",
+      options: undefined,
+      audioAsVoice: true,
+    },
+  ])("preserves code indentation and paragraph breaks with $name", (testCase) => {
+    expectParsedMediaOutputCase(
+      testCase.input,
+      {
+        text: formattedMediaReply,
+        mediaUrls: [testCase.mediaUrl],
+        ...(testCase.audioAsVoice ? { audioAsVoice: true } : {}),
+      },
+      testCase.options,
+    );
+  });
 
   it("keeps markdown image urls as text by default", () => {
     const input = "Caption\n\n![chart](https://example.com/chart.png)";

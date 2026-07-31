@@ -25,6 +25,7 @@ import {
   MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
   readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
+  type ChatGptImportRunRecord,
   writeMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
@@ -131,7 +132,7 @@ async function archiveLegacyImportRunRecords(params: {
 }
 
 function countImportRunStateRows(
-  records: Array<{ createdPaths: string[]; updatedPaths: unknown[] }>,
+  records: Array<Pick<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">>,
 ): number {
   return records.reduce(
     (total, record) => total + 1 + record.createdPaths.length + record.updatedPaths.length,

@@ -142,6 +142,7 @@ export async function checkOllamaCloudAuth(
       }
       return { signedIn: true };
     } finally {
+      await response.body?.cancel().catch(() => undefined);
       await release();
     }
   } catch {

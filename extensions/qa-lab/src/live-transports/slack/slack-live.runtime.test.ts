@@ -1001,13 +1001,15 @@ describe("Slack live QA runtime helpers", () => {
       { type: "raw_text", text: "Row" },
       { type: "raw_text", text: "Value" },
     ]);
-    expect(probe.firstRowText).toBe("row-001\tvalue-001");
-    expect(probe.finalRowText).toBe("row-101\tvalue-101");
+    expect(probe.cellCharacterCount).toBeGreaterThan(10_000);
+    expect(probe.firstRowText).toMatch(/^row-001\tvalue-001-x{96}$/u);
+    expect(probe.finalRowText).toMatch(/^row-101\tvalue-101-x{96}$/u);
     expect(probe.fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(probe.fallbackText.split("\n")).toContain(probe.finalRowText);
   });
 
   it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
+    const probe = testing.buildSlackInvalidBlocksTableProbe();
     const invalidBlocksError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
       code: "slack_webapi_platform_error",
       data: { error: "invalid_blocks", ok: false },
@@ -1068,8 +1070,8 @@ describe("Slack live QA runtime helpers", () => {
     expect(fallbackRequest).toMatchObject({ mrkdwn: false });
     const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
     expect(fallbackText).toBe(nativeRequest?.text);
-    expect(fallbackText.split("\n")).toContain("row-001\tvalue-001");
-    expect(fallbackText.split("\n")).toContain("row-101\tvalue-101");
+    expect(fallbackText.split("\n")).toContain(probe.firstRowText);
+    expect(fallbackText.split("\n")).toContain(probe.finalRowText);
     expect(result.message).toMatchObject({
       text: fallbackText,
       ts: "2.000000",

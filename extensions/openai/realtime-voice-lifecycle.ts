@@ -1,4 +1,9 @@
-type OpenAIRealtimeVoiceLifecyclePhase = "connecting" | "ready" | "retry-wait" | "terminal";
+type OpenAIRealtimeVoiceLifecyclePhase =
+  | "idle"
+  | "connecting"
+  | "ready"
+  | "retry-wait"
+  | "terminal";
 
 type OpenAIRealtimeVoiceTerminalOutcome = "completed" | "error";
 
@@ -7,20 +12,29 @@ export type OpenAIRealtimeVoiceConnection = Readonly<{
   signal: AbortSignal;
 }>;
 
-type OpenAIRealtimeVoiceLifecycleState = {
+type OpenAIRealtimeVoiceIdleState = {
+  phase: "idle" | "terminal";
+  terminalOutcome?: "completed";
+};
+
+type OpenAIRealtimeVoiceConnectionState = {
   connection: OpenAIRealtimeVoiceConnection;
   controller: AbortController;
-  phase: OpenAIRealtimeVoiceLifecyclePhase;
+  phase: Exclude<OpenAIRealtimeVoiceLifecyclePhase, "idle">;
   retryAttempts: number;
   terminalOutcome?: OpenAIRealtimeVoiceTerminalOutcome;
   terminalNotified: boolean;
 };
 
 export class OpenAIRealtimeVoiceLifecycle {
-  private state: OpenAIRealtimeVoiceLifecycleState | undefined;
+  private state: OpenAIRealtimeVoiceIdleState | OpenAIRealtimeVoiceConnectionState = {
+    phase: "idle",
+  };
 
   connect(): OpenAIRealtimeVoiceConnection {
-    this.state?.controller.abort(new Error("OpenAI realtime voice connection replaced"));
+    if ("controller" in this.state) {
+      this.state.controller.abort(new Error("OpenAI realtime voice connection replaced"));
+    }
     const controller = new AbortController();
     const connection = this.createConnection(controller);
     this.state = {
@@ -72,8 +86,15 @@ export class OpenAIRealtimeVoiceLifecycle {
 
   cancel(): boolean {
     const state = this.state;
-    if (!state || state.terminalOutcome) {
+    if (state.phase === "terminal") {
       return false;
+    }
+    if (!("controller" in state)) {
+      this.state = {
+        phase: "terminal",
+        terminalOutcome: "completed",
+      };
+      return true;
     }
     state.phase = "terminal";
     state.terminalOutcome = "completed";
@@ -125,8 +146,8 @@ export class OpenAIRealtimeVoiceLifecycle {
     return this.state?.phase === "ready";
   }
 
-  phase(): OpenAIRealtimeVoiceLifecyclePhase | undefined {
-    return this.state?.phase;
+  phase(): OpenAIRealtimeVoiceLifecyclePhase {
+    return this.state.phase;
   }
 
   terminalOutcome(
@@ -141,7 +162,9 @@ export class OpenAIRealtimeVoiceLifecycle {
 
   private currentState(
     connection: OpenAIRealtimeVoiceConnection,
-  ): OpenAIRealtimeVoiceLifecycleState | undefined {
-    return this.state?.connection.id === connection.id ? this.state : undefined;
+  ): OpenAIRealtimeVoiceConnectionState | undefined {
+    return "connection" in this.state && this.state.connection.id === connection.id
+      ? this.state
+      : undefined;
   }
 }

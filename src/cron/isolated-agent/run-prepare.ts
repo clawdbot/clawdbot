@@ -2,9 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -28,7 +26,11 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
-import { resolveCronModelSelection, resolveCronModelSelectionOwner } from "./model-selection.js";
+import {
+  resolveCronModelSelection,
+  resolveCronModelSelectionOwner,
+  resolveCronThinkingSelection,
+} from "./model-selection.js";
 import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
@@ -72,7 +74,6 @@ import {
   logWarn,
   mapHookExternalContentSource,
   normalizeAgentId,
-  normalizeThinkLevel,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentTimeoutMs,
@@ -120,8 +121,7 @@ export type PreparedCronRunContext = {
   useSubagentFallbacks: boolean;
   inheritDefaultFallbacksForAgentStringModel: boolean;
   modelFallbacksOverride?: string[];
-  thinkLevel: ThinkLevel | undefined;
-  thinkingCatalog: ModelCatalogEntry[];
+  thinkingSelection: Awaited<ReturnType<typeof resolveCronThinkingSelection>>;
   timeoutMs: number;
   preflightDiagnostics?: CronRunDiagnostics;
   /**
@@ -144,7 +144,6 @@ export async function prepareCronRunContext(params: {
 }): Promise<CronPreparationResult> {
   const { input } = params;
   const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
-  const requestedDefaultAgentId = resolveDefaultAgentId(requestedRuntimeCfg);
   const requestedAgentId =
     typeof input.agentId === "string" && input.agentId.trim()
       ? input.agentId
@@ -152,7 +151,7 @@ export async function prepareCronRunContext(params: {
         ? input.job.agentId
         : undefined;
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
-  const initialAgentId = normalizedRequested ?? requestedDefaultAgentId;
+  const initialAgentId = normalizedRequested ?? resolveDefaultAgentId(requestedRuntimeCfg);
   const initialAgentDir = resolveAgentDir(requestedRuntimeCfg, initialAgentId);
   const initialWorkspaceDir = resolveAgentWorkspaceDir(requestedRuntimeCfg, initialAgentId);
   const modelOwner = await resolveCronModelSelectionOwner({
@@ -253,8 +252,7 @@ export async function prepareCronRunContext(params: {
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const initialSessionEntry = cronSession.initialSessionEntry;
-  // Admission must precede async model preparation so concurrent maintenance
-  // preserves this exact session generation instead of deleting it before claim.
+  // Claim before async model prep so maintenance cannot delete this session generation.
   const sessionWorkAdmission = await beginSessionWorkAdmission({
     scope: cronSession.storePath,
     identities: [
@@ -317,8 +315,7 @@ export async function prepareCronRunContext(params: {
         });
         return;
       }
-      // Guarded replace: the updater sees the freshest persisted row (or
-      // undefined pre-creation) so cron lifecycle claims reject stale owners.
+      // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
       await patchSessionEntry(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
@@ -369,7 +366,6 @@ export async function prepareCronRunContext(params: {
       };
     }
     const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-    const thinkingCatalog = modelOwner.modelCatalog.entries;
     const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
     const matchesDefaultFallbackAgentStringModel =
       typeof ownerAgentConfig?.model === "string" &&
@@ -439,8 +435,7 @@ export async function prepareCronRunContext(params: {
             .slice(selectedPreflightCandidateIndex + 1)
             .map((candidate) => `${candidate.provider}/${candidate.model}`)
         : undefined;
-    // When preflight skips the first local candidate, trim the fallback chain so
-    // execution starts at the reachable provider and only falls forward from it.
+    // When preflight skips the first local candidate, start at the reachable provider.
     if (selectedPreflightCandidate && modelFallbacksOverride) {
       if (firstUnavailablePreflight?.status === "unavailable") {
         logWarn(
@@ -450,15 +445,15 @@ export async function prepareCronRunContext(params: {
       provider = selectedPreflightCandidate.provider;
       model = selectedPreflightCandidate.model;
     }
-
-    const hooksGmailThinking = isGmailHook
-      ? normalizeThinkLevel(runtimeCfg.hooks?.gmail?.thinking)
-      : undefined;
-    const jobThink = normalizeThinkLevel(
-      (input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined) ??
-        undefined,
-    );
-    const sessionThink = normalizeThinkLevel(cronSession.sessionEntry.thinkingLevel);
+    const thinkingSelection = await resolveCronThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      owner: modelOwner,
+      provider,
+      model,
+      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
+      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
+      sessionThinking: cronSession.sessionEntry.thinkingLevel,
+    });
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -467,14 +462,13 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
-    let requestedThinkLevel: ThinkLevel | undefined =
-      jobThink ?? hooksGmailThinking ?? sessionThink;
+    let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
         cfg: cfgWithAgentDefaults,
         provider,
         model,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       });
     }
@@ -483,7 +477,7 @@ export async function prepareCronRunContext(params: {
         provider,
         model,
         level: requestedThinkLevel,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       })
     ) {
@@ -491,7 +485,7 @@ export async function prepareCronRunContext(params: {
         provider,
         model,
         level: requestedThinkLevel,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       });
       if (fallbackThinkLevel !== requestedThinkLevel) {
@@ -517,7 +511,7 @@ export async function prepareCronRunContext(params: {
     const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
-      findModelInCatalog(thinkingCatalog, provider, model)?.api ??
+      findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
       configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
       configuredProvider?.api;
     const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
@@ -726,8 +720,7 @@ export async function prepareCronRunContext(params: {
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
         modelFallbacksOverride,
-        thinkLevel: requestedThinkLevel,
-        thinkingCatalog,
+        thinkingSelection,
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,

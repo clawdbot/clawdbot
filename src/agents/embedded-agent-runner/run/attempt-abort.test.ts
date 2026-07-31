@@ -6,6 +6,7 @@ import {
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
+import { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 const mocks = vi.hoisted(() => ({
@@ -182,7 +183,10 @@ describe("createEmbeddedAttemptRunAbort", () => {
 
     abortRun(false, SESSIONS_YIELD_ABORT_REASON);
     await vi.waitFor(() => {
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({ terminal: false });
+      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
+        reason: SESSIONS_YIELD_ABORT_REASON,
+        terminal: false,
+      });
     });
   });
 
@@ -233,6 +237,41 @@ describe("createEmbeddedAttemptRunAbort", () => {
       reason: "timeout",
     });
     expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
+    expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
+      reason: timeoutReason,
+      terminal: true,
+    });
+  });
+
+  it("preserves a timeout reason through the abort path to a late prompt handoff", async () => {
+    const sessionLockController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const timeoutReason = new Error("cron setup timed out");
+    timeoutReason.name = "TimeoutError";
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession: vi.fn(async () => {}),
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        onAttemptTimeout: vi.fn(),
+        runId: "run-timeout-handoff",
+        sessionFile: "agent:main:main",
+        sessionId: "session-timeout-handoff",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => undefined,
+      isProbeSession: false,
+      log: { warn: vi.fn() },
+      runAbortController: new AbortController(),
+      sessionLockController,
+      state: createAbortState().port,
+    });
+
+    abortRun(true, timeoutReason);
+
+    await expect(sessionLockController.releaseForPrompt()).rejects.toBe(timeoutReason);
+    await sessionLockController.dispose();
   });
 
   it("logs lock release failures without replacing the manual abort reason", async () => {

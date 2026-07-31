@@ -589,6 +589,24 @@ describe("createAnthropicVertexStreamFn", () => {
 });
 
 describe("createAnthropicVertexStreamFnForModel", () => {
+  it.each(["us", "eu"])("preserves the %s multi-region SDK endpoint", (region) => {
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFnForModel(
+      { baseUrl: `https://aiplatform.${region}.rep.googleapis.com` },
+      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      deps,
+    );
+
+    void streamFn(makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 }), { messages: [] }, {});
+
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
+      projectId: "vertex-project",
+      region,
+      baseURL: `https://aiplatform.${region}.rep.googleapis.com/v1`,
+    });
+  });
+
   it("derives project and region from the model and env", () => {
     const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(

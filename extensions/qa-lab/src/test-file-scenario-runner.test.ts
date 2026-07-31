@@ -258,7 +258,7 @@ describe("qa test file scenario runner", () => {
         "sends a chat turn through the GUI",
       ],
     ]);
-    expect(commands.map((command) => command.timeoutMs)).toEqual([undefined, undefined]);
+    expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000, 1_800_000]);
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -366,7 +366,7 @@ describe("qa test file scenario runner", () => {
         )}`,
       ],
     ]);
-    expect(commands.map((command) => command.timeoutMs)).toEqual([undefined]);
+    expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000]);
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -885,6 +885,78 @@ describe("qa test file scenario runner", () => {
     expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
   });
 
+  it.each([
+    { executionKind: "vitest" as const, commandCount: 1 },
+    { executionKind: "playwright" as const, commandCount: 2 },
+  ])(
+    "applies the resolved command timeout to every $executionKind subprocess",
+    async ({ commandCount, executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-command-timeout-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const commands: QaScenarioCommandExecution[] = [];
+
+      await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [
+          makeTestFileScenario(
+            executionKind,
+            executionKind === "playwright"
+              ? "ui/src/e2e/chat-flow.e2e.test.ts"
+              : "extensions/qa-lab/src/coverage-report.test.ts",
+          ),
+        ],
+        commandTimeoutMs: 321,
+        runCommand: async (command) => {
+          commands.push(command);
+          await writeNativeVitestReport(command, { passed: 1 });
+          return { exitCode: 0, stdout: "native pass\n", stderr: "" };
+        },
+      });
+
+      expect(commands).toHaveLength(commandCount);
+      expect(commands.map((command) => command.timeoutMs)).toEqual(
+        Array.from({ length: commandCount }, () => 321),
+      );
+    },
+  );
+
+  it.each(["vitest", "playwright"] as const)(
+    "terminates a hanging $executionKind subprocess with failure evidence",
+    async (executionKind) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-hung-command-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [
+          makeTestFileScenario(
+            executionKind,
+            executionKind === "playwright"
+              ? "ui/src/e2e/chat-flow.e2e.test.ts"
+              : "extensions/qa-lab/src/coverage-report.test.ts",
+          ),
+        ],
+        commandTimeoutMs: 100,
+        runCommand: (execution) =>
+          runQaScenarioCommandLifecycle({
+            ...execution,
+            args: ["-e", "setInterval(() => {}, 1_000)"],
+          }),
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage: expect.stringContaining("timed out after 100ms"),
+        status: "fail",
+      });
+      expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    },
+  );
+
   describe.skipIf(process.platform === "win32")("script timeout process groups", () => {
     const commandTimeoutMs = 1_500;
     let descendantPid: number | undefined;
@@ -1301,7 +1373,7 @@ describe("qa test file scenario runner", () => {
     });
   });
 
-  it("allows blocked imported producer evidence for opt-in script scenarios", async () => {
+  it("keeps all-blocked producer evidence blocked for opt-in script scenarios", async () => {
     const repoRoot = await makeTempRepo("qa-script-producer-blocked-allowed-");
     const outputDir = path.join(
       repoRoot,
@@ -1339,7 +1411,8 @@ describe("qa test file scenario runner", () => {
     });
 
     expect(result.results[0]).toMatchObject({
-      status: "pass",
+      status: "blocked",
+      failureMessage: "Playwright browser is missing.",
       producerEvidence: {
         entries: [
           {
@@ -1351,6 +1424,65 @@ describe("qa test file scenario runner", () => {
             },
           },
         ],
+      },
+    });
+  });
+
+  it("allows blocked producer checks when another check genuinely passes", async () => {
+    const repoRoot = await makeTempRepo("qa-script-producer-blocked-mixed-");
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "scenario-script-producer-blocked-mixed",
+    );
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
+    }
+    scenario.execution.allowBlockedEvidence = true;
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [scenario],
+      runCommand: async () => {
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "blocked",
+          failureReason: "Playwright browser is missing.",
+        });
+        const evidencePath = path.join(outputDir, "scenario-script", "run-1", "qa-evidence.json");
+        const evidence = JSON.parse(await fs.readFile(evidencePath, "utf8"));
+        evidence.entries.push({
+          ...evidence.entries[0],
+          test: {
+            ...evidence.entries[0].test,
+            id: "script-producer.web-ui.executed",
+          },
+          result: {
+            status: "pass",
+            timing: { wallMs: 1 },
+          },
+        });
+        await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+        return {
+          exitCode: 0,
+          stdout: "script mixed\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      status: "pass",
+      producerEvidence: {
+        entries: [{ result: { status: "blocked" } }, { result: { status: "pass" } }],
       },
     });
   });
@@ -1513,7 +1645,7 @@ describe("qa test file scenario runner", () => {
     );
 
     expect(result.executionKind).toBe("script");
-    expect(result.results[0]).toMatchObject({ status: "pass" });
+    expect(result.results[0]).toMatchObject({ status: "blocked" });
     expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
     expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
       "ux-matrix.qa-lab.producer-artifact-fixture",

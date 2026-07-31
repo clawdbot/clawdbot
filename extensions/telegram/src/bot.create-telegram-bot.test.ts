@@ -84,6 +84,7 @@ const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
   TelegramSpooledReplayProcessingError,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
@@ -2796,6 +2797,28 @@ describe("createTelegramBot", () => {
     await p101;
 
     expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([102]);
+  });
+
+  it("records synchronous update completion on the shared ingress frame", async () => {
+    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 150 });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await runMiddlewareChain({ update: { update_id: 151 } }, async () => {});
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+  });
+
+  it("preserves an intentionally skipped update through middleware completion", async () => {
+    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 160 });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await runMiddlewareChain({ update: { update_id: 161 } }, async () => {
+        recordTelegramMessageProcessingResult({ kind: "skipped" });
+      });
+    });
+
+    expect(result).toEqual({ kind: "skipped" });
   });
   it("logs and swallows update watermark persistence failures", async () => {
     const onUpdateId = vi.fn().mockRejectedValueOnce(new Error("disk boom"));

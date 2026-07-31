@@ -1300,6 +1300,40 @@ async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Arr
 }
 
 describe("parseNdjsonStream", () => {
+  it("cancels an oversized unterminated record", async () => {
+    const oversizedRecord = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversizedRecord);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const reader = stream.getReader();
+
+    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
+      "Ollama NDJSON record exceeds 16777216 bytes",
+    );
+    expect(canceled).toBe(true);
+    expect(stream.locked).toBe(false);
+  });
+
+  it("resets the record limit after each newline", async () => {
+    const legalRecord = new Uint8Array(9 * 1024 * 1024 + 1).fill(0x20);
+    legalRecord[legalRecord.length - 1] = 0x0a;
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(legalRecord);
+        controller.enqueue(legalRecord);
+        controller.close();
+      },
+    }).getReader();
+
+    await expectNoParsedChunks(reader);
+  });
+
   it("does not log a dangling surrogate for a malformed complete line", async () => {
     const prefix = "x".repeat(119);
     const reader = mockNdjsonReader([`${prefix}😀tail`]);
@@ -1595,15 +1629,7 @@ async function createOllamaTestStream(params: {
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: {
-    apiKey?: string;
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    headers?: Record<string, string>;
-    responseFormat?: Record<string, unknown>;
-  };
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -1721,7 +1747,7 @@ describe("createOllamaStreamFn streaming events", () => {
     );
   });
 
-  it("emits only done for tool-call-only responses (no text content)", async () => {
+  it("streams the complete lifecycle for tool-call-only responses", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
@@ -1731,12 +1757,36 @@ describe("createOllamaStreamFn streaming events", () => {
         const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
         const events = await collectStreamEvents(stream);
 
-        // No text content means no start/text_start/text_delta/text_end events
         const types = events.map((e) => e.type);
-        expect(types).toEqual(["done"]);
-        const doneEvent = requireEntry(events, 0, "tool-call-only done event");
+        expect(types).toEqual([
+          "start",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "done",
+        ]);
+        expect(events[1]).toMatchObject({
+          type: "toolcall_start",
+          contentIndex: 0,
+          partial: { content: [{ type: "toolCall", name: "bash", arguments: {} }] },
+        });
+        expect(events[2]).toMatchObject({
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"command":"ls"}',
+        });
+        expect(events[3]).toMatchObject({
+          type: "toolcall_end",
+          contentIndex: 0,
+          toolCall: { name: "bash", arguments: { command: "ls" } },
+        });
+        const doneEvent = requireEntry(events, 4, "tool-call-only done event");
         if (doneEvent.type === "done") {
           expect(doneEvent.reason).toBe("toolUse");
+          expect(doneEvent.message.content[0]).toMatchObject({
+            type: "toolCall",
+            id: events[3]?.type === "toolcall_end" ? events[3].toolCall.id : undefined,
+          });
         }
       },
     );
@@ -1813,11 +1863,123 @@ describe("createOllamaStreamFn streaming events", () => {
         const events = await collectStreamEvents(stream);
 
         const types = events.map((e) => e.type);
-        expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+        expect(types).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "done",
+        ]);
+        expect(events[5]).toMatchObject({
+          type: "toolcall_delta",
+          contentIndex: 1,
+          delta: '{"command":"ls"}',
+        });
         const doneEvent = events.at(-1);
         if (doneEvent?.type === "done") {
           expect(doneEvent.reason).toBe("toolUse");
         }
+      },
+    );
+  });
+
+  it("streams multiple native calls with stable provider ids across chunks", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-read","function":{"name":"read","arguments":{"path":"/tmp/a"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-bash","function":{"name":"bash","arguments":"{\\"command\\":\\"ls\\"}"}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const events = await collectStreamEvents(
+          await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual([
+          "start",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "done",
+        ]);
+        const toolCallEnds = events.filter((event) => event.type === "toolcall_end");
+        expect(toolCallEnds).toMatchObject([
+          {
+            contentIndex: 0,
+            toolCall: { id: "call-read", name: "read", arguments: { path: "/tmp/a" } },
+          },
+          {
+            contentIndex: 1,
+            toolCall: { id: "call-bash", name: "bash", arguments: { command: "ls" } },
+          },
+        ]);
+        expect(events.filter((event) => event.type === "toolcall_delta")).toMatchObject([
+          { contentIndex: 0, delta: '{"path":"/tmp/a"}' },
+          { contentIndex: 1, delta: '{"command":"ls"}' },
+        ]);
+        expect(events.filter((event) => event.type === "toolcall_start")).toMatchObject([
+          { partial: { content: [{ arguments: {} }] } },
+          {
+            partial: {
+              content: [{ arguments: { path: "/tmp/a" } }, { arguments: {} }],
+            },
+          },
+        ]);
+        const done = events.at(-1);
+        if (done?.type !== "done") {
+          throw new Error("missing terminal Ollama message");
+        }
+        expect(done.message.content).toMatchObject([
+          { type: "toolCall", id: "call-read" },
+          { type: "toolCall", id: "call-bash" },
+        ]);
+      },
+    );
+  });
+
+  it("does not stream non-executable calls from a token-limited final chunk", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":true,"done_reason":"length"}',
+      ],
+      async () => {
+        const events = await collectStreamEvents(
+          await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual(["done"]);
+        expect(events[0]).toMatchObject({
+          type: "done",
+          reason: "length",
+          message: { content: [], stopReason: "length" },
+        });
+      },
+    );
+  });
+
+  it("never exposes an intermediate native call invalidated by a later length terminal", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"done_reason":"length"}',
+      ],
+      async () => {
+        const events = await collectStreamEvents(
+          await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual(["done"]);
+        expect(events[0]).toMatchObject({
+          type: "done",
+          reason: "length",
+          message: { content: [], stopReason: "length" },
+        });
       },
     );
   });
@@ -1872,6 +2034,20 @@ describe("createOllamaStreamFn streaming events", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
       );
       controlledFetch.close();
+
+      const toolCallStartEvent = await nextEventWithin(iterator);
+      const toolCallDeltaEvent = await nextEventWithin(iterator);
+      const toolCallEndEvent = await nextEventWithin(iterator);
+      expect(toolCallStartEvent).not.toBe("timeout");
+      expect(toolCallDeltaEvent).not.toBe("timeout");
+      expect(toolCallEndEvent).not.toBe("timeout");
+      expectIteratorEvent(toolCallStartEvent, { type: "toolcall_start", done: false });
+      expectIteratorEvent(toolCallDeltaEvent, {
+        type: "toolcall_delta",
+        delta: '{"command":"ls"}',
+        done: false,
+      });
+      expectIteratorEvent(toolCallEndEvent, { type: "toolcall_end", done: false });
 
       const doneEvent = await nextEventWithin(iterator);
       expect(doneEvent).not.toBe("timeout");
@@ -2317,7 +2493,14 @@ describe("createOllamaStreamFn streaming events", () => {
         });
         const events = await collectStreamEvents(stream);
 
-        expect(events.map((e) => e.type)).toEqual(["done"]);
+        expect(events.map((event) => event.type)).toEqual([
+          "start",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "done",
+        ]);
+        expect(JSON.stringify(events)).not.toContain("I should think privately");
         const doneEvent = events.at(-1);
         expect(doneEvent?.type).toBe("done");
         if (doneEvent?.type === "done") {
@@ -2331,6 +2514,84 @@ describe("createOllamaStreamFn streaming events", () => {
           ]);
           expect(JSON.stringify(doneEvent)).not.toContain("I should think privately");
         }
+      },
+    );
+  });
+
+  it("flushes buffered visible Kimi text before streaming its native tool call", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":"Visible answer"},"done":false}',
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const events = await collectStreamEvents(
+          await createOllamaTestStream({
+            baseUrl: "http://ollama-host:11434",
+            model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+          }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "toolcall_start",
+          "toolcall_delta",
+          "toolcall_end",
+          "done",
+        ]);
+        expect(events[2]).toMatchObject({ type: "text_delta", delta: "Visible answer" });
+        expect(events[4]).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
+        expect(events[6]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
+        expect(events.at(-1)).toMatchObject({
+          type: "done",
+          message: {
+            content: [
+              { type: "text", text: "Visible answer" },
+              { type: "toolCall", name: "bash" },
+            ],
+          },
+        });
+      },
+    );
+  });
+
+  it("does not reveal buffered Kimi reasoning for an empty tool-call chunk", async () => {
+    const hiddenPrefix =
+      "I should think privately and not leak this planning text in the answer. " +
+      "I need to keep deciding what to say next.";
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: hiddenPrefix },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[]},"done":false}',
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":" ️ Visible answer"},"done":false}',
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const events = await collectStreamEvents(
+          await createOllamaTestStream({
+            baseUrl: "http://ollama-host:11434",
+            model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+          }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
+        expect(events[2]).toMatchObject({ type: "text_delta", delta: "Visible answer" });
+        expect(JSON.stringify(events)).not.toContain("I should think privately");
       },
     );
   });
@@ -2352,6 +2613,112 @@ describe("createOllamaStreamFn", () => {
         expect(options.num_predict).toBe(123);
       },
     );
+  });
+
+  it.each([
+    {
+      name: "forwards request stop sequences as native Ollama options",
+      model: {},
+      stop: ["END", "DONE"],
+      expectedStop: ["END", "DONE"],
+    },
+    {
+      name: "lets request stop sequences override configured model stop sequences",
+      model: { params: { stop: ["MODEL"] } },
+      stop: ["REQUEST"],
+      expectedStop: ["REQUEST"],
+    },
+    {
+      name: "keeps configured model stop sequences when request stops are empty",
+      model: { params: { stop: ["MODEL"] } },
+      stop: [],
+      expectedStop: ["MODEL"],
+    },
+  ])("$name", async ({ model, stop, expectedStop }) => {
+    await expectSuccessfulOllamaRequest(
+      { baseUrl: "http://ollama-host:11434", model, options: { stop } },
+      ({ body }) =>
+        expect(requireRecord(body.options, "Ollama request options").stop).toEqual(expectedStop),
+    );
+  });
+
+  it("awaits asynchronous payload mutations before dispatching native Ollama requests", async () => {
+    await withSuccessfulOllamaFetch(async (fetchMock) => {
+      let releasePayload: (() => void) | undefined;
+      const payloadGate = new Promise<void>((resolve) => {
+        releasePayload = resolve;
+      });
+      const onPayload = vi.fn(async (payload: unknown) => {
+        await payloadGate;
+        requireRecord(payload, "Ollama request payload").model = "patched-model";
+      });
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: { onPayload },
+      });
+
+      await vi.waitFor(() => expect(onPayload).toHaveBeenCalledTimes(1));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expectDefined(releasePayload, "pending Ollama payload hook")();
+      const events = await collectStreamEvents(stream);
+
+      expect(events.at(-1)?.type).toBe("done");
+      expect(getGuardedFetchJsonBody(fetchMock).model).toBe("patched-model");
+    });
+  });
+
+  it("dispatches asynchronous payload replacements for native Ollama requests", async () => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onPayload: async (payload) => {
+            await Promise.resolve();
+            const current = requireRecord(payload, "Ollama request payload");
+            return {
+              ...current,
+              model: "replacement-model",
+              options: {
+                ...requireRecord(current.options, "Ollama request options"),
+                stop: ["REPLACEMENT"],
+              },
+            };
+          },
+        },
+      },
+      ({ body }) => {
+        expect(body.model).toBe("replacement-model");
+        expect(requireRecord(body.options, "Ollama request options").stop).toEqual(["REPLACEMENT"]);
+      },
+    );
+  });
+
+  it("surfaces asynchronous payload hook rejection without dispatching a request", async () => {
+    await withSuccessfulOllamaFetch(async (fetchMock) => {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onPayload: async () => {
+            await Promise.resolve();
+            throw new Error("payload admission rejected");
+          },
+        },
+      });
+
+      const events = await collectStreamEvents(stream);
+
+      expect(events).toMatchObject([
+        {
+          type: "error",
+          reason: "error",
+          error: {
+            stopReason: "error",
+            errorMessage: "payload admission rejected",
+          },
+        },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("maps responseFormat JSON Schema to native Ollama format", async () => {

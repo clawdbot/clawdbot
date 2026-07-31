@@ -482,7 +482,7 @@ describe("detectSetupInference", () => {
     );
   });
 
-  it("discovers provider-owned local inference and reports unsafe CLIs without running them", async () => {
+  it("discovers provider-owned local inference without surfacing unsupported Google CLIs", async () => {
     const prepare = vi.fn();
     const detect = vi.fn(async () => ({
       modelRef: "local/qwen-tool",
@@ -521,25 +521,15 @@ describe("detectSetupInference", () => {
       ],
       probeLocalCommand: vi.fn(async (command) => ({
         command,
-        found: command === "agy" || command === "pi" || command === "opencode",
+        found: command === "pi" || command === "opencode",
       })),
       resolveManifestProviderAuthChoices: () => [
-        {
-          pluginId: "google",
-          providerId: "google-gemini-cli",
-          methodId: "oauth",
-          choiceId: "google-gemini-cli",
-          choiceLabel: "Gemini CLI OAuth",
-          groupId: "google",
-          groupLabel: "Google",
-          appGuidedAuth: "oauth",
-        },
         {
           pluginId: "google",
           providerId: "google",
           methodId: "api-key",
           choiceId: "gemini-api-key",
-          choiceLabel: "Google Gemini API key",
+          choiceLabel: "Google AI Studio API key",
           groupId: "google",
           groupLabel: "Google",
           appGuidedSecret: true,
@@ -574,13 +564,6 @@ describe("detectSetupInference", () => {
       },
     ]);
     expect(detection.unavailableCandidates).toEqual([
-      expect.objectContaining({
-        id: "gemini-cli",
-        brandId: "google-gemini-cli",
-        authOptionId: "google-gemini-cli",
-        manualProviderId: "gemini-api-key",
-      }),
-      expect.objectContaining({ id: "antigravity-cli" }),
       expect.objectContaining({ id: "pi-cli" }),
       expect.objectContaining({ id: "opencode-cli" }),
     ]);
@@ -975,7 +958,7 @@ describe("detectSetupInference", () => {
     ]);
   });
 
-  it("omits Gemini CLI because setup verification cannot hard-disable its tools", async () => {
+  it("omits Gemini CLI instead of presenting an unverifiable setup route", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
         kind: "gemini-cli",
@@ -1001,9 +984,7 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toEqual([
       expect.objectContaining({ kind: "claude-cli", recommended: false }),
     ]);
-    expect(detection.unavailableCandidates).toEqual([
-      expect.objectContaining({ id: "gemini-cli" }),
-    ]);
+    expect(detection.unavailableCandidates).toEqual([]);
   });
 
   it("reports installed Pi and OpenCode without offering them as setup inference routes", async () => {
@@ -1037,6 +1018,7 @@ describe("detectSetupInference", () => {
     ]);
     expect(probeLocalCommand).toHaveBeenCalledWith("pi");
     expect(probeLocalCommand).toHaveBeenCalledWith("opencode");
+    expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
 });
 

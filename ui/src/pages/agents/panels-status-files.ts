@@ -12,6 +12,7 @@ import type {
   CronJob,
   CronStatus,
 } from "../../api/types.ts";
+import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
@@ -296,14 +297,19 @@ export function renderAgentCron(params: {
   context: AgentContext;
   agentId: string;
   jobs: CronJob[];
+  jobsTotal: number;
+  jobsHasMore: boolean;
+  jobsLoadingMore: boolean;
   status: CronStatus | null;
+  scopedTotal: number | null;
+  scopedNextWakeAtMs: number | null;
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onLoadMore: () => void;
   onRunNow: (jobId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
 }) {
-  const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
     ${renderAgentContextSection(
       params.context,
@@ -334,11 +340,13 @@ export function renderAgentCron(params: {
         })}
         ${renderSettingsRow({
           title: t("agents.cronPanel.jobs"),
-          control: renderSettingsValue(params.status?.jobs ?? t("common.na")),
+          control: renderSettingsValue(params.scopedTotal ?? t("common.na")),
         })}
         ${renderSettingsRow({
           title: t("agents.cronPanel.nextWake"),
-          control: renderSettingsValue(formatNextRun(params.status?.nextWakeAtMs ?? null)),
+          control: renderSettingsValue(
+            formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
+          ),
         })}
       `,
     )}
@@ -347,34 +355,44 @@ export function renderAgentCron(params: {
         title: t("agents.cronPanel.agentJobsTitle"),
         description: t("agents.cronPanel.agentJobsSubtitle"),
       },
-      jobs.length === 0
+      params.jobs.length === 0
         ? renderSettingsEmpty(t("agents.cronPanel.noJobs"))
-        : jobs.map((job) => {
-            const metaParts = [
-              job.description,
-              formatCronSchedule(job),
-              job.sessionTarget,
-              formatCronState(job),
-              formatCronPayload(job),
-            ].filter(Boolean);
-            return renderSettingsRow({
-              title: job.name,
-              description: metaParts.join(" · "),
-              control: html`
-                ${renderSettingsStatus({
-                  kind: job.enabled ? "ok" : "warn",
-                  label: job.enabled ? t("common.enabled") : t("common.disabled"),
-                })}
-                <button
-                  class="btn btn--sm"
-                  ?disabled=${!job.enabled}
-                  @click=${() => params.onRunNow(job.id)}
-                >
-                  ${t("agents.cronPanel.runNow")}
-                </button>
-              `,
-            });
-          }),
+        : html`
+            ${params.jobs.map((job) => {
+              const metaParts = [
+                job.description,
+                formatCronSchedule(job),
+                job.sessionTarget,
+                formatCronState(job),
+                formatCronPayload(job),
+              ].filter(Boolean);
+              return renderSettingsRow({
+                title: job.name,
+                description: metaParts.join(" · "),
+                control: html`
+                  ${renderSettingsStatus({
+                    kind: job.enabled ? "ok" : "warn",
+                    label: job.enabled ? t("common.enabled") : t("common.disabled"),
+                  })}
+                  <button
+                    class="btn btn--sm"
+                    ?disabled=${!job.enabled}
+                    @click=${() => params.onRunNow(job.id)}
+                  >
+                    ${t("agents.cronPanel.runNow")}
+                  </button>
+                `,
+              });
+            })}
+            ${renderCronJobsPagination({
+              jobsShown: params.jobs.length,
+              jobsTotal: params.jobsTotal,
+              hasMore: params.jobsHasMore,
+              loading: params.loading,
+              loadingMore: params.jobsLoadingMore,
+              onLoadMore: params.onLoadMore,
+            })}
+          `,
     )}
   `;
 }

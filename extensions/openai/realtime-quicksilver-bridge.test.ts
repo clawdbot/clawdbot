@@ -209,6 +209,28 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     harness.bridge.close();
   });
 
+  it("discards audio closed before the first connection and reconnects fresh", async () => {
+    const harness = createHarness();
+
+    harness.bridge.sendAudio(Buffer.from("queued-before-connect"));
+    harness.bridge.close();
+    harness.bridge.close();
+    harness.bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    expect(harness.connections).toHaveLength(0);
+    expect(harness.onClose).not.toHaveBeenCalled();
+
+    await harness.bridge.connect();
+
+    expect(
+      sentEvents(harness.socket).filter((event) => event.type === "input_audio.append"),
+    ).toHaveLength(0);
+
+    harness.bridge.close();
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("completed");
+  });
+
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
     const sockets: FakeSocket[] = [];
     const bridge = new OpenAIQuicksilverVoiceBridge({

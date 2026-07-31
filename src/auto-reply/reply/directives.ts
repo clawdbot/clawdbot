@@ -21,6 +21,10 @@ type ExtractedLevel<T> = {
   hasDirective: boolean;
 };
 
+type LevelDirectiveParseOptions = {
+  strict?: boolean;
+};
+
 const compileDirectivePattern = (names: readonly string[], suffix = ""): RegExp => {
   const namePattern = names.map(escapeRegExp).join("|");
   return new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)${suffix}`, "i");
@@ -38,6 +42,7 @@ const matchLevelDirective = (
   body: string,
   pattern: RegExp,
   normalize: (raw?: string) => unknown,
+  options?: LevelDirectiveParseOptions,
 ): { start: number; end: number; rawLevel?: string } | null => {
   const match = body.match(pattern);
   if (!match || match.index === undefined) {
@@ -56,13 +61,16 @@ const matchLevelDirective = (
     }
   }
   const argStart = i;
-  while (i < body.length && /[A-Za-z-]/.test(body.charAt(i))) {
+  while (
+    i < body.length &&
+    (options?.strict ? !/\s/.test(body.charAt(i)) : /[A-Za-z-]/.test(body.charAt(i)))
+  ) {
     i += 1;
   }
   const candidate = i > argStart ? body.slice(argStart, i) : undefined;
   if (
     candidate !== undefined &&
-    (normalize(candidate) !== undefined || body.slice(i).trim().length === 0)
+    (options?.strict || normalize(candidate) !== undefined || body.slice(i).trim().length === 0)
   ) {
     return { start, end: i, rawLevel: candidate };
   }
@@ -73,8 +81,9 @@ const extractLevelDirective = <T>(
   body: string,
   pattern: RegExp,
   normalize: (raw?: string) => T | undefined,
+  options?: LevelDirectiveParseOptions,
 ): ExtractedLevel<T> => {
-  const match = matchLevelDirective(body, pattern, normalize);
+  const match = matchLevelDirective(body, pattern, normalize, options);
   if (!match) {
     return { cleaned: body.trim(), hasDirective: false };
   }
@@ -106,7 +115,10 @@ const extractSimpleDirective = (
   };
 };
 
-export function extractThinkDirective(body?: string): {
+export function extractThinkDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   thinkLevel?: ThinkLevel;
   rawLevel?: string;
@@ -115,7 +127,12 @@ export function extractThinkDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, THINK_DIRECTIVE_PATTERN, normalizeThinkLevel);
+  const extracted = extractLevelDirective(
+    body,
+    THINK_DIRECTIVE_PATTERN,
+    normalizeThinkLevel,
+    options,
+  );
   return {
     cleaned: extracted.cleaned,
     thinkLevel: extracted.level,
@@ -124,7 +141,10 @@ export function extractThinkDirective(body?: string): {
   };
 }
 
-export function extractVerboseDirective(body?: string): {
+export function extractVerboseDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   verboseLevel?: VerboseLevel;
   rawLevel?: string;
@@ -133,7 +153,12 @@ export function extractVerboseDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, VERBOSE_DIRECTIVE_PATTERN, normalizeVerboseLevel);
+  const extracted = extractLevelDirective(
+    body,
+    VERBOSE_DIRECTIVE_PATTERN,
+    normalizeVerboseLevel,
+    options,
+  );
   return {
     cleaned: extracted.cleaned,
     verboseLevel: extracted.level,
@@ -142,7 +167,10 @@ export function extractVerboseDirective(body?: string): {
   };
 }
 
-export function extractTraceDirective(body?: string): {
+export function extractTraceDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   traceLevel?: TraceLevel;
   rawLevel?: string;
@@ -151,7 +179,12 @@ export function extractTraceDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, TRACE_DIRECTIVE_PATTERN, normalizeTraceLevel);
+  const extracted = extractLevelDirective(
+    body,
+    TRACE_DIRECTIVE_PATTERN,
+    normalizeTraceLevel,
+    options,
+  );
   return {
     cleaned: extracted.cleaned,
     traceLevel: extracted.level,
@@ -160,7 +193,10 @@ export function extractTraceDirective(body?: string): {
   };
 }
 
-export function extractFastDirective(body?: string): {
+export function extractFastDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   fastMode?: FastMode;
   rawLevel?: string;
@@ -169,7 +205,7 @@ export function extractFastDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, FAST_DIRECTIVE_PATTERN, normalizeFastMode);
+  const extracted = extractLevelDirective(body, FAST_DIRECTIVE_PATTERN, normalizeFastMode, options);
   return {
     cleaned: extracted.cleaned,
     fastMode: extracted.level,
@@ -178,7 +214,10 @@ export function extractFastDirective(body?: string): {
   };
 }
 
-export function extractElevatedDirective(body?: string): {
+export function extractElevatedDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   elevatedLevel?: ElevatedLevel;
   rawLevel?: string;
@@ -187,7 +226,12 @@ export function extractElevatedDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, ELEVATED_DIRECTIVE_PATTERN, normalizeElevatedLevel);
+  const extracted = extractLevelDirective(
+    body,
+    ELEVATED_DIRECTIVE_PATTERN,
+    normalizeElevatedLevel,
+    options,
+  );
   return {
     cleaned: extracted.cleaned,
     elevatedLevel: extracted.level,
@@ -196,7 +240,10 @@ export function extractElevatedDirective(body?: string): {
   };
 }
 
-export function extractReasoningDirective(body?: string): {
+export function extractReasoningDirective(
+  body?: string,
+  options?: LevelDirectiveParseOptions,
+): {
   cleaned: string;
   reasoningLevel?: ReasoningLevel;
   rawLevel?: string;
@@ -209,6 +256,7 @@ export function extractReasoningDirective(body?: string): {
     body,
     REASONING_DIRECTIVE_PATTERN,
     normalizeReasoningLevel,
+    options,
   );
   return {
     cleaned: extracted.cleaned,

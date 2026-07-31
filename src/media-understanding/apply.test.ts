@@ -208,7 +208,6 @@ async function withMediaAutoDetectEnv<T>(
       GROQ_API_KEY: undefined,
       DEEPGRAM_API_KEY: undefined,
       GEMINI_API_KEY: undefined,
-      OPENCLAW_ANTIGRAVITY_CLI: undefined,
       OPENCLAW_AGENT_DIR: undefined,
       ...env,
     },
@@ -1029,7 +1028,7 @@ describe("applyMediaUnderstanding", () => {
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
-  it("uses Antigravity CLI as the last auto image fallback", async () => {
+  it("does not auto-detect Antigravity CLI for images", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     await createMockExecutable(binDir, "agy");
@@ -1046,40 +1045,14 @@ describe("applyMediaUnderstanding", () => {
       source: "none",
       mode: "api-key",
     });
-    mockedRunExec.mockImplementation(async (_command, args) => {
-      if (Array.isArray(args) && args.includes("--help")) {
-        return { stdout: "--print\n--add-dir\n--sandbox\n", stderr: "" };
-      }
-      return { stdout: "antigravity image description\n", stderr: "" };
-    });
 
     await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
       const result = await applyMediaUnderstanding({ ctx, cfg });
-      expect(result.appliedImage).toBe(true);
+      expect(result.appliedImage).toBe(false);
     });
 
-    expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
-    expect(mockedRunExec).toHaveBeenCalledTimes(2);
-    const realImagePath = await fs.realpath(imagePath);
-    const [_probeCommand, _probeArgs, probeOptions] = getRunExecCall(0);
-    expect(probeOptions).toEqual({
-      timeoutMs: 3000,
-      cwd: expect.stringContaining("openclaw-antigravity-probe-"),
-    });
-    const [command, args, options] = getRunExecCall(1);
-    expect(command).toBe(path.join(binDir, "agy"));
-    expect(args).toEqual([
-      "--sandbox",
-      "--add-dir",
-      path.dirname(realImagePath),
-      "--print",
-      expect.stringContaining(realImagePath),
-    ]);
-    expect(options).toEqual({
-      timeoutMs: 60_000,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: path.dirname(realImagePath),
-    });
+    expect(ctx.Body).toBe("");
+    expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {

@@ -23,9 +23,40 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
+const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
+  think: true,
+  verbose: true,
+  trace: true,
+  fast: true,
+  reasoning: true,
+  elevated: true,
+  exec: true,
+  model: true,
+  queue: true,
+} as const;
+
+/** Canonical command-registry keys that share the session-directive execution pipeline. */
+type NativeReplyDirectiveCommand = keyof typeof NATIVE_REPLY_DIRECTIVE_COMMANDS;
+
+/** Resolves a registered command key without inferring directive ownership from slash text. */
+export function resolveNativeReplyDirectiveCommand(
+  commandKey: string | undefined,
+): NativeReplyDirectiveCommand | undefined {
+  return commandKey && Object.hasOwn(NATIVE_REPLY_DIRECTIVE_COMMANDS, commandKey)
+    ? (commandKey as NativeReplyDirectiveCommand)
+    : undefined;
+}
+
+type NativeDirectiveInvocation = {
+  name: NativeReplyDirectiveCommand;
+  unconsumedArguments?: string;
+};
+
 /** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
+  /** Explicit native command ownership prevents prose-oriented inline cleanup from eating args. */
+  nativeCommand?: NativeDirectiveInvocation;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
@@ -85,38 +116,58 @@ export function parseInlineDirectives(
     modelAliases?: string[];
     disableElevated?: boolean;
     allowStatusDirective?: boolean;
+    nativeCommand?: NativeReplyDirectiveCommand;
   },
 ): InlineDirectives {
+  const nativeCommand = options?.nativeCommand;
+  const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
+    currentBody: string,
+    commandName: NativeReplyDirectiveCommand,
+    extract: (value: string) => T,
+  ): T =>
+    !nativeCommand || nativeCommand === commandName
+      ? extract(currentBody)
+      : ({ cleaned: currentBody, hasDirective: false } as T);
   const {
     cleaned: thinkCleaned,
     thinkLevel,
     rawLevel: rawThinkLevel,
     hasDirective: hasThinkDirective,
-  } = extractThinkDirective(body);
+  } = parseScopedDirective(body, "think", (value) =>
+    extractThinkDirective(value, { strict: nativeCommand === "think" }),
+  );
   const {
     cleaned: verboseCleaned,
     verboseLevel,
     rawLevel: rawVerboseLevel,
     hasDirective: hasVerboseDirective,
-  } = extractVerboseDirective(thinkCleaned);
+  } = parseScopedDirective(thinkCleaned, "verbose", (value) =>
+    extractVerboseDirective(value, { strict: nativeCommand === "verbose" }),
+  );
   const {
     cleaned: traceCleaned,
     traceLevel,
     rawLevel: rawTraceLevel,
     hasDirective: hasTraceDirective,
-  } = extractTraceDirective(verboseCleaned);
+  } = parseScopedDirective(verboseCleaned, "trace", (value) =>
+    extractTraceDirective(value, { strict: nativeCommand === "trace" }),
+  );
   const {
     cleaned: fastCleaned,
     fastMode,
     rawLevel: rawFastMode,
     hasDirective: hasFastDirective,
-  } = extractFastDirective(traceCleaned);
+  } = parseScopedDirective(traceCleaned, "fast", (value) =>
+    extractFastDirective(value, { strict: nativeCommand === "fast" }),
+  );
   const {
     cleaned: reasoningCleaned,
     reasoningLevel,
     rawLevel: rawReasoningLevel,
     hasDirective: hasReasoningDirective,
-  } = extractReasoningDirective(fastCleaned);
+  } = parseScopedDirective(fastCleaned, "reasoning", (value) =>
+    extractReasoningDirective(value, { strict: nativeCommand === "reasoning" }),
+  );
   const {
     cleaned: elevatedCleaned,
     elevatedLevel,
@@ -129,7 +180,9 @@ export function parseInlineDirectives(
         rawLevel: undefined,
         hasDirective: false,
       }
-    : extractElevatedDirective(reasoningCleaned);
+    : parseScopedDirective(reasoningCleaned, "elevated", (value) =>
+        extractElevatedDirective(value, { strict: nativeCommand === "elevated" }),
+      );
   const {
     cleaned: execCleaned,
     execHost,
@@ -146,8 +199,8 @@ export function parseInlineDirectives(
     invalidAsk: invalidExecAsk,
     invalidNode: invalidExecNode,
     hasDirective: hasExecDirective,
-  } = extractExecDirective(elevatedCleaned);
-  const allowStatusDirective = options?.allowStatusDirective !== false;
+  } = parseScopedDirective(elevatedCleaned, "exec", extractExecDirective);
+  const allowStatusDirective = options?.allowStatusDirective !== false && !nativeCommand;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
     ? extractStatusDirective(execCleaned)
     : { cleaned: execCleaned, hasDirective: false };
@@ -157,9 +210,11 @@ export function parseInlineDirectives(
     rawProfile,
     rawRuntime,
     hasDirective: hasModelDirective,
-  } = extractModelDirective(statusCleaned, {
-    aliases: options?.modelAliases,
-  });
+  } = parseScopedDirective(statusCleaned, "model", (value) =>
+    extractModelDirective(value, {
+      aliases: options?.modelAliases,
+    }),
+  );
   const {
     cleaned: queueCleaned,
     queueMode,
@@ -173,7 +228,7 @@ export function parseInlineDirectives(
     rawDrop,
     hasDirective: hasQueueDirective,
     hasOptions: hasQueueOptions,
-  } = extractQueueDirective(modelCleaned);
+  } = parseScopedDirective(modelCleaned, "queue", extractQueueDirective);
   const hasAnyDirective =
     hasThinkDirective ||
     hasVerboseDirective ||
@@ -188,6 +243,14 @@ export function parseInlineDirectives(
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned: hasAnyDirective ? queueCleaned : body.trim(),
+    ...(nativeCommand && hasAnyDirective
+      ? {
+          nativeCommand: {
+            name: nativeCommand,
+            ...(queueCleaned ? { unconsumedArguments: queueCleaned } : {}),
+          },
+        }
+      : {}),
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
