@@ -196,6 +196,36 @@ private fun execApprovalResolveFailureMessage(): String = nativeText("Could not 
 internal typealias GatewayDataRequestOverride =
   suspend (stableId: String, method: String, paramsJson: String?) -> String
 
+internal suspend fun startWearRealtimeTalkWhileCurrent(
+  owner: WearRealtimeAttemptOwner,
+  isCurrent: suspend (WearRealtimeAttemptOwner) -> Boolean,
+  start: suspend (onSessionActivated: () -> Unit) -> Boolean,
+  stop: suspend (WearRealtimeAttemptOwner) -> Unit,
+): Boolean {
+  if (!isCurrent(owner)) return false
+  var relayStarted = false
+  var committed = false
+  try {
+    val startReturned =
+      start {
+        // The controller invokes this synchronously at activation, before a
+        // canceled caller can lose the successful suspend result.
+        relayStarted = true
+      }
+    if (!startReturned || !isCurrent(owner)) return false
+    committed = true
+    return true
+  } finally {
+    // Relay creation suspends outside the channel registry. Never leave a late
+    // session alive when replacement or cancellation wins before commit.
+    if (relayStarted && !committed) {
+      withContext(NonCancellable) {
+        stop(owner)
+      }
+    }
+  }
+}
+
 private class ExecApprovalWriteOutcomeUnknown : IllegalStateException("approval resolve response was not authoritative")
 
 private class GatewayApprovalRpcUnavailable : IllegalStateException("Gateway approval RPC catalog is inconsistent")
@@ -2117,15 +2147,24 @@ class NodeRuntime private constructor(
     return try {
       started =
         wearRealtimeLifecycleMutex.withLock {
-          if (
-            talkModeEnabled.value ||
-            micEnabled.value ||
-            micCooldown.value ||
-            !app.wearRealtimeChannels.isCurrent(owner)
-          ) {
+          if (talkModeEnabled.value || micEnabled.value || micCooldown.value) {
             return@withLock false
           }
-          wearRealtimeTalkController.start(owner, sessionKey, resolvedLanguage)
+          startWearRealtimeTalkWhileCurrent(
+            owner = owner,
+            isCurrent = app.wearRealtimeChannels::isCurrent,
+            start = { onSessionActivated ->
+              wearRealtimeTalkController.start(
+                owner = owner,
+                sessionKey = sessionKey,
+                language = resolvedLanguage,
+                onSessionActivated = onSessionActivated,
+              )
+            },
+            stop = { staleOwner ->
+              wearRealtimeTalkController.stop(staleOwner)
+            },
+          )
         }
       started
     } finally {

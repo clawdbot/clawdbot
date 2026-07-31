@@ -157,8 +157,10 @@ internal class WearRealtimeTalkController(
     owner: WearRealtimeAttemptOwner,
     sessionKey: String,
     language: String?,
+    onSessionActivated: () -> Unit = {},
   ): Boolean =
     lifecycleMutex.withLock {
+      var existingSession = false
       val startGeneration =
         synchronized(lifecycleStateLock) {
           if (!isConnected()) return@withLock false
@@ -169,7 +171,8 @@ internal class WearRealtimeTalkController(
             if (activeOwner != owner || ownerSessionKey != sessionKey) {
               return@withLock false
             }
-            return@withLock true
+            existingSession = true
+            return@synchronized lifecycleGeneration.get()
           }
 
           activeOwner = owner
@@ -184,6 +187,10 @@ internal class WearRealtimeTalkController(
           )
           generation
         }
+      if (existingSession) {
+        onSessionActivated()
+        return@withLock true
+      }
 
       fun startIsStale(): Boolean =
         startGeneration != lifecycleGeneration.get() ||
@@ -251,6 +258,7 @@ internal class WearRealtimeTalkController(
         }
         return@withLock false
       }
+      onSessionActivated()
       true
     }
 
