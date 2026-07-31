@@ -9,6 +9,10 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  sweepTombstonedCronRunRemnants,
+  type SessionTombstoneSweepResult,
+} from "./cleanup-tombstones.js";
+import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
   type SessionDiskBudgetSweepResult,
@@ -75,6 +79,7 @@ export type SessionCleanupSummary = {
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
+  tombstoneRemnants: SessionTombstoneSweepResult | null;
   diskBudget: SessionDiskBudgetSweepResult | null;
   wouldMutate: boolean;
   applied?: true;
@@ -465,6 +470,14 @@ async function previewStoreCleanup(params: {
     excludeCanonicalPaths: entryCleanupArtifactPaths,
   });
   const budgetEvictedKeys = new Set<string>();
+  const tombstoneRemnants = fs.existsSync(resolveCleanupSqlitePath(params.target))
+    ? await sweepTombstonedCronRunRemnants({
+        agentId: params.target.agentId,
+        sqlitePath: resolveCleanupSqlitePath(params.target),
+        olderThanMs: params.maintenance.pruneAfterMs,
+        dryRun: true,
+      })
+    : null;
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
@@ -474,6 +487,7 @@ async function previewStoreCleanup(params: {
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
+    (tombstoneRemnants?.candidates ?? 0) > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
     (diskBudget?.removedFiles ?? 0) > 0 ||
     diskBudgetPreview.wouldMutate;
@@ -491,6 +505,7 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
     unreferencedArtifacts,
+    tombstoneRemnants,
     diskBudget,
     wouldMutate,
   };
@@ -623,6 +638,15 @@ export async function runSessionsCleanup(params: {
         mode,
         maintenance,
       });
+      const appliedTombstoneRemnants =
+        mode === "warn" || !fs.existsSync(resolveCleanupSqlitePath(target))
+          ? null
+          : await sweepTombstonedCronRunRemnants({
+              agentId: target.agentId,
+              sqlitePath: resolveCleanupSqlitePath(target),
+              olderThanMs: maintenance.pruneAfterMs,
+              dryRun: false,
+            });
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
@@ -648,10 +672,12 @@ export async function runSessionsCleanup(params: {
               }),
               dryRun: false,
               unreferencedArtifacts,
+              tombstoneRemnants: appliedTombstoneRemnants,
               diskBudget: appliedDiskBudget,
               wouldMutate:
                 removedSessionKeys.size > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
+                (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
                 (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
                 // Checkpoint/incremental-vacuum reclamation mutates the store
@@ -674,9 +700,11 @@ export async function runSessionsCleanup(params: {
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
+              tombstoneRemnants: appliedTombstoneRemnants,
               diskBudget: appliedDiskBudget,
               wouldMutate:
                 missingApplied > 0 ||
+                (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
                 dmScopeRetiredApplied > 0 ||
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
