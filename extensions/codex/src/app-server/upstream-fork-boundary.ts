@@ -171,10 +171,10 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      // The transcript stores the same upstream text two ways: history import normalizes
-      // it (trim + per-message cap), while a message authored in this session is stored
-      // verbatim. Accept either form, or an imported prefix reads as divergence and
-      // fails this fork point and every later one.
+      // Accept the raw upstream text or the projection history import would have stored
+      // (trim + per-message cap). The transcript does not guarantee one stored shape for
+      // user text, and comparing raw alone makes an imported prefix read as divergence,
+      // failing this fork point and every later one.
       if (localText !== display.text && localText !== display.importProjectedText) {
         return failure(
           "drift-mismatch",
