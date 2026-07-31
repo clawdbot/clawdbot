@@ -1,4 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  type AgentInternalEventStatus,
+} from "../agents/internal-event-contract.js";
+import { formatAgentInternalEventsForPlainPrompt } from "../agents/internal-events.js";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
 import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -163,6 +168,87 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
   return true;
 }
 
+function resolveAcpTaskInternalEventStatus(task: TaskRecord): AgentInternalEventStatus {
+  if (task.status === "succeeded" && task.terminalOutcome !== "blocked") {
+    return "ok";
+  }
+  if (task.status === "timed_out") {
+    return "timeout";
+  }
+  if (
+    task.status === "failed" ||
+    task.status === "cancelled" ||
+    task.status === "lost" ||
+    task.terminalOutcome === "blocked"
+  ) {
+    return "error";
+  }
+  return "unknown";
+}
+
+function formatAcpTerminalContinuationEvent(task: TaskRecord): string {
+  const taskRef = [
+    task.runId ? `runId=${task.runId}` : "",
+    task.childSessionKey ? `childSessionKey=${task.childSessionKey}` : "",
+    task.runId ? "" : `taskId=${task.taskId}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const result = [
+    "No child output is embedded here.",
+    "Inspect the task/run/session records and artifacts before deciding what to do next.",
+    taskRef,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return formatAgentInternalEventsForPlainPrompt([
+    {
+      type: AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+      source: "acp",
+      childSessionKey: task.childSessionKey ?? "",
+      childSessionId: task.sourceId,
+      announceType: "ACP background task",
+      taskLabel: "ACP background task",
+      status: resolveAcpTaskInternalEventStatus(task),
+      statusLabel:
+        task.terminalOutcome === "blocked" ? "blocked" : task.status.replaceAll("_", " "),
+      result,
+      replyInstruction:
+        "A completed ACP task is ready for parent review. Inspect and verify the child task/run/session artifacts before deciding whether the original request is done. If additional action is required, continue the workflow and report a concise blocker only after checking those artifacts.",
+    },
+  ]);
+}
+
+function queueAcpTerminalContinuation(task: TaskRecord) {
+  if (task.runtime !== "acp") {
+    return false;
+  }
+  const owner = resolveTaskDeliveryOwner(task);
+  const ownerKey = owner.sessionKey?.trim();
+  if (!ownerKey) {
+    return false;
+  }
+  const text = formatAcpTerminalContinuationEvent(task);
+  if (!text.trim()) {
+    return false;
+  }
+  const terminalOutcome =
+    task.terminalOutcome ?? (task.status === "succeeded" ? "succeeded" : "none");
+  const continuationKey = task.runId?.trim() || task.taskId;
+  enqueueSystemEvent(text, {
+    sessionKey: ownerKey,
+    contextKey: `task:${continuationKey}:acp-terminal-continuation:${task.status}:${terminalOutcome}`,
+    deliveryContext: owner.requesterOrigin,
+  });
+  requestHeartbeat({
+    source: "background-task",
+    intent: "immediate",
+    reason: "background-task-acp-terminal",
+    sessionKey: ownerKey,
+  });
+  return true;
+}
+
 function queueBlockedTaskFollowup(task: TaskRecord) {
   const followupText = formatTaskBlockedFollowupMessage(task);
   if (!followupText) {
@@ -281,6 +367,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
         queueTaskSystemEvent(latest, sessionEventText);
+        queueAcpTerminalContinuation(latest);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
@@ -327,6 +414,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
         return afterSend ? cloneTaskRecord(afterSend) : null;
       }
+      queueAcpTerminalContinuation(afterSend);
       if (afterSend.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(afterSend);
       }
@@ -347,6 +435,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       }
       try {
         queueTaskSystemEvent(beforeFallback, sessionEventText);
+        queueAcpTerminalContinuation(beforeFallback);
         if (beforeFallback.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(beforeFallback);
         }
