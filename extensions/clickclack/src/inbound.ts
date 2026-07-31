@@ -308,7 +308,10 @@ export async function handleClickClackInbound(params: {
   try {
     await dispatch();
   } finally {
-    await activity?.finalize();
+    // Clear transient UI before awaiting optional durable activity writes:
+    // their transport has separate failure/latency characteristics and must
+    // not leave the native progress indicator behind after final delivery.
     await progress.finalize();
+    await activity?.finalize();
   }
 }
