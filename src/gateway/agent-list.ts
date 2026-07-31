@@ -14,18 +14,34 @@ type GatewayAgentListRow = {
   name?: string;
 };
 
+// Short TTL: this is a hot path called from multiple RPCs per request, but the
+// on-disk agent directory set changes rarely (only on agent create/delete).
+const DISK_AGENT_IDS_TTL_MS = 2_000;
+let diskAgentIdsCache: { ids: string[]; agentsDir: string; time: number } | null = null;
+
 function listExistingAgentIdsFromDisk(): string[] {
   const root = resolveStateDir();
   const agentsDir = path.join(root, "agents");
+  const now = Date.now();
+  if (
+    diskAgentIdsCache &&
+    diskAgentIdsCache.agentsDir === agentsDir &&
+    now - diskAgentIdsCache.time < DISK_AGENT_IDS_TTL_MS
+  ) {
+    return diskAgentIdsCache.ids;
+  }
+  let ids: string[];
   try {
     const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-    return entries
+    ids = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => normalizeAgentId(entry.name))
       .filter(Boolean);
   } catch {
-    return [];
+    ids = [];
   }
+  diskAgentIdsCache = { ids, agentsDir, time: now };
+  return ids;
 }
 
 export function listGatewayAgentIds(cfg: OpenClawConfig): string[] {

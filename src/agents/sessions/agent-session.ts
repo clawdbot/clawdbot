@@ -383,6 +383,10 @@ export class AgentSession {
   private turnIndex = 0;
 
   private sessionResourceLoader: ResourceLoader;
+  // Skill file content is static for the lifetime of a session, but /skill:name
+  // messages can arrive repeatedly (including via steering); avoid a blocking
+  // readFileSync per message once a skill has been read once.
+  private skillContentCache: Map<string, string> = new Map();
   private customTools: ToolDefinition[];
   private baseToolDefinitions: Map<string, ToolDefinition> = new Map();
   private cwd: string;
@@ -1345,7 +1349,11 @@ export class AgentSession {
     } // Unknown skill, pass through
 
     try {
-      const content = readFileSync(skill.filePath, "utf-8");
+      let content = this.skillContentCache.get(skill.filePath);
+      if (content === undefined) {
+        content = readFileSync(skill.filePath, "utf-8");
+        this.skillContentCache.set(skill.filePath, content);
+      }
       const body = stripFrontmatter(content).trim();
       const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
       return args ? `${skillBlock}\n\n${args}` : skillBlock;
