@@ -30,7 +30,7 @@ function createGateway(connected = false) {
     client,
     subscribe,
     unsubscribe,
-    connect() {
+    connect: () => {
       snapshot = { ...snapshot, phase: "connected", client };
       for (const listener of Array.from(listeners)) {
         listener(snapshot);
