@@ -8,9 +8,11 @@ read_when:
 ---
 
 OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The
-plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
-`aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto
-your graph.
+plugin is entirely workflow-driven: OpenClaw does not map generic
+`resolution`, `durationSeconds`, or TTS-style controls onto your graph.
+Image `size`/`aspectRatio` are the one exception — they map onto your graph
+when you configure `dimensions` (see below); otherwise they are no-ops and
+the workflow's own defaults are used.
 
 | Property     | Detail                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |
@@ -232,6 +234,22 @@ The `image` and `video` sections also support a reference-image input node:
 | `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
 | `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
 
+The `image` section also supports a `dimensions` block that maps `size`/`aspectRatio`
+onto width/height nodes in your graph:
+
+| Key               | Required | Default    | Description                                                             |
+| ----------------- | -------- | ---------- | ----------------------------------------------------------------------- |
+| `widthNodeId`     | Yes      | --         | Node ID that receives the computed width.                               |
+| `heightNodeId`    | Yes      | --         | Node ID that receives the computed height.                              |
+| `widthInputName`  | No       | `"width"`  | Input name on the width node.                                           |
+| `heightInputName` | No       | `"height"` | Input name on the height node.                                          |
+| `baseSize`        | No       | `1024`     | Long-edge resolution used when computing dimensions from `aspectRatio`. |
+
+Comfy always reports `supportsSize`/`supportsAspectRatio` as supported for the
+`image_generate` tool. If `dimensions` is omitted, or a requested `size`/`aspectRatio`
+value can't be parsed, the request still succeeds but `size`/`aspectRatio` are ignored
+and the workflow's own defaults are used instead.
+
 `apiKey` accepts either a literal string or a [secret reference](/gateway/configuration-reference#secrets) object.
 
 ## Workflow details
@@ -268,6 +286,34 @@ The `image` and `video` sections also support a reference-image input node:
                 inputImageNodeId: "7",
                 inputImageInputName: "image",
                 outputNodeId: "9",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    **Size/aspect-ratio example:**
+
+    To let `image_generate` requests set `size` or `aspectRatio`, map `dimensions` to the width/height node in your graph:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          comfy: {
+            config: {
+              image: {
+                workflowPath: "./workflows/flux-api.json",
+                promptNodeId: "6",
+                outputNodeId: "9",
+                dimensions: {
+                  widthNodeId: "5",
+                  heightNodeId: "5",
+                  widthInputName: "width",
+                  heightInputName: "height",
+                },
               },
             },
           },

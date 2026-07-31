@@ -24,16 +24,16 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
     capabilities: {
       generate: {
         maxCount: 1,
-        supportsSize: false,
-        supportsAspectRatio: false,
+        supportsSize: true,
+        supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
         enabled: true,
         maxCount: 1,
         maxInputImages: 1,
-        supportsSize: false,
-        supportsAspectRatio: false,
+        supportsSize: true,
+        supportsAspectRatio: true,
         supportsResolution: false,
       },
     },
@@ -52,6 +52,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         capability: "image",
         outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
+        size: req.size,
+        aspectRatio: req.aspectRatio,
       });
 
       const images: GeneratedImageAsset[] = result.assets.map((asset) => ({
@@ -70,6 +72,10 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         metadata: {
           promptId: result.promptId,
           outputNodeIds: result.outputNodeIds,
+          // Comfy only maps size/aspectRatio onto the workflow when the
+          // dimensions config is set; callers need to know when a request
+          // silently fell back to the workflow's built-in defaults.
+          ...(req.size || req.aspectRatio ? { dimensionsApplied: result.dimensionsApplied } : {}),
         },
       };
     },

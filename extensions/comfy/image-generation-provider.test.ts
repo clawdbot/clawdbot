@@ -1084,5 +1084,247 @@ describe("comfy image-generation provider", () => {
     const extraData = requestBody.extra_data as { api_key_comfy_org?: unknown } | undefined;
     expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
+
+  describe("dimensions", () => {
+    it("advertises supportsSize/supportsAspectRatio statically regardless of dimensions config", () => {
+      const provider = buildComfyImageGenerationProvider();
+      expect(provider.capabilities.generate.supportsSize).toBe(true);
+      expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
+      expect(provider.capabilities.edit.supportsSize).toBe(true);
+      expect(provider.capabilities.edit.supportsAspectRatio).toBe(true);
+    });
+
+    it("injects an explicit size into configured width/height nodes", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-size-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        size: "512x768",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+          },
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+          "10": { inputs: { width: 512, height: 768 } },
+        },
+      });
+      expect(result.metadata?.dimensionsApplied).toBe(true);
+    });
+
+    it("calculates width/height from aspectRatio using baseSize, rounded to nearest 64px", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-ar-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        aspectRatio: "16:9",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+          },
+        }),
+      });
+
+      // 1024 long edge; short edge = round(1024 * 9/16 / 64) * 64 = 576
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+          "10": { inputs: { width: 1024, height: 576 } },
+        },
+      });
+      expect(result.metadata?.dimensionsApplied).toBe(true);
+    });
+
+    it("respects a custom baseSize", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-base-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        aspectRatio: "1:1",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+            baseSize: 512,
+          },
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+          "10": { inputs: { width: 512, height: 512 } },
+        },
+      });
+    });
+
+    it("prefers size over aspectRatio when both are given", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-precedence-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        size: "300x400",
+        aspectRatio: "16:9",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+          },
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+          "10": { inputs: { width: 300, height: 400 } },
+        },
+      });
+    });
+
+    it("falls back to workflow defaults and reports dimensionsApplied=false when dimensions is not configured", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-unconfigured-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        size: "512x768",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+        },
+      });
+      expect(result.metadata?.dimensionsApplied).toBe(false);
+    });
+
+    it("falls back to workflow defaults when the requested size is malformed", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-malformed-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        size: "not-a-size",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+          },
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a lobster" } },
+          "9": { inputs: {} },
+          "10": { inputs: {} },
+        },
+      });
+      expect(result.metadata?.dimensionsApplied).toBe(false);
+    });
+
+    it("omits dimensionsApplied metadata when neither size nor aspectRatio was requested", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("dims-none-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+            "10": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          dimensions: {
+            widthNodeId: "10",
+            heightNodeId: "10",
+          },
+        }),
+      });
+
+      expect(result.metadata).not.toHaveProperty("dimensionsApplied");
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

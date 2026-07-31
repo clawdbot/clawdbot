@@ -225,6 +225,18 @@
         "type": "integer",
         "minimum": 1000
       },
+      "dimensions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "widthNodeId": { "type": "string" },
+          "heightNodeId": { "type": "string" },
+          "widthInputName": { "type": "string" },
+          "heightInputName": { "type": "string" },
+          "baseSize": { "type": "integer", "minimum": 64 }
+        },
+        "required": ["widthNodeId", "heightNodeId"]
+      },
       "image": {
         "type": "object",
         "additionalProperties": false,
@@ -237,7 +249,19 @@
           "inputImageInputName": { "type": "string" },
           "outputNodeId": { "type": "string" },
           "pollIntervalMs": { "type": "integer", "minimum": 100 },
-          "timeoutMs": { "type": "integer", "minimum": 1000 }
+          "timeoutMs": { "type": "integer", "minimum": 1000 },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "widthNodeId": { "type": "string" },
+              "heightNodeId": { "type": "string" },
+              "widthInputName": { "type": "string" },
+              "heightInputName": { "type": "string" },
+              "baseSize": { "type": "integer", "minimum": 64 }
+            },
+            "required": ["widthNodeId", "heightNodeId"]
+          }
         }
       },
       "video": {

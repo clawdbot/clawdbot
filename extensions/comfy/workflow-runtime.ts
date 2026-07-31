@@ -109,7 +109,21 @@ type ComfyWorkflowResult = {
   model: string;
   promptId: string;
   outputNodeIds: string[];
+  dimensionsApplied: boolean;
 };
+
+type ComfyDimensionConfig = {
+  widthNodeId: string;
+  heightNodeId: string;
+  widthInputName: string;
+  heightInputName: string;
+  baseSize: number;
+};
+
+const DEFAULT_DIMENSION_INPUT_NAME_WIDTH = "width";
+const DEFAULT_DIMENSION_INPUT_NAME_HEIGHT = "height";
+const DEFAULT_DIMENSION_BASE_SIZE = 1024;
+const DIMENSION_ROUNDING_PX = 64;
 
 let comfyFetchGuard = fetchWithSsrFGuard;
 
@@ -267,6 +281,75 @@ function setWorkflowInput(params: {
     throw new Error(`Comfy workflow node "${params.nodeId}" is missing an inputs object`);
   }
   inputs[params.inputName] = params.value;
+}
+
+// Comfy workflows only accept size/aspectRatio when the operator has mapped
+// width/height node IDs; without that, requests silently keep the workflow's
+// built-in defaults (reported via ComfyWorkflowResult.dimensionsApplied).
+function resolveComfyDimensionConfig(
+  capabilityConfig: ComfyProviderConfig,
+): ComfyDimensionConfig | undefined {
+  const dimensions = capabilityConfig.dimensions;
+  if (!isRecord(dimensions)) {
+    return undefined;
+  }
+  const widthNodeId = normalizeOptionalString(dimensions.widthNodeId);
+  const heightNodeId = normalizeOptionalString(dimensions.heightNodeId);
+  if (!widthNodeId || !heightNodeId) {
+    return undefined;
+  }
+  return {
+    widthNodeId,
+    heightNodeId,
+    widthInputName:
+      normalizeOptionalString(dimensions.widthInputName) ?? DEFAULT_DIMENSION_INPUT_NAME_WIDTH,
+    heightInputName:
+      normalizeOptionalString(dimensions.heightInputName) ?? DEFAULT_DIMENSION_INPUT_NAME_HEIGHT,
+    baseSize: readConfigInteger(dimensions, "baseSize") ?? DEFAULT_DIMENSION_BASE_SIZE,
+  };
+}
+
+function calculateDimensions(params: {
+  size?: string;
+  aspectRatio?: string;
+  baseSize: number;
+}): { width: number; height: number } | undefined {
+  const size = normalizeOptionalString(params.size);
+  if (size) {
+    const match = /^(\d+)\s*x\s*(\d+)$/i.exec(size);
+    if (!match) {
+      return undefined;
+    }
+    const width = Number.parseInt(match[1] ?? "", 10);
+    const height = Number.parseInt(match[2] ?? "", 10);
+    return width > 0 && height > 0 ? { width, height } : undefined;
+  }
+
+  const aspectRatio = normalizeOptionalString(params.aspectRatio);
+  if (!aspectRatio) {
+    return undefined;
+  }
+  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(aspectRatio);
+  if (!match) {
+    return undefined;
+  }
+  const widthRatio = Number.parseFloat(match[1] ?? "");
+  const heightRatio = Number.parseFloat(match[2] ?? "");
+  if (!(widthRatio > 0) || !(heightRatio > 0)) {
+    return undefined;
+  }
+  const baseSize = params.baseSize;
+  const shortEdge = Math.max(
+    DIMENSION_ROUNDING_PX,
+    Math.round(
+      (baseSize * Math.min(widthRatio, heightRatio)) /
+        Math.max(widthRatio, heightRatio) /
+        DIMENSION_ROUNDING_PX,
+    ) * DIMENSION_ROUNDING_PX,
+  );
+  return widthRatio >= heightRatio
+    ? { width: baseSize, height: shortEdge }
+    : { width: shortEdge, height: baseSize };
 }
 
 function resolveComfyNetworkPolicy(params: {
@@ -651,6 +734,8 @@ export async function runComfyWorkflow(params: {
   capability: ComfyCapability;
   outputKinds: readonly ComfyOutputKind[];
   inputImage?: ComfySourceImage;
+  size?: string;
+  aspectRatio?: string;
 }): Promise<ComfyWorkflowResult> {
   const config = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
@@ -679,6 +764,33 @@ export async function runComfyWorkflow(params: {
     inputName: promptInputName,
     value: params.prompt,
   });
+
+  let dimensionsApplied = false;
+  if (params.size || params.aspectRatio) {
+    const dimensionConfig = resolveComfyDimensionConfig(capabilityConfig);
+    const dimensions = dimensionConfig
+      ? calculateDimensions({
+          size: params.size,
+          aspectRatio: params.aspectRatio,
+          baseSize: dimensionConfig.baseSize,
+        })
+      : undefined;
+    if (dimensionConfig && dimensions) {
+      setWorkflowInput({
+        workflow,
+        nodeId: dimensionConfig.widthNodeId,
+        inputName: dimensionConfig.widthInputName,
+        value: dimensions.width,
+      });
+      setWorkflowInput({
+        workflow,
+        nodeId: dimensionConfig.heightNodeId,
+        inputName: dimensionConfig.heightInputName,
+        value: dimensions.height,
+      });
+      dimensionsApplied = true;
+    }
+  }
 
   const pluginApiKey = resolveComfyApiKey(capabilityConfig, params.cfg);
   const resolvedAuth =
@@ -866,6 +978,7 @@ export async function runComfyWorkflow(params: {
     model: providerModel,
     promptId,
     outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
+    dimensionsApplied,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
