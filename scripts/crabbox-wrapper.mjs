@@ -813,6 +813,16 @@ function selectedProvider(commandArgs, advertisedProviders = [], versionText = "
         advertisedProviders: advertisedProviders.map(canonicalProviderName),
       })
     : [];
+  if (workload === "untrusted" && hasOption(commandArgs, "--id")) {
+    return {
+      provider: "",
+      source: "policy",
+      workload,
+      chain,
+      error:
+        "Crabbox workload=untrusted requires a fresh lease; --id reuse is forbidden without persisted workload provenance",
+    };
+  }
   const explicitProvider = commandProvider(commandArgs);
   if (explicitProvider) {
     const canonicalExplicitProvider = canonicalProviderName(explicitProvider);

@@ -952,6 +952,42 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
+  it.each([
+    {
+      name: "explicit provider",
+      args: [
+        "run",
+        "--workload",
+        "untrusted",
+        "--provider",
+        "aws",
+        "--id",
+        "cbx_trusted",
+        "--",
+        "echo ok",
+      ],
+      env: {},
+    },
+    {
+      name: "environment provider",
+      args: ["run", "--workload", "untrusted", "--id", "cbx_trusted", "--", "echo ok"],
+      env: { CRABBOX_PROVIDER: "aws" },
+    },
+  ])("rejects untrusted lease reuse through an $name", ({ args, env }) => {
+    const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", args, {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+        ...(env as Record<string, string>),
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "workload=untrusted requires a fresh lease; --id reuse is forbidden",
+    );
+  });
+
   it("reuses a workload-routed lease through its explicit provider", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",
