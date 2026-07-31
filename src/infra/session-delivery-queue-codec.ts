@@ -496,13 +496,17 @@ type InvalidSessionDelivery = {
 
 export type DecodedSessionDelivery =
   | { status: "loaded"; entry: QueuedSessionDelivery }
-  | { status: "invalid"; entry: InvalidSessionDelivery; error: string };
+  | { status: "invalid"; entry: InvalidSessionDelivery; error: string; entryJson: string };
 
+// `entryJson` carries the persisted text unchanged so the dead-letter write can
+// guard on the exact pending row it rejected. `entry` stays reduced to the
+// payload-free identity fields, so no rejected bytes survive into the terminal row.
 function invalidSessionDelivery(
   entry: InvalidSessionDelivery,
   error: string,
+  entryJson: string,
 ): DecodedSessionDelivery {
-  return { status: "invalid", entry, error };
+  return { status: "invalid", entry, error, entryJson };
 }
 
 function decodeLoadedSessionDelivery(
@@ -516,23 +520,32 @@ function decodeLoadedSessionDelivery(
       result.entryKind === "postCompactionDelegate" || payloadKind === "postCompactionDelegate"
         ? INVALID_POST_COMPACTION_DELIVERY_SHAPE
         : INVALID_GENERIC_DELIVERY_SHAPE,
+      result.entryJson,
     );
   }
   if (payloadKind !== "postCompactionDelegate") {
     const parsed = QueuedGenericDeliverySchema.safeParse(result.entry);
     if (!parsed.success) {
-      return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_SHAPE);
+      return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_SHAPE, result.entryJson);
     }
     const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
     if (normalized !== result.entry || !hasOnlyGenericAttachmentRefs(normalized)) {
-      return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_ATTACHMENTS);
+      return invalidSessionDelivery(
+        result.entry,
+        INVALID_GENERIC_DELIVERY_ATTACHMENTS,
+        result.entryJson,
+      );
     }
     return { status: "loaded", entry: normalized };
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(result.entry);
   return parsed.success
     ? { status: "loaded", entry: parsed.data as QueuedSessionDelivery }
-    : invalidSessionDelivery(result.entry, INVALID_POST_COMPACTION_DELIVERY_SHAPE);
+    : invalidSessionDelivery(
+        result.entry,
+        INVALID_POST_COMPACTION_DELIVERY_SHAPE,
+        result.entryJson,
+      );
 }
 
 export function decodeSessionDeliveryResult(
@@ -546,6 +559,7 @@ export function decodeSessionDeliveryResult(
     result.entry.entryKind === "postCompactionDelegate"
       ? INVALID_POST_COMPACTION_DELIVERY_JSON
       : INVALID_GENERIC_DELIVERY_JSON,
+    result.entryJson,
   );
 }
 

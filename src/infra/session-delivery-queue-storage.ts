@@ -97,6 +97,7 @@ export async function pruneFailedOlderThan(
 function failInvalidSessionDelivery(params: {
   entry: { id: string; enqueuedAt: number; retryCount: number };
   error: string;
+  entryJson: string;
   stateDir?: string;
 }): void {
   failPendingDeliveryQueueEntry({
@@ -109,6 +110,10 @@ function failInvalidSessionDelivery(params: {
       enqueuedAt: params.entry.enqueuedAt,
       retryCount: params.entry.retryCount,
     },
+    // The rejected row is never re-serialized, so guard the transition on the
+    // persisted text itself and keep the terminal payload identity-only.
+    expectedEntryJson: params.entryJson,
+    clearIndexedMetadata: true,
     stateDir: params.stateDir,
   });
 }

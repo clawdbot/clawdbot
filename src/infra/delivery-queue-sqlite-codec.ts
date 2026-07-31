@@ -55,9 +55,12 @@ export type CorruptDeliveryQueueEntry = {
   retryCount: number;
 };
 
+// `entryJson` is the authoritative persisted text. Callers that dead-letter a
+// row compare against it directly, because a corrupt row has no decoded value
+// to re-serialize and a scrubbed terminal payload never round-trips.
 export type DeliveryQueueEntryLoadResult =
-  | { status: "loaded"; entry: DeliveryQueueEntryState; entryKind?: string }
-  | { status: "corrupt"; entry: CorruptDeliveryQueueEntry };
+  | { status: "loaded"; entry: DeliveryQueueEntryState; entryKind?: string; entryJson: string }
+  | { status: "corrupt"; entry: CorruptDeliveryQueueEntry; entryJson: string };
 
 export function inflateDeliveryQueueEntry(
   row: DeliveryQueueSqliteRow,
@@ -92,6 +95,7 @@ export function inflateDeliveryQueueEntryResult(
       status: "loaded",
       entry,
       ...(row.entry_kind ? { entryKind: row.entry_kind } : {}),
+      entryJson: row.entry_json,
     };
   }
   return {
@@ -102,6 +106,7 @@ export function inflateDeliveryQueueEntryResult(
       enqueuedAt: Number(row.enqueued_at),
       retryCount: Number(row.retry_count),
     },
+    entryJson: row.entry_json,
   };
 }
 
