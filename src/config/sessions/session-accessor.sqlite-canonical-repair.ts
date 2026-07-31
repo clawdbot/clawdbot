@@ -26,6 +26,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { bindSqliteSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
@@ -410,6 +411,12 @@ function copySqliteSessionOwnedStateForRepair(params: {
       );
     }
   }
+  const preferredWindowProjection = params.preferredEntry
+    ? bindSqliteSessionWindowEntryProjection({
+        entry: params.preferredEntry,
+        sessionKey: params.canonicalKey,
+      })
+    : undefined;
   for (const window of windows) {
     const canonicalWindow = {
       ...window,
@@ -422,6 +429,9 @@ function copySqliteSessionOwnedStateForRepair(params: {
         window.spawned_by && sourceKeyReferences.has(window.spawned_by)
           ? params.canonicalKey
           : window.spawned_by,
+      ...(preferredWindowProjection && window.session_id === params.preferredEntry?.sessionId
+        ? preferredWindowProjection
+        : {}),
     };
     const { session_id: _sessionId, ...replacement } = {
       ...canonicalWindow,

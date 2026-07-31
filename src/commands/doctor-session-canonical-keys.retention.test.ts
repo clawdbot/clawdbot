@@ -184,6 +184,11 @@ describe("doctor canonical session-key retention repair", () => {
           .all(),
       ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
       expect(
+        destinationDatabase.db
+          .prepare("SELECT previous_session_id FROM session_windows WHERE session_id = 'winner'")
+          .get(),
+      ).toEqual({ previous_session_id: "destination-only-previous" });
+      expect(
         sourceDatabase.db
           .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
           .all(),
