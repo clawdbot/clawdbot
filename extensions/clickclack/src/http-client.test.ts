@@ -949,6 +949,44 @@ describe("ClickClack HTTP client", () => {
       payload: { op: "append", turn_id: "msg_1" },
     });
   });
+
+  it("aborts a stalled ephemeral request", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+          await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "placeholder",
+        fetch: fetchMock,
+      });
+
+      const pending = client.publishEphemeral({
+        workspaceId: "wsp_1",
+        channelId: "chn_1",
+        type: "agent.progress",
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejected;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("createClickClackClient websocket", () => {
