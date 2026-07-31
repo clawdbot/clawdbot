@@ -441,9 +441,17 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       operation.result.code === "run_stalled" &&
       (operation.staleExpiryReason === "no_activity" ||
         operation.staleExpiryReason === "stuck_recovery");
+    // Name the real condition: the run was reclaimed as stalled. "Overloaded"
+    // was a guess — a hung provider call, a wedged tool child, or a dead
+    // bridge produce this identical drop, and operators debugged the wrong
+    // thing (observed 2026-07-31: bridge turn/start losses read as gateway
+    // load). Keep the actionable part: retrying starts a clean turn.
     const queuedFinal = droppedBeforeOutput
       ? dispatcher.sendFinalReply({
-          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          text:
+            operation.staleExpiryReason === "stuck_recovery"
+              ? "⚠️ Your reply was dropped: the run made no progress and was reclaimed by stuck-session recovery. The session is intact — please retry."
+              : "⚠️ Your reply was dropped: the run showed no activity past the stale threshold and was reclaimed. The session is intact — please retry.",
           isError: true,
         })
       : false;
