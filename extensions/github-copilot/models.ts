@@ -128,7 +128,7 @@ type CopilotModelSelectionMetadata = {
   pickerEnabled: boolean;
   policyState?: string;
   preview: boolean;
-  streaming: boolean;
+  streaming?: boolean;
   toolCalls: boolean;
 };
 
@@ -151,7 +151,9 @@ export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolea
 
 function isCopilotCatalogModelSelectable(model: CopilotCatalogModel): boolean {
   const metadata = readCopilotModelSelectionMetadata(model);
-  return Boolean(isCopilotCatalogModelVisible(model) && metadata?.streaming && metadata.toolCalls);
+  return Boolean(
+    isCopilotCatalogModelVisible(model) && metadata?.streaming !== false && metadata?.toolCalls,
+  );
 }
 
 const COPILOT_STARTER_CATEGORY_RANK = new Map<string, number>([
@@ -306,7 +308,7 @@ function mapCopilotApiModelToDefinition(
     pickerEnabled: entry.model_picker_enabled === true,
     policyState: normalizeOptionalLowercaseString(entry.policy?.state),
     preview: entry.preview === true,
-    streaming: supports?.streaming === true,
+    streaming: supports?.streaming,
     toolCalls: supports?.tool_calls === true,
   });
   return definition;

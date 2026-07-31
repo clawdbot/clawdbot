@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
     release: vi.fn(async () => {}),
   })),
   resolveCopilotRuntimeAuth: vi.fn(),
-  resolveCopilotStarterModel: vi.fn(async () => "github-copilot/claude-sonnet-4.6"),
+  resolveCopilotStarterModel: vi.fn(async () => "github-copilot/claude-sonnet-5"),
 }));
 
 function requireAuthMethod<T>(methods: readonly T[], index: number): T {
@@ -569,7 +569,7 @@ describe("github-copilot plugin", () => {
           },
         },
       ],
-      defaultModel: "github-copilot/claude-sonnet-4.6",
+      defaultModel: "github-copilot/claude-sonnet-5",
     });
     expect(mocks.resolveCopilotStarterModel).toHaveBeenCalledWith({
       githubToken: "existing-token",
@@ -1366,11 +1366,9 @@ describe("github-copilot plugin", () => {
       mode: "token",
     });
     expect(result?.agents?.defaults?.model).toEqual({
-      primary: "github-copilot/claude-sonnet-4.6",
+      primary: "github-copilot/claude-sonnet-5",
     });
-    expect(result?.agents?.defaults?.models?.["github-copilot/claude-sonnet-4.6"]).toStrictEqual(
-      {},
-    );
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-sonnet-5"]).toStrictEqual({});
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
     expect(profile).toEqual({
@@ -1494,7 +1492,7 @@ describe("github-copilot plugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(result?.agents?.defaults?.model).toEqual({
       fallbacks: ["openai/gpt-5.4"],
-      primary: "github-copilot/claude-sonnet-4.6",
+      primary: "github-copilot/claude-sonnet-5",
     });
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];

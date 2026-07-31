@@ -31,7 +31,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-sonnet-4.6
+        openclaw models set github-copilot/claude-sonnet-5
         ```
 
         Or in config:
@@ -39,7 +39,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-sonnet-4.6" } },
+            defaults: { model: { primary: "github-copilot/claude-sonnet-5" } },
           },
         }
         ```
@@ -204,7 +204,7 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 
 Fresh non-interactive setup validates the token before saving it. When setup
 must choose a default, it also checks the live Copilot model catalog. OpenClaw
-prefers the documented general-purpose Copilot CLI model when that model is
+prefers the provider's current general-purpose model when that model is
 enabled for the account; otherwise it chooses a deterministic eligible fallback.
 Setup fails without writing a new auth profile if the account has no
 picker-visible model that supports streaming and tool calls. An explicitly

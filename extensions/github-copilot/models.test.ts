@@ -617,7 +617,7 @@ describe("fetchCopilotModelCatalog", () => {
     pickerEnabled?: boolean;
     policyState?: string;
     preview?: boolean;
-    streaming?: boolean;
+    streaming?: boolean | "omit";
     toolCalls?: boolean;
   }) {
     return {
@@ -635,7 +635,7 @@ describe("fetchCopilotModelCatalog", () => {
           max_output_tokens: params.maxTokens ?? 64_000,
         },
         supports: {
-          streaming: params.streaming ?? true,
+          ...(params.streaming === "omit" ? {} : { streaming: params.streaming ?? true }),
           tool_calls: params.toolCalls ?? true,
         },
       },
@@ -683,6 +683,14 @@ describe("fetchCopilotModelCatalog", () => {
     ]);
 
     expect(selectCopilotStarterModel(models, "hidden")).toBeUndefined();
+  });
+
+  it("does not treat omitted streaming metadata as an explicit lack of support", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "omitted-streaming", streaming: "omit" }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "omitted-streaming")?.id).toBe("omitted-streaming");
   });
 
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {

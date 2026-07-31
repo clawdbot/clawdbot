@@ -15,6 +15,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -3669,16 +3670,19 @@ describe("activateSetupInference", () => {
 
   it.each([
     {
-      name: "uses a provider starter model instead of an unrelated existing default",
+      name: "requests a dynamic provider model instead of using a static starter",
       existingModel: "openai/gpt-5.2",
-      starterModel: "github-copilot/claude-sonnet-4.5",
+      starterModel: "github-copilot/static-should-not-win",
+      expectedSetupInputModel: undefined,
     },
     {
       name: "accepts an unchanged provider-owned dynamic model",
       existingModel: "github-copilot/claude-sonnet-4.5",
       starterModel: undefined,
+      expectedSetupInputModel: "github-copilot/claude-sonnet-4.5",
     },
-  ])("$name without starting interactive login", async ({ existingModel, starterModel }) => {
+  ])("$name without starting interactive login", async (testCase) => {
+    const { existingModel, starterModel, expectedSetupInputModel } = testCase;
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const runInteractive = vi.fn();
@@ -3787,6 +3791,10 @@ describe("activateSetupInference", () => {
         expect.objectContaining({
           opts: expect.objectContaining({ githubCopilotToken: "github-token" }),
         }),
+      );
+      const setupInputConfig = runNonInteractive.mock.calls[0]?.[0].config;
+      expect(resolveAgentModelPrimaryValue(setupInputConfig?.agents?.defaults?.model)).toBe(
+        expectedSetupInputModel,
       );
       const activatedProfileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
       if (!activatedProfileId) {
