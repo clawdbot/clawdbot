@@ -565,8 +565,12 @@ export async function launchChromeMeetOnNode(params: {
       commandName: GOOGLE_MEET_NODE_COMMAND,
       logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
-      outputGenerationSupported: result.audioBridge.outputGeneration === true,
     });
+    Reflect.set(
+      transport,
+      Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+      result.audioBridge.outputGeneration === true,
+    );
     const bindings = createMeetingRealtimeEngineBindings({
       platform: GOOGLE_MEET_PLATFORM_ADAPTER,
       ...params,

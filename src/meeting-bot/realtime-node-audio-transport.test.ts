@@ -5,7 +5,7 @@ function createTransport(
   invoke: ReturnType<typeof vi.fn>,
   options: { outputGenerationSupported?: boolean } = {},
 ) {
-  return createNodeMeetingRealtimeAudioTransport({
+  const transport = createNodeMeetingRealtimeAudioTransport({
     runtime: { nodes: { invoke } } as never,
     nodeId: "node-1",
     bridgeId: "bridge-1",
@@ -13,8 +13,13 @@ function createTransport(
     commandName: "meeting.chrome",
     logScope: "[meeting]",
     logPrefix: "node",
-    ...options,
   });
+  Reflect.set(
+    transport,
+    Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+    options.outputGenerationSupported === true,
+  );
+  return transport;
 }
 
 describe("node meeting realtime audio transport", () => {

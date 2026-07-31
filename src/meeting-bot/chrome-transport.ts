@@ -458,8 +458,12 @@ export function createMeetingChromeTransport<
         commandName: options.nodeCommandName,
         logScope: options.platform.logScope,
         logPrefix: params.mode === "agent" ? "node agent" : "node",
-        outputGenerationSupported: result.audioBridge.outputGeneration === true,
       });
+      Reflect.set(
+        transport,
+        Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+        result.audioBridge.outputGeneration === true,
+      );
       const bindings = options.runtime.createBindings({
         platform: options.platform,
         ...params,

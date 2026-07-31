@@ -5,6 +5,10 @@ import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
+const NODE_OUTPUT_GENERATION_CAPABILITY = Symbol.for(
+  "openclaw.internal.meeting-node-output-generation.v1",
+);
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -25,7 +29,6 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   logScope: string;
   logPrefix: string;
   audioFormat?: MeetingRealtimeAudioFormat;
-  outputGenerationSupported?: boolean;
 }): MeetingRealtimeAudioTransport {
   let stopped = false;
   let inputStarted = false;
@@ -34,12 +37,13 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
   let outputGeneration = 0;
+  let outputGenerationSupported = false;
   let legacyOutputTail = Promise.resolve();
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
   const runOutputCommand = <T>(task: () => Promise<T>): Promise<T> => {
-    if (params.outputGenerationSupported) {
+    if (outputGenerationSupported) {
       return task();
     }
     const result = legacyOutputTail.then(task, task);
@@ -155,7 +159,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
               action: "pushAudio",
               bridgeId: params.bridgeId,
               base64: audio.toString("base64"),
-              ...(params.outputGenerationSupported ? { outputGeneration: generation } : {}),
+              ...(outputGenerationSupported ? { outputGeneration: generation } : {}),
             },
             timeoutMs: 5_000,
           });
@@ -183,7 +187,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
           params: {
             action: "clearAudio",
             bridgeId: params.bridgeId,
-            ...(params.outputGenerationSupported ? { outputGeneration } : {}),
+            ...(outputGenerationSupported ? { outputGeneration } : {}),
           },
           timeoutMs: 5_000,
         });
@@ -198,6 +202,12 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       ...outputLoopbackVerifier.getHealth(),
     }),
   };
+
+  Object.defineProperty(transport, NODE_OUTPUT_GENERATION_CAPABILITY, {
+    set(value) {
+      outputGenerationSupported = value === true;
+    },
+  });
 
   return transport;
 }

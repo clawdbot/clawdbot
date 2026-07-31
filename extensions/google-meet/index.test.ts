@@ -267,8 +267,8 @@ async function startTestNodeRealtimeAudioBridge(params: TestNodeRealtimeEnginePa
     commandName: "googlemeet.chrome",
     logScope: "[google-meet]",
     logPrefix: "node",
-    outputGenerationSupported: true,
   });
+  Reflect.set(transport, Symbol.for("openclaw.internal.meeting-node-output-generation.v1"), true);
   return {
     type: "node-command-pair" as const,
     nodeId,

@@ -283,8 +283,11 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     });
 
     expect(result.audioBridge?.type).toBe("node-command-pair");
-    expect(createNodeAudioTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ outputGenerationSupported: true }),
-    );
+    expect(
+      Reflect.get(
+        nodeAudioTransport,
+        Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+      ),
+    ).toBe(true);
   });
 });
