@@ -164,6 +164,8 @@ USER.md
 !.agents/skills/graincrawl/**
 !.agents/skills/notcrawl/
 !.agents/skills/notcrawl/**
+!.agents/skills/openclaw-autonomous-issue-sweep/
+!.agents/skills/openclaw-autonomous-issue-sweep/**
 !.agents/skills/openclaw-changelog-update/
 !.agents/skills/openclaw-changelog-update/**
 !.agents/skills/openclaw-ci-limits/
