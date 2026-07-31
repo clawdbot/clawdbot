@@ -6,7 +6,11 @@
 //! version, limit, session-generation, sequence, and authentication invariants
 //! shared by every platform adapter.
 
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -17,7 +21,10 @@ use zeroize::Zeroize;
 
 pub const SIDECAR_PROTOCOL_MAJOR: u16 = 1;
 pub const SIDECAR_PROTOCOL_MINOR: u16 = 0;
+/// Largest feature mask that every JSON implementation can represent exactly.
+pub const SIDECAR_MAX_FEATURE_BITS: u64 = (1 << 53) - 1;
 const SIDECAR_BOOTSTRAP_MINOR: u16 = 0;
+static NEXT_CHANNEL_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 const FRAME_MAGIC: [u8; 4] = *b"OCSC";
 const AUTH_TAG_BYTES: usize = 32;
@@ -145,6 +152,11 @@ pub fn negotiate_sidecar_protocol(
     if local.peer.role == remote.peer.role {
         return Err(SidecarProtocolError::InvalidPeerRole);
     }
+    if local.feature_bits > SIDECAR_MAX_FEATURE_BITS
+        || remote.feature_bits > SIDECAR_MAX_FEATURE_BITS
+    {
+        return Err(SidecarProtocolError::InvalidFeatureBits);
+    }
     if local.protocol_major != SIDECAR_PROTOCOL_MAJOR
         || remote.protocol_major != SIDECAR_PROTOCOL_MAJOR
     {
@@ -215,6 +227,7 @@ impl Drop for SidecarSessionKey {
 /// directional and start at one. A rejected frame never advances the receive
 /// high-water mark.
 pub struct AuthenticatedSidecarChannel {
+    instance_id: u64,
     role: SidecarPeerRole,
     protocol_minor: u16,
     session_id: String,
@@ -249,8 +262,14 @@ impl AuthenticatedSidecarChannel {
         if (max_frame_bytes as usize) < minimum_frame_bytes(session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
+        let instance_id = NEXT_CHANNEL_INSTANCE_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| SidecarProtocolError::ChannelInstanceIdExhausted)?;
 
         Ok(Self {
+            instance_id,
             role,
             protocol_minor: SIDECAR_BOOTSTRAP_MINOR,
             session_id,
@@ -272,6 +291,13 @@ impl AuthenticatedSidecarChannel {
     #[must_use]
     pub const fn is_retired(&self) -> bool {
         self.retired
+    }
+
+    /// Return an opaque process-local identity for binding a state machine to
+    /// this exact channel instance. The value has no wire or trust meaning.
+    #[must_use]
+    pub const fn instance_id(&self) -> u64 {
+        self.instance_id
     }
 
     /// Apply the negotiated frame ceiling without resetting channel sequence.
@@ -626,6 +652,10 @@ pub async fn write_sidecar_frame<W: AsyncWrite + Unpin>(
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum SidecarProtocolError {
+    #[error("sidecar channel instance id space exhausted")]
+    ChannelInstanceIdExhausted,
+    #[error("sidecar feature bits exceed the portable JSON integer range")]
+    InvalidFeatureBits,
     #[error("sidecar peers must have complementary roles")]
     InvalidPeerRole,
     #[error("invalid sidecar limit: {0}")]
@@ -909,6 +939,32 @@ mod tests {
         assert_eq!(
             negotiate_sidecar_protocol(&unsupported_local, &compatible_remote),
             Err(SidecarProtocolError::UnsupportedLocalMinor(1))
+        );
+    }
+
+    #[test]
+    fn negotiation_rejects_feature_bits_that_json_cannot_preserve() {
+        let limits = SidecarLimits {
+            max_frame_bytes: 4096,
+            max_in_flight: 8,
+            bootstrap_timeout_ms: 1_000,
+        };
+        let mut local = offer(SidecarPeerRole::Supervisor, limits);
+        let mut remote = offer(SidecarPeerRole::Runtime, limits);
+
+        local.feature_bits = SIDECAR_MAX_FEATURE_BITS;
+        remote.feature_bits = SIDECAR_MAX_FEATURE_BITS;
+        assert_eq!(
+            negotiate_sidecar_protocol(&local, &remote)
+                .unwrap()
+                .feature_bits,
+            SIDECAR_MAX_FEATURE_BITS
+        );
+
+        remote.feature_bits += 1;
+        assert_eq!(
+            negotiate_sidecar_protocol(&local, &remote),
+            Err(SidecarProtocolError::InvalidFeatureBits)
         );
     }
 

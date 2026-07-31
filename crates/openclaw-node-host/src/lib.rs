@@ -40,5 +40,6 @@ pub use sidecar_protocol::{
     negotiate_sidecar_protocol, read_sidecar_frame, write_sidecar_frame,
     AuthenticatedSidecarChannel, NegotiatedSidecarProtocol, SidecarDirection, SidecarFrameError,
     SidecarLimits, SidecarPeerIdentity, SidecarPeerRole, SidecarProtocolError,
-    SidecarProtocolOffer, SidecarSessionKey, SIDECAR_PROTOCOL_MAJOR, SIDECAR_PROTOCOL_MINOR,
+    SidecarProtocolOffer, SidecarSessionKey, SIDECAR_MAX_FEATURE_BITS, SIDECAR_PROTOCOL_MAJOR,
+    SIDECAR_PROTOCOL_MINOR,
 };

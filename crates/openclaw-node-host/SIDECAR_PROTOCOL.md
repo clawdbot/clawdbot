@@ -80,8 +80,10 @@ generation before sequence exhaustion; never reset a sequence in place.
 `SidecarProtocolOffer` carries the peer role and reported identity, protocol
 version, additive feature bits, frame/in-flight ceilings, and bootstrap
 deadline. Peers must have complementary roles and the same major version.
-Features are intersected. Frame, in-flight, and deadline values use the lower
-valid offer. Unknown features remain disabled.
+Features are intersected. The feature mask must be at most `2^53 - 1`, the
+largest integer that JSON implementations such as JavaScript can preserve
+exactly; larger local or remote offers are invalid. Frame, in-flight, and
+deadline values use the lower valid offer. Unknown features remain disabled.
 
 The offer and acceptance are application payloads carried in authenticated
 frames. Higher layers must complete negotiation before accepting credentials,
