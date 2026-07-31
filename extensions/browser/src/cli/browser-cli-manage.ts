@@ -417,7 +417,7 @@ export function registerBrowserManageCommands(
           defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         }
         if (!result.ok) {
-          defaultRuntime.exit(1);
+          process.exitCode = 1;
         }
       });
     });

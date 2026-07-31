@@ -1,5 +1,5 @@
 // Browser tests cover browser cli manage plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
   getBrowserManageCallBrowserRequestMock,
@@ -22,11 +22,19 @@ function parseSingleRuntimeJson(): unknown {
 }
 
 describe("browser manage output", () => {
+  let previousExitCode: typeof process.exitCode;
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
     getBrowserManageCallBrowserRequestMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockClear();
     getBrowserCliRuntime().writeJson.mockClear();
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
@@ -534,9 +542,10 @@ describe("browser manage output", () => {
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
-  it("prints one complete JSON browser doctor failure before exiting nonzero", async () => {
+  it("prints one complete JSON browser doctor failure before setting exit status", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {
         return {
@@ -553,9 +562,7 @@ describe("browser manage output", () => {
     });
 
     const program = createBrowserManageProgram();
-    await expect(
-      program.parseAsync(["browser", "--json", "doctor"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
 
     expect(parseSingleRuntimeJson()).toMatchObject({
       ok: false,
@@ -564,7 +571,10 @@ describe("browser manage output", () => {
         { name: "plugin", ok: false },
       ],
     });
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints one JSON browser doctor report and succeeds when every check passes", async () => {
@@ -595,6 +605,7 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {
@@ -605,9 +616,7 @@ describe("browser manage output", () => {
     getBrowserManageCallBrowserRequestMock().mockRejectedValueOnce(error);
 
     const program = createBrowserManageProgram();
-    await expect(program.parseAsync(["browser", "doctor"], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
-    );
+    await program.parseAsync(["browser", "doctor"], { from: "user" });
 
     const output = lastRuntimeLog();
     expect(output).toContain(
@@ -616,5 +625,7 @@ describe("browser manage output", () => {
     expect(output).toContain("OPENCLAW_GATEWAY_TOKEN");
     expect(output).not.toContain("GatewaySecretRefUnavailableError");
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 });
