@@ -12,6 +12,7 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
+import { createBoundedOutboundMediaReadFile } from "../../media/bounded-read-file.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import {
   buildOutboundMediaLoadOptions,
@@ -460,10 +461,11 @@ function buildAttachmentMediaLoadOptions(params: {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
     let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile = async (filePath: string): Promise<Buffer> => {
+    const readSandboxFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
       sandboxFsPromise ??= root(sandboxRoot);
-      return await (await sandboxFsPromise).readBytes(filePath);
-    };
+      const sandboxFs = await sandboxFsPromise;
+      return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+    });
     return {
       maxBytes: params.maxBytes,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
