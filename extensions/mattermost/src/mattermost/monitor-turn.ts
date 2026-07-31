@@ -60,6 +60,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     updateAssistantText: () => {},
     flush: noopAsync,
     postId: () => undefined,
+    latestSentText: () => "",
     clear: noopAsync,
     discardPending: noopAsync,
     seal: noopAsync,

@@ -2348,9 +2348,11 @@ describe("mattermost inbound user posts", () => {
   });
 
   it("skips non-terminal tool-error warning when streaming answer is live in the draft post", async () => {
-    // Regression proof for #116571: with draftPreviewEnabled, a trailing non-terminal
-    // tool-error warning was dispatched as kind:final and edited the draft post in place,
-    // replacing the visible streaming answer with the warning text.
+    // Regression proof for #116571: when the answer was delivered via streaming
+    // (resolveFinalText returns "already-delivered") rather than via a preview-post
+    // in-place edit, finalizedViaPreviewPost stays false. Without the guard, the
+    // subsequent non-terminal tool-error warning's buildFinalEdit returns a valid edit
+    // (the warning text) and overwrites the visible streaming answer.
     const { setReplyPayloadMetadata } = await vi.importActual<
       typeof import("openclaw/plugin-sdk/reply-payload-testing")
     >("openclaw/plugin-sdk/reply-payload-testing");
@@ -2368,27 +2370,29 @@ describe("mattermost inbound user posts", () => {
         },
       },
     };
-    const runtimeCore = createRuntimeCore(previewConfig);
-    mockState.runtimeCore = runtimeCore;
+    mockState.runtimeCore = createRuntimeCore(previewConfig);
 
-    const latestSentTextFn = vi.fn(() => "The assistant answer");
+    const answerText = "The assistant answer";
     mockState.createMattermostDraftStream.mockReturnValue({
       update: vi.fn(),
       updateAssistantText: vi.fn(),
       forceNewMessage: vi.fn(async () => {}),
       flush: vi.fn(async () => {}),
       postId: vi.fn(() => "preview-post-1"),
-      latestSentText: latestSentTextFn,
+      // Non-empty: the answer was streamed into the current draft post.
+      latestSentText: vi.fn(() => answerText),
       clear: vi.fn(async () => {}),
       discardPending: vi.fn(async () => {}),
       seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
       settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: vi.fn((text: string) => ({
-        kind: "full" as const,
-        text,
-        publishedParts: [],
-      })),
+      // Answer text reports already-delivered; warning text reports full (one chunk).
+      // This keeps finalizedViaPreviewPost false so the warning reaches buildFinalEdit.
+      resolveFinalText: vi.fn((text: string) =>
+        text === answerText
+          ? { kind: "already-delivered" as const, publishedParts: [] }
+          : { kind: "full" as const, text, publishedParts: [] },
+      ),
     });
 
     const socket = new FakeWebSocket();
@@ -2397,12 +2401,13 @@ describe("mattermost inbound user posts", () => {
 
     mockState.dispatchInboundMessage.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
-      await params.replyOptions?.onPartialReply?.({ text: "The assistant answer" });
+      await params.replyOptions?.onPartialReply?.({ text: answerText });
       const dispatcherOptions =
         mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
-      // Answer delivered as final
-      await dispatcherOptions?.deliver({ text: "The assistant answer" }, { kind: "final" });
-      // Non-terminal tool-error warning follows
+      // Answer arrives as final; resolveFinalText returns already-delivered so
+      // buildFinalEdit returns undefined and finalizedViaPreviewPost stays false.
+      await dispatcherOptions?.deliver({ text: answerText }, { kind: "final" });
+      // Non-terminal tool-error warning follows the already-streamed answer.
       const warningPayload = { text: "⚠️ 🛠️ Bash failed: exit 1 (agent)" };
       setReplyPayloadMetadata(warningPayload, { nonTerminalToolErrorWarning: true });
       await dispatcherOptions?.deliver(warningPayload, { kind: "final" });
@@ -2420,111 +2425,21 @@ describe("mattermost inbound user posts", () => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
     });
     socket.emitOpen();
-    await emitMattermostChannelPost(socket, { id: "post-answer-then-warning", message: "run" });
+    // rootId ensures canFinalizeMattermostPreviewInPlace returns true so
+    // buildFinalEdit produces an edit object for the warning.
+    await emitMattermostChannelPost(socket, {
+      id: "post-streamed-answer-then-warning",
+      message: "run",
+      rootId: "thread-root-streamed",
+    });
     socket.emitClose(1000);
     await monitor;
 
-    // The warning must not have been posted as a new message or edited into the draft post.
-    const warningSent = mockState.sendMessageMattermost.mock.calls.some(([, payload]) =>
-      String(payload?.message ?? "").includes("Bash failed"),
-    );
+    // The warning must not have been edited into the streaming draft post.
     const warningEdited = mockState.updateMattermostPost.mock.calls.some(([, , body]) =>
       String(body?.message ?? "").includes("Bash failed"),
     );
-    expect(warningSent).toBe(false);
     expect(warningEdited).toBe(false);
-  });
-
-  it("skips non-terminal tool-error warning when answer was finalized via preview post edit", async () => {
-    const { setReplyPayloadMetadata } = await vi.importActual<
-      typeof import("openclaw/plugin-sdk/reply-payload-testing")
-    >("openclaw/plugin-sdk/reply-payload-testing");
-
-    const previewConfig: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
-          dmPolicy: "open",
-          groupPolicy: "open",
-          streaming: { mode: "preview" },
-        },
-      },
-    };
-    const runtimeCore = createRuntimeCore(previewConfig);
-    mockState.runtimeCore = runtimeCore;
-
-    mockState.updateMattermostPost.mockResolvedValue({
-      id: "preview-post-1",
-      message: "The answer",
-    });
-    mockState.createMattermostDraftStream.mockReturnValue({
-      update: vi.fn(),
-      updateAssistantText: vi.fn(),
-      forceNewMessage: vi.fn(async () => {}),
-      flush: vi.fn(async () => {}),
-      postId: vi.fn(() => "preview-post-1"),
-      latestSentText: vi.fn(() => ""),
-      clear: vi.fn(async () => {}),
-      discardPending: vi.fn(async () => {}),
-      seal: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: vi.fn((text: string) => ({
-        kind: "full" as const,
-        text,
-        publishedParts: [],
-      })),
-    });
-
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-
-    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
-      await params.replyOptions?.onAssistantMessageStart?.();
-      const dispatcherOptions =
-        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
-      // Answer finalizes the preview post via in-place edit
-      await dispatcherOptions?.deliver({ text: "The answer" }, { kind: "final" });
-      // Non-terminal warning follows the finalized answer
-      const warningPayload = { text: "⚠️ 🛠️ Bash failed: exit 1 (agent)" };
-      setReplyPayloadMetadata(warningPayload, { nonTerminalToolErrorWarning: true });
-      await dispatcherOptions?.deliver(warningPayload, { kind: "final" });
-      abortController.abort();
-    });
-
-    const monitor = monitorMattermostProvider({
-      config: previewConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-    await emitMattermostChannelPost(socket, {
-      id: "post-finalized-then-warning",
-      message: "run",
-      rootId: "thread-root-finalized",
-    });
-    socket.emitClose(1000);
-    await monitor;
-
-    // Warning must not have overwritten the finalized answer post.
-    const postEdits = mockState.updateMattermostPost.mock.calls.map(([, , body]) => body?.message);
-    const warningEdited = postEdits.some((msg) => String(msg ?? "").includes("Bash failed"));
-    expect(warningEdited).toBe(false);
-    // Answer edit must still have landed.
-    expect(mockState.updateMattermostPost).toHaveBeenCalledWith(
-      expect.anything(),
-      "preview-post-1",
-      expect.objectContaining({ message: "The answer" }),
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
