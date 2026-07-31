@@ -1000,6 +1000,7 @@ fn validate_configuration(
         return Err(SidecarRuntimeBridgeError::InvalidLimit("maxInputBytes"));
     }
     if configuration.max_output_bytes == 0
+        || (configuration.max_output_bytes as usize) < minimum_bridge_failure_bytes()
         || configuration.max_output_bytes > negotiated.limits.max_frame_bytes
     {
         return Err(SidecarRuntimeBridgeError::InvalidLimit("maxOutputBytes"));
@@ -1132,6 +1133,18 @@ fn channel_retired() -> HandlerError {
         "SIDECAR_CHANNEL_RETIRED",
         "authenticated sidecar channel is no longer live",
     )
+}
+
+fn minimum_bridge_failure_bytes() -> usize {
+    [message_too_large(), nonportable_json(), channel_retired()]
+        .iter()
+        .map(|error| {
+            serde_json::json!({"code": &error.code, "message": &error.message})
+                .to_string()
+                .len()
+        })
+        .max()
+        .unwrap_or(1)
 }
 
 fn runtime_message_within_limit<T: Serialize>(message: &T, limit: usize) -> bool {
@@ -1526,8 +1539,10 @@ mod tests {
 
     #[tokio::test]
     async fn nonportable_json_has_a_distinct_runtime_failure() {
+        let mut failure_bounded = configuration();
+        failure_bounded.max_output_bytes = u32::try_from(minimum_bridge_failure_bytes()).unwrap();
         let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+            validated_runtime_exchange(&failure_bounded);
         let adapter = Arc::new(RecordingAdapter::default());
         let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
         assert_eq!(
@@ -1548,7 +1563,7 @@ mod tests {
         assert_eq!(adapter.admissions.load(Ordering::SeqCst), 0);
 
         let (mut result_exchange, mut result_channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+            validated_runtime_exchange(&failure_bounded);
         let result_adapter = Arc::new(NonPortableResultAdapter);
         let result_bridge = SidecarRuntimeBridge::activate(
             &mut result_exchange,
@@ -1777,6 +1792,12 @@ mod tests {
         assert!(matches!(
             validate_configuration(&invalid, selection),
             Err(SidecarRuntimeBridgeError::InvalidLimit("maxConcurrency"))
+        ));
+        let mut invalid = configuration();
+        invalid.max_output_bytes = u32::try_from(minimum_bridge_failure_bytes() - 1).unwrap();
+        assert!(matches!(
+            validate_configuration(&invalid, selection),
+            Err(SidecarRuntimeBridgeError::InvalidLimit("maxOutputBytes"))
         ));
         let mut invalid = configuration();
         invalid.commands.push(SidecarCommandRegistration {

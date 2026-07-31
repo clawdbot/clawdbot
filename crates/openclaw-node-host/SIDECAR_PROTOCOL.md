@@ -153,6 +153,11 @@ use the shared ASCII grammar `[A-Za-z0-9._-]{1,128}`, are duplicate-free, and
 are sorted bytewise before acknowledgement; the OpenClaw-owned `system.*`
 namespace remains reserved.
 
+The configured output limit must also fit the largest bridge-owned stable
+failure envelope. This preserves `SIDECAR_MESSAGE_TOO_LARGE`,
+`SIDECAR_NON_PORTABLE_JSON`, and `SIDECAR_CHANNEL_RETIRED` instead of allowing
+the generic command-runtime output limiter to rewrite them.
+
 `SidecarConfigurationExchange` permits exactly one supervisor configuration
 followed by the runtime's acknowledgement of the independently derived
 manifest. It remains bound to the exact channel instance authenticated by the
