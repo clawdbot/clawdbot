@@ -27,13 +27,10 @@ export function normalizeDirectiveWhitespace(text: string): string {
     masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
     cursor = span.end;
   }
-  masked = `${masked}${text.slice(cursor)}`.replace(
-    /(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
-    (block) => {
-      blocks.push(block);
-      return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-    },
-  );
+  masked = `${masked}${text.slice(cursor)}`.replace(/(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm, (block) => {
+    blocks.push(block);
+    return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
+  });
 
   const normalized = masked
     .replace(/\r\n/g, "\n")

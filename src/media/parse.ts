@@ -16,6 +16,9 @@ import { normalizeDirectiveWhitespace } from "../utils/directive-whitespace.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 function normalizeMediaVisibleWhitespace(text: string): string {
+  if (!text.trim()) {
+    return "";
+  }
   const normalized = normalizeDirectiveWhitespace(text);
   const withoutLeadingBlankLines = normalized.replace(/^\n+/, "");
   return /^(?: {4}|\t)/.test(withoutLeadingBlankLines)
@@ -537,16 +540,21 @@ export function splitMediaFromOutput(
         normalizedSegments.push(segment);
         continue;
       }
-      const text = normalizeMediaVisibleWhitespace(segment.text);
-      if (!text.trim()) {
+      if (!segment.text.trim()) {
         continue;
       }
+      const hadTrailingNewline = /\n$/.test(segment.text);
+      const text = normalizeMediaVisibleWhitespace(segment.text);
+      const endsWithCodeFence = /(?:^|\n) {0,3}(?:`{3,}|~{3,})[^\n]*$/.test(text);
+      const isIndentedCode = /^(?: {4}|\t)/.test(text);
+      const normalizedText =
+        hadTrailingNewline && text && !endsWithCodeFence && !isIndentedCode ? `${text}\n` : text;
       const last = normalizedSegments[normalizedSegments.length - 1];
       if (last?.type === "text") {
-        last.text = normalizeMediaVisibleWhitespace(`${last.text}\n${text}`);
+        last.text = normalizeMediaVisibleWhitespace(`${last.text}\n${normalizedText}`);
         continue;
       }
-      normalizedSegments.push({ type: "text", text });
+      normalizedSegments.push({ type: "text", text: normalizedText });
     }
     return normalizedSegments;
   };
