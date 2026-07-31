@@ -7,6 +7,13 @@ import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
+const NIX_STORE_ROOT = "/nix/store";
+
+/** Returns true when a path resolves inside the immutable Nix store. */
+function isNixStorePath(resolvedPath: string): boolean {
+  return resolvedPath === NIX_STORE_ROOT || resolvedPath.startsWith(`${NIX_STORE_ROOT}/`);
+}
+
 type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
@@ -22,6 +29,7 @@ function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
 }): string | null {
   const opened = openRootFileSync({
     absolutePath: params.filePath,
@@ -29,6 +37,7 @@ function readSkillFileSync(params: {
     rootRealPath: params.rootRealPath,
     boundaryLabel: "skill root",
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
     return null;
@@ -45,6 +54,7 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
@@ -52,6 +62,7 @@ function loadSingleSkillDirectory(params: {
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (!raw) {
     return null;
@@ -129,11 +140,17 @@ export function loadSkillsFromDirSafe(params: {
     return { skills: [], frontmatterByFilePath: new Map() };
   }
 
+  // NixOS auto-optimise-store deduplicates identical files across the store by
+  // hardlinking them. This is a standard Nix optimisation, not user mutation.
+  // Rejecting hardlinks would silently drop every skill in the Nix store.
+  const rejectHardlinks = !isNixStorePath(rootRealPath);
+
   const rootSkill = loadSingleSkillDirectory({
     skillDir: rootDir,
     source: params.source,
     rootRealPath,
     maxBytes: params.maxBytes,
+    rejectHardlinks,
     onDiagnostic: params.onDiagnostic,
   });
   if (rootSkill) {
@@ -150,6 +167,7 @@ export function loadSkillsFromDirSafe(params: {
         source: params.source,
         rootRealPath,
         maxBytes: params.maxBytes,
+        rejectHardlinks,
         onDiagnostic: params.onDiagnostic,
       }),
     )

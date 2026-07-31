@@ -1411,5 +1411,89 @@ description: Broken skill
       ]);
     });
   });
+
+  describe("NixOS hardlink handling", () => {
+    it("loads skills from Nix store paths with hardlinked SKILL.md files", async () => {
+      // NixOS auto-optimise-store deduplicates identical files by hardlinking.
+      // A SKILL.md in /nix/store may have nlink >= 2 without being a user
+      // mutation. The loader must not reject these files.
+      //
+      // NOTE: This test uses a real /nix/store path when available, or skips
+      // on non-NixOS systems. The isNixStorePath check requires the resolved
+      // path to actually be under /nix/store.
+      const nixStoreDir = "/nix/store/clawtribute-test-" + Date.now();
+      const skillDir = path.join(nixStoreDir, "abc123-my-skill");
+      try {
+        await fs.mkdir(skillDir, { recursive: true });
+      } catch {
+        // Skip if we can't create /nix/store (not a NixOS system or no permissions)
+        return;
+      }
+      const skillPath = path.join(skillDir, "SKILL.md");
+      await fs.writeFile(
+        skillPath,
+        "---\nname: nix-skill\ndescription: A skill in the Nix store\n---\n# Nix Skill\n",
+      );
+
+      // Create a hardlink to simulate Nix store deduplication
+      const linkPath = path.join(nixStoreDir, "def456-other", "SKILL.md");
+      await fs.mkdir(path.dirname(linkPath), { recursive: true });
+      await fs.link(skillPath, linkPath);
+
+      // Verify the file has nlink > 1
+      const stat = await fs.stat(skillPath);
+      expect(stat.nlink).toBeGreaterThan(1);
+
+      try {
+        // Load skills from the Nix store path — should succeed despite hardlink
+        const { loadSkillsFromDirSafe } = await import("./local-loader.js");
+        const result = loadSkillsFromDirSafe({
+          dir: nixStoreDir,
+          source: "openclaw-extra",
+        });
+
+        expect(result.skills.length).toBeGreaterThan(0);
+        expect(result.skills[0]?.name).toBe("nix-skill");
+      } finally {
+        // Cleanup
+        await fs.rm(nixStoreDir, { recursive: true, force: true });
+      }
+    });
+
+    it("still rejects hardlinked SKILL.md files outside the Nix store", async () => {
+      // Outside /nix/store, hardlinks may indicate user mutation and should
+      // still be rejected by the boundary guard.
+      const userDir = path.join(os.tmpdir(), "user-skills-test-" + Date.now());
+      const skillDir = path.join(userDir, "my-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skillPath = path.join(skillDir, "SKILL.md");
+      await fs.writeFile(
+        skillPath,
+        "---\nname: user-skill\ndescription: A user skill\n---\n# User Skill\n",
+      );
+
+      // Create a hardlink
+      const linkPath = path.join(userDir, "other", "SKILL.md");
+      await fs.mkdir(path.dirname(linkPath), { recursive: true });
+      await fs.link(skillPath, linkPath);
+
+      // Verify the file has nlink > 1
+      const stat = await fs.stat(skillPath);
+      expect(stat.nlink).toBeGreaterThan(1);
+
+      // Load skills — should reject the hardlinked file
+      const { loadSkillsFromDirSafe } = await import("./local-loader.js");
+      const result = loadSkillsFromDirSafe({
+        dir: userDir,
+        source: "openclaw-extra",
+      });
+
+      // The hardlinked file should be rejected (returns empty skills)
+      expect(result.skills.length).toBe(0);
+
+      // Cleanup
+      await fs.rm(userDir, { recursive: true, force: true });
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
