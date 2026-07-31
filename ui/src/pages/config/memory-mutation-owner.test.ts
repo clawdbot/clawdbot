@@ -295,6 +295,55 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
+  it("keeps a newer add-on notice when an older process lookup finishes last", async () => {
+    const firstProcess = createMemoryTestDeferred<{ processInstanceId: string }>();
+    let enabled = true;
+    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
+      configObject: {},
+      listCatalog: () =>
+        Promise.resolve({ plugins: [createMemoryTestAddon("active-memory", enabled)] }),
+      processInfo: (call) =>
+        call === 0
+          ? firstProcess.promise
+          : Promise.resolve({ processInstanceId: "process-current" }),
+      setEnabled: (pluginId, nextEnabled) => {
+        enabled = nextEnabled;
+        return Promise.resolve({
+          restartRequired: true,
+          plugin: createMemoryTestAddon(pluginId, nextEnabled),
+        });
+      },
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+      await runExternalMutation.mock.results[0]?.value;
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
+      toggleAddon(element, "Active memory", true);
+
+      const currentNotice =
+        "Enabled active-memory. A Gateway restart is required to apply the change.";
+      await waitForFast(() => expect(element.textContent).toContain(currentNotice));
+      firstProcess.resolve({ processInstanceId: "process-current" });
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(4),
+      );
+      await element.updateComplete;
+
+      expect(element.textContent).toContain(currentNotice);
+      expect(element.textContent).not.toContain("Disabled active-memory.");
+    } finally {
+      firstProcess.resolve({ processInstanceId: "process-current" });
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
     const { element, request, runExternalMutation, setPhase } = createMemoryPage({

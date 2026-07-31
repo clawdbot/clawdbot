@@ -45,21 +45,16 @@ import {
   type MemoryTab,
 } from "./memory-schema.ts";
 import {
+  buildMemoryAddonRows,
   renderMemory,
   findMemoryCatalogPlugin as findMemoryPlugin,
   resolveMemoryPluginState as pluginState,
-  type MemoryAddonRow,
   type MemoryCatalogState as MemoryCatalog,
   type MemoryEngineOutcome,
   type MemoryEngineOption,
   type MemoryPluginState,
 } from "./memory.ts";
 import type { ConfigRouteData } from "./route-data.ts";
-
-const MEMORY_ADDON_PLUGINS = [
-  { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
-  { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
-] as const;
 
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
@@ -127,6 +122,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   } | null = null;
   private supportPluginId: string | null = null;
   private supportProbe: { pluginId: string } | null = null;
+  private readonly addonNoticeOperations = new Map<string, object>();
   private normalizedLocation = "";
 
   private readonly subscriptions = new SubscriptionsController(this)
@@ -160,6 +156,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.catalog = { kind: "unavailable" };
     this.supportPluginId = null;
     this.supportProbe = null;
+    this.addonNoticeOperations.clear();
     super.disconnectedCallback();
   }
 
@@ -438,22 +435,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       : pluginState(this.catalog, findMemoryPlugin(this.catalog, engineId));
   }
 
-  private addonRows(): MemoryAddonRow[] {
-    const catalog = this.catalog;
-    return MEMORY_ADDON_PLUGINS.map((addon) => {
-      const entry = findMemoryPlugin(catalog, addon.id);
-      return {
-        id: addon.id,
-        label: t(addon.labelKey),
-        description: entry?.description ?? addon.id,
-        state: pluginState(catalog, entry),
-        busy: this.addonBusy.has(addon.id),
-        error: this.addonErrors.get(addon.id) ?? null,
-        notice: this.addonNotices.get(addon.id)?.message ?? null,
-      };
-    });
-  }
-
   private async changeAddon(pluginId: string, enabled: boolean) {
     if (
       this.addonBusy.has(pluginId) ||
@@ -471,6 +452,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     if (!connection || !client || (addonState !== "enabled" && addonState !== "disabled")) {
       return;
     }
+    const noticeOperation = {};
+    this.addonNoticeOperations.set(pluginId, noticeOperation);
     this.addonBusy = new Set(this.addonBusy).add(pluginId);
     const errors = new Map(this.addonErrors);
     errors.delete(pluginId);
@@ -499,19 +482,26 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       ]
         .filter(Boolean)
         .join(" ");
-      const noticeProcessInstanceId = notice ? await processInstanceId : null;
-      const notices = new Map(this.addonNotices);
-      if (notice) {
-        notices.set(pluginId, { message: notice, processInstanceId: noticeProcessInstanceId });
-      } else {
-        notices.delete(pluginId);
+      if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
+        const noticeProcessInstanceId = notice ? await processInstanceId : null;
+        if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
+          const notices = new Map(this.addonNotices);
+          if (notice) {
+            notices.set(pluginId, { message: notice, processInstanceId: noticeProcessInstanceId });
+          } else {
+            notices.delete(pluginId);
+          }
+          this.addonNotices = notices;
+          if (notice) {
+            const noticeConnection = this.connection;
+            if (noticeConnection?.connected && noticeConnection.client) {
+              void this.reconcileAddonNotices(noticeConnection.client, noticeConnection);
+            }
+          }
+        }
       }
-      this.addonNotices = notices;
       const currentConnection = this.connection;
       if (currentConnection?.connected && currentConnection.client) {
-        if (notice) {
-          void this.reconcileAddonNotices(currentConnection.client, currentConnection);
-        }
         await this.loadCatalog(currentConnection.client, currentConnection);
       }
     } catch (error) {
@@ -519,6 +509,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
       }
     } finally {
+      if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
+        this.addonNoticeOperations.delete(pluginId);
+      }
       if (this.connection === connection) {
         const busy = new Set(this.addonBusy);
         busy.delete(pluginId);
@@ -684,7 +677,11 @@ class MemorySettingsPage extends OpenClawLightDomElement {
           runtimeConfig.patchForm(["memory", "backend"], next);
         }
       },
-      addons: this.addonRows(),
+      addons: buildMemoryAddonRows(this.catalog, {
+        busy: this.addonBusy,
+        errors: this.addonErrors,
+        notices: this.addonNotices,
+      }),
       canToggleAddons:
         this.catalog.kind === "ready" &&
         this.catalog.mutationAllowed &&

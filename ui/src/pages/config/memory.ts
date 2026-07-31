@@ -73,6 +73,33 @@ export type MemoryAddonRow = {
   notice: string | null;
 };
 
+const MEMORY_ADDON_PLUGINS = [
+  { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
+  { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
+] as const;
+
+export function buildMemoryAddonRows(
+  catalog: MemoryCatalogState,
+  state: {
+    busy: ReadonlySet<string>;
+    errors: ReadonlyMap<string, string>;
+    notices: ReadonlyMap<string, { message: string }>;
+  },
+): MemoryAddonRow[] {
+  return MEMORY_ADDON_PLUGINS.map((addon) => {
+    const entry = findMemoryCatalogPlugin(catalog, addon.id);
+    return {
+      id: addon.id,
+      label: t(addon.labelKey),
+      description: entry?.description ?? addon.id,
+      state: resolveMemoryPluginState(catalog, entry),
+      busy: state.busy.has(addon.id),
+      error: state.errors.get(addon.id) ?? null,
+      notice: state.notices.get(addon.id)?.message ?? null,
+    };
+  });
+}
+
 export type MemoryEngineOutcome = { kind: "error" | "warning"; message: string };
 
 type MemoryViewProps = {
