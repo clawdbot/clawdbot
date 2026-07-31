@@ -2171,6 +2171,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("maps NovitaAI provider aliases and credentials to the external plugin", () => {
+    expect(
+      resolveOfficialExternalProviderPluginIds({
+        providerIds: new Set(["novita", "novita-ai", "novitaai"]),
+      }),
+    ).toEqual(["novita"]);
+    expect(
+      resolveOfficialExternalProviderPluginIdsForEnv({
+        NOVITA_API_KEY: "novita-key",
+      }),
+    ).toEqual(["novita"]);
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],

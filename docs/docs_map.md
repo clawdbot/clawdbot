@@ -8504,7 +8504,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Setup
   - H2: Defaults
-  - H2: Bundled model catalog
+  - H2: Model catalog
   - H2: When to choose Novita
   - H2: Troubleshooting
   - H2: Related
