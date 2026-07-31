@@ -10,6 +10,7 @@ import {
 } from "./http-byte-range.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
+const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
 
 describe("resolveByteResponse", () => {
   it("resolves an open-ended range", () => {
@@ -84,6 +85,57 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
 
+  it("honors an If-Range HTTP-date at the file's fractional modification second", () => {
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        rangeHeader: "bytes=1-2",
+        ifRangeHeader: LAST_MODIFIED,
+      }),
+    ).toMatchObject({
+      kind: "partial",
+      statusCode: 206,
+      lastModified: LAST_MODIFIED,
+      range: { start: 1, end: 2 },
+    });
+  });
+
+  it.each([
+    {
+      label: "an earlier HTTP-date",
+      header: new Date(Date.parse(LAST_MODIFIED) - 1000).toUTCString(),
+    },
+    {
+      label: "a future HTTP-date",
+      header: new Date(Date.parse(LAST_MODIFIED) + 1000).toUTCString(),
+    },
+    {
+      label: "an ISO timestamp for the same second",
+      header: new Date(Date.parse(LAST_MODIFIED)).toISOString(),
+    },
+    {
+      label: "a non-HTTP timezone for the same second",
+      header: LAST_MODIFIED.replace("GMT", "UTC"),
+    },
+    {
+      label: "a lowercase weekday for the same second",
+      header: LAST_MODIFIED.replace("Tue", "tue"),
+    },
+    { label: "a malformed HTTP-date", header: "not-an-http-date" },
+    { label: "a weak ETag", header: `W/${resolveByteResponse({ file: FILE }).etag}` },
+    { label: "multiple validator values", header: [LAST_MODIFIED, LAST_MODIFIED] },
+  ])("ignores a range for $label If-Range", ({ header }) => {
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        rangeHeader: "bytes=1-2",
+        ifRangeHeader: header,
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
       resolveByteResponse({
@@ -109,12 +161,18 @@ describe("resolveByteResponse", () => {
       ifNoneMatchHeader: header(etag),
     });
 
-    expect(plan).toEqual({ kind: "not-modified", statusCode: 304, etag });
+    expect(plan).toEqual({
+      kind: "not-modified",
+      statusCode: 304,
+      etag,
+      lastModified: LAST_MODIFIED,
+    });
     const setHeader = vi.fn();
     const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
     writeByteHeaders(res, plan);
     expect(res.statusCode).toBe(304);
     expect(setHeader).toHaveBeenCalledWith("ETag", etag);
+    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
     expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
@@ -131,7 +189,7 @@ describe("resolveByteResponse", () => {
           ifRangeHeader: '"stale"',
           ifNoneMatchHeader: etag,
         }),
-      ).toEqual({ kind: "not-modified", statusCode: 304, etag });
+      ).toEqual({ kind: "not-modified", statusCode: 304, etag, lastModified: LAST_MODIFIED });
     },
   );
 
@@ -148,6 +206,24 @@ describe("resolveByteResponse", () => {
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
+
+  it.each([
+    { label: "full", rangeHeader: undefined, statusCode: 200 },
+    { label: "partial", rangeHeader: "bytes=1-2", statusCode: 206 },
+    { label: "unsatisfiable", rangeHeader: "bytes=10-11", statusCode: 416 },
+  ])(
+    "emits the same Last-Modified validator on $label responses",
+    ({ rangeHeader, statusCode }) => {
+      const plan = resolveByteResponse({ file: FILE, method: "GET", rangeHeader });
+      const setHeader = vi.fn();
+      const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+
+      writeByteHeaders(res, plan);
+
+      expect(res.statusCode).toBe(statusCode);
+      expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
+    },
+  );
 });
 
 describe("byte ETag generation", () => {

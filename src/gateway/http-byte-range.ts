@@ -13,18 +13,19 @@ type ByteSlice = {
   end: number;
 };
 
-type ByteResponsePlan =
+type ByteResponsePlan = {
+  etag: string;
+  lastModified: string;
+} & (
   | {
       kind: "full";
       statusCode: 200;
       contentLength: number;
-      etag: string;
     }
   | {
       kind: "partial";
       statusCode: 206;
       contentLength: number;
-      etag: string;
       range: ByteSlice;
       size: number;
     }
@@ -32,14 +33,13 @@ type ByteResponsePlan =
       kind: "unsatisfiable";
       statusCode: 416;
       contentLength: 0;
-      etag: string;
       size: number;
     }
   | {
       kind: "not-modified";
       statusCode: 304;
-      etag: string;
-    };
+    }
+);
 
 function createByteEtag(file: FileIdentity): string {
   // Gateway media files are write-once, so size + mtimeMs uniquely version their bytes here.
@@ -90,23 +90,30 @@ export function resolveByteResponse(params: {
   ifNoneMatchHeader?: string | string[];
 }): ByteResponsePlan {
   const etag = createByteEtag(params.file);
+  const lastModified = new Date(params.file.mtimeMs).toUTCString();
   if (
     (params.method === "GET" || params.method === "HEAD") &&
     matchesHttpIfNoneMatch(params.ifNoneMatchHeader, etag)
   ) {
     // RFC 9110 evaluates representation validators before Range or If-Range.
-    return { kind: "not-modified", statusCode: 304, etag };
+    return { kind: "not-modified", statusCode: 304, etag, lastModified };
   }
   const full = {
     kind: "full",
     statusCode: 200,
     contentLength: params.file.size,
     etag,
+    lastModified,
   } as const;
   if (params.method !== "GET" || typeof params.rangeHeader !== "string") {
     return full;
   }
-  if (params.ifRangeHeader !== undefined && params.ifRangeHeader !== etag) {
+  if (
+    params.ifRangeHeader !== undefined &&
+    params.ifRangeHeader !== etag &&
+    // If-Range must exactly match the emitted HTTP-date; parsing accepts invalid lookalikes.
+    params.ifRangeHeader !== lastModified
+  ) {
     return full;
   }
 
@@ -120,6 +127,7 @@ export function resolveByteResponse(params: {
       statusCode: 416,
       contentLength: 0,
       etag,
+      lastModified,
       size: params.file.size,
     };
   }
@@ -128,6 +136,7 @@ export function resolveByteResponse(params: {
     statusCode: 206,
     contentLength: range.end - range.start + 1,
     etag,
+    lastModified,
     range,
     size: params.file.size,
   };
@@ -137,6 +146,7 @@ export function writeByteHeaders(res: ServerResponse, plan: ByteResponsePlan): v
   res.statusCode = plan.statusCode;
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("ETag", plan.etag);
+  res.setHeader("Last-Modified", plan.lastModified);
   if (plan.kind === "not-modified") {
     return;
   }

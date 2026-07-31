@@ -605,6 +605,51 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
+  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-if-range-date-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        const body = Buffer.from("assistant-media-bytes");
+        const modified = new Date("2025-07-08T18:40:00.789Z");
+        await fs.writeFile(filePath, body);
+        await fs.utimes(filePath, modified, modified);
+        const lastModified = (await fs.stat(filePath)).mtime.toUTCString();
+        const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+        const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+        const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+        expect(initial.res.statusCode).toBe(200);
+        expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+
+        const partial = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: { range: "bytes=0-8", "if-range": lastModified },
+        });
+        expect(partial.res.statusCode).toBe(206);
+        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+        expect(partial.setHeader).toHaveBeenCalledWith(
+          "Content-Range",
+          `bytes 0-8/${body.byteLength}`,
+        );
+
+        const future = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: {
+            range: "bytes=0-8",
+            "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
+          },
+        });
+        expect(future.res.statusCode).toBe(200);
+        expect(future.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+      },
+    });
+  });
+
   it("returns 202 while assistant playback media is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
     await withAllowedAssistantMediaRoot({
