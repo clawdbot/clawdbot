@@ -616,6 +616,39 @@ describe("processMessage group system prompt wiring", () => {
     expect(runParams.raw).not.toHaveProperty("admission");
   });
 
+  it("declares runDispatchLifecycle when turnAdoptionLifecycle is present", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+    const msg = attachWhatsAppIngressLifecycle(makeBaseMsg(), lifecycle as never);
+
+    await callProcessMessage({ msg });
+
+    const runParams = mockCallArg(runChannelInboundEventParamsMock, "runChannelInboundEvent") as {
+      turnAdoptionLifecycle?: unknown;
+      adapter?: {
+        resolveTurn?: () => { runDispatchLifecycle?: unknown };
+      };
+    };
+    expect(runParams.turnAdoptionLifecycle).toBeDefined();
+    // The resolveTurn result must include runDispatchLifecycle so
+    // assertPreparedDispatchLifecycle does not throw.
+    const resolved = runParams.adapter?.resolveTurn?.();
+    expect(resolved?.runDispatchLifecycle).toBeDefined();
+  });
+
   it("drops blocked admission before session record and reply dispatch", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({

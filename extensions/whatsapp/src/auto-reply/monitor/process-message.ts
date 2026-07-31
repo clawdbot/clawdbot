@@ -607,6 +607,14 @@ export async function processMessage(params: {
               trackBackgroundTask(params.backgroundTasks, task);
             },
           },
+          ...(turnAdoptionLifecycle
+            ? {
+                runDispatchLifecycle: {
+                  turnAdoptionLifecycle,
+                  onDispatchSkipped: async () => await turnAdoptionLifecycle.onAdopted(),
+                },
+              }
+            : {}),
           ...replyPlan,
         };
       },
