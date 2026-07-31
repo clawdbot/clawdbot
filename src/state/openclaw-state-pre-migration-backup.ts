@@ -17,8 +17,13 @@ export type PreMigrationBackupResult =
 const BACKUP_FILE_PREFIX = "openclaw-state-v";
 const BACKUP_FILE_SUFFIX = ".sqlite";
 
-/** Directory (relative to the state database) that holds pre-migration copies. */
-export const PRE_MIGRATION_BACKUP_DIRNAME = "pre-migration-backups";
+/**
+ * Directory (relative to the state database) that holds pre-migration copies.
+ *
+ * Module-private on purpose: the directory name is an on-disk contract that
+ * operators and tests pin by literal, not a knob other modules read.
+ */
+const PRE_MIGRATION_BACKUP_DIRNAME = "pre-migration-backups";
 
 /**
  * How many pre-migration copies to keep, newest first.
@@ -53,8 +58,8 @@ function prunePreMigrationBackups(backupDir: string, keep: number): string[] {
   }
   const snapshots = entries
     .filter((name) => name.startsWith(BACKUP_FILE_PREFIX) && name.endsWith(BACKUP_FILE_SUFFIX))
-    .sort()
-    .reverse();
+    .toSorted()
+    .toReversed();
   for (const name of snapshots.slice(Math.max(keep, 0))) {
     try {
       fs.rmSync(path.join(backupDir, name));
@@ -108,7 +113,7 @@ export function createPreMigrationStateBackup(
     );
     // VACUUM INTO fails if the target already exists; the timestamp keeps the
     // name unique. Escape single quotes for the SQL string literal.
-    db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`);
+    db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`); // sqlite-allow-raw -- Offline snapshot maintenance boundary; VACUUM INTO has no Kysely form.
     fs.chmodSync(backupPath, 0o600);
     // Prune only AFTER the new snapshot exists, so a failure above never leaves
     // the directory emptier than it started.

@@ -5,9 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   createPreMigrationStateBackup,
-  PRE_MIGRATION_BACKUP_DIRNAME,
   PRE_MIGRATION_BACKUP_RETENTION,
 } from "./openclaw-state-pre-migration-backup.js";
+
+/**
+ * Pinned by literal rather than imported: the directory name is the on-disk
+ * contract an operator follows to find a recovery copy, so a test that reads it
+ * back from the module under test would assert nothing.
+ */
+const PRE_MIGRATION_BACKUP_DIRNAME = "pre-migration-backups";
 
 const tempDirs: string[] = [];
 
@@ -42,7 +48,9 @@ describe("createPreMigrationStateBackup", () => {
         Date.parse("2026-07-25T09:40:00Z"),
       );
       expect(result.status).toBe("created");
-      if (result.status !== "created") return;
+      if (result.status !== "created") {
+        return;
+      }
       expect(fs.existsSync(result.backupPath)).toBe(true);
       expect(result.backupPath).toContain(PRE_MIGRATION_BACKUP_DIRNAME);
       expect(result.backupPath).toContain("v5-to-v6");
@@ -75,7 +83,9 @@ describe("createPreMigrationStateBackup", () => {
     try {
       const result = createPreMigrationStateBackup(db, dbPath, 5, 6, Date.now());
       expect(result.status).toBe("created");
-      if (result.status !== "created") return;
+      if (result.status !== "created") {
+        return;
+      }
       // Shared state is sensitive, so a copy of it must not be world readable.
       expect(fs.statSync(result.backupPath).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.dirname(result.backupPath)).mode & 0o777).toBe(0o700);
@@ -98,7 +108,9 @@ describe("createPreMigrationStateBackup", () => {
       for (let i = 0; i < total; i += 1) {
         const result = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
         expect(result.status).toBe("created");
-        if (result.status !== "created") return;
+        if (result.status !== "created") {
+          return;
+        }
         created.push(result.backupPath);
         // Nothing to prune until the cap is exceeded, and exactly one after that:
         // every migration prunes back down to the cap, so they never pile up.
