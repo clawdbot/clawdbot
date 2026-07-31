@@ -68,6 +68,7 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
   if (
     executable === "openclaw" ||
     executable === "openclaw.mjs" ||
+    executable === "openclaw.ps1" ||
     executable.startsWith("openclaw@") ||
     isOpenClawEntryScriptPath(value)
   ) {
@@ -75,7 +76,7 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
   }
   return (
     /[*?[{]/u.test(executable) &&
-    ["openclaw", "openclaw.mjs"].some((candidate) =>
+    ["openclaw", "openclaw.mjs", "openclaw.ps1"].some((candidate) =>
       globPatternToRegExp(executable).test(candidate),
     )
   );
@@ -84,10 +85,23 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
 /** Return true when a process selector regex or wildcard can select OpenClaw. */
 export function matchesOpenClawProcessPattern(value: string | undefined): boolean {
   const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
-  if (pattern.includes("openclaw")) {
+  const spellsOpenClaw =
+    /o[^a-z0-9]*p[^a-z0-9]*e[^a-z0-9]*n[^a-z0-9]*c[^a-z0-9]*l[^a-z0-9]*a[^a-z0-9]*w/iu;
+  if (pattern.includes("openclaw") || spellsOpenClaw.test(pattern)) {
     return true;
   }
-  const candidates = ["openclaw", "openclaw.exe", "openclaw gateway", "/opt/openclaw"];
+  const candidates = [
+    "openclaw",
+    "openclaw.exe",
+    "openclaw.ps1",
+    "openclaw.mjs",
+    "openclaw gateway",
+    "/opt/openclaw",
+    "node /opt/openclaw/openclaw.mjs gateway",
+    "node /opt/openclaw/dist/entry.js gateway",
+    "node /opt/openclaw/dist/index.js gateway",
+    String.raw`node C:\Users\Alice\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs gateway`,
+  ];
   if (
     /[*?[]/u.test(pattern) &&
     candidates.some((name) => globPatternToRegExp(pattern).test(name))

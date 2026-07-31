@@ -110,6 +110,30 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
 });
 
 describe("OpenClaw lifecycle runner parsing edges", () => {
+  it("recognizes the Windows PowerShell shim", () => {
+    const shim = String.raw`C:\Users\Alice\AppData\Roaming\npm\openclaw.ps1`;
+    expect(requiresApproval(`& ${shim} gateway restart`, ["&", shim, "gateway", "restart"])).toBe(
+      true,
+    );
+  });
+
+  it("fails closed for regexes matching OpenClaw entry process forms", () => {
+    expect(
+      requiresApproval(String.raw`pkill -f 'open[c]law\.mjs'`, [
+        "pkill",
+        "-f",
+        String.raw`open[c]law\.mjs`,
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval(String.raw`pkill -f 'node.*other\.mjs'`, [
+        "pkill",
+        "-f",
+        String.raw`node.*other\.mjs`,
+      ]),
+    ).toBe(false);
+  });
+
   it.each([
     ["& { openclaw gateway restart }", ["&", "{", "openclaw", "gateway", "restart", "}"]],
     [
