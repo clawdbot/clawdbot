@@ -31,9 +31,6 @@ async function collectEntries(root: string, relativeDir = ""): Promise<SkillTree
       collected.push(...(await collectEntries(root, relativePath)));
       continue;
     }
-    if (stat.nlink > 1) {
-      throw new Error(`Skill tree contains hard-linked file ${JSON.stringify(portablePath)}.`);
-    }
     const content = await fs.readFile(path.join(root, relativePath));
     collected.push({
       path: portablePath,
