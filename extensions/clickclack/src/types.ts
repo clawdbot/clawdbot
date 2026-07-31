@@ -85,7 +85,7 @@ export type ResolvedClickClackAccount = {
   allowFrom: string[];
   reconnectMs: number;
   agentActivity: boolean;
-  nativeProgress: boolean;
+  nativeProgress?: boolean;
   commandMenu: boolean;
   discussions: {
     enabled: boolean;
