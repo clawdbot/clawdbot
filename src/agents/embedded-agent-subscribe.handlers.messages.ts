@@ -616,10 +616,6 @@ function mergeReplyDirectiveResults(
   };
 }
 
-function parseFullStreamingReplyText(text: string): string {
-  return parseReplyDirectives(splitTrailingDirective(text).text).text;
-}
-
 function containsCompleteMediaDirectiveLine(text: string): boolean {
   return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
 }
@@ -664,13 +660,16 @@ function resolveStreamingReplyText(params: {
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
   shouldUsePhaseAwareBlockReply: boolean;
 }): string {
-  if (!params.parsedStreamDirectives) {
-    return params.evtType === "text_delta"
-      ? params.previousCleaned
-      : parseFullStreamingReplyText(params.next);
+  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+    return params.previousCleaned;
   }
 
-  return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
+  return (
+    resolveIncrementalStreamingReplyText(params) ??
+    parseReplyDirectives(
+      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
+    ).text
+  );
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */

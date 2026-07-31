@@ -470,6 +470,41 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.lastStreamedAssistantCleaned).toBe("Hello");
   });
 
+  it.each([
+    {
+      name: "the directive accumulator has no parsed result",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: false,
+    },
+    {
+      name: "the directive accumulator flushes a buffered tail",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: true,
+    },
+    {
+      name: "the final text ends with one bracket",
+      text: "answer part A [",
+      hasParsedDirectives: true,
+    },
+  ])("keeps literal final text when $name", ({ text, hasParsedDirectives }) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      ...(hasParsedDirectives ? {} : { consumePartialReplyDirectives: vi.fn(() => null) }),
+    });
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end", content: text },
+    });
+
+    expect(context.state.lastStreamedAssistantCleaned).toBe(text);
+    expect(firstMockArg(onAgentEvent, "final assistant event")).toMatchObject({
+      stream: "assistant",
+      data: { text },
+    });
+  });
+
   it("keeps stripped reply directives out of later plain deltas", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
