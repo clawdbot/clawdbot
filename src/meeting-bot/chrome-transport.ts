@@ -344,7 +344,7 @@ export function createMeetingChromeTransport<
   type MeetingNodeStartResult = {
     launched?: boolean;
     bridgeId?: string;
-    audioBridge?: { type?: string };
+    audioBridge?: { type?: string; outputGeneration?: boolean };
     browser?: Health;
   };
 
@@ -458,6 +458,7 @@ export function createMeetingChromeTransport<
         commandName: options.nodeCommandName,
         logScope: options.platform.logScope,
         logPrefix: params.mode === "agent" ? "node agent" : "node",
+        outputGenerationSupported: result.audioBridge.outputGeneration === true,
       });
       const bindings = options.runtime.createBindings({
         platform: options.platform,

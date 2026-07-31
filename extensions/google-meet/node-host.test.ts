@@ -553,7 +553,7 @@ describe("google-meet node host bridge sessions", () => {
       expect(typeof start.bridgeId).toBe("string");
       expect(start.bridgeId.length).toBeGreaterThan(0);
       expect(start).toEqual({
-        audioBridge: { type: "node-command-pair" },
+        audioBridge: { type: "node-command-pair", outputGeneration: true },
         bridgeId: start.bridgeId,
         launched: false,
       });

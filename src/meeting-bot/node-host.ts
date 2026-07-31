@@ -383,7 +383,10 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
     const mode = readString(params.mode);
     let bridgeId: string | undefined;
-    let audioBridge: { type: "external-command" | "node-command-pair" } | undefined;
+    let audioBridge:
+      | { type: "external-command" }
+      | { type: "node-command-pair"; outputGeneration: true }
+      | undefined;
     if (mode && options.talkBackModes.has(mode)) {
       options.assertAudioAvailable(Math.min(timeoutMs, 10_000));
       const healthCommand = readStringArray(params.audioBridgeHealthCommand);
@@ -421,7 +424,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           mode,
         });
         bridgeId = session.id;
-        audioBridge = { type: "node-command-pair" };
+        audioBridge = { type: "node-command-pair", outputGeneration: true };
       }
     }
 

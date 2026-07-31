@@ -267,6 +267,7 @@ async function startTestNodeRealtimeAudioBridge(params: TestNodeRealtimeEnginePa
     commandName: "googlemeet.chrome",
     logScope: "[google-meet]",
     logPrefix: "node",
+    outputGenerationSupported: true,
   });
   return {
     type: "node-command-pair" as const,

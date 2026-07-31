@@ -25,6 +25,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   logScope: string;
   logPrefix: string;
   audioFormat?: MeetingRealtimeAudioFormat;
+  outputGenerationSupported?: boolean;
 }): MeetingRealtimeAudioTransport {
   let stopped = false;
   let inputStarted = false;
@@ -33,9 +34,21 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
   let outputGeneration = 0;
+  let legacyOutputTail = Promise.resolve();
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
+  const runOutputCommand = <T>(task: () => Promise<T>): Promise<T> => {
+    if (params.outputGenerationSupported) {
+      return task();
+    }
+    const result = legacyOutputTail.then(task, task);
+    legacyOutputTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   const signalFatal = () => {
     if (!fatalSignaled) {
       fatalSignaled = true;
@@ -131,16 +144,21 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       const generation = outputGeneration;
       outputLoopbackVerifier.recordOutput(audio);
       try {
-        await params.runtime.nodes.invoke({
-          nodeId: params.nodeId,
-          command: params.commandName,
-          params: {
-            action: "pushAudio",
-            bridgeId: params.bridgeId,
-            base64: audio.toString("base64"),
-            outputGeneration: generation,
-          },
-          timeoutMs: 5_000,
+        await runOutputCommand(async () => {
+          if (stopped) {
+            return;
+          }
+          await params.runtime.nodes.invoke({
+            nodeId: params.nodeId,
+            command: params.commandName,
+            params: {
+              action: "pushAudio",
+              bridgeId: params.bridgeId,
+              base64: audio.toString("base64"),
+              ...(params.outputGenerationSupported ? { outputGeneration: generation } : {}),
+            },
+            timeoutMs: 5_000,
+          });
         });
       } catch (error) {
         if (!stopped && generation === outputGeneration) {
@@ -155,15 +173,20 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       }
       outputGeneration += 1;
       outputLoopbackVerifier.cancelOutput();
-      await params.runtime.nodes.invoke({
-        nodeId: params.nodeId,
-        command: params.commandName,
-        params: {
-          action: "clearAudio",
-          bridgeId: params.bridgeId,
-          outputGeneration,
-        },
-        timeoutMs: 5_000,
+      await runOutputCommand(async () => {
+        if (stopped) {
+          return;
+        }
+        await params.runtime.nodes.invoke({
+          nodeId: params.nodeId,
+          command: params.commandName,
+          params: {
+            action: "clearAudio",
+            bridgeId: params.bridgeId,
+            ...(params.outputGenerationSupported ? { outputGeneration } : {}),
+          },
+          timeoutMs: 5_000,
+        });
       });
     },
     dispose: async () => {

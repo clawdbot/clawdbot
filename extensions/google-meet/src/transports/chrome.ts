@@ -233,7 +233,7 @@ export async function launchChromeMeet(params: {
 function parseNodeStartResult(raw: unknown): {
   launched?: boolean;
   bridgeId?: string;
-  audioBridge?: { type?: string };
+  audioBridge?: { type?: string; outputGeneration?: boolean };
   browser?: GoogleMeetChromeHealth;
 } {
   const value =
@@ -246,7 +246,7 @@ function parseNodeStartResult(raw: unknown): {
   return value as {
     launched?: boolean;
     bridgeId?: string;
-    audioBridge?: { type?: string };
+    audioBridge?: { type?: string; outputGeneration?: boolean };
     browser?: GoogleMeetChromeHealth;
   };
 }
@@ -565,6 +565,7 @@ export async function launchChromeMeetOnNode(params: {
       commandName: GOOGLE_MEET_NODE_COMMAND,
       logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
+      outputGenerationSupported: result.audioBridge.outputGeneration === true,
     });
     const bindings = createMeetingRealtimeEngineBindings({
       platform: GOOGLE_MEET_PLATFORM_ADAPTER,
