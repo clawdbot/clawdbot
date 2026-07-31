@@ -130,6 +130,24 @@ describe("web_fetch configured request headers", () => {
     ]);
   });
 
+  it("normalizes empty values without retaining a stale case-colliding value", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Normalized"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createToolWithHeaders({
+      "X-Presence-Flag": " \t ",
+      "X-Routing-Target": "staging",
+      "x-routing-target": "東京",
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/normalized" });
+
+    const headers = getRequestHeaders(fetchSpy);
+    expect(headers["X-Presence-Flag"]).toBe("");
+    expect(headers["X-Routing-Target"]).toBeUndefined();
+    expect(headers["x-routing-target"]).toBeUndefined();
+  });
+
   it("still fetches when every configured header is unusable, naming it in a warning", async () => {
     // The whole request must not fail because one config value is unsendable.
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Survives"));
