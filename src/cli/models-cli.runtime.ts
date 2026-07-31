@@ -33,3 +33,15 @@ export function rejectAgentScopedModelWrite(
     `openclaw models ${commandName} does not support --agent; it only updates global model defaults. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }
+
+export function rejectAgentScopedImageFallbacks(command: Command): void {
+  // Image model fallbacks live only on agents.defaults.imageModel; accepting
+  // --agent here would imply per-agent scoping that does not exist.
+  const agent = resolveOptionFromCommand<string>(command, "agent");
+  if (!agent) {
+    return;
+  }
+  throw new Error(
+    `openclaw models image-fallbacks does not support --agent; image model fallbacks are configured on global defaults only. Remove --agent, or run ${formatCliCommand("openclaw models status --agent <id>")} to inspect an agent's effective models.`,
+  );
+}

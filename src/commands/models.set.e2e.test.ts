@@ -101,7 +101,7 @@ describe("models set + fallbacks", () => {
     mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
     const runtime = makeRuntime();
 
-    await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
+    await modelsFallbacksAddCommand("z-ai/glm-4.7", {}, runtime);
 
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
@@ -112,11 +112,81 @@ describe("models set + fallbacks", () => {
     });
   });
 
+  it("writes to the agent entry when --agent names an agent with its own fallbacks", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: { model: { fallbacks: ["zai/glm-4.7"] } },
+        list: [{ id: "riley", model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } }],
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsFallbacksAddCommand("openai/gpt-5.2", { agent: "riley" }, runtime);
+
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { fallbacks: ["zai/glm-4.7"] },
+        models: { "openai/gpt-5.2": {} },
+      },
+      list: [
+        {
+          id: "riley",
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["openai/gpt-5.2"] },
+        },
+      ],
+    });
+  });
+
+  it("materializes an agent override when --agent names an inheriting agent", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["zai/glm-4.7"],
+          },
+        },
+        list: [{ id: "riley" }],
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsFallbacksAddCommand("openai/gpt-5.2", { agent: "riley" }, runtime);
+
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["zai/glm-4.7"],
+        },
+        models: { "openai/gpt-5.2": {} },
+      },
+      list: [
+        {
+          id: "riley",
+          model: { fallbacks: ["zai/glm-4.7", "openai/gpt-5.2"] },
+        },
+      ],
+    });
+  });
+
+  it("rejects an unknown --agent id without writing config", async () => {
+    mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
+    const runtime = makeRuntime();
+
+    await expect(
+      modelsFallbacksAddCommand("openai/gpt-5.2", { agent: "bogus" }, runtime),
+    ).rejects.toThrow(/Unknown agent id "bogus"/);
+    expect(mocks.writtenConfig).toBeUndefined();
+  });
+
   it("preserves primary when adding fallbacks to string defaults.model", async () => {
     mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
     const runtime = makeRuntime();
 
-    await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
+    await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", {}, runtime);
 
     const written = getWrittenConfig();
     expect(written.agents).toEqual({

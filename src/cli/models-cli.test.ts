@@ -17,6 +17,14 @@ const mocks = vi.hoisted(() => ({
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
+  modelsFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsFallbacksAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsFallbacksRemoveCommand: vi.fn().mockResolvedValue(undefined),
+  modelsFallbacksClearCommand: vi.fn().mockResolvedValue(undefined),
+  modelsImageFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsImageFallbacksAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsImageFallbacksRemoveCommand: vi.fn().mockResolvedValue(undefined),
+  modelsImageFallbacksClearCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
 const {
@@ -62,16 +70,16 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesRemoveCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/fallbacks.js", () => ({
-  modelsFallbacksAddCommand: mocks.noopAsync,
-  modelsFallbacksClearCommand: mocks.noopAsync,
-  modelsFallbacksListCommand: mocks.noopAsync,
-  modelsFallbacksRemoveCommand: mocks.noopAsync,
+  modelsFallbacksAddCommand: mocks.modelsFallbacksAddCommand,
+  modelsFallbacksClearCommand: mocks.modelsFallbacksClearCommand,
+  modelsFallbacksListCommand: mocks.modelsFallbacksListCommand,
+  modelsFallbacksRemoveCommand: mocks.modelsFallbacksRemoveCommand,
 }));
 vi.mock("../commands/models/image-fallbacks.js", () => ({
-  modelsImageFallbacksAddCommand: mocks.noopAsync,
-  modelsImageFallbacksClearCommand: mocks.noopAsync,
-  modelsImageFallbacksListCommand: mocks.noopAsync,
-  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+  modelsImageFallbacksAddCommand: mocks.modelsImageFallbacksAddCommand,
+  modelsImageFallbacksClearCommand: mocks.modelsImageFallbacksClearCommand,
+  modelsImageFallbacksListCommand: mocks.modelsImageFallbacksListCommand,
+  modelsImageFallbacksRemoveCommand: mocks.modelsImageFallbacksRemoveCommand,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.noopAsync,
@@ -299,5 +307,103 @@ describe("models cli", () => {
       const error = err as { exitCode?: number };
       expect(error.exitCode).toBe(0);
     }
+  });
+});
+
+describe("models cli fallbacks --agent wiring", () => {
+  beforeEach(() => {
+    mocks.modelsFallbacksListCommand.mockClear();
+    mocks.modelsFallbacksAddCommand.mockClear();
+    mocks.modelsFallbacksRemoveCommand.mockClear();
+    mocks.modelsFallbacksClearCommand.mockClear();
+    mocks.modelsImageFallbacksListCommand.mockClear();
+    mocks.modelsImageFallbacksAddCommand.mockClear();
+    mocks.modelsImageFallbacksRemoveCommand.mockClear();
+    mocks.modelsImageFallbacksClearCommand.mockClear();
+  });
+
+  async function runModelsCommand(args: string[]) {
+    await runRegisteredCli({
+      register: registerModelsCli as (program: Command) => void,
+      argv: args,
+    });
+  }
+
+  it.each([
+    { label: "subcommand flag", args: ["models", "fallbacks", "list", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "fallbacks", "list"] },
+  ])("passes --agent to models fallbacks list ($label)", async ({ args }) => {
+    await runModelsCommand(args);
+    expect(mocks.modelsFallbacksListCommand).toHaveBeenCalledTimes(1);
+    const [opts] = mocks.modelsFallbacksListCommand.mock.calls[0] ?? [];
+    expect((opts as { agent?: string } | undefined)?.agent).toBe("poe");
+  });
+
+  it("omits agent when --agent is not provided (defaults behaviour)", async () => {
+    await runModelsCommand(["models", "fallbacks", "list"]);
+    const [opts] = mocks.modelsFallbacksListCommand.mock.calls[0] ?? [];
+    expect((opts as { agent?: string } | undefined)?.agent).toBeUndefined();
+  });
+
+  it("passes --agent to models fallbacks add/remove/clear", async () => {
+    await runModelsCommand(["models", "--agent", "poe", "fallbacks", "add", "openai/gpt-5.4"]);
+    expect(mocks.modelsFallbacksAddCommand).toHaveBeenCalledWith(
+      "openai/gpt-5.4",
+      expect.objectContaining({ agent: "poe" }),
+      expect.anything(),
+    );
+
+    await runModelsCommand(["models", "fallbacks", "remove", "openai/gpt-5.4", "--agent", "poe"]);
+    expect(mocks.modelsFallbacksRemoveCommand).toHaveBeenCalledWith(
+      "openai/gpt-5.4",
+      expect.objectContaining({ agent: "poe" }),
+      expect.anything(),
+    );
+
+    await runModelsCommand(["models", "fallbacks", "clear", "--agent", "poe"]);
+    expect(mocks.modelsFallbacksClearCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "poe" }),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    {
+      label: "list",
+      args: ["models", "--agent", "poe", "image-fallbacks", "list"],
+      command: () => mocks.modelsImageFallbacksListCommand,
+    },
+    {
+      label: "add",
+      args: ["models", "--agent", "poe", "image-fallbacks", "add", "openai/gpt-image-1"],
+      command: () => mocks.modelsImageFallbacksAddCommand,
+    },
+    {
+      label: "remove",
+      args: ["models", "--agent", "poe", "image-fallbacks", "remove", "openai/gpt-image-1"],
+      command: () => mocks.modelsImageFallbacksRemoveCommand,
+    },
+    {
+      label: "clear",
+      args: ["models", "--agent", "poe", "image-fallbacks", "clear"],
+      command: () => mocks.modelsImageFallbacksClearCommand,
+    },
+  ])("rejects parent --agent for models image-fallbacks $label", async ({ args, command }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+
+    expect(command()).not.toHaveBeenCalled();
+  });
+
+  it("runs image-fallbacks against global defaults when --agent is not provided", async () => {
+    await runModelsCommand(["models", "image-fallbacks", "list"]);
+    expect(mocks.modelsImageFallbacksListCommand).toHaveBeenCalledTimes(1);
+    const [listOpts] = mocks.modelsImageFallbacksListCommand.mock.calls[0] ?? [];
+    expect((listOpts as { agent?: string } | undefined)?.agent).toBeUndefined();
+
+    await runModelsCommand(["models", "image-fallbacks", "add", "openai/gpt-image-1"]);
+    expect(mocks.modelsImageFallbacksAddCommand).toHaveBeenCalledWith(
+      "openai/gpt-image-1",
+      expect.anything(),
+    );
   });
 });

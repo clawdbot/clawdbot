@@ -195,10 +195,15 @@ export function registerModelsCli(program: Command) {
     .description("List fallback models")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
+    .action(async (opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
         const { modelsFallbacksListCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksListCommand(opts, defaultRuntime);
+        await modelsFallbacksListCommand(
+          { json: Boolean(opts.json), plain: Boolean(opts.plain), agent },
+          defaultRuntime,
+        );
       });
     });
 
@@ -206,10 +211,12 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Add a fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .option("--agent <id>", "Agent id to update (overrides OPENCLAW_AGENT_DIR)")
+    .action(async (model: string, opts, command: Command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
         const { modelsFallbacksAddCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksAddCommand(model, defaultRuntime);
+        await modelsFallbacksAddCommand(model, { agent }, defaultRuntime);
       });
     });
 
@@ -217,20 +224,24 @@ export function registerModelsCli(program: Command) {
     .command("remove")
     .description("Remove a fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .option("--agent <id>", "Agent id to update (overrides OPENCLAW_AGENT_DIR)")
+    .action(async (model: string, opts, command: Command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
         const { modelsFallbacksRemoveCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksRemoveCommand(model, defaultRuntime);
+        await modelsFallbacksRemoveCommand(model, { agent }, defaultRuntime);
       });
     });
 
   fallbacks
     .command("clear")
     .description("Clear all fallback models")
-    .action(async () => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .option("--agent <id>", "Agent id to update (overrides OPENCLAW_AGENT_DIR)")
+    .action(async (opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
         const { modelsFallbacksClearCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksClearCommand(defaultRuntime);
+        await modelsFallbacksClearCommand({ agent }, defaultRuntime);
       });
     });
 
@@ -243,10 +254,15 @@ export function registerModelsCli(program: Command) {
     .description("List image fallback models")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedImageFallbacks(command);
+      await runtime.runModelsCommand(async () => {
         const { modelsImageFallbacksListCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksListCommand(opts, defaultRuntime);
+        await modelsImageFallbacksListCommand(
+          { json: Boolean(opts.json), plain: Boolean(opts.plain) },
+          runtime.defaultRuntime,
+        );
       });
     });
 
@@ -254,10 +270,12 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Add an image fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedImageFallbacks(command);
+      await runtime.runModelsCommand(async () => {
         const { modelsImageFallbacksAddCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksAddCommand(model, defaultRuntime);
+        await modelsImageFallbacksAddCommand(model, runtime.defaultRuntime);
       });
     });
 
@@ -265,20 +283,24 @@ export function registerModelsCli(program: Command) {
     .command("remove")
     .description("Remove an image fallback model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedImageFallbacks(command);
+      await runtime.runModelsCommand(async () => {
         const { modelsImageFallbacksRemoveCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksRemoveCommand(model, defaultRuntime);
+        await modelsImageFallbacksRemoveCommand(model, runtime.defaultRuntime);
       });
     });
 
   imageFallbacks
     .command("clear")
     .description("Clear all image fallback models")
-    .action(async () => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (_opts: unknown, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedImageFallbacks(command);
+      await runtime.runModelsCommand(async () => {
         const { modelsImageFallbacksClearCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksClearCommand(defaultRuntime);
+        await modelsImageFallbacksClearCommand(runtime.defaultRuntime);
       });
     });
 

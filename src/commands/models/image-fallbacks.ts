@@ -20,6 +20,7 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
   return await addFallbackCommand(
     { label: "Image fallbacks", key: "imageModel", logPrefix: "Image fallbacks" },
     modelRaw,
+    {},
     runtime,
   );
 }
@@ -34,6 +35,7 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
       logPrefix: "Image fallbacks",
     },
     modelRaw,
+    {},
     runtime,
   );
 }
@@ -42,6 +44,7 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
 export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
   return await clearFallbacksCommand(
     { key: "imageModel", clearedMessage: "Image fallback list cleared." },
+    {},
     runtime,
   );
 }
