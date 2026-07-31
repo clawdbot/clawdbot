@@ -133,6 +133,13 @@ export type ClickClackAgentProgressPublisher = {
   finalize(): Promise<void>;
 };
 
+type QueuedProgressFrame = {
+  lineId?: string;
+  payload: Record<string, unknown>;
+};
+
+const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
+
 export function createClickClackAgentProgressPublisher(params: {
   client: ClickClackProgressClient;
   target: ClickClackProgressTarget;
@@ -140,26 +147,90 @@ export function createClickClackAgentProgressPublisher(params: {
   onError?: (error: unknown) => void;
 }): ClickClackAgentProgressPublisher {
   let sequence = 0;
-  let chain = Promise.resolve();
+  const queue: QueuedProgressFrame[] = [];
+  const queuedLines = new Map<string, QueuedProgressFrame>();
+  let drainPromise: Promise<void> | undefined;
+  let lineDrainTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let cleared = false;
   const seenLines = new Set<string>();
   const resolveLineId = createLineIdResolver();
 
+  const drain = (): Promise<void> => {
+    if (drainPromise) return drainPromise;
+    drainPromise = (async () => {
+      while (queue.length > 0) {
+        const frame = queue.shift();
+        if (!frame) continue;
+        if (frame.lineId) {
+          queuedLines.delete(frame.lineId);
+        }
+        try {
+          await params.client.publishEphemeral({
+            ...params.target,
+            type: "agent.progress",
+            payload: {
+              turn_id: params.turnId,
+              seq: ++sequence,
+              ...frame.payload,
+            },
+          });
+        } catch (error) {
+          try {
+            params.onError?.(error);
+          } catch {
+            // Progress reporting must never affect the agent turn.
+          }
+        }
+      }
+    })().finally(() => {
+      drainPromise = undefined;
+      if (queue.length > 0) {
+        void drain();
+      }
+    });
+    return drainPromise;
+  };
+
   const enqueue = (payload: Record<string, unknown>): void => {
-    chain = chain
-      .then(() =>
-        params.client.publishEphemeral({
-          ...params.target,
-          type: "agent.progress",
-          payload: {
-            turn_id: params.turnId,
-            seq: ++sequence,
-            ...payload,
-          },
-        }),
-      )
-      .catch((error) => params.onError?.(error));
+    queue.push({ payload });
+    void drain();
+  };
+
+  const flushQueuedLines = (): void => {
+    for (const [lineId, frame] of queuedLines) {
+      queuedLines.delete(lineId);
+      queue.push(frame);
+    }
+    void drain();
+  };
+
+  const scheduleLineDrain = (): void => {
+    if (lineDrainTimer) return;
+    lineDrainTimer = setTimeout(() => {
+      lineDrainTimer = undefined;
+      flushQueuedLines();
+    }, CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS);
+  };
+
+  const enqueueLine = (lineId: string, payload: Record<string, unknown>): void => {
+    const queued = queuedLines.get(lineId);
+    if (queued) {
+      // Preserve an initial append while the request is in flight, but keep
+      // only the newest line contents. A completion must still win so the
+      // client can mark the line finalized when both arrive in one window.
+      const op =
+        payload.op === "finalize"
+          ? "finalize"
+          : queued.payload.op === "append"
+            ? "append"
+            : payload.op;
+      queued.payload = { ...payload, ...(op ? { op } : {}) };
+      return;
+    }
+    const frame = { lineId, payload };
+    queuedLines.set(lineId, frame);
+    scheduleLineDrain();
   };
 
   return {
@@ -184,7 +255,7 @@ export function createClickClackAgentProgressPublisher(params: {
       if (payload.name?.trim()) {
         line.tool_name = payload.name.trim();
       }
-      enqueue({
+      enqueueLine(id, {
         op: final ? "finalize" : seenLines.has(id) ? "update" : "append",
         line,
       });
@@ -193,8 +264,13 @@ export function createClickClackAgentProgressPublisher(params: {
     async finalize() {
       if (!started || cleared) return;
       cleared = true;
+      if (lineDrainTimer) {
+        clearTimeout(lineDrainTimer);
+        lineDrainTimer = undefined;
+      }
+      flushQueuedLines();
       enqueue({ op: "clear" });
-      await chain;
+      await drain();
     },
   };
 }
