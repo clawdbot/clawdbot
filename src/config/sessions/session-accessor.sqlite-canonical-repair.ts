@@ -140,13 +140,24 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepair(
   canonicalKey: string,
   previousKeys: readonly string[],
 ): void {
+  const ownedKeys = new Set([canonicalKey, ...previousKeys]);
+  const db = getSessionKysely(database.db);
+  const competingIdentities = new Set(
+    executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select("session_key"),
+    ).rows.flatMap((row) =>
+      ownedKeys.has(row.session_key) ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+    ),
+  );
   const aliases = resolveSqliteCanonicalRepairLookupKeys(canonicalKey, previousKeys).filter(
-    (key) => key !== canonicalKey,
+    (key) =>
+      key !== canonicalKey &&
+      (ownedKeys.has(key) || !competingIdentities.has(normalizeStoreSessionKey(key.trim()))),
   );
   if (aliases.length === 0) {
     return;
   }
-  const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
     database.db,
     db
