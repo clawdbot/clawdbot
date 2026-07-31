@@ -136,6 +136,46 @@ describe("llama-server provider catalog", () => {
     ]);
   });
 
+  it("scopes dynamic catalogs by agent runtime and auth profile", async () => {
+    const first = success();
+    const second = {
+      ...success(),
+      models: [
+        {
+          ...model(),
+          config: { ...model().config, name: "second scope" },
+        },
+      ],
+    };
+    discoverMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const base = {
+      config: {},
+      provider: "llama-server",
+      modelId: "org/model:Q4",
+      modelRegistry: {},
+      providerConfig: {
+        baseUrl: "http://localhost:8080/v1",
+        api: "openai-completions",
+      },
+    };
+    const firstCtx = {
+      ...base,
+      agentRuntimeId: "runtime-one",
+      authProfileId: "profile-one",
+    } as unknown as ProviderPrepareDynamicModelContext;
+    const secondCtx = {
+      ...base,
+      agentRuntimeId: "runtime-two",
+      authProfileId: "profile-two",
+    } as unknown as ProviderPrepareDynamicModelContext;
+
+    await prepareLlamaServerDynamicModels(firstCtx);
+    await prepareLlamaServerDynamicModels(secondCtx);
+
+    expect(resolveLlamaServerDynamicModel(firstCtx)?.name).toBe("org/model:Q4");
+    expect(resolveLlamaServerDynamicModel(secondCtx)?.name).toBe("second scope");
+  });
+
   it("refreshes and resolves dynamic model ids containing slashes", async () => {
     discoverMock.mockResolvedValue(success());
     const ctx = {

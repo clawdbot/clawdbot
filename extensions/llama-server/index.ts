@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { shouldUseLlamaServerSyntheticAuth } from "./src/auth.js";
+import {
+  hasLlamaServerAuthorizationHeader,
+  shouldUseLlamaServerSyntheticAuth,
+} from "./src/auth.js";
 import {
   LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
   LLAMA_SERVER_LOCAL_AUTH_MARKER,
@@ -66,7 +69,9 @@ export default definePluginEntry({
       resolveSyntheticAuth: ({ providerConfig }) =>
         shouldUseLlamaServerSyntheticAuth(providerConfig)
           ? {
-              apiKey: LLAMA_SERVER_LOCAL_AUTH_MARKER,
+              apiKey: hasLlamaServerAuthorizationHeader(providerConfig?.headers)
+                ? LLAMA_SERVER_LOCAL_AUTH_MARKER
+                : CUSTOM_LOCAL_AUTH_MARKER,
               source: "models.providers.llama-server (synthetic local key)",
               mode: "api-key" as const,
             }

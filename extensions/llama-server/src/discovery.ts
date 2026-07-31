@@ -1,3 +1,4 @@
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
@@ -66,6 +67,7 @@ async function fetchJson(params: {
   url: string;
   origin: string;
   apiKey?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   signal?: AbortSignal;
   readBody: boolean;
@@ -75,7 +77,7 @@ async function fetchJson(params: {
   try {
     guarded = await params.fetchGuard({
       url: params.url,
-      init: { headers: buildLlamaServerAuthHeaders(params.apiKey) },
+      init: { headers: buildLlamaServerAuthHeaders(params.apiKey, params.headers) },
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
@@ -135,6 +137,7 @@ async function readModelProps(params: {
   routerMode: boolean;
   origin: string;
   apiKey?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   signal?: AbortSignal;
   fetchGuard: LlamaServerFetchGuard;
@@ -149,6 +152,7 @@ async function readModelProps(params: {
     url: `${params.origin}/props${query}`,
     origin: params.origin,
     apiKey: params.apiKey,
+    headers: params.headers,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
     readBody: true,
@@ -163,15 +167,22 @@ async function readModelProps(params: {
 export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
+  headers?: Record<string, string>;
   timeoutMs?: number;
   cacheTtlMs?: number;
   signal?: AbortSignal;
   fetchGuard?: LlamaServerFetchGuard;
 }): Promise<LlamaServerDiscoveryResult> {
   const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
-  const cacheTtlMs = Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
+  const normalizedApiKey = params.apiKey?.trim();
+  const hasCredentialScope =
+    Boolean(normalizedApiKey && !isNonSecretApiKeyMarker(normalizedApiKey)) ||
+    Boolean(params.headers && Object.keys(params.headers).length > 0);
+  const cacheTtlMs = hasCredentialScope
+    ? 0
+    : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
   const cached = discoveryCache.get(endpoint.origin);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cacheTtlMs > 0 && cached && cached.expiresAt > Date.now()) {
     return cached.result;
   }
 
@@ -181,6 +192,7 @@ export async function discoverLlamaServer(params: {
     url: `${endpoint.origin}/health`,
     origin: endpoint.origin,
     apiKey: params.apiKey,
+    headers: params.headers,
     timeoutMs,
     signal: params.signal,
     readBody: false,
@@ -214,6 +226,7 @@ export async function discoverLlamaServer(params: {
     url: `${endpoint.origin}${modelsPath}`,
     origin: endpoint.origin,
     apiKey: params.apiKey,
+    headers: params.headers,
     timeoutMs,
     signal: params.signal,
     readBody: true,
@@ -225,6 +238,7 @@ export async function discoverLlamaServer(params: {
       url: `${endpoint.origin}${modelsPath}`,
       origin: endpoint.origin,
       apiKey: params.apiKey,
+      headers: params.headers,
       timeoutMs,
       signal: params.signal,
       readBody: true,
@@ -265,6 +279,7 @@ export async function discoverLlamaServer(params: {
       routerMode,
       origin: endpoint.origin,
       apiKey: params.apiKey,
+      headers: params.headers,
       timeoutMs,
       signal: params.signal,
       fetchGuard,

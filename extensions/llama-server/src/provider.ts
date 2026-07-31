@@ -1,18 +1,32 @@
 import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
+  ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig, type LlamaServerDiscoveredModel } from "./models.js";
 
 const dynamicModels = new Map<string, ProviderRuntimeModel[]>();
+
+function dynamicModelScopeKey(
+  ctx: Pick<
+    ProviderResolveDynamicModelContext,
+    "agentRuntimeId" | "agentDir" | "authProfileId" | "providerConfig"
+  >,
+): string {
+  return [
+    ctx.agentRuntimeId ?? ctx.agentDir ?? "",
+    ctx.authProfileId ?? "",
+    ctx.providerConfig?.baseUrl ?? "",
+  ].join("\u0000");
+}
 
 function toRuntimeModel(
   model: LlamaServerDiscoveredModel,
@@ -74,9 +88,15 @@ async function discoverFromCatalogContext(
 ): Promise<LlamaServerDiscoveryResult> {
   const providerConfig = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
   const auth = ctx.resolveProviderApiKey(LLAMA_SERVER_PROVIDER_ID);
+  const headers = await resolveLlamaServerProviderHeaders({
+    config: ctx.config,
+    env: ctx.env,
+    headers: providerConfig?.headers,
+  });
   return await discoverLlamaServer({
     baseUrl: providerConfig?.baseUrl,
     apiKey: auth.discoveryApiKey ?? auth.apiKey,
+    headers,
     signal: "signal" in ctx ? ctx.signal : undefined,
     timeoutMs: "timeoutMs" in ctx ? ctx.timeoutMs : undefined,
   });
@@ -130,12 +150,18 @@ export async function prepareLlamaServerDynamicModels(
     config: ctx.config,
     agentDir: ctx.agentDir,
   });
+  const headers = await resolveLlamaServerProviderHeaders({
+    config: ctx.config,
+    env: process.env,
+    headers: ctx.providerConfig?.headers,
+  });
   const discovery = await discoverLlamaServer({
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey,
+    headers,
     cacheTtlMs: 0,
   });
-  const key = ctx.providerConfig?.baseUrl ?? "";
+  const key = dynamicModelScopeKey(ctx);
   dynamicModels.set(
     key,
     discovery.kind === "success"
@@ -144,12 +170,11 @@ export async function prepareLlamaServerDynamicModels(
   );
 }
 
-export function resolveLlamaServerDynamicModel(params: {
-  modelId: string;
-  providerConfig?: { baseUrl?: string };
-}): ProviderRuntimeModel | undefined {
+export function resolveLlamaServerDynamicModel(
+  params: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
   return dynamicModels
-    .get(params.providerConfig?.baseUrl ?? "")
+    .get(dynamicModelScopeKey(params))
     ?.find((model) => model.id === params.modelId);
 }
 

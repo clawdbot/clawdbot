@@ -193,14 +193,51 @@ describe("llama-server discovery", () => {
     ).resolves.toMatchObject({ kind: "invalid-response", path: "/models" });
   });
 
+  it("forwards configured headers and bypasses the shared cache for credentialed discovery", async () => {
+    const { guard } = createFetchGuard({
+      "http://localhost:8080/health": () => json({ status: "ok" }),
+      "http://localhost:8080/models": () => json({ data: [] }),
+    });
+
+    for (let index = 0; index < 2; index += 1) {
+      await discoverLlamaServer({
+        baseUrl: "http://localhost:8080",
+        headers: { "X-Proxy-Key": "proxy-token" },
+        fetchGuard: guard,
+      });
+    }
+
+    expect(guard).toHaveBeenCalledTimes(4);
+    for (const call of vi.mocked(guard).mock.calls) {
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          init: {
+            headers: {
+              Accept: "application/json",
+              "X-Proxy-Key": "proxy-token",
+            },
+          },
+        }),
+      );
+    }
+  });
+
   it("reuses only successful cached discovery", async () => {
     const { guard } = createFetchGuard({
       "http://localhost:8080/health": json({ status: "ok" }),
       "http://localhost:8080/models": json({ data: [] }),
     });
 
-    await discoverLlamaServer({ baseUrl: "http://localhost:8080", fetchGuard: guard });
-    await discoverLlamaServer({ baseUrl: "http://localhost:8080", fetchGuard: guard });
+    await discoverLlamaServer({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+    });
+    await discoverLlamaServer({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+    });
     expect(guard).toHaveBeenCalledTimes(2);
   });
 });

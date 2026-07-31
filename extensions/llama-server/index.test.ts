@@ -68,7 +68,7 @@ describe("llama-server plugin", () => {
     });
   });
 
-  it("uses synthetic auth only when no real credential is configured", () => {
+  it("uses synthetic auth unless a real API key is configured", () => {
     const { provider } = captureProvider();
     expect(
       provider.resolveSyntheticAuth?.({
@@ -77,7 +77,7 @@ describe("llama-server plugin", () => {
         providerConfig: configuredProvider(),
       }),
     ).toEqual({
-      apiKey: LLAMA_SERVER_LOCAL_AUTH_MARKER,
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.providers.llama-server (synthetic local key)",
       mode: "api-key",
     });
@@ -97,7 +97,11 @@ describe("llama-server plugin", () => {
           headers: { Authorization: "Bearer proxy-key" },
         },
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      apiKey: LLAMA_SERVER_LOCAL_AUTH_MARKER,
+      source: "models.providers.llama-server (synthetic local key)",
+      mode: "api-key",
+    });
   });
 
   it("defers both supported synthetic auth markers", () => {

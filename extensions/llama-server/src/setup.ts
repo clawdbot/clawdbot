@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
-import { resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import {
   LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
   LLAMA_SERVER_DEFAULT_ORIGIN,
@@ -97,6 +97,7 @@ async function discoverForSetup(params: {
   config: OpenClawConfig;
   baseUrl: string;
   agentDir?: string;
+  env?: NodeJS.ProcessEnv;
   apiKey?: string;
   signal?: AbortSignal;
 }): Promise<LlamaServerDiscoveryResult> {
@@ -106,9 +107,16 @@ async function discoverForSetup(params: {
       config: params.config,
       agentDir: params.agentDir,
     }));
+  const providerConfig = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const headers = await resolveLlamaServerProviderHeaders({
+    config: params.config,
+    env: params.env,
+    headers: providerConfig?.headers,
+  });
   return await discoverLlamaServer({
     baseUrl: params.baseUrl,
     apiKey: resolvedApiKey,
+    headers,
     signal: params.signal,
     cacheTtlMs: 0,
   });
@@ -125,6 +133,7 @@ export async function detectLlamaServerSetup(
     discovery = await discoverForSetup({
       config: ctx.config,
       baseUrl,
+      env: ctx.env,
       signal: ctx.signal,
     });
   } catch {
@@ -153,6 +162,7 @@ export async function prepareLlamaServerSetup(
     discovery = await discoverForSetup({
       config: ctx.config,
       baseUrl: provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
+      env: ctx.env,
       signal: ctx.signal,
     });
   } catch {
@@ -210,6 +220,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     config: ctx.config,
     agentDir: ctx.agentDir,
     baseUrl: endpoint.inferenceBaseUrl,
+    env: ctx.env,
     apiKey,
     signal: ctx.signal,
   });
@@ -247,9 +258,15 @@ async function validateNonInteractiveDiscovery(
     envVarName: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
     required: false,
   });
+  const headers = await resolveLlamaServerProviderHeaders({
+    config: ctx.config,
+    env: process.env,
+    headers: ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers,
+  });
   const discovery = await discoverLlamaServer({
     baseUrl,
     apiKey: resolvedApiKey?.key,
+    headers,
     cacheTtlMs: 0,
   });
   if (discovery.kind !== "success") {
