@@ -37,7 +37,7 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
   return {
     inboundBodyResult: { value: createInboundBodyResult(), reset: createInboundBodyResult },
     recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
-    resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(),
   };
 });
 
@@ -63,18 +63,24 @@ const { buildTelegramMessageContextForTest } =
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("openclaw/plugin-sdk/runtime-config-snapshot");
 
-beforeEach(() => {
+let defaultSessionStoreRoot = "";
+
+beforeEach(async () => {
+  defaultSessionStoreRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-telegram-message-context-"),
+  );
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
   inboundBodyResult.value = inboundBodyResult.reset();
+  resolveStorePathMock.mockReturnValue(path.join(defaultSessionStoreRoot, "sessions.json"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
   recordInboundSessionMock.mockClear();
   resolveStorePathMock.mockReset();
-  resolveStorePathMock.mockReturnValue("/tmp/openclaw-session-store.json");
+  await fs.rm(defaultSessionStoreRoot, { recursive: true, force: true });
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
