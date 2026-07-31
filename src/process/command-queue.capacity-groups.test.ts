@@ -178,6 +178,60 @@ describe("command lane capacity groups", () => {
     await Promise.all(runs);
   });
 
+  test("blockedBy reports hypothetical immediate admission with an EMPTY queue", async () => {
+    // The non-vacuity condition for the whole wait-visibility fix.
+    //
+    // `noteLaneWaitIfBusy` runs BEFORE enqueue, so it sees queuedCount === 0. If
+    // blockedBy were only populated for an already-queued head entry, the
+    // pre-enqueue snapshot would read "not blocked", no onLaneWait(waiting:true)
+    // would fire, and agent-watchdog's setup-timeout suppression would never
+    // engage — producing a false setup timeout for a run that is merely waiting
+    // on group capacity. blockedBy must answer "could this lane start work right
+    // now?", independent of whether anything is queued.
+    setCommandLaneGroup(GROUP, {
+      budget: 8,
+      members: [CRON, HOOK],
+      reservations: { [HOOK]: 1 },
+    });
+
+    const gates = Array.from({ length: 7 }, () => gate());
+    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    await settle();
+
+    const snapshot = getCommandLaneSnapshot(CRON);
+    // Nothing queued, and the lane is under its own maxConcurrent of 8...
+    expect(snapshot.queuedCount).toBe(0);
+    expect(snapshot.activeCount).toBeLessThan(snapshot.maxConcurrent);
+    // ...yet it genuinely cannot start: the last slot is the hook's reserve.
+    expect(snapshot.blockedBy).toBe("sibling-reservation");
+
+    // A lane with room reports null, so the assertion above is discriminating
+    // rather than always-truthy.
+    expect(getCommandLaneSnapshot(HOOK).blockedBy).toBeNull();
+
+    for (const g of gates) g.release();
+    await Promise.all(runs);
+  });
+
+  test("an unmaterialized lane still reports its group block state", async () => {
+    // A member lane may not exist yet (never enqueued) or may have been retired
+    // while idle. `noteLaneWaitIfBusy` can snapshot it in exactly that state, so
+    // the not-found path must consult the group rather than return a bare
+    // default that reads as "free".
+    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
+    const busy = gate();
+    const run = enqueueCommandInLane(CRON, async () => await busy.promise);
+    await settle();
+
+    const snapshot = getCommandLaneSnapshot(HOOK);
+    expect(snapshot.activeCount).toBe(0);
+    expect(snapshot.blockedBy).toBe("group-budget");
+    expect(snapshot.groupBudget).toBe(1);
+
+    busy.release();
+    await run;
+  });
+
   test("lanes outside any group are unconstrained by it", async () => {
     setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
     setCommandLaneConcurrency("unpooled", 4);
