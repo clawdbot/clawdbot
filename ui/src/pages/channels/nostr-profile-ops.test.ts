@@ -147,5 +147,13 @@ describe("Nostr profile HTTP operations", () => {
         firstImport,
       ),
     ).toEqual({ name: "relay-two", about: "local bio" });
+
+    expect(
+      mergeNostrProfileDraft(
+        { name: "relay-three" },
+        { name: "relay-two", about: "existing bio" },
+        { name: "relay-two", about: "existing bio" },
+      ),
+    ).toEqual({ name: "relay-three", about: "existing bio" });
   });
 });

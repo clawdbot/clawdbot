@@ -50,7 +50,7 @@ export function mergeNostrProfileDraft(
   original: NostrProfile,
   importedBaseline: Partial<NostrProfile> = {},
 ): NostrProfile {
-  const draft = { ...merged };
+  const draft = { ...values, ...merged };
   for (const field of Object.keys(values) as Array<keyof NostrProfile>) {
     if (values[field] !== original[field] && values[field] !== importedBaseline[field]) {
       draft[field] = values[field];
