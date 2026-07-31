@@ -11,6 +11,15 @@ function requiresApproval(command: string, argv: string[]): boolean {
 }
 
 describe("OpenClaw PowerShell lifecycle edges", () => {
+  it.each(["&", "."])(
+    "fails closed for an adjacent calculated %s invocation target",
+    (operator) => {
+      const inline = `${operator}("open" + "claw") gateway restart`;
+      const command = `powershell -Command '${inline}'`;
+      expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
+    },
+  );
+
   it("scans lifecycle substitutions inside double quotes", () => {
     const command = `Write-Output "$(openclaw gateway restart)"`;
     expect(extractShellSubstitutionCommands(command, "powershell").commands).toContain(
@@ -35,7 +44,7 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(true);
   });
 
-  it("allows a negative filter that excludes OpenClaw", () => {
+  it("keeps the Node-hosted identity selected by a claw-only negative filter", () => {
     const command = "Get-Process | Where-Object ProcessName -NotLike '*claw*' | Stop-Process";
     expect(
       requiresApproval(command, [
@@ -45,6 +54,22 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
         "ProcessName",
         "-NotLike",
         "*claw*",
+        "|",
+        "Stop-Process",
+      ]),
+    ).toBe(true);
+  });
+
+  it("allows a negative filter only when it excludes every host identity", () => {
+    const command = "Get-Process | Where-Object ProcessName -NotLike '*' | Stop-Process";
+    expect(
+      requiresApproval(command, [
+        "Get-Process",
+        "|",
+        "Where-Object",
+        "ProcessName",
+        "-NotLike",
+        "*",
         "|",
         "Stop-Process",
       ]),

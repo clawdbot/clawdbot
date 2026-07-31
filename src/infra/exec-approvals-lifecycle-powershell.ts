@@ -4,6 +4,7 @@ import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
 import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessNamePattern,
+  negativePowerShellProcessNameSelectorExcludesAll,
 } from "./exec-approvals-lifecycle-patterns.js";
 import { splitLifecycleCommandText } from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
@@ -190,7 +191,14 @@ function powerShellIdentityFilterKeepsOpenClaw(
   if (operands.some((token) => /[$@][A-Za-z_][A-Za-z0-9_]*/u.test(token))) {
     return true;
   }
-  return !operands.some((token) => looksLikeOpenClawSelector(token, allowUnresolved));
+  const selectors = operands.filter((token) => !/^[(){}]$/u.test(token.trim()));
+  return !(
+    selectors.length === 1 &&
+    negativePowerShellProcessNameSelectorExcludesAll(
+      selectors[0],
+      argv[negativeIndex]?.trim().toLowerCase() ?? "",
+    )
+  );
 }
 
 function isPowerShellIdentityFilter(argv: readonly string[]): boolean {

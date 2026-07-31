@@ -112,7 +112,7 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
     expect(requiresApproval(command, argv)).toBe(true);
   });
 
-  it("keeps unrelated filtered mutations non-blocking", () => {
+  it("recognizes the Node-hosted OpenClaw process identity", () => {
     const command = "Get-Process | Where-Object ProcessName -Like 'node*' | Stop-Process";
     expect(
       requiresApproval(command, [
@@ -125,7 +125,7 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
         "|",
         "Stop-Process",
       ]),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

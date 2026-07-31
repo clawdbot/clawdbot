@@ -106,6 +106,8 @@ const OPENCLAW_PROCESS_NAME_CANDIDATES = [
   "openclaw.exe",
   "openclaw.ps1",
   "openclaw.mjs",
+  "node",
+  "node.exe",
 ] as const;
 
 function matchesOpenClawProcessCandidates(
@@ -138,6 +140,31 @@ function matchesOpenClawProcessCandidates(
 /** Return true when a PowerShell process-name selector can select OpenClaw. */
 export function matchesOpenClawProcessNamePattern(value: string | undefined): boolean {
   return matchesOpenClawProcessCandidates(value, OPENCLAW_PROCESS_NAME_CANDIDATES);
+}
+
+/** Return true only when a negative PowerShell selector excludes every OpenClaw host name. */
+export function negativePowerShellProcessNameSelectorExcludesAll(
+  value: string | undefined,
+  operator: string,
+): boolean {
+  const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
+  if (!pattern) {
+    return false;
+  }
+  if (operator === "-notlike") {
+    const wildcard = globPatternToRegExp(pattern);
+    return OPENCLAW_PROCESS_NAME_CANDIDATES.every((name) => wildcard.test(name));
+  }
+  if (operator === "-notmatch") {
+    const compiled = compileSafeRegexDetailed(pattern, "iu");
+    return Boolean(
+      compiled.regex &&
+      OPENCLAW_PROCESS_NAME_CANDIDATES.every((name) =>
+        testRegexWithBoundedInput(compiled.regex!, name),
+      ),
+    );
+  }
+  return false;
 }
 
 /** Return true when a system service/unit glob can select an OpenClaw unit. */

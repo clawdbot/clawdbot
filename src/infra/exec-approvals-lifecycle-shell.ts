@@ -47,7 +47,7 @@ export function lifecycleControlArgvRequiresApproval(
 /** Return true when PowerShell calculates an invocation target for a lifecycle-shaped command. */
 export function powerShellCalculatedInvocationRequiresApproval(command: string): boolean {
   return (
-    /(?:^|[;|\n\r])\s*[&.]\s+[$(@[{\]]/u.test(command) &&
+    /(?:^|[;|\n\r])\s*[&.]\s*[$(@[{\]]/u.test(command) &&
     /\b(?:approvals|config|configure|daemon|exec-approvals|exec-policy|gateway|hooks|node|onboard|plugins|reset|setup|uninstall|update)\b/iu.test(
       command,
     )
