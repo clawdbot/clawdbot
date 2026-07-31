@@ -1184,6 +1184,9 @@ function createRawOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        if (options?.stop && options.stop.length > 0) {
+          ollamaOptions.stop = options.stop;
+        }
         normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
         // Structured-output grammars constrain the same token stream as tool
@@ -1209,7 +1212,8 @@ function createRawOllamaStreamFn(
           options: ollamaOptions,
           requestParams,
         });
-        options?.onPayload?.(body, model);
+        const replacement = await options?.onPayload?.(body, model);
+        const requestBody = replacement === undefined ? body : replacement;
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           ...defaultHeaders,
@@ -1227,7 +1231,7 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            body: JSON.stringify(body),
+            body: JSON.stringify(requestBody),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

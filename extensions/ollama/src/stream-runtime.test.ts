@@ -1595,15 +1595,7 @@ async function createOllamaTestStream(params: {
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: {
-    apiKey?: string;
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    headers?: Record<string, string>;
-    responseFormat?: Record<string, unknown>;
-  };
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -2352,6 +2344,112 @@ describe("createOllamaStreamFn", () => {
         expect(options.num_predict).toBe(123);
       },
     );
+  });
+
+  it.each([
+    {
+      name: "forwards request stop sequences as native Ollama options",
+      model: {},
+      stop: ["END", "DONE"],
+      expectedStop: ["END", "DONE"],
+    },
+    {
+      name: "lets request stop sequences override configured model stop sequences",
+      model: { params: { stop: ["MODEL"] } },
+      stop: ["REQUEST"],
+      expectedStop: ["REQUEST"],
+    },
+    {
+      name: "keeps configured model stop sequences when request stops are empty",
+      model: { params: { stop: ["MODEL"] } },
+      stop: [],
+      expectedStop: ["MODEL"],
+    },
+  ])("$name", async ({ model, stop, expectedStop }) => {
+    await expectSuccessfulOllamaRequest(
+      { baseUrl: "http://ollama-host:11434", model, options: { stop } },
+      ({ body }) =>
+        expect(requireRecord(body.options, "Ollama request options").stop).toEqual(expectedStop),
+    );
+  });
+
+  it("awaits asynchronous payload mutations before dispatching native Ollama requests", async () => {
+    await withSuccessfulOllamaFetch(async (fetchMock) => {
+      let releasePayload: (() => void) | undefined;
+      const payloadGate = new Promise<void>((resolve) => {
+        releasePayload = resolve;
+      });
+      const onPayload = vi.fn(async (payload: unknown) => {
+        await payloadGate;
+        requireRecord(payload, "Ollama request payload").model = "patched-model";
+      });
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: { onPayload },
+      });
+
+      await vi.waitFor(() => expect(onPayload).toHaveBeenCalledTimes(1));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expectDefined(releasePayload, "pending Ollama payload hook")();
+      const events = await collectStreamEvents(stream);
+
+      expect(events.at(-1)?.type).toBe("done");
+      expect(getGuardedFetchJsonBody(fetchMock).model).toBe("patched-model");
+    });
+  });
+
+  it("dispatches asynchronous payload replacements for native Ollama requests", async () => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onPayload: async (payload) => {
+            await Promise.resolve();
+            const current = requireRecord(payload, "Ollama request payload");
+            return {
+              ...current,
+              model: "replacement-model",
+              options: {
+                ...requireRecord(current.options, "Ollama request options"),
+                stop: ["REPLACEMENT"],
+              },
+            };
+          },
+        },
+      },
+      ({ body }) => {
+        expect(body.model).toBe("replacement-model");
+        expect(requireRecord(body.options, "Ollama request options").stop).toEqual(["REPLACEMENT"]);
+      },
+    );
+  });
+
+  it("surfaces asynchronous payload hook rejection without dispatching a request", async () => {
+    await withSuccessfulOllamaFetch(async (fetchMock) => {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onPayload: async () => {
+            await Promise.resolve();
+            throw new Error("payload admission rejected");
+          },
+        },
+      });
+
+      const events = await collectStreamEvents(stream);
+
+      expect(events).toMatchObject([
+        {
+          type: "error",
+          reason: "error",
+          error: {
+            stopReason: "error",
+            errorMessage: "payload admission rejected",
+          },
+        },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("maps responseFormat JSON Schema to native Ollama format", async () => {
