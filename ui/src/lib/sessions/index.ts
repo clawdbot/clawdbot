@@ -40,6 +40,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
+import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
@@ -105,9 +106,6 @@ export type SessionListOptions = {
 export const DEFAULT_SESSION_LIST_QUERY = {
   limit: 50,
 } as const satisfies SessionListOptions;
-
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
 type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
@@ -729,8 +727,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let inFlight: Promise<void> | null = null;
   let queuedExplicitRefresh: SessionRefreshOptions | null = null;
   let eventRefreshQueued = false;
-  let eventRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let eventRefreshDeadline: number | null = null;
   let canonicalListRevision = 0;
   let disposed = false;
   let connectionEpoch = 0;
@@ -922,6 +918,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         result && append && requestOptions.offset && state.result
           ? appendSessionResults(state.result, result)
           : result;
+      if (append && nextResult && !backgroundHydrate) {
+        // Event replacements restart at page one, so retain the visible page
+        // depth instead of silently dropping every previously appended row.
+        lastListOptions = {
+          ...durableListOptions,
+          limit: Math.max(
+            durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
+            nextResult.sessions.length,
+          ),
+        };
+      }
       if (backgroundHydrate && nextResult) {
         const currentKey = gateway.snapshot.sessionKey?.trim();
         if (currentKey) {
@@ -976,16 +983,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const clearEventRefreshTimer = () => {
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
-      eventRefreshTimer = null;
-    }
-    eventRefreshDeadline = null;
-  };
-
   const absorbPendingEventRefresh = () => {
-    clearEventRefreshTimer();
+    eventRefreshCoordinator.absorb();
     eventRefreshQueued = false;
   };
 
@@ -1062,30 +1061,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return startRefresh({ ...lastListOptions, force: true });
   };
 
-  const flushEventRefresh = () => {
-    if (eventRefreshTimer === null) {
-      return;
-    }
-    clearEventRefreshTimer();
-    void refreshFromEvent();
-  };
-
-  const scheduleEventRefresh = () => {
-    const now = Date.now();
-    eventRefreshDeadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
-    }
-    const delay = Math.min(
-      SESSION_EVENT_REFRESH_DEBOUNCE_MS,
-      Math.max(0, eventRefreshDeadline - now),
-    );
-    eventRefreshTimer = globalThis.setTimeout(() => {
-      eventRefreshTimer = null;
-      eventRefreshDeadline = null;
-      void refreshFromEvent();
-    }, delay);
-  };
+  const eventRefreshCoordinator = createSessionEventRefreshCoordinator({
+    canRefresh: () =>
+      gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null && !disposed,
+    refresh: refreshFromEvent,
+  });
+  const flushEventRefresh = () => eventRefreshCoordinator.flush();
 
   const handleVisibilityChange = () => {
     if (document.visibilityState === "hidden") {
@@ -1848,7 +1829,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionConnected = connected;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
-      clearEventRefreshTimer();
+      eventRefreshCoordinator.reset();
       connectionEpoch += 1;
       if (previousClient) {
         resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
@@ -1976,7 +1957,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Gateway lists are filtered and windowed. Events cannot preserve server
       // membership or ordering, so the coalesced refresh remains canonical. Only
       // events debounce, with a max wait; explicit refreshes and page exit flush it.
-      scheduleEventRefresh();
+      eventRefreshCoordinator.schedule();
     }
   });
 
@@ -2038,6 +2019,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Page teardown must start the trailing refresh synchronously before the
       // disposed guard makes the capability inert.
       flushEventRefresh();
+      eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         globalThis.removeEventListener("pagehide", flushEventRefresh);
