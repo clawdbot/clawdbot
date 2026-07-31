@@ -815,11 +815,16 @@ export function stripDowngradedToolCallText(text: string): string {
 
   const stripToolCalls = (input: string): string => {
     const toolCallRe = /\[Tool Call:[^\]]*\]/gi;
+    const codeRegions = findCodeRegions(input);
     let result = "";
     let cursor = 0;
     for (const match of input.matchAll(toolCallRe)) {
       const start = match.index ?? 0;
       if (start < cursor) {
+        continue;
+      }
+      // Skip matches inside code regions (fenced code blocks) to preserve quoted logs.
+      if (isInsideCode(start, codeRegions)) {
         continue;
       }
       result += input.slice(cursor, start);
@@ -872,10 +877,20 @@ export function stripDowngradedToolCallText(text: string): string {
   let cleaned = stripToolCalls(text);
 
   // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
+  // Skip matches inside code regions (fenced code blocks) to preserve quoted logs.
+  const codeRegions = findCodeRegions(cleaned);
+  cleaned = cleaned.replace(
+    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+    (match, offset) => {
+      return isInsideCode(offset, codeRegions) ? match : "";
+    },
+  );
 
   // Remove [Historical context: ...] markers (self-contained within brackets).
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+  // Skip matches inside code regions to preserve quoted logs.
+  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, (match, offset) => {
+    return isInsideCode(offset, codeRegions) ? match : "";
+  });
 
   return cleaned.trim();
 }

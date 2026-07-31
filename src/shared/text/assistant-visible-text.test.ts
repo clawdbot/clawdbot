@@ -1017,4 +1017,67 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       "🛠️ run git status",
     );
   });
+
+  it("preserves downgraded tool markers inside fenced code blocks", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    // The [Tool Result for ID ...] line is inside a fenced code block, so it
+    // should be preserved as quoted content, not stripped as live tool scaffolding.
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves [Tool Call: ...] markers inside fenced code blocks", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Call: bash (ID: 7)]",
+      'Arguments: {"cmd":"ls"}',
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves [Historical context: ...] markers inside fenced code blocks", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Historical context: earlier run]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("still strips downgraded tool markers outside fenced code blocks", () => {
+    const input = [
+      "Visible answer",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "[Historical context: earlier run]",
+      "More content",
+    ].join("\n");
+
+    // These markers are NOT inside code blocks, so they should be stripped.
+    // Note: [Tool Result for ID ...] strips to end of string by design (it removes
+    // the tool result and all its content). [Historical context: ...] only removes
+    // the marker line itself.
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
 });
