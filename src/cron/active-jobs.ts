@@ -15,6 +15,7 @@ export type CronActiveJobMarker = {
   generation: number;
   token: number;
   scheduleMutated?: true;
+  triggerMutated?: true;
   jobRemoved?: true;
   preserveAcrossGenerationAdvance?: boolean;
 };
@@ -107,6 +108,20 @@ export function noteActiveCronJobScheduleMutation(jobId: string): void {
     // Keep mutation history on the admitted run: A→B→A has the original
     // schedule value but still belongs to the operator's newer edit.
     marker.scheduleMutated = true;
+  }
+}
+
+/** Records a durable trigger edit against the exact run that evaluated it. */
+export function noteActiveCronJobTriggerMutation(jobId: string): void {
+  if (!jobId) {
+    return;
+  }
+  const state = getCronActiveJobState();
+  const marker = state.activeJobs.get(jobId);
+  if (marker && isMarkerActiveInGeneration(marker, state.generation)) {
+    // A→B→A restores the script but cannot return ownership of the new
+    // trigger state to an evaluation admitted before either durable edit.
+    marker.triggerMutated = true;
   }
 }
 
