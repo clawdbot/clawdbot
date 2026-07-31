@@ -10,7 +10,10 @@ import {
 } from "../talk/realtime-session-harness.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
-import { resolveMeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import {
+  resolveMeetingRealtimeAudioFormat,
+  type MeetingRealtimeAudioFormat,
+} from "./realtime-audio-format.js";
 import type {
   MeetingRealtimeAudioTransport,
   MeetingRealtimeAudioTransportHealth,
@@ -21,7 +24,6 @@ import {
   formatMeetingRealtimeVoiceModelLog,
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
-  type MeetingRealtimeEngineConfig,
 } from "./realtime-engine-support.js";
 
 export {
@@ -32,13 +34,26 @@ export {
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
-export type { MeetingRealtimeEngineConfig } from "./realtime-engine-support.js";
 
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
   displayName: string;
   logScope: string;
   sessionIdPrefix: string;
+};
+
+export type MeetingRealtimeEngineConfig = {
+  chrome: { audioFormat: MeetingRealtimeAudioFormat };
+  realtime: {
+    strategy: string;
+    provider?: string;
+    transcriptionProvider?: string;
+    voiceProvider?: string;
+    model?: string;
+    instructions?: string;
+    introMessage?: string;
+    providers: Record<string, Record<string, unknown>>;
+  };
 };
 
 export type MeetingAgentConsultParams = {
