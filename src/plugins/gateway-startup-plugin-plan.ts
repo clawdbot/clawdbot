@@ -418,9 +418,14 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       pluginIds.push(plugin.pluginId);
       continue;
     }
+    const isSourceExternalPlugin =
+      plugin.origin === "bundled" && plugin.packageBuild?.bundledDist === false;
+    // Source checkout discovery still uses the bundled root, but source-only
+    // packages are externally owned and must keep the external explicit-startup policy.
+    const startupPolicyOrigin = isSourceExternalPlugin ? "workspace" : plugin.origin;
     const activationState = resolveEffectivePluginActivationState({
       id: plugin.pluginId,
-      origin: plugin.origin,
+      origin: startupPolicyOrigin,
       config: pluginsConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
@@ -430,7 +435,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       continue;
     }
     if (
-      plugin.origin !== "bundled"
+      startupPolicyOrigin !== "bundled"
         ? activationState.explicitlyEnabled
         : activationState.source === "explicit" || activationState.source === "default"
     ) {

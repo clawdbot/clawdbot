@@ -93,22 +93,27 @@ flow:
                           - set: sessionKey
                             value:
                               expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
-                          - call: runAgentPrompt
+                          - set: parentOutboundStartIndex
+                            value:
+                              expr: "state.getSnapshot().messages.length"
+                          # sessions_yield ends the original run. Observe the resumed
+                          # announce turn through channel delivery instead of agent.wait.
+                          - call: startAgentRun
                             args:
                               - ref: env
                               - sessionKey:
                                   ref: sessionKey
                                 message:
                                   ref: prompt
+                                taskTracking: false
                                 timeoutMs:
-                                  expr: liveTurnTimeoutMs(env, 90000)
+                                  expr: liveTurnTimeoutMs(env, 30000)
                           - call: waitForCondition
-                            saveAs: parentTranscript
+                            saveAs: parentOutbound
                             args:
                               - lambda:
-                                  async: true
-                                  expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
-                              - expr: "30000"
+                                  expr: "state.getSnapshot().messages.slice(parentOutboundStartIndex).find((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text).includes(needle))))"
+                              - expr: liveTurnTimeoutMs(env, 90000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           # Native child completions are private. Wait for this parent's
                           # actual SQLite rows and both settled final transcripts.
@@ -151,7 +156,7 @@ flow:
                                       expr: "`expected at least two sessions_spawn tool calls during subagent fanout scenario, saw ${fanoutSpawnRequests.length}`"
                           - set: details
                             value:
-                              expr: "parentTranscript.finalText"
+                              expr: "parentOutbound.text"
                           - set: lastError
                             value: __done__
                         catchAs: attemptError
@@ -218,16 +223,15 @@ flow:
                                           expr: "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && (!env.mock || timeoutSpawnRequests.length >= 2)"
                                           then:
                                             - call: waitForCondition
-                                              saveAs: recoveredParentTranscript
+                                              saveAs: recoveredParentOutbound
                                               args:
                                                 - lambda:
-                                                    async: true
-                                                    expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
+                                                    expr: "state.getSnapshot().messages.slice(parentOutboundStartIndex).find((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text).includes(needle))))"
                                                 - expr: liveTurnTimeoutMs(env, 30000)
                                                 - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                                             - set: details
                                               value:
-                                                expr: recoveredParentTranscript.finalText
+                                                expr: recoveredParentOutbound.text
                                             - set: lastError
                                               value: __done__
                                     catchAs: recoveryError

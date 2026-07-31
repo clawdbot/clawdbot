@@ -102,10 +102,29 @@ export function projectMainSessionRecoveryLifecycle(params: {
     lifecycleGeneration &&
     runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration),
   );
+  // The current owner retires stale generations of its own run id. An older
+  // delayed event consumes only its matching fence and cannot settle its replacement.
   const remaining = matchesFence
-    ? runs?.filter((run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration)
+    ? runs?.filter(
+        (run) =>
+          run.runId !== runId ||
+          (lifecycleGeneration !== params.currentLifecycleGeneration &&
+            run.lifecycleGeneration !== lifecycleGeneration),
+      )
     : runs;
   if (settlesRecovery) {
+    if (
+      matchesFence &&
+      lifecycleGeneration !== params.currentLifecycleGeneration &&
+      remaining?.some(
+        (run) =>
+          run.runId === runId && run.lifecycleGeneration === params.currentLifecycleGeneration,
+      )
+    ) {
+      // Older generations share the live owner's run id. Consume only their
+      // fence; recording that id as terminal would also tombstone its replacement.
+      return { action: "apply", patch: { restartRecoveryRuns: remaining } };
+    }
     const foregroundClaims = params.entry?.mainRestartRecovery?.foregroundClaims;
     const foregroundOwnerClaimId =
       runId &&

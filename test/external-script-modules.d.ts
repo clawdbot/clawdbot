@@ -16,6 +16,12 @@ declare module "*scripts/ui.js" {
       windowsVerbatimArguments?: boolean;
     };
   };
+  export function assertUiBuildOutputRoot(params?: {
+    rootDir?: string;
+    fs?: {
+      lstatSync(path: string): { isSymbolicLink(): boolean };
+    };
+  }): void;
   export function shouldUseCmdExeForCommand(cmd: string, platform?: NodeJS.Platform): boolean;
   export function resolveSpawnCall(
     cmd: string,

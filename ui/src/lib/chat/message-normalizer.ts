@@ -412,7 +412,8 @@ function expandTextContent(text: string): {
       replyTarget = { kind: "current" };
     }
     if (directives.text) {
-      parts.push({ type: "text", text: directives.text });
+      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
+      parts.push({ type: "text", text: normalizedText });
     }
   }
   for (const preview of extracted.previews) {

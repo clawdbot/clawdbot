@@ -332,7 +332,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         }
       }
 
-      if (refusalBuffer && !sawMessageStop) {
+      if (!sawMessageStop) {
         throw new Error("Bedrock stream ended before messageStop");
       }
       if (options.signal?.aborted) {
@@ -812,7 +812,7 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
       content.push({ text: sanitizeSurrogates(block.text) });
       continue;
     }
-    if (describeToolResultMediaPlaceholder([block])) {
+    if (block.type === "image" && describeToolResultMediaPlaceholder([block])) {
       content.push({ image: createImageBlock(block.mimeType, block.data) });
     }
   }
@@ -820,7 +820,10 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
   return {
     toolResult: {
       toolUseId: message.toolCallId,
-      content: content.length > 0 ? content : [{ text: "(no output)" }],
+      content:
+        content.length > 0
+          ? content
+          : [{ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" }],
       status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
     },
   };

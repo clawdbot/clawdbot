@@ -1,7 +1,7 @@
 // HTTP common tests cover JSON/text response helpers, auth failures, security
 // headers, SSE headers, body parsing, and disconnect diagnostics.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
@@ -335,6 +335,103 @@ describe("watchClientDisconnect", () => {
     socket.emit("close");
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("immediately aborts when the request socket was already destroyed", () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: true });
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(1);
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("immediately aborts when the response was already destroyed", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    Object.assign(res, { destroyed: true });
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(1);
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("handles response stream errors as client disconnects", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("keeps real response errors handled after cleanup until the response closes", async () => {
+    const socket = new EventEmitter();
+    const req = { socket } as IncomingMessage;
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(res.listenerCount("error")).toBeGreaterThan(0);
+    cleanup();
+    res.end();
+    res.write("late SSE frame");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("keeps deferred errors handled when a real response was already destroyed", async () => {
+    const socket = new EventEmitter();
+    const req = { socket } as IncomingMessage;
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    const controller = new AbortController();
+    const deferredError = new Promise<void>((resolve) => {
+      process.nextTick(() => {
+        res.emit("error", new Error("destroyed response failed during cleanup"));
+        resolve();
+      });
+    });
+    res.destroy();
+
+    const cleanup = watchClientDisconnect(req, res, controller);
+    expect(controller.signal.aborted).toBe(true);
+    expect(res.listenerCount("error")).toBe(1);
+
+    await deferredError;
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
   });
 
   it("does not double-abort when the controller is already aborted", () => {

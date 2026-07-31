@@ -62,6 +62,7 @@ const MISTRAL_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
 const MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const MISTRAL_REALTIME_RECONNECT_DELAY_MS = 1000;
 const MISTRAL_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+const MISTRAL_REALTIME_SPEECH_CONTENT = /[\p{L}\p{N}]/u;
 
 function readNestedMistralConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
@@ -165,6 +166,15 @@ function createMistralRealtimeTranscriptionSession(
   config: MistralRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
   let partialText = "";
+  let hasFinalSegment = false;
+
+  const emitFinalTranscript = (text: string, source: "segment" | "terminal" | "pending") => {
+    if (!text.trim() || (source === "pending" && !MISTRAL_REALTIME_SPEECH_CONTENT.test(text))) {
+      return;
+    }
+    hasFinalSegment ||= source === "segment";
+    config.onTranscript?.(text);
+  };
 
   const handleEvent = (
     event: MistralRealtimeTranscriptionEvent,
@@ -195,18 +205,22 @@ function createMistralRealtimeTranscriptionSession(
         }
         return;
       case "transcription.segment":
-        if (event.text) {
-          config.onTranscript?.(event.text);
+        if (event.text?.trim()) {
+          emitFinalTranscript(event.text, "segment");
           partialText = "";
         }
         return;
-      case "transcription.done":
-        if (partialText.trim()) {
-          config.onTranscript?.(partialText);
-          partialText = "";
-        }
+      case "transcription.done": {
+        // Final segments already own completed speech; only later buffered
+        // speech deltas are new. Punctuation only completes an earlier final.
+        const source = hasFinalSegment ? "pending" : "terminal";
+        const terminalText =
+          source === "pending" ? partialText : event.text?.trim() ? event.text : partialText;
+        emitFinalTranscript(terminalText, source);
+        partialText = "";
         transport.closeNow();
         return;
+      }
       case "error":
         config.onError?.(new Error(readErrorDetail(event)));
 

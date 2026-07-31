@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
@@ -189,12 +190,13 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
       legacyCronStoreFinding({
         message: line.replace(/^- /u, ""),
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-cron-store-shape",
       }),
     );
@@ -215,7 +217,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       findings.push(
         legacyCronStoreFinding({
           message: `${pluralize(names.length, "tool-bearing automation")} ${description}.`,
-          path: storePath,
+          path: sqliteStorePath,
           requirement,
           fixHint: `Review with ${formatCliCommand("openclaw automations list")} and reauthorize with ${formatCliCommand("openclaw automations edit <id> --tools <tool,...>")}.`,
         }),
@@ -227,7 +229,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "sqlite-projection-backfill",
       }),
     );
@@ -238,7 +240,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(notifyCount, "job")} still uses legacy notify webhook fallback.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-notify-fallback",
       }),
     );
@@ -249,7 +251,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-dreaming-payload",
       }),
     );
@@ -352,8 +354,8 @@ export async function maybeRepairLegacyCronStore(params: {
     noteLegacyCronRepairResult(await applyLegacyCronStoreRepair({ cfg: params.cfg, state }));
     return;
   }
-  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
-  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs, storePath });
+  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
+  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {
@@ -436,7 +438,7 @@ export async function maybeRepairLegacyCronStore(params: {
 
   const noteHeading = legacyStoreDetected
     ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
-    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+    : `Cron store issues detected at ${shortenHomePath(resolveOpenClawStateSqlitePath())}.`;
 
   note(
     [

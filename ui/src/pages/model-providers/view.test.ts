@@ -167,6 +167,181 @@ describe("renderModelProviders", () => {
     expect([...groups].every((group) => group.disabled)).toBe(true);
   });
 
+  it("locks provider and default-model mutations while shared config work is pending", () => {
+    const container = mount(
+      props({
+        configBusy: true,
+        defaultModelsDirty: true,
+        defaultModels: {
+          primary: "openai/gpt-5",
+          fallbacks: ["anthropic/claude"],
+          utilityModel: null,
+        },
+        configuredModels: [
+          { id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true },
+          { id: "anthropic/claude", provider: "anthropic", name: "Claude", available: true },
+        ],
+        cards: [
+          card({
+            hasConfigApiKey: true,
+            apiKey: { source: "config" },
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+          }),
+        ],
+        keyEditorProvider: "openai",
+        keyDraft: "replacement",
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+      }),
+    );
+
+    const defaults = container.querySelector(".model-providers__defaults");
+    const defaultControls = [
+      ...(defaults?.querySelectorAll<HTMLSelectElement | HTMLButtonElement>(
+        "select, .model-providers__fallback-row button",
+      ) ?? []),
+      button(container, "Save"),
+    ];
+    expect(defaultControls.map((control) => control?.disabled)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(
+      provider?.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
+    ).toBe(true);
+    expect(button(provider!, "Replace key")?.disabled).toBe(true);
+    expect(button(provider!, "Remove key")?.disabled).toBe(true);
+    expect(button(provider!, "Log out")?.disabled).toBe(true);
+
+    const addForm = container.querySelector(".model-providers__add-form");
+    expect(
+      [
+        ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+          "select, input, button",
+        ) ?? []),
+      ].map((control) => control.disabled),
+    ).toEqual([true, true, true]);
+  });
+
+  it("locks an already-open provider form after mutation access is revoked", () => {
+    const onAddProvider = vi.fn();
+    const onAddProviderToggle = vi.fn();
+    const container = mount(
+      props({
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+        canMutate: false,
+        mutationBlockedReason: "Operator admin access required",
+        onAddProvider,
+        onAddProviderToggle,
+      }),
+    );
+    const addForm = container.querySelector(".model-providers__add-form");
+    const controls = [
+      ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+        "select, input, button",
+      ) ?? []),
+    ];
+
+    expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
+    addForm?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onAddProvider).not.toHaveBeenCalled();
+
+    const cancel = button(addForm!.closest(".settings-section")!, "Cancel");
+    expect(cancel?.disabled).toBe(false);
+    cancel?.click();
+    expect(onAddProviderToggle).toHaveBeenCalledOnce();
+  });
+
+  it("freezes provider and credential fields while adding a provider", () => {
+    const container = mount(
+      props({
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+        busy: { add: true },
+      }),
+    );
+    const addForm = container.querySelector(".model-providers__add-form");
+
+    expect(
+      [
+        ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("select, input") ?? []),
+      ].map((control) => control.disabled),
+    ).toEqual([true, true]);
+  });
+
+  it("keeps committed credential success visible beside its refresh warning", () => {
+    const container = mount(
+      props({
+        messages: {
+          openai: {
+            kind: "success",
+            text: "Secret saved.",
+            warning: "Config refresh failed after the secret was committed.",
+          },
+        },
+      }),
+    );
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    const messages = [...(provider?.querySelectorAll('[role="status"]') ?? [])];
+
+    expect(messages.map((message) => text(message))).toEqual([
+      "Secret saved.",
+      "Config refresh failed after the secret was committed.",
+    ]);
+    expect(messages[0]?.classList.contains("success")).toBe(true);
+    expect(messages[1]?.classList.contains("warning")).toBe(true);
+  });
+
+  it("keeps committed default-model success visible beside its refresh warning", () => {
+    const container = mount(
+      props({
+        messages: {
+          defaults: {
+            kind: "success",
+            text: "Default models saved.",
+            warning: "Config refresh failed after the model defaults were committed.",
+          },
+        },
+      }),
+    );
+    const defaults = container.querySelector(".model-providers__defaults");
+    const messages = [...(defaults?.querySelectorAll('[role="status"]') ?? [])];
+
+    expect(messages.map((message) => text(message))).toEqual([
+      "Default models saved.",
+      "Config refresh failed after the model defaults were committed.",
+    ]);
+    expect(messages[0]?.classList.contains("success")).toBe(true);
+    expect(messages[1]?.classList.contains("warning")).toBe(true);
+  });
+
+  it("announces provider and default-model mutation failures as accessible alerts", () => {
+    const container = mount(
+      props({
+        messages: {
+          openai: { kind: "error", text: "Provider credential could not be saved." },
+          defaults: { kind: "error", text: "Default models could not be saved." },
+        },
+      }),
+    );
+
+    expect(text(container.querySelector('[data-provider-id="openai"] [role="alert"]'))).toBe(
+      "Provider credential could not be saved.",
+    );
+    expect(text(container.querySelector('.model-providers__defaults [role="alert"]'))).toBe(
+      "Default models could not be saved.",
+    );
+  });
+
   it("keeps model behavior available while provider data loads", () => {
     const container = mount(props({ loading: true, thinkingLevel: "high", fastMode: true }));
     const behavior = container.querySelector("#settings-model-behavior");
@@ -230,7 +405,7 @@ describe("renderModelProviders", () => {
     );
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Connect your AI");
+    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("No models available");
     expect(text(readiness)).toContain("Choose another provider");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
@@ -269,7 +444,7 @@ describe("renderModelProviders", () => {
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Model required");
-    expect(button(readiness!, "Connect your AI")).toBeDefined();
+    expect(button(readiness!, "Connect a verified AI model")).toBeDefined();
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
   });
 

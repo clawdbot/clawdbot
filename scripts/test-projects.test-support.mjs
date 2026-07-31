@@ -1442,6 +1442,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/lib/plugin-npm-runtime-build.mjs",
     ["test/scripts/plugin-npm-runtime-build-args.test.ts", "test/plugin-npm-runtime-build.test.ts"],
   ],
+  ["scripts/lib/output-root-guard.mjs", ["test/scripts/output-root-guard.test.ts"]],
+  ["scripts/lib/output-root-guard.d.mts", ["test/scripts/output-root-guard.test.ts"]],
   [
     "scripts/lib/npm-publish-plan.mjs",
     [
@@ -2252,6 +2254,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/write-package-dist-inventory.ts", ["test/scripts/test-install-sh-docker.test.ts"]],
   ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/copy-export-html-templates.ts", ["test/scripts/copy-export-html-templates.test.ts"]],
+  ["scripts/ui.js", ["test/scripts/ui.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],

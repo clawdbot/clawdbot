@@ -245,7 +245,7 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 function runNpmTelegramArtifactValidation(params: {
   currentRunId: string;
   producerRunId: string;
-  producerStatus: "completed" | "in_progress" | "queued";
+  producerStatus: "completed" | "in_progress" | "pending" | "queued";
   producerConclusion: "success" | null;
 }) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
@@ -2383,7 +2383,11 @@ describe("package artifact reuse", () => {
   it("finalizes dispatched Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
+    const setupNodeStep = workflowStep(checkTestboxJob, "Setup Node environment");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const closeTestboxSshStep = workflowStep(checkTestboxJob, "Close Testbox SSH sessions");
+    const setupNodeWith = setupNodeStep.with ?? {};
+    const checkTestboxSteps = checkTestboxJob.steps ?? [];
     const runArmTestboxStep = workflowStep(
       workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
       "Run Testbox",
@@ -2397,14 +2401,30 @@ describe("package artifact reuse", () => {
       "Run Testbox",
     );
 
-    expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
+    expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    expect(setupNodeWith["sticky-disk"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
+    );
+    expect(setupNodeWith["use-actions-cache"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
+    );
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(closeTestboxSshStep.run).toContain(
+      `sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'`,
+    );
+    expect(closeTestboxSshStep.run).toContain(
+      'ss -K state established \\\n  "( sport = :${runner_ssh_local_port} )"',
+    );
+    expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
+      checkTestboxSteps.indexOf(runTestboxStep) + 1,
+    );
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.if).toBe("always()");
@@ -2583,7 +2603,11 @@ describe("package artifact reuse", () => {
     const releaseJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks");
 
     expect(releaseJob.uses).toBe("./.github/workflows/qa-live-transports-convex.yml");
-    expect(releaseJob.secrets).toBeUndefined();
+    expect(releaseJob.secrets).toEqual({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
     expect(releaseJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
@@ -2650,7 +2674,11 @@ describe("package artifact reuse", () => {
     const releaseJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_buzz_release_checks");
 
     expect(releaseJob.uses).toBe("./.github/workflows/qa-live-transports-convex.yml");
-    expect(releaseJob.secrets).toBeUndefined();
+    expect(releaseJob.secrets).toEqual({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
     expect(releaseJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.if).toContain("needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'");
@@ -2659,14 +2687,25 @@ describe("package artifact reuse", () => {
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
       run_buzz: true,
     });
-    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz").if).toBe("inputs.run_buzz");
-    expect(
-      workflowStep(
-        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz"),
-        "Upload Buzz QA artifacts",
-      ).with?.name,
-    ).toBe(
+    const buzzJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz");
+    expect(buzzJob.if).toBe("inputs.run_buzz");
+    const resolveBuzz = workflowStep(buzzJob, "Resolve Buzz QA runner");
+    expect(resolveBuzz.run).toContain('runner?.commandName === "buzz"');
+    expect(resolveBuzz.run).toContain("selected ref does not declare the Buzz QA runner");
+    expect(workflowStep(buzzJob, "Validate required Buzz QA credential env").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Build private QA runtime").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Run Buzz live lane").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.name).toBe(
       "${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}",
+    );
+    expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.path).toBe(
+      "${{ steps.resolve_buzz.outputs.output_dir }}",
     );
   });
 
@@ -3212,6 +3251,7 @@ describe("package artifact reuse", () => {
       '--arg digest "sha256:${ARTIFACT_DIGEST}"',
       "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
       'if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]',
+      '.status == "pending"',
       '.status == "queued" or .status == "in_progress"',
       ".conclusion == null",
       "Package Telegram artifact predates the active producer run attempt.",
@@ -3264,6 +3304,17 @@ describe("package artifact reuse", () => {
       producerConclusion: null,
       producerRunId: "123",
       producerStatus: "queued",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts active artifacts while GitHub reports the workflow as pending", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunId: "123",
+      producerConclusion: null,
+      producerRunId: "123",
+      producerStatus: "pending",
     });
 
     expect(result.status, result.stderr).toBe(0);
@@ -4479,18 +4530,14 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   });
 
   it("keeps every tracked repository skill visible to Git-aware syncs", () => {
-    const gitignore = readFileSync(".gitignore", "utf8");
     const skillFiles = execFileSync("git", ["ls-files", ".agents/skills/*/SKILL.md"], {
       encoding: "utf8",
     })
       .trim()
-      .split("\n");
-    const skillDirs = skillFiles.map((path) => path.split("/").slice(0, 3).join("/"));
+      .split("\n")
+      .filter(Boolean);
 
-    for (const skillDir of skillDirs) {
-      expect(gitignore).toContain(`!${skillDir}/`);
-      expect(gitignore).toContain(`!${skillDir}/**`);
-    }
+    expect(skillFiles.length).toBeGreaterThan(0);
     const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin"], {
       encoding: "utf8",
       input: `${skillFiles.join("\n")}\n`,

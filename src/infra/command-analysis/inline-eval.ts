@@ -91,6 +91,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   {
     names: ["awk", "gawk", "mawk", "nawk"],
     exactFlags: new Set(["-e", "--source"]),
+    // gawk before 4.0 accepted "--s" for "--source"; modern releases reject it
+    // as ambiguous with "--sandbox", so the older executable case sets the floor.
+    abbreviatedFlags: [{ label: "--source", full: "--source", min: "--s" }],
     prefixFlags: [{ label: "--source", prefix: "--source=" }],
   },
   {
@@ -285,6 +288,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     exactFlags: new Set(["-f", "--file", "--makefile", "--eval"]),
     rawExactFlags: new Map([["-E", "-E"]]),
     rawPrefixFlags: [{ label: "-E", prefix: "-E" }],
+    // GNU make keeps "--e" ambiguous with "--environment-overrides";
+    // "--ev" is the shortest unique spelling of "--eval".
+    abbreviatedFlags: [{ label: "--eval", full: "--eval", min: "--ev" }],
     prefixFlags: [
       { label: "-f", prefix: "-f" },
       { label: "--file", prefix: "--file=" },

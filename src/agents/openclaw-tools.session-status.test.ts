@@ -579,6 +579,25 @@ describe("session_status tool", () => {
     listSessionStateEventsSinceMock.mockReturnValue({
       events: [
         {
+          sequence: 11,
+          sessionKey: "main",
+          sessionId: "s1",
+          agentId: "main",
+          kind: "run_failed",
+          actorType: "agent",
+          actorId: "worker-1",
+          runId: "run-11",
+          occurredAt: 90,
+          summary: "child run timed out",
+          payload: {
+            outcome: "timeout",
+            channel: "codex",
+            turns: 2,
+            catalogId: "internal-catalog",
+            nested: { drop: true },
+          },
+        },
+        {
           sequence: 12,
           sessionKey: "main",
           sessionId: "s1",
@@ -591,7 +610,7 @@ describe("session_status tool", () => {
         },
       ],
       truncated: false,
-      earliestAvailableSequence: 12,
+      earliestAvailableSequence: 11,
       historyGap: true,
     });
 
@@ -603,9 +622,18 @@ describe("session_status tool", () => {
     expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
     expect(details.stateVersion).toBe(12);
-    expect(details.stateChanges).toMatchObject({
-      historyGap: true,
+    const expectedStateChanges = {
       events: [
+        {
+          sequence: 11,
+          kind: "run_failed",
+          actorType: "agent",
+          occurredAt: 90,
+          summary: "child run timed out",
+          actorId: "worker-1",
+          runId: "run-11",
+          payload: { outcome: "timeout", channel: "codex", turns: 2 },
+        },
         {
           sequence: 12,
           kind: "upstream_missing",
@@ -615,11 +643,35 @@ describe("session_status tool", () => {
           payload: { channel: "codex" },
         },
       ],
-    });
+      truncated: false,
+      earliestAvailableSequence: 11,
+      historyGap: true,
+    };
+    expect(details.stateChanges).toEqual(expectedStateChanges);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(JSON.stringify(details.stateChanges)).not.toContain("internal-catalog");
-    expect(text).toContain("Session state changes:");
-    expect(text).toContain('"kind": "upstream_missing"');
+    expect(details.statusText).toBe(text);
+    const stateChangesMarker = "Session state changes:\n```json\n";
+    const stateChangesStart = text.indexOf(stateChangesMarker);
+    expect(stateChangesStart).toBeGreaterThanOrEqual(0);
+    const stateChangesJsonStart = stateChangesStart + stateChangesMarker.length;
+    const stateChangesJsonEnd = text.indexOf("\n```", stateChangesJsonStart);
+    expect(stateChangesJsonEnd).toBeGreaterThan(stateChangesJsonStart);
+    const visibleStateChangesText = text.slice(stateChangesJsonStart, stateChangesJsonEnd);
+    expect(JSON.parse(visibleStateChangesText)).toEqual({
+      stateVersion: 12,
+      stateChanges: expectedStateChanges,
+    });
+    for (const omittedField of [
+      '"sessionKey"',
+      '"sessionId"',
+      '"agentId"',
+      '"catalogId"',
+      '"nested"',
+      "internal-catalog",
+    ]) {
+      expect(visibleStateChangesText).not.toContain(omittedField);
+      expect(String(details.statusText)).not.toContain(omittedField);
+    }
   });
 
   it("returns watched group changesSince under tree visibility", async () => {

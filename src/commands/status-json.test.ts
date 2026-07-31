@@ -144,8 +144,18 @@ describe("statusJsonCommand", () => {
     expect(payload).not.toHaveProperty("securityAudit");
   });
 
-  it("includes security audit details only when --all is requested", async () => {
+  it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const { runtime, logs } = createRuntimeCapture();
+    const compatibilityNotice = {
+      pluginId: "legacy-plugin",
+      code: "hook-only",
+      severity: "warn",
+      message: "plugin registers only legacy hooks",
+    };
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      pluginCompatibility: [compatibilityNotice],
+    });
 
     await statusJsonCommand({ all: true }, runtime);
 
@@ -183,6 +193,34 @@ describe("statusJsonCommand", () => {
         summary: { critical: 1, warn: 0, info: 0 },
         findings: [],
       },
+      pluginCompatibility: {
+        count: 1,
+        warnings: [compatibilityNotice],
+      },
     });
+  });
+
+  it("reports deep gateway probe failures and runs the documented security audit", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayReachable: true,
+    });
+    mocks.callGateway.mockImplementation(async (params: { method?: string }) => {
+      if (params.method === "health") {
+        throw new Error("gateway health probe timed out");
+      }
+      return null;
+    });
+
+    await statusJsonCommand({ deep: true }, runtime);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      health?: { error?: string };
+      securityAudit?: { summary?: { critical?: number } };
+    };
+    expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
+    expect(payload.securityAudit?.summary?.critical).toBe(1);
   });
 });

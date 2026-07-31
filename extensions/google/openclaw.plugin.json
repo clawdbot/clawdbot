@@ -692,28 +692,16 @@
       "method": "api-key",
       "choiceId": "gemini-api-key",
       "appGuidedSecret": true,
-      "choiceLabel": "Google Gemini API key",
-      "choiceHint": "Free API key from aistudio.google.com/apikey",
+      "choiceLabel": "Google AI Studio API key",
+      "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
+      "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
       "cliDescription": "Gemini API key"
-    },
-    {
-      "provider": "google-gemini-cli",
-      "method": "oauth",
-      "choiceId": "google-gemini-cli",
-      "appGuidedAuth": "oauth",
-      "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Sign in with your Google account (opens a browser)",
-      "groupId": "google",
-      "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
-      "onboardingFeatured": true
     }
   ],
   "uiHints": {

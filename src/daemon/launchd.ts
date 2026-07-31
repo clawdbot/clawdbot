@@ -956,8 +956,11 @@ export async function uninstallLaunchAgent({
   await execLaunchctl(["unload", plistPath]);
 
   try {
-    await fs.access(plistPath);
-  } catch {
+    await fs.lstat(plistPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw createLaunchAgentRemovalError(error);
+    }
     stdout.write(`LaunchAgent not found at ${plistPath}\n`);
     return;
   }
@@ -969,9 +972,27 @@ export async function uninstallLaunchAgent({
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
     stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
-  } catch {
-    stdout.write(`LaunchAgent remains at ${plistPath} (could not move)\n`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        await fs.lstat(plistPath);
+      } catch (accessError) {
+        if ((accessError as NodeJS.ErrnoException).code === "ENOENT") {
+          stdout.write(`LaunchAgent not found at ${plistPath}\n`);
+          return;
+        }
+        throw createLaunchAgentRemovalError(accessError);
+      }
+    }
+    throw createLaunchAgentRemovalError(error);
   }
+}
+
+function createLaunchAgentRemovalError(error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  return new Error(
+    `LaunchAgent removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+  );
 }
 
 function isUnsupportedGuiDomain(detail: string): boolean {

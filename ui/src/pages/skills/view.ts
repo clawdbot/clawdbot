@@ -737,6 +737,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                     >
                     <input
                       type="password"
+                      required
                       ?disabled=${locked}
                       .value=${editValue}
                       @input=${(e: Event) =>
@@ -756,7 +757,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   })()}
                   <button
                     class="btn primary"
-                    ?disabled=${locked}
+                    ?disabled=${locked || !editValue.trim()}
                     @click=${() => props.onSaveKey(skill.skillKey)}
                   >
                     ${t("skillsPage.saveKey")}

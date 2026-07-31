@@ -6,6 +6,7 @@ import { matchesSkillFilter, normalizeSkillFilter } from "./filter.js";
 const sessionSkillCases: Array<{
   name: string;
   skill: string;
+  skillKey?: string;
   base: string[];
   overrides?: Record<string, boolean>;
   expected: boolean;
@@ -30,6 +31,14 @@ const sessionSkillCases: Array<{
     base: ["github"],
     expected: true,
   },
+  {
+    name: "applies canonical skill-key overrides without changing name-based agent filters",
+    skill: "friendly-skill-name",
+    skillKey: "canonical-skill-key",
+    base: ["friendly-skill-name"],
+    overrides: { "canonical-skill-key": false },
+    expected: false,
+  },
 ];
 
 describe("skills/filter", () => {
@@ -53,7 +62,7 @@ describe("skills/filter", () => {
     expect(matchesSkillFilter([], undefined)).toBe(false);
   });
 
-  it.each(sessionSkillCases)("$name", ({ skill, base, overrides, expected }) => {
-    expect(isSessionSkillEnabled(skill, base, overrides)).toBe(expected);
+  it.each(sessionSkillCases)("$name", ({ skill, skillKey, base, overrides, expected }) => {
+    expect(isSessionSkillEnabled(skill, base, overrides, skillKey)).toBe(expected);
   });
 });

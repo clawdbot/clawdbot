@@ -125,7 +125,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const openaiCard = page.locator('[data-provider-id="openai"]');
       const readiness = page.locator('[data-model-readiness="model-required"]');
       await readiness.waitFor();
-      await expect.poll(async () => readiness.textContent()).toContain("Connect your AI");
+      await expect
+        .poll(async () => readiness.textContent())
+        .toContain("Connect a verified AI model");
       await expect.poll(async () => readiness.textContent()).toContain("No models available");
       await expect.poll(async () => openaiCard.textContent()).toContain("Signed in");
       expect(await page.locator(".model-providers__defaults").count()).toBe(0);

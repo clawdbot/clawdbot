@@ -17,6 +17,7 @@ import type {
 } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
   resolveLlamaCppModelCacheDir,
@@ -293,7 +294,7 @@ async function clearLlamaCppInferenceCacheForTests(): Promise<void> {
 }
 
 export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderConfig }): StreamFn {
-  return (model, context, options) => {
+  return createPlainTextToolCallCompatWrapper((model, context, options) => {
     const stream = createAssistantMessageEventStream();
     let streamedText = "";
     let generationAborted = false;
@@ -453,7 +454,7 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
       queueMicrotask(() => void serialize(run));
     }
     return stream;
-  };
+  });
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

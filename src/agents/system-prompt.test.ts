@@ -126,7 +126,7 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
-      toolNames: ["message", "memory_search"],
+      toolNames: ["message", "memory_search", "read"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
@@ -215,6 +215,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       promptMode: "minimal",
       skillsPrompt,
+      toolNames: ["read"],
     });
 
     expect(prompt).toContain("## Skills");
@@ -839,6 +840,7 @@ describe("buildAgentSystemPrompt", () => {
   it("includes skills guidance when skills prompt is present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -852,10 +854,43 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Several: most specific");
   });
 
+  it("omits skills guidance when the actual visible tools cannot read skill instructions", () => {
+    const skillsPrompt =
+      "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+
+    for (const toolNames of [[], ["message"], ["tool_search"]]) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        capabilityToolNames: ["read"],
+        skillsPrompt,
+      });
+
+      expect(prompt).not.toContain("## Skills");
+      expect(prompt).not.toContain("<available_skills>");
+      expect(prompt).not.toContain("read exact <location>");
+    }
+  });
+
+  it("keeps CLI-backend skill guidance when file tools are owned by the external harness", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptSurface: "cli_backend",
+      toolNames: [],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain("<name>demo</name>");
+    expect(prompt).toContain("read exact <location>");
+  });
+
   it("switches skills access guidance under code mode", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       codeModeActive: true,
+      toolNames: ["exec"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -864,6 +899,19 @@ describe("buildAgentSystemPrompt", () => {
       'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.',
     );
     expect(prompt).not.toContain("read exact <location> with `read`");
+  });
+
+  it("omits code-mode skill guidance when the actual exec tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      codeModeActive: true,
+      toolNames: ["message"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).not.toContain("## Skills");
+    expect(prompt).not.toContain("skills.read");
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
@@ -896,6 +944,7 @@ describe("buildAgentSystemPrompt", () => {
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });

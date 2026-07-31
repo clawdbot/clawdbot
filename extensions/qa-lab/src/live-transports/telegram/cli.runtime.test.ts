@@ -60,6 +60,8 @@ describe("Telegram live QA scenario gate", () => {
       summaryPath,
       JSON.stringify({
         counts: {
+          total: 1,
+          passed: status === "pass" ? 1 : 0,
           failed: status === "fail" ? 1 : 0,
           skipped: status === "skip" || status === "skipped" ? 1 : 0,
         },
@@ -76,6 +78,7 @@ describe("Telegram live QA scenario gate", () => {
     delete process.env[SUT_COMMAND_ENV];
     tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-qa-telegram-gate-"));
     summaryPath = path.join(tempRoot, "qa-suite-summary.json");
+    writeSummary("pass");
     mocks.resolveTelegramQaScenarioIds.mockReturnValue(["channel-canary"]);
     mocks.runQaFlowSuiteFromRuntime.mockResolvedValue({
       reportPath: ".artifacts/qa-e2e/telegram/qa-suite-report.md",
@@ -121,7 +124,8 @@ describe("Telegram live QA scenario gate", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("does not read the summary when failures are explicitly allowed", async () => {
+  it("permits genuinely executed failed scenarios when failures are explicitly allowed", async () => {
+    writeSummary("fail");
     await runQaTelegramSuite({
       repoRoot: "/repo",
       providerMode: "mock-openai",
@@ -130,6 +134,43 @@ describe("Telegram live QA scenario gate", () => {
 
     expect(process.exitCode).toBeUndefined();
   });
+
+  it.each([
+    { summary: "missing", expected: "Could not read QA summary" },
+    { summary: "malformed", expected: "Could not parse QA summary" },
+    { summary: "zero-work", expected: "did not include any executed scenarios" },
+    { summary: "required-skip", expected: "did not include any executed scenarios" },
+    { summary: "blocked", expected: "did not include any executed scenarios" },
+  ])(
+    "rejects $summary Telegram summaries even with --allow-failures",
+    async ({ summary, expected }) => {
+      if (summary === "missing") {
+        rmSync(summaryPath);
+      } else if (summary === "malformed") {
+        writeFileSync(summaryPath, "{not-json", "utf8");
+      } else if (summary === "zero-work") {
+        writeFileSync(
+          summaryPath,
+          JSON.stringify({
+            counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+            scenarios: [],
+          }),
+          "utf8",
+        );
+      } else {
+        writeSummary(summary === "required-skip" ? "skip" : "blocked");
+      }
+
+      await expect(
+        runQaTelegramSuite({
+          repoRoot: "/repo",
+          providerMode: "mock-openai",
+          allowFailures: true,
+        }),
+      ).rejects.toThrow(expected);
+      expect(process.exitCode).toBeUndefined();
+    },
+  );
 
   it("lists only scenarios accepted by its flow runner", async () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

@@ -861,6 +861,21 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+    ctx.state.lastToolError = (
+      ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
+    )({
+      toolName,
+      meta: approvalMeta,
+      executionStarted: false,
+      outcome: "failure",
+      failure: { error: `Approval prompt delivery failed: ${message}` },
+    }).lastToolError;
+    ctx.state.deterministicApprovalPromptSent = false;
+  };
   const hasStructuredMedia = Boolean(
     result &&
     typeof result === "object" &&
@@ -893,8 +908,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -922,8 +937,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }

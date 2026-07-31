@@ -419,6 +419,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         provider,
         model,
+        senderIsOwner: command.senderIsOwner,
         senderId: command.senderId,
         currentChannelId: command.channelId,
         groupId: extractExplicitGroupId(ctx.From),

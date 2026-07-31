@@ -1529,6 +1529,198 @@
       }
     },
     {
+      "name": "@openclaw/vydra-provider",
+      "description": "OpenClaw Vydra media provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "vydra",
+          "label": "Vydra"
+        },
+        "providers": [
+          {
+            "id": "vydra",
+            "name": "Vydra",
+            "docs": "/providers/vydra",
+            "categories": [
+              "cloud",
+              "media"
+            ],
+            "envVars": [
+              "VYDRA_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "vydra-api-key",
+                "choiceLabel": "Vydra API key",
+                "groupId": "vydra",
+                "groupLabel": "Vydra",
+                "groupHint": "Image, video, and speech",
+                "optionKey": "vydraApiKey",
+                "cliFlag": "--vydra-api-key",
+                "cliOption": "--vydra-api-key <key>",
+                "cliDescription": "Vydra API key",
+                "onboardingScopes": [
+                  "image-generation"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "vydra"
+          ],
+          "imageGenerationProviders": [
+            "vydra"
+          ],
+          "videoGenerationProviders": [
+            "vydra"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/vydra-provider",
+          "npmSpec": "@openclaw/vydra-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/xiaomi-provider",
+      "description": "OpenClaw Xiaomi provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "xiaomi",
+          "label": "Xiaomi"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "xiaomi-native",
+            "hosts": [
+              "api.xiaomimimo.com",
+              "token-plan-ams.xiaomimimo.com",
+              "token-plan-cn.xiaomimimo.com",
+              "token-plan-sgp.xiaomimimo.com"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "xiaomi",
+            "name": "Xiaomi",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "xiaomi-api-key",
+                "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
+                "choiceHint": "Endpoint: api.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiApiKey",
+                "cliFlag": "--xiaomi-api-key",
+                "cliOption": "--xiaomi-api-key <key>",
+                "cliDescription": "Xiaomi MiMo pay-as-you-go API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "xiaomi-token-plan",
+            "name": "Xiaomi Token Plan",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_TOKEN_PLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "token-plan-ams",
+                "choiceId": "xiaomi-token-plan-ams",
+                "choiceLabel": "Xiaomi Token Plan (Europe)",
+                "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-cn",
+                "choiceId": "xiaomi-token-plan-cn",
+                "choiceLabel": "Xiaomi Token Plan (China)",
+                "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-sgp",
+                "choiceId": "xiaomi-token-plan-sgp",
+                "choiceLabel": "Xiaomi Token Plan (Singapore)",
+                "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "xiaomi"
+          ],
+          "usageProviders": [
+            "xiaomi",
+            "xiaomi-token-plan"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/xiaomi-provider",
+          "npmSpec": "@openclaw/xiaomi-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/zai-provider",
       "description": "OpenClaw Z.AI provider plugin",
       "source": "official",
@@ -1656,6 +1848,160 @@
           "npmSpec": "@openclaw/zai-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/synthetic-provider",
+      "description": "OpenClaw Synthetic provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "synthetic",
+          "label": "Synthetic"
+        },
+        "providers": [
+          {
+            "id": "synthetic",
+            "name": "Synthetic",
+            "docs": "/providers/synthetic",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "SYNTHETIC_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "synthetic-api-key",
+                "choiceLabel": "Synthetic API key",
+                "groupId": "synthetic",
+                "groupLabel": "Synthetic",
+                "groupHint": "Anthropic-compatible (multi-model)",
+                "optionKey": "syntheticApiKey",
+                "cliFlag": "--synthetic-api-key",
+                "cliOption": "--synthetic-api-key <key>",
+                "cliDescription": "Synthetic API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/synthetic-provider",
+          "npmSpec": "@openclaw/synthetic-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/voyage-provider",
+      "description": "OpenClaw Voyage embedding provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "voyage",
+          "label": "Voyage"
+        },
+        "providers": [
+          {
+            "id": "voyage",
+            "name": "Voyage",
+            "docs": "/reference/memory-config",
+            "categories": [
+              "cloud"
+            ],
+            "envVars": [
+              "VOYAGE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "memoryEmbeddingProviders": [
+            "voyage"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/voyage-provider",
+          "npmSpec": "@openclaw/voyage-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/volcengine-provider",
+      "description": "OpenClaw Volcengine provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "volcengine",
+          "label": "Volcengine"
+        },
+        "providers": [
+          {
+            "id": "volcengine",
+            "aliases": [
+              "volcengine-plan"
+            ],
+            "name": "Volcengine",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "volcengine-api-key",
+                "choiceLabel": "Volcano Engine API key",
+                "groupId": "volcengine",
+                "groupLabel": "Volcano Engine",
+                "groupHint": "API key",
+                "optionKey": "volcengineApiKey",
+                "cliFlag": "--volcengine-api-key",
+                "cliOption": "--volcengine-api-key <key>",
+                "cliDescription": "Volcano Engine API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "volcengine-plan",
+            "name": "Volcengine Plan",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "volcengine"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/volcengine-provider",
+          "npmSpec": "@openclaw/volcengine-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
