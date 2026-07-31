@@ -142,7 +142,9 @@ runtime remains `AcknowledgementPending` until that delivery is committed, so
 invocation work cannot race ahead of the supervisor-visible manifest. The
 configuration exchange is consumed from its authenticated handshake, and a
 successful activation irreversibly moves it to `Activated`; neither phase can
-be replayed to multiply concurrency. Activation also requires the exact live
+be replayed to multiply concurrency. Beginning configuration locks the
+negotiated frame ceiling for the rest of the channel generation, so bridge
+preflight budgets cannot become stale. Activation also requires the exact live
 authenticated channel. The bridge carries that channel's retirement signal:
 retirement blocks new native work and cancels in-flight adapter work. The bridge
 accepts one immutable connection manifest and requires its

@@ -467,6 +467,7 @@ impl SidecarConfigurationExchange {
         if self.state != SidecarConfigurationState::Starting {
             return self.fail(channel, SidecarConfigurationError::UnexpectedMessage);
         }
+        channel.lock_frame_limit();
         if let Err(error) = validate_configuration(configuration, self.selection) {
             return self.fail(channel, SidecarConfigurationError::Configuration(error));
         }
@@ -506,6 +507,7 @@ impl SidecarConfigurationExchange {
         if channel.role() != self.role {
             return self.fail(channel, SidecarConfigurationError::ChannelRoleMismatch);
         }
+        channel.lock_frame_limit();
         let message = match channel.open::<SidecarRuntimeMessage>(frame) {
             Ok(message) => message,
             Err(error) => return self.fail(channel, SidecarConfigurationError::Frame(error)),
@@ -1919,7 +1921,16 @@ mod tests {
         );
 
         let adapter = Arc::new(RecordingAdapter::default());
+        let frame_limit = channel.max_frame_bytes();
+        assert_eq!(
+            channel.lower_frame_limit(frame_limit - 1),
+            Err(crate::SidecarProtocolError::FrameLimitLocked)
+        );
         let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
+        assert_eq!(
+            channel.lower_frame_limit(frame_limit - 1),
+            Err(crate::SidecarProtocolError::FrameLimitLocked)
+        );
         assert_eq!(bridge.manifest().manifest_generation, 3);
         assert!(matches!(
             SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter),

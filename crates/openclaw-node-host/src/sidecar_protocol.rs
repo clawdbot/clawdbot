@@ -240,6 +240,7 @@ pub struct AuthenticatedSidecarChannel {
     generation: u64,
     key: SidecarSessionKey,
     max_frame_bytes: u32,
+    frame_limit_locked: bool,
     send_sequence: u64,
     receive_sequence: u64,
     liveness: SidecarChannelLiveness,
@@ -303,6 +304,7 @@ impl AuthenticatedSidecarChannel {
             generation,
             key,
             max_frame_bytes,
+            frame_limit_locked: false,
             send_sequence: 0,
             receive_sequence: 0,
             liveness: SidecarChannelLiveness(Arc::new(watch::channel(false).0)),
@@ -350,12 +352,16 @@ impl AuthenticatedSidecarChannel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the new limit cannot hold a minimal frame or would
-    /// raise the ceiling used to bootstrap this channel.
+    /// Returns an error if the new limit cannot hold a minimal frame, would
+    /// raise the ceiling used to bootstrap this channel, or configuration has
+    /// locked the negotiated ceiling for the rest of the channel generation.
     pub fn lower_frame_limit(
         &mut self,
         negotiated_max_frame_bytes: u32,
     ) -> Result<(), SidecarProtocolError> {
+        if self.frame_limit_locked {
+            return Err(SidecarProtocolError::FrameLimitLocked);
+        }
         if (negotiated_max_frame_bytes as usize) < minimum_frame_bytes(self.session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
@@ -367,6 +373,10 @@ impl AuthenticatedSidecarChannel {
         }
         self.max_frame_bytes = negotiated_max_frame_bytes;
         Ok(())
+    }
+
+    pub(crate) fn lock_frame_limit(&mut self) {
+        self.frame_limit_locked = true;
     }
 
     /// Apply the authenticated protocol selection after the bootstrap exchange.
@@ -716,6 +726,8 @@ pub enum SidecarProtocolError {
     InvalidSessionId,
     #[error("negotiated frame limit cannot increase from {current} to {requested}")]
     LimitIncrease { current: u32, requested: u32 },
+    #[error("sidecar frame limit is locked for this configured channel")]
+    FrameLimitLocked,
     #[error("sidecar generation must be nonzero")]
     InvalidGeneration,
     #[error("unsupported sidecar major version (local {local}, remote {remote})")]
