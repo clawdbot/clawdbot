@@ -1414,6 +1414,56 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("cancels a queued local turn without waiting for the active provider", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const active = deferred<{ payloads: Array<{ text: string }>; meta: Record<string, unknown> }>();
+    let activeSignal: AbortSignal | undefined;
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      activeSignal = opts.abortSignal;
+      return active.promise;
+    });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: { messages: { queue: { mode: "followup" } } },
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: { queueDebounceMs: 0 },
+    }));
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "the active provider does not settle",
+      runId: "active-provider",
+    });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "cancel this queued turn",
+      runId: "queued-provider",
+    });
+
+    await backend.abortChat({ sessionKey: "agent:main:main", runId: "queued-provider" });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "queued-provider",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "aborted",
+      },
+    });
+    expect(activeSignal?.aborted).toBe(false);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    active.resolve({ payloads: [{ text: "active provider completed" }], meta: {} });
+    await flushMicrotasks();
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+  });
+
   it("steers same-session sends into the active local run", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
@@ -1891,6 +1941,120 @@ describe("EmbeddedTuiBackend", () => {
         state: "aborted",
         errorMessage: "edit tool validation failed: edits: must have required properties edits",
       },
+    });
+  });
+
+  it.each([
+    {
+      label: "a provider timeout after mechanical cancellation",
+      lifecycle: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      text: "The provider timed out. Please try again.",
+    },
+    {
+      label: "a mechanically aborted blocked turn",
+      lifecycle: {
+        phase: "end",
+        aborted: true,
+        stopReason: "aborted",
+        livenessState: "blocked",
+      },
+      meta: { aborted: true, stopReason: "aborted", livenessState: "blocked" },
+      text: "No provider completed the response. Please try again.",
+    },
+    {
+      label: "an abandoned turn without cancellation",
+      lifecycle: { phase: "end", livenessState: "abandoned" },
+      meta: { livenessState: "abandoned" },
+      text: "The agent stopped before completing its response.",
+    },
+    {
+      label: "a structured agent failure",
+      meta: { error: { kind: "image_size", message: "Internal provider diagnostic" } },
+      text: "The image is too large. Resize it and try again.",
+    },
+  ])("projects $label as an actionable terminal failure", async ({ lifecycle, meta, text }) => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string; mediaUrl: null }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "show the actual terminal outcome",
+      runId: "canonical-terminal",
+    });
+
+    if (lifecycle) {
+      registeredListener?.({ runId: "canonical-terminal", stream: "lifecycle", data: lifecycle });
+    }
+    pending.resolve({ payloads: [{ text, mediaUrl: null }], meta });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "canonical-terminal",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "error",
+        errorMessage: text,
+      },
+    });
+  });
+
+  it("preserves a yielded parent turn in the embedded session projection", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string; mediaUrl: null }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "wait for the delegated turn",
+      runId: "yielded-parent",
+    });
+
+    registeredListener?.({
+      runId: "yielded-parent",
+      stream: "lifecycle",
+      data: { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    });
+    pending.resolve({
+      payloads: [{ text: "Delegated work is continuing.", mediaUrl: null }],
+      meta: { yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: expect.objectContaining({
+        runId: "yielded-parent",
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
     });
   });
 

@@ -84,6 +84,25 @@ export function createAgentCommandLifecycle(params: {
         )?.text
       : undefined) ??
     (runResult.meta.error ? "Agent run failed" : undefined);
+  const emitTerminalPhase = (
+    phase: "finishing" | "end",
+    terminal: EmbeddedAgentRunEntryTerminal,
+  ) => {
+    emitAgentEvent({
+      runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration(),
+      stream: "lifecycle",
+      data: {
+        ...terminal.metadata,
+        phase,
+        startedAt: params.startedAt,
+        endedAt: Date.now(),
+        aborted: terminal.metadata.aborted ?? false,
+        stopReason: terminal.outcome.stopReason,
+        ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      },
+    });
+  };
 
   return {
     emitFinishing(terminal: EmbeddedAgentRunEntryTerminal) {
@@ -96,19 +115,7 @@ export function createAgentCommandLifecycle(params: {
       }
       lifecycleFinishingEmitted = true;
       params.state.lifecycleFinishing = true;
-      emitAgentEvent({
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration(),
-        stream: "lifecycle",
-        data: {
-          phase: "finishing",
-          startedAt: params.startedAt,
-          endedAt: Date.now(),
-          aborted: terminal.metadata.aborted ?? false,
-          stopReason: terminal.outcome.stopReason,
-          ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
-        },
-      });
+      emitTerminalPhase("finishing", terminal);
     },
     emitEnd(terminal: EmbeddedAgentRunEntryTerminal) {
       if (params.state.lifecycleEnded) {
@@ -120,19 +127,7 @@ export function createAgentCommandLifecycle(params: {
       if (logLevel) {
         log[logLevel](`[agent] run ${params.runId} ended with stopReason=${stopReason}`);
       }
-      emitAgentEvent({
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration(),
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: params.startedAt,
-          endedAt: Date.now(),
-          aborted: terminal.metadata.aborted ?? false,
-          stopReason,
-          ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
-        },
-      });
+      emitTerminalPhase("end", terminal);
     },
     resolveResultError,
     emitResultError(
