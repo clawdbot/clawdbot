@@ -143,7 +143,7 @@ function formatHookSource(hook: HookStatusEntry): string {
 
 function formatHookMissingSummary(hook: HookStatusEntry): string {
   const missing: string[] = [];
-  if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
+  if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
     missing.push(hook.blockedReason);
   }
   if (hook.missing.bins.length > 0) {

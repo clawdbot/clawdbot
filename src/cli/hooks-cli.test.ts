@@ -128,19 +128,6 @@ describe("hooks cli formatting", () => {
     expect(output).not.toContain("Internal Hooks");
   });
 
-  it("labels hooks status output", () => {
-    const output = formatHooksCheck(report, {});
-    expect(output).toContain("Hooks Status");
-  });
-
-  it("classifies eventless hooks as not ready in human check output", () => {
-    const output = formatHooksCheck(createEventlessHookReport(), {});
-
-    expect(output).toContain("Ready: 0");
-    expect(output).toContain("Not ready: 1");
-    expect(output).toContain("session-memory - no events defined");
-  });
-
   it("shows eventless hooks as blocked by their event declaration in list output", () => {
     const output = formatHooksList(createEventlessHookReport(), {});
 
@@ -156,6 +143,30 @@ describe("hooks cli formatting", () => {
     expect(output).not.toContain("missing requirements");
   });
 
+  it.each([
+    ["disabled in config", "disabled in config"],
+    ["workspace hook (disabled by default)", "workspace hook"],
+  ] as const)(
+    "does not report disabled hook policy as a missing requirement: %s",
+    (blockedReason, displayedPolicyReason) => {
+      const disabledReport: HookStatusReport = {
+        ...report,
+        hooks: [
+          {
+            ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+            enabledByConfig: false,
+            loadable: false,
+            blockedReason,
+          },
+        ],
+      };
+      const output = formatHooksList(disabledReport, { verbose: true });
+
+      expect(output).toContain("disabled");
+      expect(output).not.toContain(displayedPolicyReason);
+    },
+  );
+
   it("shows eventless hooks as blocked by their event declaration in info output", () => {
     const output = formatHookInfo(createEventlessHookReport(), "session-memory", {});
 
@@ -169,6 +180,19 @@ describe("hooks cli formatting", () => {
 
     expect(output).toContain("Missing requirements");
     expect(output).toContain("DEMO_HOOK_TOKEN");
+  });
+
+  it("labels hooks status output", () => {
+    const output = formatHooksCheck(report, {});
+    expect(output).toContain("Hooks Status");
+  });
+
+  it("classifies eventless hooks as not ready in human check output", () => {
+    const output = formatHooksCheck(createEventlessHookReport(), {});
+
+    expect(output).toContain("Ready: 0");
+    expect(output).toContain("Not ready: 1");
+    expect(output).toContain("session-memory - no events defined");
   });
 
   it("classifies eventless hooks as not eligible in JSON check output", () => {
