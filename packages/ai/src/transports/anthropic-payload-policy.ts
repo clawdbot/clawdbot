@@ -56,6 +56,8 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   return (
     hostname === "api.anthropic.com" ||
     hostname === "aiplatform.googleapis.com" ||
+    hostname === "aiplatform.us.rep.googleapis.com" ||
+    hostname === "aiplatform.eu.rep.googleapis.com" ||
     hostname.endsWith("-aiplatform.googleapis.com")
   );
 }
