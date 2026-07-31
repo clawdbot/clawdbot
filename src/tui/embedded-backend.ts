@@ -161,18 +161,6 @@ type LocalPendingMessage = {
   message: string;
 };
 
-type LocalRunTerminalMetadata = {
-  aborted?: unknown;
-  status?: unknown;
-  stopReason?: unknown;
-  error?: unknown;
-  livenessState?: unknown;
-  timeoutPhase?: unknown;
-  providerStarted?: unknown;
-  yielded?: unknown;
-  toolErrorSummary?: unknown;
-};
-
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
   error: (..._args: unknown[]) => undefined,
@@ -273,6 +261,10 @@ function payloadText(parts: unknown): string {
     .filter(Boolean)
     .join("\n\n")
     .trim();
+}
+
+function assistantChatMessage(text: string) {
+  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
 }
 
 function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
@@ -1186,38 +1178,29 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private isSameRunScope(run: LocalRunState, params: { sessionKey: string; agentId?: string }) {
-    if (run.sessionKey !== params.sessionKey) {
-      return false;
-    }
-    if (params.sessionKey !== "global") {
-      return true;
-    }
-    return run.agentId === params.agentId;
+    return (
+      run.sessionKey === params.sessionKey &&
+      (params.sessionKey !== "global" || run.agentId === params.agentId)
+    );
   }
 
   private isAbortableRun(runId: string, run: LocalRunState): boolean {
     return !run.lifecycleEnded || this.runPromises.has(runId);
   }
 
-  private nextSeq() {
-    this.seq += 1;
-    return this.seq;
-  }
-
   private emit(event: string, payload: unknown) {
     this.onEvent?.({
       event,
       payload,
-      seq: this.nextSeq(),
+      seq: ++this.seq,
     });
   }
 
   private clearPendingLifecycleError(runId: string) {
     const pending = this.pendingLifecycleErrors.get(runId);
-    if (!pending) {
-      return;
+    if (pending) {
+      clearTimeout(pending);
     }
-    clearTimeout(pending);
     this.pendingLifecycleErrors.delete(runId);
   }
 
@@ -1259,56 +1242,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: run.agentId,
       state: "delta",
       ...deltaPayload,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: Date.now(),
-      },
-    });
-  }
-
-  private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
-    this.clearPendingLifecycleError(runId);
-    run.markQueuedRunReady();
-    const alreadyFinal = run.finalSent;
-    run.finishing = false;
-    run.lifecycleEnded = true;
-    run.finalSent = true;
-    if (alreadyFinal) {
-      return;
-    }
-    run.registered = true;
-    run.lastBroadcastText = undefined;
-    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
-    const projected = projectLiveAssistantBufferedText(normalizedText, {
-      suppressLeadFragments: false,
-    });
-    const text = projected.text.trim();
-    const shouldIncludeMessage = Boolean(text) && !projected.suppress;
-    this.emit("chat", {
-      runId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
-      state: "final",
-      ...(stopReason ? { stopReason } : {}),
-      ...(run.lifecycleYielded ? { yielded: true } : {}),
-      ...(shouldIncludeMessage
-        ? {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: Date.now(),
-            },
-          }
-        : {}),
+      message: assistantChatMessage(text),
     });
   }
 
   private emitChatTerminal(
     runId: string,
     run: LocalRunState,
-    state: "aborted" | "error",
-    errorMessage?: string,
+    state: "final" | "aborted" | "error",
+    detail?: string,
   ) {
     this.clearPendingLifecycleError(runId);
     run.markQueuedRunReady();
@@ -1321,52 +1263,44 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
-    const diagnostic = state === "aborted" ? (errorMessage ?? run.toolErrorSummary) : errorMessage;
+    const projected = projectLiveAssistantBufferedText(
+      normalizeLiveAssistantBufferedText(run.buffer).trim(),
+      { suppressLeadFragments: false },
+    );
+    const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       agentId: run.agentId,
       state,
-      ...(diagnostic ? { errorMessage: formatTuiErrorMessage(diagnostic) } : {}),
+      ...(state === "final" && detail ? { stopReason: detail } : {}),
+      ...(state === "final" && run.lifecycleYielded ? { yielded: true } : {}),
+      ...(text ? { message: assistantChatMessage(text) } : {}),
+      ...(state !== "final" && (detail || (state === "aborted" && run.toolErrorSummary))
+        ? { errorMessage: formatTuiErrorMessage(detail ?? run.toolErrorSummary) }
+        : {}),
     });
   }
 
   private projectTerminalOutcome(
     runId: string,
     run: LocalRunState,
-    metadata: LocalRunTerminalMetadata,
-    options: { phase?: string; errorMessage?: string; deferError?: boolean } = {},
+    metadata: Partial<Parameters<typeof buildAgentRunTerminalOutcome>[0]> & {
+      aborted?: unknown;
+      toolErrorSummary?: unknown;
+    },
+    options: { phase?: string; visibleText?: string; deferError?: boolean } = {},
   ): boolean {
     const aborted = metadata.aborted === true || run.controller.signal.aborted;
-    const stopReason =
-      typeof metadata.stopReason === "string"
-        ? metadata.stopReason
-        : aborted
-          ? "aborted"
-          : undefined;
-    const rawError =
-      typeof metadata.error === "string"
-        ? metadata.error
-        : metadata.error &&
-            typeof metadata.error === "object" &&
-            "message" in metadata.error &&
-            typeof metadata.error.message === "string"
-          ? metadata.error.message
-          : undefined;
-    const status =
-      stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
-        ? "timeout"
-        : aborted ||
-            metadata.error ||
-            options.phase === "error" ||
-            stopReason === "error" ||
-            stopReason === "rpc" ||
-            stopReason === "restart"
-          ? "error"
-          : "ok";
+    const stopReason = metadata.stopReason ?? (aborted ? "aborted" : undefined);
     const outcome = buildAgentRunTerminalOutcome({
-      status,
-      error: options.errorMessage ?? rawError,
+      status:
+        stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
+          ? "timeout"
+          : aborted || metadata.error || options.phase === "error" || stopReason === "error"
+            ? "error"
+            : "ok",
+      error: typeof metadata.error === "string" ? metadata.error : undefined,
       stopReason,
       livenessState: metadata.livenessState,
       timeoutPhase: metadata.timeoutPhase,
@@ -1375,23 +1309,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (outcome.reason === "completed") {
       return false;
     }
-    if (outcome.reason === "aborted" || outcome.reason === "cancelled") {
-      this.emitChatTerminal(
-        runId,
-        run,
-        "aborted",
-        readToolValidationErrorSummary(metadata.toolErrorSummary),
-      );
-      return true;
-    }
-    const errorMessage =
-      options.errorMessage ??
-      outcome.error ??
-      (outcome.reason === "hard_timeout" ? "The provider timed out. Please try again." : undefined);
-    if (options.deferError) {
-      this.scheduleChatError(runId, run, errorMessage);
+    const state =
+      outcome.reason === "aborted" || outcome.reason === "cancelled" ? "aborted" : "error";
+    const diagnostic =
+      state === "aborted"
+        ? readToolValidationErrorSummary(metadata.toolErrorSummary)
+        : options.visibleText ||
+          outcome.error ||
+          (outcome.reason === "hard_timeout"
+            ? "The provider timed out. Please try again."
+            : undefined);
+    if (options.deferError && state === "error") {
+      this.scheduleChatError(runId, run, diagnostic);
     } else {
-      this.emitChatTerminal(runId, run, "error", errorMessage);
+      this.emitChatTerminal(runId, run, state, diagnostic);
     }
     return true;
   }
@@ -1408,11 +1339,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: run.agentId,
       state: "delta",
       deltaText: "",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        timestamp: Date.now(),
-      },
+      message: assistantChatMessage(""),
     });
   }
 
@@ -1474,29 +1401,26 @@ export class EmbeddedTuiBackend implements TuiBackend {
         typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
       return;
     }
-    if (phase === "end") {
-      run.finishing = false;
-      if (
-        this.projectTerminalOutcome(evt.runId, run, evt.data, {
-          phase,
-          deferError: true,
-        })
-      ) {
-        return;
-      }
-      run.lifecycleEnded = true;
-      run.markQueuedRunReady();
-      run.lifecycleStopReason =
-        typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-      run.lifecycleYielded = isAgentLifecycleYieldedWaiting(evt.data);
+    if (phase !== "end" && phase !== "error") {
       return;
     }
-
+    run.finishing = false;
     if (phase === "error") {
-      run.finishing = false;
       run.buffer = "";
-      this.projectTerminalOutcome(evt.runId, run, evt.data, { phase, deferError: true });
     }
+    if (
+      this.projectTerminalOutcome(evt.runId, run, evt.data, {
+        phase,
+        deferError: phase === "error",
+      })
+    ) {
+      return;
+    }
+    run.lifecycleEnded = true;
+    run.markQueuedRunReady();
+    run.lifecycleStopReason =
+      typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+    run.lifecycleYielded = isAgentLifecycleYieldedWaiting(evt.data);
   }
 
   private async runTurn(params: {
@@ -1575,7 +1499,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           text: result.text,
           ...(result.isError ? { isError: true } : {}),
         });
-        this.emitChatFinal(params.runId, run);
+        this.emitChatTerminal(params.runId, run, "final");
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
@@ -1608,19 +1532,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (!run) {
         return;
       }
-      const metadata = result?.meta;
-      const failed =
-        metadata?.error ||
-        metadata?.aborted ||
-        metadata?.timeoutPhase ||
-        metadata?.stopReason === "timeout" ||
-        metadata?.stopReason === "error" ||
-        metadata?.livenessState === "blocked" ||
-        metadata?.livenessState === "abandoned";
-      const visibleFailureText = failed ? payloadText(result?.payloads) : undefined;
       if (
-        this.projectTerminalOutcome(params.runId, run, metadata ?? {}, {
-          ...(visibleFailureText ? { errorMessage: visibleFailureText } : {}),
+        this.projectTerminalOutcome(params.runId, run, result?.meta ?? {}, {
+          visibleText: payloadText(result?.payloads),
         })
       ) {
         return;
@@ -1639,7 +1553,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             text,
           });
         }
-        this.emitChatFinal(params.runId, run);
+        this.emitChatTerminal(params.runId, run, "final");
         return;
       }
 
@@ -1652,7 +1566,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         const stopReason =
           run.lifecycleStopReason ??
           (typeof result?.meta?.stopReason === "string" ? result.meta.stopReason : undefined);
-        this.emitChatFinal(params.runId, run, stopReason);
+        this.emitChatTerminal(params.runId, run, "final", stopReason);
       }
     } catch (error) {
       const run = this.runs.get(params.runId);

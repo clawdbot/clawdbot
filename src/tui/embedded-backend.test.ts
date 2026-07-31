@@ -1971,13 +1971,13 @@ describe("EmbeddedTuiBackend", () => {
         livenessState: "blocked",
       },
       meta: { aborted: true, stopReason: "aborted", livenessState: "blocked" },
-      text: "No provider completed the response. Please try again.",
+      text: "Agent run blocked before producing a usable result.",
     },
     {
       label: "an abandoned turn without cancellation",
       lifecycle: { phase: "end", livenessState: "abandoned" },
       meta: { livenessState: "abandoned" },
-      text: "The agent stopped before completing its response.",
+      text: "Agent run ended before producing a complete result.",
     },
     {
       label: "a structured agent failure",
@@ -2000,9 +2000,28 @@ describe("EmbeddedTuiBackend", () => {
       message: "show the actual terminal outcome",
       runId: "canonical-terminal",
     });
+    const queuedRunReady = (
+      backend as unknown as { runs: Map<string, { queuedRunReady: Promise<void> }> }
+    ).runs.get("canonical-terminal")?.queuedRunReady;
+    let queueReady = false;
+    void queuedRunReady?.then(() => {
+      queueReady = true;
+    });
 
     if (lifecycle) {
       registeredListener?.({ runId: "canonical-terminal", stream: "lifecycle", data: lifecycle });
+      await flushMicrotasks();
+      expect(queueReady).toBe(true);
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "canonical-terminal",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          state: "error",
+          errorMessage: text,
+        },
+      });
     }
     pending.resolve({ payloads: [{ text, mediaUrl: null }], meta });
     await flushMicrotasks();
@@ -2017,6 +2036,12 @@ describe("EmbeddedTuiBackend", () => {
         errorMessage: text,
       },
     });
+    expect(
+      events.filter(
+        ({ event, payload }) =>
+          event === "chat" && (payload as { state?: string }).state === "error",
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves a yielded parent turn in the embedded session projection", async () => {
