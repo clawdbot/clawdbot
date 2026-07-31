@@ -560,6 +560,7 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
   explicitBotMention: boolean;
   eventScope?: SlackEventScope;
+  onVisibleDrop?: () => void;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
@@ -613,14 +614,13 @@ async function authorizeSlackInboundMessage(params: {
         }
       }
       try {
-        // The message handler collapses message/app_mention twins before preparation,
-        // so this boundary emits one notice per logical Slack mention.
         await (params.eventScope?.client ?? ctx.app.client).chat.postEphemeral({
           token: ctx.botToken,
           channel: message.channel,
           user: message.user,
           text: `${subject} can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <${SLACK_CHANNEL_ACCESS_DOCS_URL}|Learn how to configure Slack channel access.>`,
         });
+        params.onVisibleDrop?.();
       } catch (error) {
         ctx.runtime.error?.(
           `slack allowlist denial notice failed for channel ${message.channel}: ${formatSlackError(error)}`,
@@ -687,6 +687,8 @@ export async function prepareSlackMessage(params: {
     eventScope?: SlackEventScope;
     /** Handler-owned race check for suppressing a duplicate dropped-history record. */
     shouldRecordDroppedHistory?: () => boolean;
+    /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
+    onVisibleDrop?: () => void;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
@@ -725,6 +727,7 @@ export async function prepareSlackMessage(params: {
     conversation,
     explicitBotMention,
     eventScope: opts.eventScope,
+    onVisibleDrop: opts.onVisibleDrop,
   });
   if (!authorization) {
     return null;
