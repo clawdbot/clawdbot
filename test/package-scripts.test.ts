@@ -263,4 +263,10 @@ describe("package scripts", () => {
       "src/infra/exec-allowlist-pattern.test.ts",
     );
   });
+
+  it("runs Windows-only safe removal coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/fs-safe-remove.test.ts",
+    );
+  });
 });

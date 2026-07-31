@@ -478,22 +478,26 @@ describe("Slack live QA runtime helpers", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "lane",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-false",
-        commentaryTs: undefined,
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-omitted",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
         commentaryTs: "1.500000",
+        commentaryStyle: "standalone",
         toolProgress: "standalone",
       },
     ] as const;
@@ -519,7 +523,8 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text: `💬 ${commentaryMarker}`,
+                text:
+                  testCase.commentaryStyle === "lane" ? `💬 ${commentaryMarker}` : commentaryMarker,
                 ts: testCase.commentaryTs,
               },
             ]
@@ -530,7 +535,7 @@ describe("Slack live QA runtime helpers", () => {
               {
                 channelId: "C123456789",
                 text: `🛠️ Exec ${toolMarker}`,
-                ts: testCase.toolProgress === "draft" ? "2.000000" : "1.750000",
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -576,28 +581,31 @@ describe("Slack live QA runtime helpers", () => {
           messages: mutate(completeMarkers).map((text) => ({
             channelId: "C123456789",
             text,
-            ts: "2.000000",
+            ts: text.includes(completeMarkers[2]) ? "2.000000" : "1.500000",
           })),
         });
     };
 
     expect(
-      verify("slack-progress-commentary-false", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("commentary to stay out");
+      verify("slack-progress-commentary-false", ([commentary, , final]) => [
+        `💬 ${commentary}`,
+        final,
+      ]),
+    ).toThrow("status headline");
     expect(
       verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
-        commentary,
+        `💬 ${commentary}`,
         tool,
         final,
       ]),
     ).toThrow("tool progress to stay out");
     expect(
       verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("tool progress on the progress draft");
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
-        ([commentary, , final]) => [`${commentary} ${final}`],
+        ([commentary, , final]) => [`💬 ${commentary} ${final}`],
         "echo",
       ),
     ).toThrow("only the final marker");

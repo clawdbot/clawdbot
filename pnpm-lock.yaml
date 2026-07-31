@@ -2293,6 +2293,9 @@ importers:
       libphonenumber-js:
         specifier: 1.13.9
         version: 1.13.9
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/plugin-package-contract: {}
 

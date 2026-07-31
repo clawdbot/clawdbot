@@ -29,6 +29,7 @@ type QaRunnerAdapterOptions = {
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
   transportPolicy?: QaRunnerTransportPolicy;
@@ -38,6 +39,46 @@ type QaRunnerMessageRecorder = {
   addInboundMessage: (input: QaBusInboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   addOutboundMessage: (input: QaBusOutboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   editMessage: (input: QaBusEditMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+};
+
+type QaRunnerCredentialLease<TPayload> = {
+  credentialId?: string;
+  heartbeat(): Promise<void>;
+  heartbeatIntervalMs: number;
+  kind: string;
+  leaseToken?: string;
+  leaseTtlMs: number;
+  ownerId?: string;
+  payload: TPayload;
+  release(): Promise<void>;
+  role?: "ci" | "maintainer";
+  source: "convex" | "env";
+};
+
+type QaRunnerCredentialLeaseOptions<TPayload> = {
+  kind: string;
+  parsePayload: (payload: unknown) => TPayload;
+  resolveEnvPayload: () => TPayload;
+  role?: string;
+  source?: string;
+};
+
+type QaRunnerCredentialHeartbeat = {
+  getFailure(): Error | null;
+  stop(): Promise<void>;
+  throwIfFailed(): void;
+};
+
+type QaRunnerCredentialHost = {
+  acquire<TPayload>(
+    options: QaRunnerCredentialLeaseOptions<TPayload>,
+  ): Promise<QaRunnerCredentialLease<TPayload>>;
+  startHeartbeat(
+    lease: Pick<
+      QaRunnerCredentialLease<unknown>,
+      "heartbeat" | "heartbeatIntervalMs" | "kind" | "source"
+    >,
+  ): QaRunnerCredentialHeartbeat;
 };
 
 type QaRunnerTransportFlowPreparationInput = {
@@ -147,6 +188,7 @@ type QaRunnerTransportFactory = {
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
     channelId: string;
+    credentials: QaRunnerCredentialHost;
     driver: string;
     messages: QaRunnerMessageRecorder;
     outputDir: string;

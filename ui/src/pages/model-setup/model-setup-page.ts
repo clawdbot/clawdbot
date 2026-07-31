@@ -302,6 +302,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
+        ...(result.prepareOptions ?? []),
         ...(result.recommendedInstalls ?? []),
       ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
@@ -530,10 +531,18 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
       };
     }
-    if (prepareOption?.activateAfterPrepare) {
+    if (prepareOption) {
+      // Provider setup can persist a model before the live activation check.
+      // Keep that unverified config out of the ready surface until activation succeeds.
+      this.pageState = {
+        phase: "ready",
+        result: { ...result, configuredModel: undefined, setupComplete: false },
+      };
       const candidate = findPreparedModelCandidate(result, prepareOption.id);
       if (!candidate) {
-        this.wizard.fail(t("modelSetup.prepare.llamaCppNotReady"));
+        this.wizard.fail(
+          t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
+        );
         return;
       }
       this.wizard.close();
