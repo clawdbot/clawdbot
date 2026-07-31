@@ -10,13 +10,24 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
+import {
+  resolveCodeModeContinuationInstruction,
+  resolveCodeModeMutationVerificationState,
+  resolveCodeModeContinuationToolPolicy,
+  resolveCodeModeTargetlessSideEffectEvidence,
+  shouldLatchCodeModeReadOnlyForRun,
+} from "./incomplete-turn.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
+import {
+  type EmbeddedRunToolCapableContinuation,
+  resolveSettledTurnFinalizationRequest,
+} from "./terminal-resolution.js";
+import type { EmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
@@ -53,6 +64,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     >[0]["executionContract"];
     hasTerminalToolPresentation: boolean;
     noteLaneTaskProgress: () => void;
+    retryState: EmbeddedRunTerminalRetryState;
   };
 }) {
   const initial = input.initial;
@@ -69,6 +81,50 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     lastTurnTotal,
     terminalState: initial.terminalState,
   });
+  const settledAttemptToolSummary = prepared.attemptToolSummary;
+  const codeModeMutationVerification = resolveCodeModeMutationVerificationState(
+    initial.attempt,
+    input.finalization.retryState.codeModeMutationVerification,
+    input.terminalBase.runParams.cwd ?? input.terminalBase.runParams.workspaceDir,
+  );
+  input.finalization.retryState.codeModeMutationVerification = codeModeMutationVerification;
+  const codeModeMutationVerificationRequired =
+    codeModeMutationVerification.pendingTargets.length > 0;
+  const codeModeTargetlessSideEffectEvidence = resolveCodeModeTargetlessSideEffectEvidence(
+    initial.attempt,
+  );
+  if (
+    shouldLatchCodeModeReadOnlyForRun({
+      mutationVerificationRequired: codeModeMutationVerificationRequired,
+      targetlessSideEffectEvidence: codeModeTargetlessSideEffectEvidence,
+    })
+  ) {
+    input.finalization.retryState.forceReadOnlyToolsForRun = true;
+  }
+  if (!codeModeMutationVerificationRequired) {
+    // Dispatch and failover paths cannot release this guard. Only successful
+    // target reconciliation proves that mutation tools are safe to restore.
+    input.finalization.retryState.forceReadOnlyToolsUntilVerification = false;
+  }
+  // Known targets need one read-only verification attempt at a time. Once
+  // verified, later continuations may resume unfinished mutations. Targetless
+  // side effects remain read-only for the rest of the run.
+  const attemptContinuationToolPolicy = codeModeMutationVerificationRequired
+    ? "read-only"
+    : codeModeTargetlessSideEffectEvidence === false
+      ? "normal"
+      : resolveCodeModeContinuationToolPolicy(initial.attempt);
+  const codeModeContinuationToolPolicy =
+    attemptContinuationToolPolicy && input.finalization.retryState.forceReadOnlyToolsForRun
+      ? "read-only"
+      : attemptContinuationToolPolicy;
+  const settledTurnFinalizationAvailable =
+    typeof input.finalization.harness.finalizeSettledTurn === "function";
+  const codeModeCompletionContinuationExhausted =
+    !codeModeMutationVerificationRequired &&
+    input.finalization.retryState.codeModeCompletionContinuationAttempts >= 1;
+  const useIsolatedFinalization =
+    codeModeCompletionContinuationExhausted && settledTurnFinalizationAvailable;
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.terminalBase.runParams,
     attempt,
@@ -80,8 +136,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
     terminalState: initial.terminalState,
-    settledTurnFinalizationAvailable:
-      typeof input.finalization.harness.finalizeSettledTurn === "function",
+    settledTurnFinalizationAvailable,
+    toolCapableContinuationAvailable:
+      codeModeContinuationToolPolicy !== null && !useIsolatedFinalization,
+    requireCodeModeMutationVerification: codeModeMutationVerificationRequired,
   });
   if (!prompt) {
     return {
@@ -91,6 +149,37 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastTurnTotal,
       finalizationAttempted: false,
       finalizationSucceeded: false,
+      toolCapableContinuation: null,
+    };
+  }
+  if (codeModeContinuationToolPolicy && !useIsolatedFinalization) {
+    // Keep unfinished Code Mode work on the ordinary continuation path.
+    // Mutating turns expose only host-enforced read-only tools.
+    const readOnlyToolsScope: "run" | "verification" | null = input.finalization.retryState
+      .forceReadOnlyToolsForRun
+      ? "run"
+      : codeModeMutationVerificationRequired
+        ? "verification"
+        : codeModeContinuationToolPolicy === "read-only"
+          ? "run"
+          : null;
+    const toolCapableContinuation: EmbeddedRunToolCapableContinuation = {
+      kind: codeModeMutationVerificationRequired ? "verification" : "completion",
+      instruction: resolveCodeModeContinuationInstruction({
+        mutationVerificationRequired: codeModeMutationVerificationRequired,
+        targetlessSideEffectEvidence: codeModeTargetlessSideEffectEvidence,
+        toolPolicy: codeModeContinuationToolPolicy,
+      }),
+      readOnlyToolsScope,
+    };
+    return {
+      ...initial,
+      prepared,
+      lastRunPromptUsage,
+      lastTurnTotal,
+      finalizationAttempted: false,
+      finalizationSucceeded: false,
+      toolCapableContinuation,
     };
   }
 
@@ -120,7 +209,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       }),
       signalOwnedInterruption: false,
     };
-    prepared = prepareEmbeddedRunTerminal({
+    const finalizedPrepared = prepareEmbeddedRunTerminal({
       ...input.terminalBase,
       attempt,
       currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
@@ -130,6 +219,16 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastTurnTotal,
       terminalState,
     });
+    const finalizerToolSummary = finalizedPrepared.attemptToolSummary;
+    prepared = {
+      ...finalizedPrepared,
+      // The finalizer intentionally runs without tools, but the completed
+      // outer calls still belong to the same run's execution trace.
+      attemptToolSummary:
+        finalizerToolSummary && finalizerToolSummary.calls > 0
+          ? finalizerToolSummary
+          : settledAttemptToolSummary,
+    };
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
@@ -143,6 +242,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastTurnTotal,
       finalizationAttempted: true,
       finalizationSucceeded: true,
+      toolCapableContinuation: null,
     };
   } catch (error) {
     log.warn(
@@ -156,6 +256,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastTurnTotal,
       finalizationAttempted: true,
       finalizationSucceeded: false,
+      toolCapableContinuation: null,
     };
   }
 }

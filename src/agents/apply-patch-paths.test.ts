@@ -6,7 +6,7 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import { extractApplyPatchTargetPaths, extractApplyPatchTargets } from "./apply-patch-paths.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
@@ -62,6 +62,10 @@ describe("extractApplyPatchTargetPaths", () => {
       cwdPath("old/path.ts"),
       cwdPath("new/path.ts"),
     ]);
+    expect(extractApplyPatchTargets(patch)).toEqual([
+      { path: cwdPath("old/path.ts"), expected: "absent" },
+      { path: cwdPath("new/path.ts"), expected: "present" },
+    ]);
   });
 
   it("tolerates blank lines between Update File and Move to", () => {
@@ -91,6 +95,19 @@ describe("extractApplyPatchTargetPaths", () => {
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("same.ts")]);
+  });
+
+  it("keeps the final expected state for repeated paths", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: same.ts",
+      "*** Add File: same.ts",
+      "+replacement",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargets(patch)).toEqual([
+      { path: cwdPath("same.ts"), expected: "present" },
+    ]);
   });
 
   it("normalizes derived paths before de-duplicating them", () => {

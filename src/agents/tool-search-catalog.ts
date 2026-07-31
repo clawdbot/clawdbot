@@ -134,6 +134,7 @@ function restoreToolSearchCatalog(params: {
     searchCount: 0,
     describeCount: 0,
     callCount: 0,
+    callSequence: [],
   };
   params.catalogRef.current = next;
   catalogFingerprints.set(next, params.fingerprint);
@@ -287,6 +288,11 @@ function registerToolSearchCatalog(params: {
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
+    callSequence: prior?.callSequence ? [...prior.callSequence] : [],
+    callFailureCount: prior?.callFailureCount ?? 0,
+    callSideEffectFreeSequence: prior?.callSideEffectFreeSequence
+      ? [...prior.callSideEffectFreeSequence]
+      : [],
   };
   catalogFingerprints.set(next, catalogEntriesFingerprint(next.entries));
   params.catalogRef.current = next;

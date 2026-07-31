@@ -187,11 +187,15 @@ describe("FS tools with workspaceOnly=false", () => {
   it("still throws for ordinary missing read paths", async () => {
     const readTool = requireTool(toolsFor(undefined), "read");
 
-    await expect(
-      readTool.execute("test-call-missing-ordinary-file", {
+    const error = await readTool
+      .execute("test-call-missing-ordinary-file", {
         path: "notes/missing.md",
-      }),
-    ).rejects.toThrow(/ENOENT|no such file|not found/i);
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code: "ENOENT" });
+    expect((error as NodeJS.ErrnoException).path).toMatch(/notes[/\\]missing\.md$/u);
   });
 
   it("should allow write outside workspace when workspaceOnly is unset", async () => {

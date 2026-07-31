@@ -35,6 +35,8 @@ type ReasoningStreamPayload = Pick<
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Canonical execution cwd used to bind file-observation evidence. */
+  cwd?: string;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */
@@ -132,6 +134,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact visible names backed by marked Code Mode control tool instances. */
+  codeModeControlToolNames?: ReadonlySet<string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
   /**

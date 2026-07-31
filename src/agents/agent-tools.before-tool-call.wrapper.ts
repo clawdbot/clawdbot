@@ -35,7 +35,9 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
+  codeModeControlToolCallIds,
   preExecutionBlockedToolCallIds,
+  recordCodeModeControlToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -57,7 +59,9 @@ import {
 } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
+  copyCodeModeControlToolIdentity,
   getCodeModeExecBeforeHookMetadata,
+  isCodeModeControlTool,
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
@@ -216,12 +220,22 @@ export function recordStructuredReplayTrustForToolCall(
     return;
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
+  if (isCodeModeControlTool(tool)) {
+    recordCodeModeControlToolCall(toolCallId, runId);
+  }
   while (structuredReplaySafeToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
     const oldest = structuredReplaySafeToolCallIds.values().next().value;
     if (!oldest) {
       break;
     }
     structuredReplaySafeToolCallIds.delete(oldest);
+  }
+  while (codeModeControlToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = codeModeControlToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    codeModeControlToolCallIds.delete(oldest);
   }
 }
 
@@ -592,6 +606,7 @@ export function wrapToolWithBeforeToolCallHook(
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  copyCodeModeControlToolIdentity(tool, wrappedTool);
   copyToolTerminalPresentation(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
@@ -637,6 +652,7 @@ export function rewrapToolWithBeforeToolCallHook(
   delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  copyCodeModeControlToolIdentity(tool, rewrapSource);
   copyToolTerminalPresentation(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }

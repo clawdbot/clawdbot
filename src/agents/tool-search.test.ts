@@ -944,6 +944,7 @@ describe("Tool Search", () => {
       "has an invalid outputSchema",
     );
     expect(execute).not.toHaveBeenCalled();
+    expect(runtime.telemetry()).toMatchObject({ failures: 1 });
   });
 
   it("recompiles validation when the same catalog id changes its output schema", async () => {
@@ -1040,11 +1041,13 @@ describe("Tool Search", () => {
       searchCount?: number;
       describeCount?: number;
       callCount?: number;
+      callSequence?: string[];
     };
     expect(telemetry.catalogSize).toBe(2);
     expect(telemetry.searchCount).toBe(1);
     expect(telemetry.describeCount).toBe(1);
     expect(telemetry.callCount).toBe(1);
+    expect(telemetry.callSequence).toEqual(["fake_create_ticket"]);
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {

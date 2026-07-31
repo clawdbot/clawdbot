@@ -77,8 +77,12 @@ function createFixture() {
       bundleTools: {},
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { toolSearchTargetTranscriptProjections: new Map() },
+      toolBase: {
+        codeModeControlsEnabledForRun: true,
+        toolSearchTargetTranscriptProjections: new Map(),
+      },
       toolCatalog: {
+        effectiveTools: [{ name: "exec" }, { name: "wait" }],
         toolSearchRunPlan: {
           capabilityToolNames: new Set(["read"]),
           liveAllowedToolNames: new Set(["read"]),
@@ -203,6 +207,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       yieldDetected: true,
     });
     expect(streamInput.stream.isReplaySafeTool(fixture.replaySafeTool)).toBe(true);
+    expect(streamInput.stream.codeModeControlToolNames).toEqual(new Set(["exec", "wait"]));
   });
 
   it("does not enter settlement when stream preparation fails", async () => {
@@ -214,5 +219,15 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     );
 
     expect(mocks.runSettledPhase).not.toHaveBeenCalled();
+  });
+
+  it("does not trust an exec-shaped tool when Code Mode controls are disabled", async () => {
+    const fixture = createFixture();
+    fixture.input.prepared.toolBase.codeModeControlsEnabledForRun = false;
+
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+
+    const streamInput = mocks.prepareStreamRuntime.mock.calls[0]?.[0];
+    expect(streamInput.stream.codeModeControlToolNames).toEqual(new Set());
   });
 });

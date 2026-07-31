@@ -55,6 +55,9 @@ export const OLLAMA_INCOMPLETE_STREAM_ERROR = "Ollama API stream ended without a
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OLLAMA_STRUCTURED_TOOL_FALLBACK_MAX_TOOLS = 4;
+const OLLAMA_QWEN_TOOL_PARSER_ERROR_RE =
+  /^(?:XML syntax error on line \d+:|expected element type <function> but have <parameter>)/iu;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -1156,6 +1159,143 @@ function resolveOllamaRequestTimeoutMs(
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
+function isOllamaQwenStructuredToolFallbackCandidate(params: {
+  errorText: string;
+  modelId: string;
+  status: number;
+  toolCount: number;
+}): boolean {
+  if (
+    params.status !== 500 ||
+    params.toolCount < 1 ||
+    params.toolCount > OLLAMA_STRUCTURED_TOOL_FALLBACK_MAX_TOOLS ||
+    !/(?:^|[/_.:-])qwen(?=\d|[/_.:-]|$)/iu.test(params.modelId)
+  ) {
+    return false;
+  }
+  try {
+    const payload = parseJsonObjectPreservingUnsafeIntegers(params.errorText);
+    const message = readStringValue(payload?.error);
+    return message ? OLLAMA_QWEN_TOOL_PARSER_ERROR_RE.test(message) : false;
+  } catch {
+    return false;
+  }
+}
+
+function readOllamaToolsFromRequest(request: unknown): OllamaTool[] {
+  if (!isRecord(request) || !Array.isArray(request.tools)) {
+    return [];
+  }
+  return request.tools.filter((tool): tool is OllamaTool => {
+    if (!isRecord(tool) || tool.type !== "function" || !isRecord(tool.function)) {
+      return false;
+    }
+    return (
+      typeof tool.function.name === "string" &&
+      typeof tool.function.description === "string" &&
+      isRecord(tool.function.parameters)
+    );
+  });
+}
+
+function buildOllamaStructuredToolFallbackRequest(
+  request: unknown,
+  tools: OllamaTool[],
+): OllamaChatRequest | undefined {
+  if (!isRecord(request) || !Array.isArray(request.messages)) {
+    return undefined;
+  }
+  const messages = request.messages.map((message) => {
+    if (
+      !isRecord(message) ||
+      typeof message.role !== "string" ||
+      typeof message.content !== "string"
+    ) {
+      return undefined;
+    }
+    return { ...message } as unknown as OllamaChatMessage;
+  });
+  if (messages.some((message) => message === undefined)) {
+    return undefined;
+  }
+  const catalog = tools
+    .map((tool) =>
+      JSON.stringify({
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters,
+      }),
+    )
+    .join("\n");
+  const instruction = [
+    "Ollama's native tool parser rejected the previous response.",
+    "For this retry, return exactly one JSON object matching the response schema.",
+    'Set "name" to one available tool and put its complete arguments object in "arguments".',
+    "Emit no XML, prose, or code fence.",
+    "Available tools:",
+    catalog,
+  ].join("\n");
+  const fallbackMessages = messages as OllamaChatMessage[];
+  const systemIndex = fallbackMessages.findIndex((message) => message.role === "system");
+  if (systemIndex >= 0) {
+    const systemMessage = fallbackMessages[systemIndex];
+    if (systemMessage) {
+      fallbackMessages[systemIndex] = {
+        ...systemMessage,
+        content: `${systemMessage.content}\n\n${instruction}`,
+      };
+    }
+  } else {
+    fallbackMessages.unshift({ role: "system", content: instruction });
+  }
+  const { tools: _nativeTools, ...fallbackRequest } = request;
+  return {
+    ...fallbackRequest,
+    messages: fallbackMessages,
+    format: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          enum: tools.map((tool) => tool.function.name),
+        },
+        arguments: {
+          type: "object",
+        },
+      },
+      required: ["name", "arguments"],
+      additionalProperties: false,
+    },
+  } as unknown as OllamaChatRequest;
+}
+
+function parseOllamaStructuredToolFallback(
+  text: string,
+  availableToolNames: ReadonlySet<string>,
+): OllamaToolCall {
+  const payload = parseJsonObjectPreservingUnsafeIntegers(text);
+  const keys = payload ? Object.keys(payload).toSorted() : [];
+  const name = payload ? readStringValue(payload.name)?.trim() : undefined;
+  const argumentsValue = payload?.arguments;
+  if (
+    !payload ||
+    keys.length !== 2 ||
+    keys[0] !== "arguments" ||
+    keys[1] !== "name" ||
+    !name ||
+    !availableToolNames.has(name) ||
+    !isRecord(argumentsValue)
+  ) {
+    throw new Error("Ollama structured tool fallback returned an invalid tool-call envelope");
+  }
+  return {
+    function: {
+      name,
+      arguments: argumentsValue,
+    },
+  };
+}
+
 function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
@@ -1205,17 +1345,19 @@ function createRawOllamaStreamFn(
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 
+        let requestMessages = ollamaMessages;
         const body = buildOllamaChatRequest({
           modelId: model.id,
           providerId: model.provider,
-          messages: ollamaMessages,
+          messages: requestMessages,
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
           requestParams,
         });
         const replacement = await options?.onPayload?.(body, model);
-        const requestBody = replacement === undefined ? body : replacement;
+        let requestBody: unknown = replacement === undefined ? body : replacement;
+        let requestTools = readOllamaToolsFromRequest(requestBody);
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           ...defaultHeaders,
@@ -1228,30 +1370,68 @@ function createRawOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
-          url: chatUrl,
-          init: {
-            method: "POST",
-            headers,
-            body: JSON.stringify(requestBody),
-          },
-          policy: ssrfPolicy,
-          ...(options?.signal ? { signal: options.signal } : {}),
-          timeoutMs: resolveOllamaRequestTimeoutMs(
-            model,
-            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
-          ),
-          auditContext: "ollama-stream.chat",
-        });
+        let structuredToolFallbackAvailable = true;
+        let structuredToolFallbackActive = false;
+        let structuredToolFallbackNames: ReadonlySet<string> | undefined;
+        const fetchChatResponse = async () => {
+          while (true) {
+            const guarded = await fetchWithSsrFGuard({
+              url: chatUrl,
+              init: {
+                method: "POST",
+                headers,
+                body: JSON.stringify(requestBody),
+              },
+              policy: ssrfPolicy,
+              ...(options?.signal ? { signal: options.signal } : {}),
+              timeoutMs: resolveOllamaRequestTimeoutMs(
+                model,
+                options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
+              ),
+              auditContext: "ollama-stream.chat",
+            });
+            if (guarded.response.ok) {
+              return guarded;
+            }
 
-        try {
-          if (!response.ok) {
             const errorText = await readResponseTextLimited(
-              response,
+              guarded.response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
             ).catch(() => "unknown error");
-            throw new Error(`${response.status} ${errorText}`);
+            const fallbackRequest =
+              structuredToolFallbackAvailable &&
+              !options?.signal?.aborted &&
+              isOllamaQwenStructuredToolFallbackCandidate({
+                errorText,
+                modelId: model.id,
+                status: guarded.response.status,
+                toolCount: requestTools.length,
+              })
+                ? buildOllamaStructuredToolFallbackRequest(requestBody, requestTools)
+                : undefined;
+            await guarded.release();
+            if (!fallbackRequest) {
+              throw new Error(`${guarded.response.status} ${errorText}`);
+            }
+
+            // The native parser failed before an event reached OpenClaw. Retry
+            // once with a grammar-constrained envelope that bypasses its
+            // malformed XML path, then validate it before emitting a tool call.
+            structuredToolFallbackAvailable = false;
+            structuredToolFallbackActive = true;
+            structuredToolFallbackNames = new Set(requestTools.map((tool) => tool.function.name));
+            requestBody = fallbackRequest;
+            requestMessages = fallbackRequest.messages;
+            requestTools = [];
+            log.warn(
+              `Retrying ${model.id} with structured output after Ollama's Qwen parser rejected output`,
+            );
           }
+        };
+
+        const { response, release, refreshTimeout } = await fetchChatResponse();
+
+        try {
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
           }
@@ -1431,9 +1611,11 @@ function createRawOllamaStreamFn(
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
               accumulatedRawContent += rawDelta;
-              flushVisibleText(resolveVisibleContent(false));
+              if (!structuredToolFallbackActive) {
+                flushVisibleText(resolveVisibleContent(false));
+              }
             }
-            if (chunk.message?.tool_calls?.length) {
+            if (chunk.message?.tool_calls?.length && !structuredToolFallbackActive) {
               // Kimi holds short visible prefixes until a terminal boundary;
               // settle them now so later tool indices cannot overwrite text.
               flushVisibleText(resolveVisibleContent(true));
@@ -1447,7 +1629,9 @@ function createRawOllamaStreamFn(
               }
             }
             if (chunk.done) {
-              pendingFinalVisibleContent = resolveVisibleContent(true);
+              pendingFinalVisibleContent = structuredToolFallbackActive
+                ? ""
+                : resolveVisibleContent(true);
               finalResponse = chunk;
               break;
             }
@@ -1456,6 +1640,16 @@ function createRawOllamaStreamFn(
 
           if (!finalResponse) {
             throw new Error(OLLAMA_INCOMPLETE_STREAM_ERROR);
+          }
+
+          if (structuredToolFallbackActive) {
+            if (!structuredToolFallbackNames) {
+              throw new Error("Ollama structured tool fallback lost its tool allowlist");
+            }
+            accumulatedToolCalls.push(
+              parseOllamaStructuredToolFallback(accumulatedRawContent, structuredToolFallbackNames),
+            );
+            accumulatedVisibleContent = "";
           }
 
           if (
@@ -1488,7 +1682,10 @@ function createRawOllamaStreamFn(
           }
 
           const usageFallback = {
-            input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
+            input: estimateOllamaPromptTokens({
+              messages: requestMessages,
+              tools: requestTools,
+            }),
             output: estimateOllamaCompletionTokens(
               finalResponse,
               estimateStringChars(suppressedThinking),

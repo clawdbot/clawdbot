@@ -46,7 +46,8 @@ export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
   return codeModeControlTools.has(tool);
 }
 
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
+/** Return whether a marked control is the fresh Code Mode exec entry point. */
+export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   return isCodeModeControlTool(tool) && normalizeToolName(tool.name) === CODE_MODE_EXEC_TOOL_NAME;
 }
 

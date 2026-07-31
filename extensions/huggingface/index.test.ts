@@ -79,4 +79,16 @@ describe("huggingface plugin", () => {
     expect(result).toBeNull();
     expect(buildHuggingfaceProviderMock).not.toHaveBeenCalled();
   });
+
+  it("registers the Hugging Face stream wrapper", () => {
+    expect(registerProvider().wrapStreamFn).toBeTypeOf("function");
+  });
+
+  it("registers route-aware resolved-model normalization", () => {
+    expect(registerProvider().normalizeResolvedModel).toBeTypeOf("function");
+  });
+
+  it("registers routed model resolution", () => {
+    expect(registerProvider().resolveDynamicModel).toBeTypeOf("function");
+  });
 });

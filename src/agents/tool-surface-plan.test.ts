@@ -60,12 +60,26 @@ describe("resolveAgentToolSurfacePlan", () => {
       config: { tools: { codeMode: false, toolSearch: true } },
       expected: { codeMode: false, toolSearch: true },
     },
+    {
+      name: "tool search remains unchanged when auto code mode declines a lean model",
+      config: {
+        agents: { defaults: { experimental: { localModelLean: true } } },
+        tools: { codeMode: "auto", toolSearch: true },
+      },
+      model: { compat: {} },
+      expected: { codeMode: false, toolSearch: true },
+    },
   ] satisfies Array<{
     name: string;
     config: OpenClawConfig;
+    model?: AgentToolSurfacePlanParams["model"];
     expected: { codeMode: boolean; toolSearch: boolean };
-  }>)("keeps controls mutually exclusive: $name", ({ config, expected }) => {
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
+  }>)("keeps controls mutually exclusive: $name", ({ config, model, expected }) => {
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      ...(model ? { model } : {}),
+    });
 
     expect(plan.codeModeControlsEnabled).toBe(expected.codeMode);
     expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
@@ -139,6 +153,64 @@ describe("applyAgentToolSurfaceCatalog", () => {
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
     expect(result.catalogToolCount).toBe(1);
+  });
+
+  it("keeps file tools behind the bridge for unflagged lean models", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { codeMode: true },
+    };
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      model: { compat: {} },
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createCodeModeTools({ config, catalogRef, executeTool }),
+        ...["read", "edit", "write", "apply_patch"].map(createStubTool),
+      ],
+      config,
+      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
+      codeModeControlsEnabled: plan.codeModeControlsEnabled,
+      toolSearchConfig: plan.toolSearchConfig,
+      forceDirectMessageTool: false,
+      catalogRef,
+    });
+
+    expect(plan.codeModeControlsEnabled).toBe(true);
+    expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.catalogToolCount).toBe(4);
+  });
+
+  it("keeps file tools behind the bridge for an auto-engaged preferred lean model", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { codeMode: "auto" },
+    };
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      model: { compat: { codeMode: "preferred" } },
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createCodeModeTools({ config, catalogRef, executeTool }),
+        ...["read", "edit", "write", "apply_patch"].map(createStubTool),
+      ],
+      config,
+      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
+      codeModeControlsEnabled: plan.codeModeControlsEnabled,
+      toolSearchConfig: plan.toolSearchConfig,
+      forceDirectMessageTool: false,
+      catalogRef,
+    });
+
+    expect(plan.codeModeControlsEnabled).toBe(true);
+    expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.catalogToolCount).toBe(4);
   });
 
   it("uses the schema-directory catalog in directory mode", () => {

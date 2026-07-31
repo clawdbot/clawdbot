@@ -38,11 +38,15 @@ export function createCliEventHandlers(params: {
   let signaledToolExecutionStarted = false;
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
-  const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
+  const toolSummaryById = new Map<
+    string,
+    { name: string; failed: boolean; sequenceIndex: number }
+  >();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<string, Record<string, unknown>>();
   const toolSummaryNames: string[] = [];
+  const toolSummarySequence: Array<string | undefined> = [];
   const toolSummaryNameSet = new Set<string>();
   const activeParsedTools = new Map<
     string,
@@ -61,9 +65,12 @@ export function createCliEventHandlers(params: {
     }
     const current = toolSummaryById.get(event.toolCallId);
     if (!current) {
-      toolSummaryById.set(event.toolCallId, { name: event.name, failed: false });
+      const sequenceIndex = toolSummarySequence.length;
+      toolSummaryById.set(event.toolCallId, { name: event.name, failed: false, sequenceIndex });
+      toolSummarySequence.push(event.name || undefined);
     } else if (!current.name && event.name) {
       current.name = event.name;
+      toolSummarySequence[current.sequenceIndex] = event.name;
     }
     rememberToolName(event.name);
   };
@@ -73,15 +80,23 @@ export function createCliEventHandlers(params: {
       current.failed ||= event.isError;
       if (!current.name && event.name) {
         current.name = event.name;
+        toolSummarySequence[current.sequenceIndex] = event.name;
       }
     } else {
-      toolSummaryById.set(event.toolCallId, { name: event.name, failed: event.isError });
+      const sequenceIndex = toolSummarySequence.length;
+      toolSummaryById.set(event.toolCallId, {
+        name: event.name,
+        failed: event.isError,
+        sequenceIndex,
+      });
+      toolSummarySequence.push(event.name || undefined);
     }
     rememberToolName(event.name);
   };
   const getToolSummary = (): ToolSummaryTrace => ({
     calls: toolSummaryById.size,
     tools: toolSummaryNames.slice(),
+    sequence: toolSummarySequence.filter((name): name is string => name !== undefined),
     failures: Array.from(toolSummaryById.values()).filter((entry) => entry.failed).length,
   });
   const emitCliToolUseStart = (event: CliToolUseStartDelta) => {

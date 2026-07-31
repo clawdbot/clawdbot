@@ -5,6 +5,7 @@ import {
   activeRuns,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
+  mergePendingBridgeSideEffectFree,
   reserveActiveRunSlot,
   resumingRunIds,
   storeSnapshotState,
@@ -38,6 +39,9 @@ function parkExpiringRun(
     method,
     args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
     promise: new Promise(() => {}),
+    knownSideEffectFree: false,
+    executionBoundaryClassified: true,
+    potentialSideEffectStarted: method === "agentWait",
     cancel,
   };
 
@@ -46,6 +50,8 @@ function parkExpiringRun(
     replayId: "cm_replay_lifecycle",
     pending: [pending],
     replaySafe: false,
+    readOnly: false,
+    sideEffectFree: false,
     settlementMode: { kind: "awaiting" },
     snapshotBytes: new Uint8Array([1]),
     parentToolCallId: "code-mode-lifecycle",
@@ -69,6 +75,25 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("keeps unresolved calls unsafe until their final execution input is classified", () => {
+    const pending: PendingBridgeState = {
+      id: "bridge:callValue:unclassified",
+      method: "callValue",
+      args: ["openclaw:core:read", { path: "facts.txt" }],
+      promise: new Promise(() => {}),
+      knownSideEffectFree: true,
+      executionBoundaryClassified: false,
+      potentialSideEffectStarted: false,
+    };
+
+    expect(mergePendingBridgeSideEffectFree(true, [pending])).toBe(true);
+    pending.executionBoundaryClassified = true;
+    expect(mergePendingBridgeSideEffectFree(true, [pending])).toBe(true);
+    pending.knownSideEffectFree = false;
+    pending.potentialSideEffectStarted = true;
+    expect(mergePendingBridgeSideEffectFree(true, [pending])).toBe(false);
+  });
+
   it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;

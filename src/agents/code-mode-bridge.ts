@@ -391,6 +391,7 @@ export async function runBridgeRequest(params: {
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onExecutionStart?: (finalInput: unknown) => void;
 }): Promise<SettledBridgeRequest> {
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -429,6 +430,7 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
+          onExecutionStart: params.onExecutionStart,
           recoverySurface: "tools",
         });
         break;
@@ -443,6 +445,7 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
+          onExecutionStart: params.onExecutionStart,
           recoverySurface: "tools",
         });
         break;
@@ -490,6 +493,7 @@ export async function runBridgeRequest(params: {
               parentToolCallId: params.parentToolCallId,
               signal: params.signal,
               onUpdate: params.onUpdate,
+              onExecutionStart: params.onExecutionStart,
             });
             if (request.catalogId) {
               return called.result;

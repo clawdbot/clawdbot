@@ -208,7 +208,7 @@ export function buildUsageAgentMetaFields(params: {
   lastTurnTotal?: number;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
+  if (usage && usage.total === undefined && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
   const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);

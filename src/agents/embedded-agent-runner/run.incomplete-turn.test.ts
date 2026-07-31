@@ -27,14 +27,19 @@ import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION,
+  resolveCodeModeContinuationInstruction,
+  resolveCodeModeMutationVerificationState,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
+  resolveReplaySafeCodeModeErrorRetryInstruction,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   resolveSettledToolTerminalContinuationInstruction,
+  shouldLatchCodeModeReadOnlyForRun,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
@@ -47,8 +52,27 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+const NORMAL_CODE_MODE_CONTINUATION_INSTRUCTION = resolveCodeModeContinuationInstruction({
+  mutationVerificationRequired: false,
+  targetlessSideEffectEvidence: null,
+  toolPolicy: "normal",
+});
+const VERIFIED_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION = resolveCodeModeContinuationInstruction(
+  {
+    mutationVerificationRequired: false,
+    targetlessSideEffectEvidence: false,
+    toolPolicy: "normal",
+  },
+);
+const VERIFY_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION = resolveCodeModeContinuationInstruction({
+  mutationVerificationRequired: true,
+  targetlessSideEffectEvidence: false,
+  toolPolicy: "read-only",
+});
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+type CodeModeMutationAttempt = Parameters<typeof resolveCodeModeMutationVerificationState>[0];
 
 // Cold GitHub-hosted fork runners can spend more than five minutes loading and
 // warming this broad harness before the first test reports progress.
@@ -62,6 +86,10 @@ function resolveIncompleteTurnPayloadText(
   // Most helper tests exercise internal abort behavior; external aborts opt in
   // explicitly through params.
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
+}
+
+function requiresCodeModeMutationVerification(attempt: CodeModeMutationAttempt): boolean {
+  return resolveCodeModeMutationVerificationState(attempt).pendingTargets.length > 0;
 }
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
@@ -91,6 +119,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   function runAttemptCall(index: number): {
     prompt?: string;
     disableTools?: boolean;
+    forceRestartSafeTools?: boolean;
+    forceReadOnlyTools?: boolean;
     operation?: string;
     suppressNextUserMessagePersistence?: boolean;
     skipPreparedUserTurnMessage?: boolean;
@@ -104,6 +134,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     return call[0] as {
       prompt?: string;
       disableTools?: boolean;
+      forceRestartSafeTools?: boolean;
+      forceReadOnlyTools?: boolean;
       operation?: string;
       suppressNextUserMessagePersistence?: boolean;
       skipPreparedUserTurnMessage?: boolean;
@@ -117,6 +149,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }
     ).onUserMessagePersisted?.({ role: "user", content: "test prompt" });
   }
+
+  it("latches read-only tools for confirmed or unresolved targetless Code Mode effects", () => {
+    expect(
+      shouldLatchCodeModeReadOnlyForRun({
+        mutationVerificationRequired: true,
+        targetlessSideEffectEvidence: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLatchCodeModeReadOnlyForRun({
+        mutationVerificationRequired: true,
+        targetlessSideEffectEvidence: true,
+      }),
+    ).toBe(true);
+  });
 
   it("counts failed tool results in trace tool summaries", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -139,6 +186,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta?.toolSummary).toEqual({
       calls: 3,
       tools: ["bash"],
+      sequence: ["bash", "bash", "bash"],
       failures: 2,
     });
   });
@@ -1158,6 +1206,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(secondCall.operation).toBe("settled-tool-finalization");
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
+    expect(result.meta?.toolSummary).toEqual({
+      calls: 1,
+      tools: ["write"],
+      sequence: ["write"],
+      failures: 0,
+    });
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
@@ -1266,6 +1320,754 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(runAttemptCall(1).disableTools).toBe(true);
     expectNoWarnMessageWith("empty response detected");
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("keeps tools available when read-only Code Mode work stops before the remaining steps", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.6",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [{ toolName: "exec", replaySafe: true }],
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [{ type: "text", text: "Finished the remaining write and verification." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Finished the remaining write and verification."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Finished the remaining write and verification." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-read-only-code-mode-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("Finished the remaining write and verification.");
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toBe(NORMAL_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(secondCall.disableTools).not.toBe(true);
+    expect(secondCall.forceRestartSafeTools).toBeFalsy();
+    expect(secondCall.operation).toBe("attempt");
+    expectWarnMessageWith("settled Code Mode work stopped before final verification");
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("uses answer-only finalization after one verified Code Mode completion continuation", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.6",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "edit",
+              replaySafe: false,
+              sideEffectFree: false,
+              codeModeHadTargetlessSideEffects: false,
+              codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+            },
+            {
+              toolName: "read",
+              replaySafe: true,
+              sideEffectFree: true,
+              fileTarget: { path: "result.txt" },
+              fileTargetVerified: true,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [{ toolName: "read", replaySafe: true, sideEffectFree: true }],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["CM-FRONTIER"],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.6",
+            content: [{ type: "text", text: "CM-FRONTIER" }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "CM-FRONTIER" }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.6",
+      runId: "run-code-mode-answer-only-finalization",
+    });
+
+    expect(runAttemptCall(1).operation).toBe("attempt");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.text).toBe("CM-FRONTIER");
+    expect(runAttemptCall(1).prompt).toBe(VERIFIED_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION);
+    expect(runAttemptCall(1).disableTools).not.toBe(true);
+    expect(runAttemptCall(2).operation).toBe("settled-tool-finalization");
+    expect(runAttemptCall(2).disableTools).toBe(true);
+    expect(runAttemptCall(2).skipPreparedUserTurnMessage).toBe(true);
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("surfaces a bounded incomplete turn when Code Mode finalization is unavailable", async () => {
+    registerAgentHarness({
+      id: "legacy-code-mode",
+      label: "Legacy Code Mode harness without settled-turn finalization",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    });
+    try {
+      const emptyStopAssistant = {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.6",
+        content: [],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockResolvedValue(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [{ toolName: "read", replaySafe: true, sideEffectFree: true }],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      );
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.6",
+        agentHarnessId: "legacy-code-mode",
+        runId: "run-code-mode-no-finalization-capability",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(runAttemptCall(1).operation).toBe("attempt");
+      expect(result.payloads?.[0]).toMatchObject({ isError: true });
+      expect(result.payloads?.[0]?.text).toContain("stopped before producing a final answer");
+      expect(result.meta.error?.fallbackSafe).toBe(true);
+      expectWarnMessageWith("Code Mode completion retries exhausted");
+    } finally {
+      resetRunOverflowCompactionHarnessMocks();
+    }
+  });
+
+  it("uses answer-only finalization after a run-latched read-only completion", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.6",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              replaySafe: false,
+              sideEffectFree: false,
+              codeModeHadTargetlessSideEffects: true,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [{ toolName: "read", replaySafe: true, sideEffectFree: true }],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Finished safely."],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.6",
+            content: [{ type: "text", text: "Finished safely." }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Finished safely." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.6",
+      runId: "run-targetless-answer-only-finalization",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.text).toBe("Finished safely.");
+    expect(runAttemptCall(1).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(1).prompt).toBe(RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(runAttemptCall(2).operation).toBe("settled-tool-finalization");
+    expect(runAttemptCall(2).disableTools).toBe(true);
+  });
+
+  it("keeps only read-only tools across uncertain Code Mode mutation retries", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            replaySafe: false,
+            sideEffectFree: false,
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [{ type: "text", text: "Verified the completed write." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: false,
+        toolMetas: [{ toolName: "read", replaySafe: true, fileTarget: { path: "other.txt" } }],
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Verified the completed write."],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            fileTarget: { path: "result.txt" },
+            fileTargetVerified: true,
+          },
+        ],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Verified the completed write." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-mutating-code-mode-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.text).toBe("Verified the completed write.");
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toBe(RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
+    expect(secondCall.disableTools).not.toBe(true);
+    expect(secondCall.forceRestartSafeTools).toBeFalsy();
+    expect(secondCall.forceReadOnlyTools).toBe(true);
+    expect(secondCall.operation).toBe("attempt");
+    const thirdCall = runAttemptCall(2);
+    expect(thirdCall.prompt).toBe(RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(thirdCall.disableTools).not.toBe(true);
+    expect(thirdCall.forceRestartSafeTools).toBeFalsy();
+    expect(thirdCall.forceReadOnlyTools).toBe(true);
+    expect(thirdCall.operation).toBe("attempt");
+    expectWarnMessageWith("settled Code Mode work stopped before final verification");
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("restores mutation tools after verifying a completed file write", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            replaySafe: false,
+            sideEffectFree: false,
+            codeModeHadTargetlessSideEffects: false,
+            codeModeUnverifiedMutationFileTargets: [{ path: "first.txt" }],
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            sideEffectFree: true,
+            fileTarget: { path: "first.txt" },
+            fileTargetVerified: true,
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [{ type: "text", text: "Wrote and verified both files." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Wrote and verified both files."],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            replaySafe: false,
+            sideEffectFree: false,
+            codeModeSuccessfulObservationFileTargets: [{ path: "second.txt" }],
+          },
+        ],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Wrote and verified both files." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-resume-mutation-after-verification",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.text).toBe("Wrote and verified both files.");
+    expect(runAttemptCall(1).prompt).toBe(VERIFY_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION);
+    expect(runAttemptCall(1).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(2).prompt).toBe(NORMAL_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(runAttemptCall(2).forceReadOnlyTools).toBe(false);
+  });
+
+  it("keeps unknown targetless evidence read-only after targeted mutation verification", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              replaySafe: false,
+              sideEffectFree: false,
+              codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "read",
+              replaySafe: true,
+              sideEffectFree: true,
+              fileTarget: { path: "result.txt" },
+              fileTargetVerified: true,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Verified and finished."],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "huggingface",
+            model: "Qwen/Qwen3.5-9B",
+            content: [{ type: "text", text: "Verified and finished." }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Verified and finished." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-release-unknown-targetless-latch",
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("Verified and finished.");
+    expect(runAttemptCall(1).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(2).forceReadOnlyTools).toBe(true);
+  });
+
+  it("keeps mixed targeted and targetless mutations read-only after file verification", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            replaySafe: false,
+            sideEffectFree: false,
+            codeModeHadTargetlessSideEffects: true,
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            sideEffectFree: true,
+            fileTarget: { path: "result.txt" },
+            fileTargetVerified: true,
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [{ type: "text", text: "Verified the completed external action." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Verified the completed external action."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Verified the completed external action." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-targetless-mutation-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.text).toBe("Verified the completed external action.");
+    expect(runAttemptCall(1).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(2).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(2).prompt).toBe(RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expectWarnMessageWith("settled Code Mode work stopped before final verification");
+  });
+
+  it("surfaces an error when Code Mode mutation verification retries are exhausted", async () => {
+    const unverifiedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [{ type: "text", text: "The write completed." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["The write completed."],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: attemptIndex === 0 ? "exec" : "read",
+              replaySafe: attemptIndex > 0,
+              sideEffectFree: attemptIndex > 0,
+              codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+            },
+          ],
+          replayMetadata: {
+            hadPotentialSideEffects: attemptIndex === 0,
+            replaySafe: attemptIndex > 0,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: attemptIndex === 0,
+            replaySafe: attemptIndex > 0,
+          },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: unverifiedAssistant,
+          currentAttemptAssistant: unverifiedAssistant,
+          currentAttemptCompletedAssistant: unverifiedAssistant,
+        }),
+      );
+    }
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "The write completed." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      runId: "run-code-mode-verification-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent stopped before completing Code Mode verification. Please inspect the changes and try again.",
+        isError: true,
+      },
+    ]);
+    expect(runAttemptCall(1).forceReadOnlyTools).toBe(true);
+    expect(runAttemptCall(2).forceReadOnlyTools).toBe(true);
+    expectWarnMessageWith("Code Mode verification retries exhausted");
+  });
+
+  it("requires read-back after a successful Code Mode write-only sequence", async () => {
+    const prematureAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      content: [{ type: "text", text: "CM-EXAMPLE" }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["CM-EXAMPLE"],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            replaySafe: false,
+            sideEffectFree: false,
+            codeModeLastCallSideEffectFree: false,
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: prematureAssistant,
+        currentAttemptAssistant: prematureAssistant,
+        currentAttemptCompletedAssistant: prematureAssistant,
+      }),
+    );
+    const verifiedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      content: [{ type: "text", text: "CM-EXAMPLE" }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["CM-EXAMPLE"],
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            fileTarget: { path: "result.txt" },
+            fileTargetVerified: true,
+          },
+        ],
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: verifiedAssistant,
+        currentAttemptAssistant: verifiedAssistant,
+        currentAttemptCompletedAssistant: verifiedAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([{ text: "CM-EXAMPLE" }])
+      .mockReturnValueOnce([{ text: "CM-EXAMPLE" }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "qwen3.5:9b",
+      runId: "run-visible-mutating-code-mode-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("CM-EXAMPLE");
+    const verificationCall = runAttemptCall(1);
+    expect(verificationCall.prompt).toBe(RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION);
+    expect(verificationCall.forceReadOnlyTools).toBe(true);
+    expectWarnMessageWith("settled Code Mode work stopped before final verification");
   });
 
   it.each([
@@ -2589,6 +3391,434 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBeNull();
   });
 
+  it("requires verification only while nested mutation uncertainty remains", () => {
+    const base = {
+      codeModeEngaged: true,
+      toolMetas: [
+        {
+          toolName: "exec",
+          sideEffectFree: false,
+          codeModeLastCallSideEffectFree: false,
+          codeModeSuccessfulObservationFileTargets: [],
+          codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+        },
+      ],
+    } satisfies CodeModeMutationAttempt;
+
+    expect(requiresCodeModeMutationVerification(base)).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...base,
+        toolMetas: [
+          ...base.toolMetas,
+          {
+            toolName: "exec",
+            sideEffectFree: true,
+            codeModeLastCallSideEffectFree: true,
+            codeModeSuccessfulObservationFileTargets: [{ path: "result.txt" }],
+            codeModeUnverifiedMutationFileTargets: [],
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...base,
+        toolMetas: [
+          ...base.toolMetas,
+          {
+            toolName: "exec",
+            isError: true,
+            sideEffectFree: true,
+            codeModeLastCallSideEffectFree: true,
+            codeModeSuccessfulObservationFileTargets: [{ path: "result.txt" }],
+            codeModeUnverifiedMutationFileTargets: [],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            isError: true,
+            sideEffectFree: false,
+            codeModeLastCallSideEffectFree: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            sideEffectFree: false,
+            codeModeSuccessfulObservationFileTargets: [{ path: "result.txt" }],
+            codeModeUnverifiedMutationFileTargets: [],
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            sideEffectFree: false,
+            codeModeSuccessfulObservationFileTargets: [{ path: "result.txt" }],
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "exec",
+            sideEffectFree: false,
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("requires read-back after a successful native Code Mode mutation", () => {
+    const mutation = {
+      codeModeEngaged: true,
+      toolMetas: [
+        {
+          toolName: "write",
+          mutatingAction: true,
+          fileMutationExecutionStarted: true,
+          fileTarget: { path: "result.txt" },
+        },
+      ],
+    } satisfies CodeModeMutationAttempt;
+
+    expect(requiresCodeModeMutationVerification(mutation)).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          { toolName: "read", fileTarget: { path: "result.txt" }, fileTargetVerified: true },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          {
+            toolName: "read",
+            fileTarget: { path: "result.txt" },
+            fileTargetVerified: true,
+            isError: true,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [...mutation.toolMetas, { toolName: "read", fileTarget: { path: "other.txt" } }],
+      }),
+    ).toBe(true);
+  });
+
+  it("allows a normal-tool fallback read to clear a carried Code Mode target", () => {
+    expect(
+      resolveCodeModeMutationVerificationState(
+        {
+          codeModeEngaged: false,
+          toolMetas: [
+            {
+              toolName: "read",
+              fileTarget: { path: "./result.txt" },
+              fileTargetVerified: true,
+            },
+          ],
+        },
+        { pendingTargets: [{ path: "result.txt" }] },
+      ),
+    ).toEqual({ pendingTargets: [] });
+    expect(
+      resolveCodeModeMutationVerificationState(
+        {
+          codeModeEngaged: false,
+          toolMetas: [
+            {
+              toolName: "read",
+              fileTarget: { path: "/workspace/result.txt" },
+              fileTargetVerified: true,
+            },
+          ],
+        },
+        { pendingTargets: [{ path: "result.txt" }] },
+        "/workspace",
+      ),
+    ).toEqual({ pendingTargets: [] });
+    expect(
+      resolveCodeModeMutationVerificationState(
+        {
+          codeModeEngaged: false,
+          toolMetas: [
+            {
+              toolName: "write",
+              isError: true,
+              mutatingAction: true,
+              fileTarget: { path: "other.txt" },
+            },
+          ],
+        },
+        { pendingTargets: [{ path: "result.txt" }] },
+      ),
+    ).toEqual({ pendingTargets: [{ path: "result.txt" }] });
+  });
+
+  it("requires read-back after a successful native apply_patch mutation", () => {
+    const mutation = {
+      codeModeEngaged: true,
+      toolMetas: [
+        {
+          toolName: "apply_patch",
+          mutatingAction: true,
+          fileMutationExecutionStarted: true,
+          fileTargets: [{ path: "a.ts" }, { path: "b.ts" }],
+        },
+      ],
+    } satisfies CodeModeMutationAttempt;
+
+    expect(requiresCodeModeMutationVerification(mutation)).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          { toolName: "read", fileTarget: { path: "a.ts" }, fileTargetVerified: true },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          { toolName: "read", fileTarget: { path: "a.ts" }, fileTargetVerified: true },
+          { toolName: "read", fileTarget: { path: "b.ts" }, fileTargetVerified: true },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "apply_patch",
+            mutatingAction: true,
+            fileMutationExecutionStarted: true,
+            fileTargets: [],
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "apply_patch",
+            isError: true,
+            mutatingAction: true,
+            fileMutationExecutionStarted: true,
+            fileTargets: [{ path: "a.ts" }, { path: "b.ts" }],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats a successful apply_patch deletion as authoritative absence", () => {
+    expect(
+      resolveCodeModeMutationVerificationState({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "write",
+            mutatingAction: true,
+            fileMutationExecutionStarted: true,
+            fileTarget: { path: "temporary.ts" },
+          },
+          {
+            toolName: "apply_patch",
+            mutatingAction: true,
+            fileMutationExecutionStarted: true,
+            fileTargets: [{ path: "temporary.ts", expected: "absent" }],
+          },
+        ],
+      }),
+    ).toEqual({ pendingTargets: [] });
+  });
+
+  it("clears moved apply_patch targets with ordered absence and presence reads", () => {
+    const mutation = {
+      codeModeEngaged: true,
+      toolMetas: [
+        {
+          toolName: "apply_patch",
+          isError: true,
+          mutatingAction: true,
+          fileMutationExecutionStarted: true,
+          fileTargets: [
+            { path: "old.ts", expected: "absent" as const },
+            { path: "new.ts", expected: "present" as const },
+          ],
+        },
+      ],
+    } satisfies CodeModeMutationAttempt;
+
+    expect(requiresCodeModeMutationVerification(mutation)).toBe(true);
+    expect(
+      resolveCodeModeMutationVerificationState({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          {
+            toolName: "read",
+            isError: true,
+            fileTarget: { path: "old.ts" },
+            fileTargetAbsent: true,
+          },
+        ],
+      }),
+    ).toEqual({ pendingTargets: [{ path: "new.ts", expected: "unknown" }] });
+    expect(
+      requiresCodeModeMutationVerification({
+        ...mutation,
+        toolMetas: [
+          ...mutation.toolMetas,
+          {
+            toolName: "read",
+            isError: true,
+            fileTarget: { path: "old.ts" },
+            fileTargetAbsent: true,
+          },
+          {
+            toolName: "read",
+            fileTarget: { path: "new.ts" },
+            fileTargetVerified: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("uses nested Code Mode absence evidence to clear moved patch sources", () => {
+    expect(
+      resolveCodeModeMutationVerificationState(
+        {
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              sideEffectFree: false,
+              codeModeSuccessfulAbsenceObservationFileTargets: [{ path: "old.ts" }],
+              codeModeUnverifiedMutationFileTargets: [{ path: "new.ts", expected: "unknown" }],
+            },
+          ],
+        },
+        { pendingTargets: [{ path: "old.ts", expected: "absent" }] },
+      ),
+    ).toEqual({ pendingTargets: [{ path: "new.ts", expected: "unknown" }] });
+  });
+
+  it("resolves failed mutation uncertainty from either ordered file state", () => {
+    const failedWrite = {
+      codeModeEngaged: true,
+      toolMetas: [
+        {
+          toolName: "write",
+          isError: true,
+          mutatingAction: true,
+          fileMutationExecutionStarted: true,
+          fileTarget: { path: "result.txt" },
+        },
+      ],
+    } satisfies CodeModeMutationAttempt;
+    expect(requiresCodeModeMutationVerification(failedWrite)).toBe(true);
+    expect(resolveCodeModeMutationVerificationState(failedWrite)).toEqual({
+      pendingTargets: [{ path: "result.txt", expected: "unknown" }],
+    });
+    expect(
+      requiresCodeModeMutationVerification({
+        ...failedWrite,
+        toolMetas: [
+          ...failedWrite.toolMetas,
+          { toolName: "read", fileTarget: { path: "result.txt" }, fileTargetVerified: true },
+        ],
+      }),
+    ).toBe(false);
+
+    expect(
+      requiresCodeModeMutationVerification({
+        codeModeEngaged: true,
+        toolMetas: [
+          {
+            toolName: "write",
+            isError: true,
+            mutatingAction: true,
+            fileTarget: { path: "not-dispatched.txt" },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...failedWrite,
+        toolMetas: [
+          ...failedWrite.toolMetas,
+          {
+            toolName: "read",
+            isError: true,
+            fileTarget: { path: "result.txt" },
+            fileTargetAbsent: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+
+    expect(
+      requiresCodeModeMutationVerification({
+        ...failedWrite,
+        toolMetas: [
+          ...failedWrite.toolMetas,
+          { toolName: "read", fileTarget: { path: "result.txt" } },
+        ],
+      }),
+    ).toBe(true);
+
+    const failedTargetlessExec = {
+      codeModeEngaged: true,
+      toolMetas: [{ toolName: "exec", isError: true }],
+    } satisfies CodeModeMutationAttempt;
+    expect(requiresCodeModeMutationVerification(failedTargetlessExec)).toBe(false);
+    expect(
+      requiresCodeModeMutationVerification({
+        ...failedTargetlessExec,
+        toolMetas: [...failedTargetlessExec.toolMetas, { toolName: "exec", sideEffectFree: true }],
+      }),
+    ).toBe(false);
+  });
+
   it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,
@@ -3731,6 +4961,115 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(incompleteTurnText).toBeNull();
+  });
+
+  it("does not retry a replay-safe Code Mode failure after a mutation", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+
+    expect(
+      resolveReplaySafeCodeModeErrorRetryInstruction({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              isError: true,
+              replaySafe: true,
+              sideEffectFree: false,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastToolError: { toolName: "exec", error: "verification failed after write" },
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("retries an explicitly side-effect-free Code Mode exec failure", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "huggingface",
+      model: "Qwen/Qwen3.5-9B",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+
+    expect(
+      resolveReplaySafeCodeModeErrorRetryInstruction({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              isError: true,
+              replaySafe: true,
+              sideEffectFree: true,
+              codeModeRepairAllowed: true,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastToolError: { toolName: "exec", error: "read failed" },
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+        }),
+      }),
+    ).toBe(
+      "The prior Code Mode exec failed without side effects. Inspect the prior error and tool output, then retry with changed code using injected global tools only. If text parsing failed, inspect raw `.content` instead of assuming JSON or quoted values. Do not use import, require, process, fs, or absolute workspace paths.",
+    );
+  });
+
+  it("retries a repairable side-effect-free failure despite untrusted assistant text", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "granite4:3b",
+      content: [{ type: "text", text: "_verify_" }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+
+    expect(
+      resolveReplaySafeCodeModeErrorRetryInstruction({
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["_verify_"],
+          codeModeEngaged: true,
+          toolMetas: [
+            {
+              toolName: "exec",
+              isError: true,
+              replaySafe: true,
+              sideEffectFree: true,
+              codeModeRepairAllowed: true,
+            },
+          ],
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastToolError: { toolName: "exec", error: "module access is disabled" },
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+        }),
+      }),
+    ).toContain("failed without side effects");
   });
 
   it("does not retry reasoning-only GPT turns after side effects", () => {

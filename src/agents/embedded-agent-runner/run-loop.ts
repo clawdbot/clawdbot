@@ -528,6 +528,7 @@ export async function runPreparedEmbeddedLoop(
           executionContract,
           hasTerminalToolPresentation: Boolean(terminalToolPresentation),
           noteLaneTaskProgress: input.laneController.noteLaneTaskProgress,
+          retryState: terminalRetryState,
         },
       });
       const {
@@ -537,6 +538,7 @@ export async function runPreparedEmbeddedLoop(
         attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
         finalizationAttempted: settledTurnFinalizationAttempted,
+        toolCapableContinuation,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
       lastTurnTotal = finalizedTerminal.lastTurnTotal;
@@ -623,6 +625,7 @@ export async function runPreparedEmbeddedLoop(
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
         settledTurnFinalizationAttempted,
+        toolCapableContinuation,
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,

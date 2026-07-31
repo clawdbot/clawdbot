@@ -57,9 +57,14 @@ export type AgentExecEnvelope = {
   final: string;
   payloads: AgentExecPayload[];
   usage?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["usage"]>;
+  lastCallUsage?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["lastCallUsage"]>;
   costUsd?: number;
   codeModeEngaged?: boolean;
   assistantTurns?: number;
+  providerAttemptCount?: number;
+  providerRetryCount?: number;
+  firstProviderAttemptSucceeded?: boolean;
+  fallbackUsed?: boolean;
   bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
   toolSummary?: NonNullable<EmbeddedAgentRunMeta["toolSummary"]>;
   model: string | null;
@@ -232,18 +237,30 @@ export function classifyAgentExecResult(
               ? "agent_error"
               : undefined;
   const agentMeta = meta.agentMeta;
+  const providerAttempts = meta.executionTrace?.attempts ?? [];
   return {
     ok: status === "ok",
     status,
     final: finalTextFromResult(result, payloads, !hasErrorPayload),
     payloads,
     ...(agentMeta?.usage ? { usage: agentMeta.usage } : {}),
+    ...(agentMeta?.lastCallUsage ? { lastCallUsage: agentMeta.lastCallUsage } : {}),
     ...(agentMeta?.costUsd !== undefined ? { costUsd: agentMeta.costUsd } : {}),
     ...(agentMeta?.codeModeEngaged !== undefined
       ? { codeModeEngaged: agentMeta.codeModeEngaged }
       : {}),
     ...(agentMeta?.assistantTurns !== undefined
       ? { assistantTurns: agentMeta.assistantTurns }
+      : {}),
+    ...(providerAttempts.length > 0
+      ? {
+          providerAttemptCount: providerAttempts.length,
+          providerRetryCount: Math.max(0, providerAttempts.length - 1),
+          firstProviderAttemptSucceeded: providerAttempts[0]?.result === "success",
+        }
+      : {}),
+    ...(meta.executionTrace?.fallbackUsed !== undefined
+      ? { fallbackUsed: meta.executionTrace.fallbackUsed }
       : {}),
     ...(agentMeta?.bridgeCalls ? { bridgeCalls: agentMeta.bridgeCalls } : {}),
     ...(meta.toolSummary ? { toolSummary: meta.toolSummary } : {}),
@@ -317,9 +334,12 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts: Pick<AgentExecCliOptions, "codeMode" | "fallback" | "localModelLean" | "model">;
 }): OpenClawConfig {
   const codeMode = normalizeCodeMode(params.opts.codeMode);
+  const explicitModelRefs = [params.opts.model, ...(params.opts.fallback ?? [])]
+    .map((model) => model?.trim())
+    .filter((model): model is string => Boolean(model?.includes("/")));
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -329,6 +349,11 @@ function buildExecRunOverlay(params: {
       defaults: {
         workspace: params.cwd,
         skipBootstrap: true,
+        ...(explicitModelRefs.length > 0
+          ? {
+              models: Object.fromEntries(explicitModelRefs.map((model) => [model, {}])),
+            }
+          : {}),
         ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
       ...(entries.length > 0
@@ -406,7 +431,7 @@ export async function resolveExecBaseConfig(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts?: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts?: Pick<AgentExecCliOptions, "codeMode" | "fallback" | "localModelLean" | "model">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
   const base = stripInheritedAgentLocations(params.base);

@@ -33,6 +33,67 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return typeof encoded === "string" ? encoded : String(value);
   }
 
+  const textResultPrototype = Object.create(Object.prototype);
+  for (const key of Reflect.ownKeys(String.prototype)) {
+    if (key === "constructor") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(String.prototype, key);
+    if (!descriptor || typeof descriptor.value !== "function") continue;
+    Object.defineProperty(textResultPrototype, key, {
+      value: function (...args) {
+        return descriptor.value.apply(String(this.content), args);
+      },
+    });
+  }
+  Object.defineProperties(textResultPrototype, {
+    field: {
+      value: function (name) {
+        const key = String(name ?? "").trim();
+        if (!key) return undefined;
+        for (const line of String(this.content).split(/\r?\n/)) {
+          const match = line.match(/^\s*([^:=]+?)\s*[:=]\s*(.*?)\s*$/);
+          if (match && match[1].trim() === key) return match[2];
+        }
+        return undefined;
+      },
+    },
+    length: {
+      get: function () {
+        return String(this.content).length;
+      },
+    },
+    [Symbol.toPrimitive]: {
+      value: function () {
+        return String(this.content);
+      },
+    },
+  });
+  Object.freeze(textResultPrototype);
+
+  function makeTextResultErgonomic(value) {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      typeof value.content !== "string" ||
+      (value.kind !== "text" && value.kind !== "truncated" && value.kind !== "image")
+    ) {
+      return value;
+    }
+    Object.setPrototypeOf(value, textResultPrototype);
+    return value;
+  }
+
+  function writeConsole(values) {
+    output.push({ type: "text", text: values.map(asText).join(" ") });
+  }
+
+  const console = Object.freeze({
+    debug: (...values) => writeConsole(values),
+    error: (...values) => writeConsole(values),
+    info: (...values) => writeConsole(values),
+    log: (...values) => writeConsole(values),
+    warn: (...values) => writeConsole(values),
+  });
+
   function request(method, args) {
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
@@ -85,7 +146,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       parsed = String(payload);
     }
     if (ok) {
-      entry.resolve(parsed);
+      entry.resolve(makeTextResultErgonomic(parsed));
     } else {
       const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       entry.reject(error);
@@ -228,6 +289,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
+    console: { value: console, enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },

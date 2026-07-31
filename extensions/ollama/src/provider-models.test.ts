@@ -216,6 +216,33 @@ describe("ollama provider models", () => {
     );
   });
 
+  it("prefers Code Mode for the exact capability-confirmed Devstral model", () => {
+    expect(
+      buildOllamaModelDefinition("devstral-small-2:24b", 393_216, ["completion", "vision", "tools"])
+        .compat,
+    ).toEqual(
+      expect.objectContaining({
+        codeMode: "preferred",
+        supportsTools: true,
+      }),
+    );
+  });
+
+  it.each([
+    ["devstral-small-2:24b", undefined],
+    ["devstral-small-2:24b", ["completion"]],
+    ["devstral-small-2:24b", ["tools"]],
+    ["devstral-small-2", ["completion", "tools"]],
+    ["devstral-small-2:latest", ["completion", "tools"]],
+    ["devstral-small-2:22b", ["completion", "tools"]],
+    ["devstral-small-2:24b-cloud", ["completion", "tools"]],
+    ["devstral-small-2:24b-custom", ["completion", "tools"]],
+    ["ministral-3:8b", ["completion", "tools"]],
+  ])("does not prefer Code Mode for %s with capabilities %j", (modelId, capabilities) => {
+    const compat = buildOllamaModelDefinition(modelId, undefined, capabilities).compat;
+    expect(compat).not.toHaveProperty("codeMode");
+  });
+
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
     const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
     const fetchMock = vi.fn(async () =>

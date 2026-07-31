@@ -18,6 +18,7 @@ import {
 } from "../../execution-contract.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { type FileTarget, isSameFileTarget } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
@@ -25,6 +26,7 @@ import {
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
+import type { CodeModeMutationVerificationState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
@@ -41,6 +43,7 @@ type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
   | "clientToolCalls"
+  | "codeModeEngaged"
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
@@ -139,8 +142,18 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const REPLAY_SAFE_CODE_MODE_ERROR_RETRY_INSTRUCTION =
+  "The prior Code Mode exec failed without side effects. Inspect the prior error and tool output, then retry with changed code using injected global tools only. If text parsing failed, inspect raw `.content` instead of assuming JSON or quoted values. Do not use import, require, process, fs, or absolute workspace paths.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+export const RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION =
+  "The previous Code Mode step completed mutations but stopped before verification. Continue from the transcript using only the available read-only tools. Do not repeat completed mutations. Verify the result, then follow the user's exact requested output format with no extra label or markdown.";
+const VERIFY_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION =
+  "The previous Code Mode step completed file mutations but stopped before verification. Continue from the transcript using only the available read-only tools. Do not repeat completed mutations. Verify the changed files. If the user's requested work is incomplete, stop after verification so the next continuation can restore normal tools. Otherwise, follow the user's exact requested output format with no extra label or markdown.";
+const VERIFIED_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION =
+  "The previous Code Mode step completed and verified file mutations but stopped before the task was complete. Continue from the transcript with tools. Do not repeat completed mutations. Finish only the remaining work, verify any new mutations, and follow the user's exact requested output format with no extra label or markdown.";
+const NORMAL_CODE_MODE_CONTINUATION_INSTRUCTION =
+  "The previous Code Mode step was read-only and stopped before the task was complete. Continue from the transcript with tools, use the actual prior output shape, and finish the remaining steps. Follow the user's exact requested output format with no extra label or markdown.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -151,9 +164,11 @@ export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
+  const hadKnownSideEffects = params.toolMetas.some((entry) => entry.sideEffectFree === false);
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadUnsafeTools ||
+    hadKnownSideEffects ||
     hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
@@ -169,6 +184,241 @@ export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
+}
+
+type CodeModeContinuationToolPolicy = "normal" | "read-only";
+
+/** Selects the bounded tool policy for an unfinished settled Code Mode turn. */
+export function resolveCodeModeContinuationToolPolicy(attempt: {
+  codeModeEngaged?: boolean;
+  replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
+}): CodeModeContinuationToolPolicy | null {
+  if (attempt.codeModeEngaged !== true) {
+    return null;
+  }
+  return resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects ? "read-only" : "normal";
+}
+
+/** Reports whether current Code Mode telemetry proves targetless side effects were absent or seen. */
+export function resolveCodeModeTargetlessSideEffectEvidence(attempt: {
+  codeModeEngaged?: boolean;
+  toolMetas?: ReadonlyArray<{
+    toolName?: string;
+    replaySafe?: boolean;
+    mutatingAction?: boolean;
+    fileTarget?: FileTarget;
+    fileTargets?: FileTarget[];
+    fileMutationExecutionStarted?: true;
+    sideEffectFree?: boolean;
+    asyncStarted?: boolean;
+    codeModeHadTargetlessSideEffects?: boolean;
+  }>;
+}): boolean | null {
+  if (attempt.codeModeEngaged !== true) {
+    return null;
+  }
+  let coveredPotentialSideEffect = false;
+  for (const tool of attempt.toolMetas ?? []) {
+    if (tool.codeModeHadTargetlessSideEffects === true) {
+      return true;
+    }
+    const potentiallySideEffecting =
+      tool.replaySafe !== true || tool.sideEffectFree === false || tool.asyncStarted === true;
+    if (!potentiallySideEffecting) {
+      continue;
+    }
+    const trackedNativeFileMutation =
+      tool.fileMutationExecutionStarted === true &&
+      tool.mutatingAction === true &&
+      (tool.toolName === "write" || tool.toolName === "edit" || tool.toolName === "apply_patch") &&
+      (tool.fileTarget !== undefined || (tool.fileTargets?.length ?? 0) > 0);
+    if (trackedNativeFileMutation) {
+      // This flag is emitted only for started core-owned workspace mutations.
+      // Their tracked targets prove the call did not mutate an unrelated surface.
+      coveredPotentialSideEffect = true;
+      continue;
+    }
+    if (tool.codeModeHadTargetlessSideEffects !== false) {
+      return null;
+    }
+    coveredPotentialSideEffect = true;
+  }
+  return coveredPotentialSideEffect ? false : null;
+}
+
+/** Keeps confirmed or unresolved targetless effects read-only for the rest of the run. */
+export function shouldLatchCodeModeReadOnlyForRun(params: {
+  mutationVerificationRequired: boolean;
+  targetlessSideEffectEvidence: boolean | null;
+}): boolean {
+  return (
+    params.targetlessSideEffectEvidence === true ||
+    (params.mutationVerificationRequired && params.targetlessSideEffectEvidence === null)
+  );
+}
+
+/** Selects continuation wording without losing whether the prior attempt mutated files. */
+export function resolveCodeModeContinuationInstruction(params: {
+  mutationVerificationRequired: boolean;
+  targetlessSideEffectEvidence: boolean | null;
+  toolPolicy: CodeModeContinuationToolPolicy;
+}): string {
+  if (params.mutationVerificationRequired) {
+    return VERIFY_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION;
+  }
+  if (params.targetlessSideEffectEvidence === false) {
+    return VERIFIED_CODE_MODE_MUTATION_CONTINUATION_INSTRUCTION;
+  }
+  return params.toolPolicy === "read-only"
+    ? RESTART_SAFE_CODE_MODE_CONTINUATION_INSTRUCTION
+    : NORMAL_CODE_MODE_CONTINUATION_INSTRUCTION;
+}
+
+/**
+ * Detects a completed Code Mode mutation that ended without a later
+ * side-effect-free observation. Failed follow-up execs do not erase the need
+ * for verification, and the continuation is host-restricted to read-only tools.
+ */
+export function resolveCodeModeMutationVerificationState(
+  attempt: {
+    codeModeEngaged?: boolean;
+    toolMetas?: ReadonlyArray<{
+      toolName?: string;
+      isError?: boolean;
+      mutatingAction?: boolean;
+      fileTarget?: FileTarget;
+      fileTargets?: FileTarget[];
+      fileMutationExecutionStarted?: true;
+      fileTargetVerified?: true;
+      fileTargetAbsent?: true;
+      sideEffectFree?: boolean;
+      codeModeLastCallSideEffectFree?: boolean;
+      codeModeHadTargetlessSideEffects?: boolean;
+      codeModeSuccessfulObservationFileTargets?: FileTarget[];
+      codeModeSuccessfulAbsenceObservationFileTargets?: FileTarget[];
+      codeModeUnverifiedMutationFileTargets?: FileTarget[];
+    }>;
+  },
+  initial: CodeModeMutationVerificationState = {
+    pendingTargets: [],
+  },
+  cwd?: string,
+): CodeModeMutationVerificationState {
+  let pendingTargets = [...initial.pendingTargets];
+  const codeModeEngaged = attempt.codeModeEngaged === true;
+  const sameFileTarget = (a: FileTarget, b: FileTarget) =>
+    isSameFileTarget(a, b, process.platform, cwd);
+  const addPendingTarget = (target: FileTarget) => {
+    const existingIndex = pendingTargets.findIndex((candidate) =>
+      sameFileTarget(candidate, target),
+    );
+    if (existingIndex >= 0) {
+      pendingTargets[existingIndex] = target;
+    } else {
+      pendingTargets.push(target);
+    }
+  };
+  const addMutationEvidence = (
+    targets: readonly FileTarget[] | undefined,
+    fallbackTarget?: FileTarget,
+    uncertain = false,
+  ) => {
+    if (targets !== undefined) {
+      for (const target of targets) {
+        addPendingTarget(uncertain ? { ...target, expected: "unknown" } : target);
+      }
+      return;
+    }
+    if (fallbackTarget) {
+      addPendingTarget(uncertain ? { ...fallbackTarget, expected: "unknown" } : fallbackTarget);
+    }
+  };
+  const applySuccessfulMutationEvidence = (
+    targets: readonly FileTarget[] | undefined,
+    fallbackTarget?: FileTarget,
+  ) => {
+    if (targets === undefined) {
+      if (fallbackTarget) {
+        addPendingTarget(fallbackTarget);
+      }
+      return;
+    }
+    for (const target of targets) {
+      if (target.expected === "absent") {
+        // A successful patch deletion is authoritative final-state evidence.
+        // Clear stale present/unknown expectations instead of requiring a read.
+        pendingTargets = pendingTargets.filter((candidate) => !sameFileTarget(candidate, target));
+      } else {
+        addPendingTarget(target);
+      }
+    }
+  };
+  const clearVerifiedTarget = (target: FileTarget | undefined, expected: "present" | "absent") => {
+    if (!target) {
+      return;
+    }
+    pendingTargets = pendingTargets.filter((candidate) => {
+      const targetExpectation = candidate.expected ?? "present";
+      return !(
+        sameFileTarget(candidate, target) &&
+        (targetExpectation === expected || targetExpectation === "unknown")
+      );
+    });
+  };
+  for (const tool of attempt.toolMetas ?? []) {
+    const toolName = normalizeLowercaseStringOrEmpty(tool.toolName);
+    if (toolName === "read" && tool.mutatingAction !== true) {
+      if (tool.isError !== true && tool.fileTargetVerified === true) {
+        clearVerifiedTarget(tool.fileTarget, "present");
+        continue;
+      }
+      if (tool.isError === true && tool.fileTargetAbsent === true) {
+        clearVerifiedTarget(tool.fileTarget, "absent");
+        continue;
+      }
+    }
+    if ((toolName === "exec" || toolName === "wait") && codeModeEngaged && tool.isError !== true) {
+      for (const target of tool.codeModeSuccessfulObservationFileTargets ?? []) {
+        clearVerifiedTarget(target, "present");
+      }
+      for (const target of tool.codeModeSuccessfulAbsenceObservationFileTargets ?? []) {
+        clearVerifiedTarget(target, "absent");
+      }
+    }
+    if (tool.isError === true) {
+      if (!codeModeEngaged) {
+        continue;
+      }
+      if (
+        (toolName === "write" || toolName === "edit" || toolName === "apply_patch") &&
+        tool.mutatingAction === true &&
+        tool.fileMutationExecutionStarted === true
+      ) {
+        addMutationEvidence(tool.fileTargets, tool.fileTarget, true);
+      } else if ((toolName === "exec" || toolName === "wait") && tool.sideEffectFree !== true) {
+        addMutationEvidence(tool.codeModeUnverifiedMutationFileTargets, undefined, true);
+      }
+      continue;
+    }
+    if (!codeModeEngaged) {
+      continue;
+    }
+    if (
+      (toolName === "write" || toolName === "edit" || toolName === "apply_patch") &&
+      tool.mutatingAction === true &&
+      tool.fileMutationExecutionStarted === true
+    ) {
+      applySuccessfulMutationEvidence(tool.fileTargets, tool.fileTarget);
+      continue;
+    }
+    if ((toolName === "exec" || toolName === "wait") && tool.sideEffectFree === false) {
+      // The bridge snapshot is the final state for the whole cell. Add it
+      // after historical observations so an observation-before-write cannot
+      // incorrectly verify the later mutation.
+      addMutationEvidence(tool.codeModeUnverifiedMutationFileTargets);
+    }
+  }
+  return { pendingTargets };
 }
 
 type TerminalAttemptState = Pick<
@@ -785,6 +1035,8 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   modelApi?: string;
   executionContract?: string;
   allowEmptyStopContinuation?: boolean;
+  allowCodeModeContinuation?: boolean;
+  requireCodeModeMutationVerification?: boolean;
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
@@ -794,6 +1046,24 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
 }): string | null {
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
   const currentAttemptAssistant = params.attempt.currentAttemptAssistant;
+  if (params.requireCodeModeMutationVerification === true) {
+    if (
+      params.hasTerminalToolPresentation ||
+      params.aborted ||
+      params.promptError != null ||
+      params.timedOut ||
+      params.attempt.itemLifecycle.activeCount > 0 ||
+      params.attempt.clientToolCalls ||
+      params.attempt.yieldDetected ||
+      params.attempt.didSendDeterministicApprovalPrompt ||
+      hasMessagingToolDeliveryEvidence(params.attempt) ||
+      hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+      hasAsyncStartedToolActivity(params.attempt.toolMetas)
+    ) {
+      return null;
+    }
+    return SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
+  }
   const emptyStopAfterSettledTools = Boolean(
     params.allowEmptyStopContinuation &&
     currentAttemptAssistant?.stopReason === "stop" &&
@@ -857,6 +1127,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     return null;
   }
   if (
+    params.allowCodeModeContinuation !== true &&
     !shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
@@ -883,6 +1154,10 @@ export function resolveEmptyResponseRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
+  const codeModeErrorInstruction = resolveReplaySafeCodeModeErrorRetryInstruction(params);
+  if (codeModeErrorInstruction) {
+    return codeModeErrorInstruction;
+  }
   if (shouldSkipNonVisibleTurnRetry(params)) {
     return null;
   }
@@ -923,6 +1198,78 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   return null;
+}
+
+/** Builds one correction turn after an exact side-effect-free Code Mode failure. */
+export function resolveReplaySafeCodeModeErrorRetryInstruction(params: {
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (!isReplaySafeCodeModeToolError(params)) {
+    return null;
+  }
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return REPLAY_SAFE_CODE_MODE_ERROR_RETRY_INSTRUCTION;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (assistant?.stopReason === "toolUse") {
+    const lifecycle = params.attempt.itemLifecycle;
+    return lifecycle.activeCount === 0 &&
+      lifecycle.startedCount > 0 &&
+      lifecycle.completedCount === lifecycle.startedCount
+      ? REPLAY_SAFE_CODE_MODE_ERROR_RETRY_INSTRUCTION
+      : null;
+  }
+  if (
+    !isEmptyResponseAssistantTurn({
+      // A safe Code Mode failure can synthesize an "Exec failed" payload even
+      // when the model emitted no answer. Retry the model turn, not that wrapper text.
+      payloadCount: 0,
+      attempt: params.attempt,
+    })
+  ) {
+    return null;
+  }
+  return REPLAY_SAFE_CODE_MODE_ERROR_RETRY_INSTRUCTION;
+}
+
+function isReplaySafeCodeModeToolError(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  const replayMetadata = resolveAttemptReplayMetadata(params.attempt);
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.codeModeEngaged !== true ||
+    !params.attempt.lastToolError ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    replayMetadata.hadPotentialSideEffects ||
+    !replayMetadata.replaySafe
+  ) {
+    return false;
+  }
+  const toolName = normalizeLowercaseStringOrEmpty(params.attempt.lastToolError.toolName);
+  if (toolName !== "exec" && toolName !== "wait") {
+    return false;
+  }
+  const latestMatchingFailure = params.attempt.toolMetas.findLast(
+    (entry) =>
+      normalizeLowercaseStringOrEmpty(entry.toolName) === toolName && entry.isError === true,
+  );
+  return Boolean(
+    latestMatchingFailure &&
+    latestMatchingFailure.replaySafe === true &&
+    latestMatchingFailure.sideEffectFree === true &&
+    latestMatchingFailure.codeModeRepairAllowed === true &&
+    latestMatchingFailure.asyncStarted !== true,
+  );
 }
 
 function shouldApplyNonVisibleTurnRetryGuard(params: {

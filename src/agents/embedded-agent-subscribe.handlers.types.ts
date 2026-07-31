@@ -50,6 +50,10 @@ export type ToolCallSummary = {
   mutatingAction: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
+  mutationFallbackFileTargets?: import("./tool-mutation.js").FileTarget[];
+  mutationOrderStarted?: true;
+  observedMutationCompletionVersion?: number;
+  codeModeObservationTracked?: true;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
@@ -73,7 +77,21 @@ export type EmbeddedAgentSubscribeState = {
   toolMetas: Array<{
     toolName?: string;
     meta?: string;
+    durationMs?: number;
     replaySafe?: boolean;
+    mutatingAction?: boolean;
+    fileTarget?: import("./tool-mutation.js").FileTarget;
+    fileTargets?: import("./tool-mutation.js").FileTarget[];
+    fileMutationExecutionStarted?: true;
+    fileTargetVerified?: true;
+    fileTargetAbsent?: true;
+    sideEffectFree?: boolean;
+    codeModeLastCallSideEffectFree?: boolean;
+    codeModeHadTargetlessSideEffects?: boolean;
+    codeModeSuccessfulObservationFileTargets?: import("./tool-mutation.js").FileTarget[];
+    codeModeSuccessfulAbsenceObservationFileTargets?: import("./tool-mutation.js").FileTarget[];
+    codeModeUnverifiedMutationFileTargets?: import("./tool-mutation.js").FileTarget[];
+    codeModeRepairAllowed?: boolean;
     isError?: true;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
@@ -289,6 +307,7 @@ export type EmbeddedAgentSubscribeContext = {
 type ToolHandlerParams = Pick<
   SubscribeEmbeddedAgentSessionParams,
   | "runId"
+  | "cwd"
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolStreamBoundary"
@@ -308,6 +327,7 @@ type ToolHandlerParams = Pick<
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "codeModeControlToolNames"
   | "replaySafeToolNames"
   | "toolResultFormat"
   | "toolProgressDetail"

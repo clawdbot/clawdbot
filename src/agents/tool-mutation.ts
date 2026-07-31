@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 /**
  * Tool mutation classification and fingerprinting.
  *
@@ -8,6 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { extractApplyPatchTargets } from "./apply-patch-paths.js";
 import { isLikelyMutatingToolName } from "./tool-mutation-names.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -23,6 +25,7 @@ export { isLikelyMutatingToolName };
 // extract a `path=` segment from real call args. Including `apply_patch` here
 // would only match handcrafted-fingerprint test inputs, not real recoveries.
 const FILE_MUTATING_TOOL_NAMES = new Set(["edit", "write"]);
+const FILE_TARGET_TOOL_NAMES = new Set(["edit", "read", "write"]);
 
 // Args aliases that identify the file target on a file-mutating call.
 const FILE_TARGET_PATH_ARG_KEYS = ["path", "file_path", "filePath", "filepath", "file"] as const;
@@ -134,6 +137,13 @@ const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
 export type FileTarget = {
   path?: string;
   oldpath?: string;
+  expected?: "present" | "absent" | "unknown";
+};
+
+type ApplyPatchResultSummary = {
+  added: string[];
+  modified: string[];
+  deleted: string[];
 };
 
 type ToolMutationState = {
@@ -487,29 +497,24 @@ function isFileMutatingToolName(rawName: string): boolean {
   return FILE_MUTATING_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(rawName));
 }
 
-function readArgFingerprintValue(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
-): string | undefined {
-  if (!record) {
+function normalizeFileTargetValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
     return undefined;
   }
-  for (const key of keys) {
-    const normalized = normalizeFingerprintValue(record[key]);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
+  return value.trim() ? value : undefined;
 }
 
-function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
-  if (!isFileMutatingToolName(toolName)) {
+export function buildToolFileTarget(toolName: string, args: unknown): FileTarget | undefined {
+  if (!FILE_TARGET_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(toolName))) {
     return undefined;
   }
   const record = asRecord(args);
-  const path = readArgFingerprintValue(record, FILE_TARGET_PATH_ARG_KEYS);
-  const oldpath = readArgFingerprintValue(record, FILE_TARGET_OLDPATH_ARG_KEYS);
+  const path = FILE_TARGET_PATH_ARG_KEYS.map((key) => normalizeFileTargetValue(record?.[key])).find(
+    Boolean,
+  );
+  const oldpath = FILE_TARGET_OLDPATH_ARG_KEYS.map((key) =>
+    normalizeFileTargetValue(record?.[key]),
+  ).find(Boolean);
   if (!path && !oldpath) {
     return undefined;
   }
@@ -519,8 +524,146 @@ function extractFileTarget(toolName: string, args: unknown): FileTarget | undefi
   };
 }
 
-function fileTargetsEqual(a: FileTarget, b: FileTarget): boolean {
-  return (a.path ?? "") === (b.path ?? "") && (a.oldpath ?? "") === (b.oldpath ?? "");
+function toApplyPatchDisplayPath(path: string, cwd: string): string {
+  const relative = nodePath.relative(cwd, path);
+  if (!relative || relative === "") {
+    return nodePath.basename(path);
+  }
+  if (
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.startsWith("..\\") ||
+    nodePath.isAbsolute(relative)
+  ) {
+    return path;
+  }
+  return relative;
+}
+
+/**
+ * Best-effort pre-execution targets for apply_patch failure recovery.
+ * Successful calls use their authoritative result summary instead.
+ */
+export function buildToolInputFileTargets(
+  toolName: string,
+  args: unknown,
+  cwd = process.cwd(),
+): FileTarget[] | undefined {
+  if (normalizeLowercaseStringOrEmpty(toolName) !== "apply_patch") {
+    return undefined;
+  }
+  const targets = extractApplyPatchTargets(args, { cwd });
+  if (targets.length === 0) {
+    return undefined;
+  }
+  return targets.map((target) => ({
+    path: toApplyPatchDisplayPath(target.path, cwd),
+    expected: target.expected,
+  }));
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    return undefined;
+  }
+  return value;
+}
+
+function readApplyPatchResultSummary(result: unknown): ApplyPatchResultSummary | undefined {
+  const details = asRecord(result)?.details;
+  const summary = asRecord(details)?.summary;
+  const summaryRecord = asRecord(summary);
+  const added = readStringArray(summaryRecord?.added);
+  const modified = readStringArray(summaryRecord?.modified);
+  const deleted = readStringArray(summaryRecord?.deleted);
+  if (!added || !modified || !deleted) {
+    return undefined;
+  }
+  return { added, modified, deleted };
+}
+
+/**
+ * Extract file targets that require content read-back after apply_patch has
+ * resolved and applied its envelope. A successful delete result is already
+ * authoritative absence evidence, so deleted paths are intentionally excluded.
+ */
+export function buildToolResultFileTargets(
+  toolName: string,
+  result: unknown,
+  options: { includeDeleted?: boolean } = {},
+): FileTarget[] | undefined {
+  if (normalizeLowercaseStringOrEmpty(toolName) !== "apply_patch") {
+    return undefined;
+  }
+  const summary = readApplyPatchResultSummary(result);
+  if (!summary) {
+    return undefined;
+  }
+  const targets: FileTarget[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of [...summary.added, ...summary.modified]) {
+    const path = normalizeFileTargetValue(rawPath);
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    targets.push({ path });
+  }
+  if (options.includeDeleted) {
+    for (const rawPath of summary.deleted) {
+      const path = normalizeFileTargetValue(rawPath);
+      if (!path || seen.has(path)) {
+        continue;
+      }
+      seen.add(path);
+      targets.push({ path, expected: "absent" });
+    }
+  }
+  return targets;
+}
+
+export function mergeFileTargets(
+  ...groups: Array<readonly FileTarget[] | undefined>
+): FileTarget[] | undefined {
+  const targets: FileTarget[] = [];
+  let foundGroup = false;
+  for (const group of groups) {
+    if (group === undefined) {
+      continue;
+    }
+    foundGroup = true;
+    for (const target of group) {
+      const existingIndex = targets.findIndex((candidate) => isSameFileTarget(candidate, target));
+      if (existingIndex >= 0) {
+        targets[existingIndex] = target;
+      } else {
+        targets.push(target);
+      }
+    }
+  }
+  return foundGroup ? targets : undefined;
+}
+
+export function isSameFileTarget(
+  a: FileTarget,
+  b: FileTarget,
+  platform: NodeJS.Platform = process.platform,
+  cwd: string = process.cwd(),
+): boolean {
+  const normalizeIdentity = (value: string | undefined) => {
+    if (!value) {
+      return "";
+    }
+    const pathApi = platform === "win32" ? nodePath.win32 : nodePath.posix;
+    const normalized = pathApi.isAbsolute(value)
+      ? pathApi.normalize(value)
+      : pathApi.resolve(cwd, value);
+    return platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  return (
+    normalizeIdentity(a.path) === normalizeIdentity(b.path) &&
+    normalizeIdentity(a.oldpath) === normalizeIdentity(b.oldpath)
+  );
 }
 
 export function buildToolMutationState(
@@ -529,7 +672,9 @@ export function buildToolMutationState(
   meta?: string,
 ): ToolMutationState {
   const actionFingerprint = buildToolActionFingerprint(toolName, args, meta);
-  const fileTarget = extractFileTarget(toolName, args);
+  const fileTarget = isFileMutatingToolName(toolName)
+    ? buildToolFileTarget(toolName, args)
+    : undefined;
   return {
     mutatingAction: actionFingerprint != null,
     replaySafe: isReplaySafeToolCall(toolName, args),
@@ -538,7 +683,22 @@ export function buildToolMutationState(
   };
 }
 
-export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
+export function isSameToolMutationAction(
+  existing: ToolActionRef,
+  next: ToolActionRef,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (
+    isFileMutatingToolName(existing.toolName) &&
+    isFileMutatingToolName(next.toolName) &&
+    existing.fileTarget !== undefined &&
+    next.fileTarget !== undefined
+  ) {
+    // File identity is platform-sensitive, while legacy fingerprints normalize
+    // string values to lowercase. Resolve the structured target first so a
+    // fingerprint collision cannot merge distinct files on macOS or Linux.
+    return isSameFileTarget(existing.fileTarget, next.fileTarget, platform);
+  }
   if (existing.actionFingerprint != null || next.actionFingerprint != null) {
     // For mutating flows, fail closed: only clear when both fingerprints exist
     // and either match exactly or describe the same file-mutation target.
@@ -546,19 +706,6 @@ export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActi
       return false;
     }
     if (existing.actionFingerprint === next.actionFingerprint) {
-      return true;
-    }
-    // Cross-tool recovery: a successful file-mutation on the same `path`
-    // clears an unresolved file-mutation failure even when the tool name
-    // differs (e.g. edit→write self-heal). Compared structurally on
-    // `fileTarget` so paths containing `|` cannot over-match.
-    if (
-      isFileMutatingToolName(existing.toolName) &&
-      isFileMutatingToolName(next.toolName) &&
-      existing.fileTarget !== undefined &&
-      next.fileTarget !== undefined &&
-      fileTargetsEqual(existing.fileTarget, next.fileTarget)
-    ) {
       return true;
     }
     return false;

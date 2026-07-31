@@ -1,5 +1,9 @@
 // Tool Call Repair module implements promote behavior.
-import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
+import {
+  parseStandalonePlainTextToolCallBlocks,
+  type PlainTextToolCallBlock,
+  type PlainTextToolCallParseOptions,
+} from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
 export type ToolCallRepairNameResolver = (
@@ -20,6 +24,7 @@ export type PlainTextToolCallPromotionOptions = {
   createToolCallBlock: PromotedPlainTextToolCallBlockFactory;
   isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
   message: unknown;
+  parseOptions?: Omit<PlainTextToolCallParseOptions, "allowedToolNames">;
   requireAssistantRole?: boolean;
   resolveToolName?: ToolCallRepairNameResolver;
 };
@@ -81,7 +86,7 @@ function createPromotedToolCallBlocks(
 ): Record<string, unknown>[] | undefined {
   const parsedBlocks = parseStandalonePlainTextToolCallBlocks(
     text,
-    undefined,
+    options.parseOptions,
     lineBreakOffsets ? { lineBreakOffsets } : undefined,
   );
   if (!parsedBlocks) {

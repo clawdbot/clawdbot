@@ -9,6 +9,7 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
+  supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
 import {
@@ -276,7 +277,7 @@ export function buildOpenAIResponsesParams(
   if (effectiveMaxTokens) {
     params.max_output_tokens = effectiveMaxTokens;
   }
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
   if (options?.topP !== undefined) {

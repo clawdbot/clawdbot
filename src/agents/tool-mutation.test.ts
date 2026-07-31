@@ -2,11 +2,16 @@
 // used to decide whether repeated tool actions can recover prior failures.
 import { describe, expect, it } from "vitest";
 import {
+  buildToolFileTarget,
+  buildToolInputFileTargets,
   buildToolMutationState,
+  buildToolResultFileTargets,
   isLikelyMutatingToolName,
   isMutatingToolCall,
   isReplaySafeToolCall,
+  isSameFileTarget,
   isSameToolMutationAction,
+  mergeFileTargets,
 } from "./tool-mutation.js";
 
 describe("tool mutation helpers", () => {
@@ -330,7 +335,7 @@ describe("tool mutation helpers", () => {
       path: "/tmp/a",
     });
     expect(buildToolMutationState("write", { path: "/tmp/Foo|bar" }).fileTarget).toEqual({
-      path: "/tmp/foo|bar",
+      path: "/tmp/Foo|bar",
     });
     // Non-file-mutating tools never carry fileTarget, even with a path arg.
     expect(buildToolMutationState("bash", { command: "rm /tmp/a" }).fileTarget).toBeUndefined();
@@ -340,6 +345,172 @@ describe("tool mutation helpers", () => {
     expect(
       buildToolMutationState("apply_patch", { input: "*** Update File: /tmp/a" }).fileTarget,
     ).toBeUndefined();
+  });
+
+  it("extracts authoritative apply_patch targets from successful result details", () => {
+    expect(
+      buildToolResultFileTargets("apply_patch", {
+        details: {
+          summary: {
+            added: ["A.ts"],
+            modified: ["b.ts", "A.ts"],
+            deleted: ["c.ts"],
+          },
+        },
+      }),
+    ).toEqual([{ path: "A.ts" }, { path: "b.ts" }]);
+    expect(
+      buildToolResultFileTargets("apply_patch", {
+        details: { summary: { added: [], modified: [], deleted: [] } },
+      }),
+    ).toEqual([]);
+    expect(
+      buildToolResultFileTargets(
+        "apply_patch",
+        {
+          details: {
+            summary: {
+              added: ["new.ts"],
+              modified: [],
+              deleted: ["old.ts"],
+            },
+          },
+        },
+        { includeDeleted: true },
+      ),
+    ).toEqual([{ path: "new.ts" }, { path: "old.ts", expected: "absent" }]);
+    expect(buildToolResultFileTargets("apply_patch", { details: { status: "failed" } })).toBe(
+      undefined,
+    );
+    expect(buildToolResultFileTargets("write", { details: { summary: {} } })).toBeUndefined();
+  });
+
+  it("extracts apply_patch fallback targets from the input envelope", () => {
+    expect(
+      buildToolInputFileTargets(
+        "apply_patch",
+        {
+          input: [
+            "*** Begin Patch",
+            "*** Add File: a.ts",
+            "+export {};",
+            "*** Update File: b.ts",
+            "*** Move to: c.ts",
+            "@@",
+            "-old",
+            "+next",
+            "*** End Patch",
+          ].join("\n"),
+        },
+        process.cwd(),
+      ),
+    ).toEqual([
+      { path: "a.ts", expected: "present" },
+      { path: "b.ts", expected: "absent" },
+      { path: "c.ts", expected: "present" },
+    ]);
+    expect(buildToolInputFileTargets("write", { path: "a.ts" })).toBeUndefined();
+  });
+
+  it("merges result and input targets with the intended final state winning", () => {
+    expect(
+      mergeFileTargets(
+        [{ path: "old.ts" }, { path: "extra.ts", expected: "absent" }],
+        [
+          { path: "old.ts", expected: "absent" },
+          { path: "new.ts", expected: "present" },
+        ],
+      ),
+    ).toEqual([
+      { path: "old.ts", expected: "absent" },
+      { path: "extra.ts", expected: "absent" },
+      { path: "new.ts", expected: "present" },
+    ]);
+  });
+
+  it("keeps case-distinct verification targets separate on case-sensitive platforms", () => {
+    expect(isSameFileTarget({ path: "A.ts" }, { path: "a.ts" }, "linux")).toBe(false);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=a.ts",
+          fileTarget: { path: "A.ts" },
+        },
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=a.ts",
+          fileTarget: { path: "a.ts" },
+        },
+        "linux",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves case distinctions on macOS because volumes may be case-sensitive", () => {
+    expect(isSameFileTarget({ path: "A.ts" }, { path: "a.ts" }, "darwin")).toBe(false);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "edit",
+          actionFingerprint: "tool=edit|path=a.ts",
+          fileTarget: { path: "A.ts" },
+        },
+        {
+          toolName: "edit",
+          actionFingerprint: "tool=edit|path=a.ts",
+          fileTarget: { path: "a.ts" },
+        },
+        "darwin",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches case variants on Windows", () => {
+    expect(isSameFileTarget({ path: "A.ts" }, { path: "a.ts" }, "win32")).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=a.ts",
+          fileTarget: { path: "A.ts" },
+        },
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=a.ts",
+          fileTarget: { path: "a.ts" },
+        },
+        "win32",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches lexically equivalent verification targets", () => {
+    expect(isSameFileTarget({ path: "result.txt" }, { path: "./result.txt" })).toBe(true);
+    expect(isSameFileTarget({ path: "src/../result.txt" }, { path: "result.txt" })).toBe(true);
+    expect(
+      isSameFileTarget(
+        { path: "/workspace/result.txt" },
+        { path: "result.txt" },
+        "linux",
+        "/workspace",
+      ),
+    ).toBe(true);
+    expect(
+      isSameFileTarget(
+        { path: "/other/result.txt" },
+        { path: "result.txt" },
+        "linux",
+        "/workspace",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves whitespace in file-target identities", () => {
+    expect(buildToolFileTarget("write", { path: " report.txt " })).toEqual({
+      path: " report.txt ",
+    });
+    expect(isSameFileTarget({ path: " report.txt" }, { path: "report.txt" }, "darwin")).toBe(false);
   });
 
   it("recognizes cross-tool file-mutation recovery on the same target (#79024)", () => {

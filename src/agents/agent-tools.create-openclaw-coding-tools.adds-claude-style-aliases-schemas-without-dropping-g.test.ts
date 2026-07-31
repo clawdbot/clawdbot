@@ -274,6 +274,29 @@ describe("createOpenClawCodingTools read behavior", () => {
     ).rejects.toThrow("read failed");
   });
 
+  it("binds code-only ENOENT failures to the requested read path", async () => {
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({
+        path: Type.String(),
+      }),
+      execute: vi.fn(async () => {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }),
+    });
+
+    const error = await readTool
+      .execute("read-missing", { path: "notes.txt" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "ENOENT",
+      path: "notes.txt",
+    });
+  });
+
   it("strips truncation.content details from read results while preserving other fields", async () => {
     const readResult: AgentToolResult<unknown> = {
       content: [{ type: "text" as const, text: "line-0001" }],

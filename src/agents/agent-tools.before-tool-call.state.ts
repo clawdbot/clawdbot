@@ -6,6 +6,8 @@
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
+export const codeModeControlToolCallIds = new Set<string>();
+const parentToolCallIdByToolCallId = new Map<string, string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 
@@ -88,6 +90,39 @@ export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: 
   return replaySafe;
 }
 
+export function recordCodeModeControlToolCall(toolCallId: string, runId?: string): void {
+  codeModeControlToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+/** Inspect Code Mode control identity without consuming end-of-call ownership. */
+export function peekCodeModeControlToolCall(toolCallId: string, runId?: string): boolean {
+  return codeModeControlToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+export function consumeCodeModeControlToolCall(toolCallId: string, runId?: string): boolean {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const codeModeControl = codeModeControlToolCallIds.has(key);
+  codeModeControlToolCallIds.delete(key);
+  return codeModeControl;
+}
+
+/** Preserve nested tool ownership across lifecycle events without inferring it from generated ids. */
+export function recordParentToolCall(
+  toolCallId: string,
+  parentToolCallId: string,
+  runId?: string,
+): void {
+  parentToolCallIdByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), parentToolCallId);
+}
+
+export function peekParentToolCall(toolCallId: string, runId?: string): string | undefined {
+  return parentToolCallIdByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+export function clearParentToolCall(toolCallId: string, runId?: string): void {
+  parentToolCallIdByToolCallId.delete(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
 /** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
@@ -95,4 +130,6 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   trackedToolCallIds.clear();
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
+  codeModeControlToolCallIds.clear();
+  parentToolCallIdByToolCallId.clear();
 }

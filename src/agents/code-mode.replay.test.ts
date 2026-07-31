@@ -3,16 +3,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   fakeTool,
   pluginTool,
+  pluginToolWithExecute,
   mcpTool,
   resultDetails,
   createCodeModeHarness,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
+import { createToolSearchCatalogRef } from "./tool-search.js";
 
 describe("Code Mode restart-safe replay", () => {
   beforeEach(() => {
@@ -36,7 +38,7 @@ describe("Code Mode restart-safe replay", () => {
       catalogRef,
     });
 
-    const first = resultDetails(
+    const completed = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-replay-safety",
         {
@@ -48,27 +50,8 @@ describe("Code Mode restart-safe replay", () => {
         },
       ),
     );
-    expect(first.status).toBe("waiting");
-    expect(first.replaySafe).toBe(true);
-
-    const second = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-replay-safety",
-        { runId: first.runId },
-      ),
-    );
-    expect(second.status).toBe("waiting");
-    expect(second.replaySafe).toBe(true);
-
-    const completed = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-replay-safety-complete",
-        {
-          runId: second.runId,
-        },
-      ),
-    );
     expect(completed.status).toBe("completed");
+    expect(completed.replaySafe).toBe(true);
   });
 
   it("allows explicitly replay-safe plugin tools by exact catalog id", async () => {
@@ -100,10 +83,12 @@ describe("Code Mode restart-safe replay", () => {
 
     expect(completed.status).toBe("completed");
     expect(completed.replaySafe).toBe(true);
+    expect(completed.sideEffectFree).toBe(false);
     expect(targetTool.execute).toHaveBeenCalledTimes(1);
   });
 
   it("rejects MCP tools even when their metadata claims replay safety", async () => {
+    const readTool = fakeTool("read", "Read");
     const targetTool = mcpTool({
       name: "mcp_github_read_file",
       serverName: "github",
@@ -122,7 +107,7 @@ describe("Code Mode restart-safe replay", () => {
     });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
-      tools: [...codeModeTools, targetTool],
+      tools: [...codeModeTools, readTool, targetTool],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -134,12 +119,18 @@ describe("Code Mode restart-safe replay", () => {
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
-      code: 'return await MCP.github.readFile({ path: "README.md" });',
+      code: `
+        await tools.read({ path: "facts.txt" });
+        return await MCP.github.readFile({ path: "README.md" });
+      `,
     });
 
     expect(completed.status).toBe("failed");
     expect(completed.replaySafe).toBe(true);
+    expect(completed.sideEffectFree).toBe(true);
+    expect(completed.bridgeDispatchStarted).toBe(true);
     expect(completed.error).toContain("cannot call namespace tools");
+    expect(readTool.execute).toHaveBeenCalledTimes(1);
     expect(targetTool.execute).not.toHaveBeenCalled();
   });
 
@@ -155,7 +146,7 @@ describe("Code Mode restart-safe replay", () => {
       catalogRef,
     });
 
-    const first = resultDetails(
+    const failed = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-unsafe-restart",
         {
@@ -167,27 +158,13 @@ describe("Code Mode restart-safe replay", () => {
         },
       ),
     );
-    expect(first.status).toBe("waiting");
-    expect(first.replaySafe).toBe(true);
-
-    const failed = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-unsafe-restart",
-        { runId: first.runId },
-      ),
-    );
     expect(failed.status).toBe("failed");
     expect(failed.error).toContain("cannot call side-effecting tools");
     expect(targetTool.execute).not.toHaveBeenCalled();
   });
 
   it("preserves bridge evidence when a later restart-safe call is rejected", async () => {
-    const readTool = pluginTool("fake_safe_read", "Read");
-    setPluginToolMeta(readTool, {
-      pluginId: "fake-code-mode",
-      optional: true,
-      replaySafe: true,
-    });
+    const readTool = fakeTool("read", "Read");
     const writeTool = pluginTool("fake_unsafe_write", "Write");
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -204,8 +181,7 @@ describe("Code Mode restart-safe replay", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
       code: `
-        const reads = await tools.search("fake_safe_read");
-        await tools.call(reads[0].id, {});
+        await tools.read({ path: "facts.txt" });
         const writes = await tools.search("fake_unsafe_write");
         return await tools.call(writes[0].id, {});
       `,
@@ -216,6 +192,7 @@ describe("Code Mode restart-safe replay", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
       replaySafe: true,
+      sideEffectFree: true,
     });
     expect(failed.error).toContain("cannot call side-effecting tools");
     expect(readTool.execute).toHaveBeenCalledTimes(1);
@@ -240,7 +217,7 @@ describe("Code Mode restart-safe replay", () => {
       catalogRef,
     });
 
-    const first = resultDetails(
+    const failed = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-forced-restart",
         {
@@ -252,17 +229,230 @@ describe("Code Mode restart-safe replay", () => {
         },
       ),
     );
-    expect(first.status).toBe("waiting");
-    expect(first.replaySafe).toBe(true);
-
-    const failed = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-forced-restart",
-        { runId: first.runId },
-      ),
-    );
     expect(failed.status).toBe("failed");
     expect(failed.error).toContain("cannot call side-effecting tools");
     expect(targetTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves restart safety when a replay-safe call is parked", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          timeoutMs: 100,
+        },
+      },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      forceRestartSafeTools: true,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const slowRead = pluginToolWithExecute(
+      "fake_slow_read",
+      "Slow read",
+      async () => await new Promise<never>(() => {}),
+    );
+    setPluginToolMeta(slowRead, {
+      pluginId: "fake-code-mode",
+      optional: true,
+      replaySafe: true,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, slowRead],
+      config,
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+      runId: ctx.runId,
+      catalogRef,
+    });
+
+    const parked = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-restart-safe-park",
+        {
+          code: `
+            const matches = await tools.search("fake_slow_read");
+            return await tools.call(matches[0].id, {});
+          `,
+        },
+      ),
+    );
+
+    expect(parked).toMatchObject({
+      status: "waiting",
+      replaySafe: true,
+    });
+    const stillWaiting = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-restart-safe-park",
+        { runId: parked.runId },
+      ),
+    );
+    expect(stillWaiting).toMatchObject({
+      status: "waiting",
+      replaySafe: true,
+    });
+  });
+
+  it("keeps host-forced read-only mode across audited core reads", async () => {
+    const targetTool = fakeTool("read", "Read");
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      forceReadOnlyTools: true,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(codeModeTools).toHaveLength(2);
+    const completed = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-forced-read-only",
+        {
+          restartSafe: false,
+          code: `
+          const matches = await tools.search("read");
+          return await tools.call(matches[0].id, { path: "facts.txt" });
+        `,
+        },
+      ),
+    );
+
+    expect(completed.status).toBe("completed");
+    expect(completed.replaySafe).toBe(true);
+    expect(completed.sideEffectFree).toBe(true);
+    expect(targetTool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks replay-safe plugin tools during host-forced read-only verification", async () => {
+    const targetTool = pluginTool("fake_plugin_read", "Plugin read");
+    setPluginToolMeta(targetTool, {
+      pluginId: "fake-code-mode",
+      optional: true,
+      replaySafe: true,
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      forceReadOnlyTools: true,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const failed = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-forced-read-only-plugin",
+        {
+          restartSafe: false,
+          code: `
+          const matches = await tools.search("fake_plugin_read");
+          return await tools.call(matches[0].id, {});
+        `,
+        },
+      ),
+    );
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      replaySafe: true,
+      sideEffectFree: true,
+    });
+    expect(failed.error).toContain("read-only code mode cannot call side-effecting tools");
+    expect(targetTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("resumes a run parked under host-forced read-only verification", async () => {
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      forceReadOnlyTools: true,
+    });
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const suspended = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-forced-read-only-yield",
+        {
+          code: 'await yield_control("verify"); return "verified";',
+        },
+      ),
+    );
+
+    expect(suspended.status).toBe("waiting");
+    const completed = resultDetails(
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-forced-read-only-yield",
+        { runId: suspended.runId },
+      ),
+    );
+    expect(completed).toMatchObject({
+      status: "completed",
+      value: "verified",
+      readOnly: true,
+      replaySafe: true,
+      sideEffectFree: true,
+    });
+  });
+
+  it("does not resume an unrestricted parked run through a read-only wait", async () => {
+    const { config, catalogRef, tools: normalTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: normalTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const suspended = resultDetails(
+      await expectDefined(normalTools[0], "normalTools[0] test invariant").execute(
+        "code-call-unrestricted-yield",
+        {
+          code: 'await yield_control("pause"); return "done";',
+        },
+      ),
+    );
+    expect(suspended.status).toBe("waiting");
+
+    const { tools: readOnlyTools } = createCodeModeHarness({
+      forceReadOnlyTools: true,
+    });
+    await expect(
+      expectDefined(readOnlyTools[1], "readOnlyTools[1] test invariant").execute(
+        "code-wait-forced-read-only-unrestricted",
+        { runId: suspended.runId },
+      ),
+    ).rejects.toThrow("was not created under the read-only policy");
   });
 });

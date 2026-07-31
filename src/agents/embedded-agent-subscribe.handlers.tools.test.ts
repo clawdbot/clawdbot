@@ -16,8 +16,11 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearParentToolCall,
+  recordParentToolCall,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -53,6 +56,22 @@ function startTool(ctx: ToolHandlerContext, event: ToolExecutionStartEvent) {
 
 function endTool(ctx: ToolHandlerContext, event: ToolExecutionEndEvent) {
   return handleToolExecutionEnd(ctx, { type: "tool_execution_end", ...event });
+}
+
+function trustCoreToolCall(toolCallId: string, toolName: string): void {
+  recordStructuredReplayTrustForToolCall(
+    toolCallId,
+    { name: toolName, execute: vi.fn() } as never,
+    "run-test",
+  );
+}
+
+function trustCodeModeControlCall(toolCallId: string, toolName: "exec" | "wait"): void {
+  recordStructuredReplayTrustForToolCall(
+    toolCallId,
+    markCodeModeControlTool({ name: toolName, execute: vi.fn() } as never),
+    "run-test",
+  );
 }
 
 async function executeTool(
@@ -134,7 +153,7 @@ afterEach(async () => {
 
 const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
-function createTestContext(): {
+function createTestContext(params: Partial<ToolHandlerContext["params"]> = {}): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<
@@ -163,6 +182,7 @@ function createTestContext(): {
       onAgentEvent,
       onExecutionPhase,
       onToolResult: undefined,
+      ...params,
     },
     flushBlockReplyBuffer: vi.fn(),
     hookRunner: undefined,
@@ -308,6 +328,37 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
     expect(record[key]).toEqual(expectedValue);
   }
 }
+
+describe("tool duration metadata", () => {
+  it("records positive execution time for terminal summaries", async () => {
+    const { ctx } = createTestContext();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-31T00:00:00Z"));
+      await startTool(ctx, {
+        toolName: "read",
+        toolCallId: "tool-duration",
+        args: { path: "facts.txt" },
+      });
+      vi.advanceTimersByTime(25);
+      await endTool(ctx, {
+        toolName: "read",
+        toolCallId: "tool-duration",
+        isError: false,
+        result: { content: [], details: {} },
+      });
+
+      expect(ctx.state.toolMetas).toContainEqual(
+        expect.objectContaining({
+          toolName: "read",
+          durationMs: 25,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 function requireMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, label: string) {
   return requireRecord(mock.mock.calls[callIndex]?.[0], label);
@@ -1354,6 +1405,276 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("marks a native read as verification only after prior mutations settle", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-write-sequential", "write");
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-sequential",
+      args: { path: "/tmp/demo.txt", content: "updated" },
+      isError: false,
+      result: { ok: true },
+    });
+    trustCoreToolCall("tool-read-sequential", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-sequential",
+      args: { path: "/tmp/demo.txt" },
+      isError: false,
+      result: { content: [{ type: "text", text: "updated" }] },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "read",
+      fileTarget: { path: "/tmp/demo.txt" },
+      fileTargetVerified: true,
+    });
+  });
+
+  it("does not let an overlapping native read verify an in-flight mutation", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-write-overlap", "write");
+    await startTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-overlap",
+      args: { path: "/tmp/demo.txt", content: "updated" },
+    });
+    trustCoreToolCall("tool-read-overlap", "read");
+    await startTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-overlap",
+      args: { path: "/tmp/demo.txt" },
+    });
+    await endTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-overlap",
+      isError: false,
+      result: { content: [{ type: "text", text: "stale" }] },
+    });
+    await endTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-overlap",
+      isError: false,
+      result: { ok: true },
+    });
+
+    const readMeta = ctx.state.toolMetas.find((entry) => entry.toolName === "read");
+    expect(readMeta).toMatchObject({
+      toolName: "read",
+      fileTarget: { path: "/tmp/demo.txt" },
+    });
+    expect(readMeta).not.toHaveProperty("fileTargetVerified");
+  });
+
+  it("does not trust a shadowed read tool as workspace verification", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-write-before-shadowed-read", "write");
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-before-shadowed-read",
+      args: { path: "/tmp/demo.txt", content: "updated" },
+      isError: false,
+      result: { ok: true },
+    });
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-shadowed-read",
+      args: { path: "/tmp/demo.txt" },
+      isError: false,
+      result: { content: [{ type: "text", text: "remote record" }] },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).not.toHaveProperty("fileTargetVerified");
+  });
+
+  it("does not mark a pre-dispatch mutation failure as uncertain execution", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-write-validation-failure", "write");
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-validation-failure",
+      args: { path: "/tmp/demo.txt" },
+      isError: true,
+      executionStarted: false,
+      errorKind: "argument-validation",
+      result: { details: { status: "error", error: "missing content" } },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).not.toHaveProperty("fileMutationExecutionStarted");
+  });
+
+  it("preserves apply_patch targets reported after a failed mutation", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-apply-patch-partial-failure", "apply_patch");
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-apply-patch-partial-failure",
+      args: { input: "*** Begin Patch\n*** End Patch" },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          summary: {
+            added: ["a.ts"],
+            modified: ["b.ts"],
+            deleted: ["old.ts"],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "apply_patch",
+      isError: true,
+      mutatingAction: true,
+      fileMutationExecutionStarted: true,
+      fileTargets: [{ path: "a.ts" }, { path: "b.ts" }, { path: "old.ts", expected: "absent" }],
+    });
+  });
+
+  it("preserves apply_patch input targets when a native mutation fails without a summary", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-apply-patch-thrown-failure", "apply_patch");
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-apply-patch-thrown-failure",
+      args: {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: old.ts",
+          "*** Move to: new.ts",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          error: "patch crashed after applying an earlier hunk",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "apply_patch",
+      isError: true,
+      mutatingAction: true,
+      fileMutationExecutionStarted: true,
+      fileTargets: [
+        { path: "old.ts", expected: "absent" },
+        { path: "new.ts", expected: "present" },
+      ],
+    });
+
+    trustCoreToolCall("tool-read-moved-source", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-moved-source",
+      args: { path: "old.ts" },
+      isError: true,
+      result: {
+        details: { status: "failed", code: "ENOENT", path: "old.ts", error: "file not found" },
+      },
+    });
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "read",
+      isError: true,
+      fileTarget: { path: "old.ts" },
+      fileTargetAbsent: true,
+    });
+  });
+
+  it("resolves apply_patch fallback targets against the run cwd", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.cwd = "/workspace/project";
+
+    trustCoreToolCall("tool-apply-patch-parent-relative", "apply_patch");
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-apply-patch-parent-relative",
+      args: {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: ../shared.ts",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          error: "patch crashed",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "apply_patch",
+      isError: true,
+      fileTargets: [{ path: "/workspace/shared.ts", expected: "present" }],
+    });
+  });
+
+  it("does not treat a missing read helper as target absence", async () => {
+    const { ctx } = createTestContext();
+
+    trustCoreToolCall("tool-read-helper-missing", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-helper-missing",
+      args: { path: "old.ts" },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          code: "ENOENT",
+          error: "Error: spawn missing-read-helper ENOENT",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "read",
+      isError: true,
+      fileTarget: { path: "old.ts" },
+    });
+    expect(ctx.state.toolMetas.at(-1)?.fileTargetAbsent).toBeUndefined();
+  });
+
+  it("binds absolute not-found diagnostics to the execution cwd", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.cwd = "/workspace";
+
+    trustCoreToolCall("tool-read-other-helper", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-other-helper",
+      args: { path: "helper-config" },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          code: "ENOENT",
+          error: "ENOENT: no such file or directory, open '/opt/helper-config'",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.at(-1)?.fileTargetAbsent).toBeUndefined();
+  });
+
   it("marks middleware failures on the last tool error", async () => {
     const { ctx } = createTestContext();
 
@@ -1516,6 +1837,421 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       result: { error: "Command exited with code 1" },
     });
 
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("clears a side-effect-free Code Mode failure after a corrected exec succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-invalid", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-invalid",
+      args: { code: "import fs from 'fs';" },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          code: "invalid_input",
+          failurePhase: "input",
+          bridgeDispatchStarted: false,
+          repair: { allowed: true, remainingAttempts: 1 },
+        },
+      },
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      mutatingAction: false,
+    });
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+
+    trustCodeModeControlCall("tool-code-mode-corrected", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-corrected",
+      args: { code: 'return await tools.read({ path: "facts.txt" });' },
+      isError: false,
+      result: { details: { status: "completed", sideEffectFree: true } },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+  });
+
+  it("keeps a read-only Code Mode bridge failure replay-safe", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-read-failure", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-read-failure",
+      args: {
+        code: 'const text = await tools.read({ path: "facts.txt" }); throw new Error(text);',
+      },
+      isError: true,
+      result: {
+        details: {
+          status: "failed",
+          code: "internal_error",
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          sideEffectFree: true,
+          repair: { allowed: true, remainingAttempts: 1 },
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        meta: undefined,
+        replaySafe: true,
+        mutatingAction: true,
+        sideEffectFree: true,
+        codeModeRepairAllowed: true,
+        isError: true,
+      }),
+    );
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      mutatingAction: false,
+    });
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+  });
+
+  it("does not promote a parked replay-unsafe Code Mode call as side-effect-free", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-parked-mutation", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-parked-mutation",
+      args: { code: 'return await tools.write({ path: "result.txt", content: "done" });' },
+      isError: false,
+      result: {
+        details: {
+          status: "waiting",
+          replaySafe: false,
+          sideEffectFree: true,
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        meta: undefined,
+        replaySafe: false,
+        mutatingAction: true,
+        sideEffectFree: true,
+      }),
+    );
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps a parked replay-safe read-only Code Mode call replay-safe", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-parked-read", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-parked-read",
+      args: { code: 'return await tools.read({ path: "facts.txt" });' },
+      isError: false,
+      result: {
+        details: {
+          status: "waiting",
+          replaySafe: true,
+          sideEffectFree: true,
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        meta: undefined,
+        replaySafe: true,
+        mutatingAction: true,
+        sideEffectFree: true,
+      }),
+    );
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+  });
+
+  it("records a completed Code Mode mutation as side-effectful", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-replay-safe-mutation", "exec");
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-replay-safe-mutation",
+      args: { code: 'return await tools.write({ path: "result.txt", content: "done" });' },
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          replaySafe: true,
+          sideEffectFree: false,
+          telemetry: {
+            callSequence: ["read", "write"],
+            callSideEffectFreeSequence: [true, false],
+            lastCallSideEffectFree: false,
+            hadTargetlessSideEffects: false,
+            successfulObservationFileTargets: [{ path: "facts.txt" }],
+            unverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        meta: undefined,
+        replaySafe: false,
+        mutatingAction: true,
+        sideEffectFree: false,
+        codeModeLastCallSideEffectFree: false,
+        codeModeHadTargetlessSideEffects: false,
+        codeModeSuccessfulObservationFileTargets: [{ path: "facts.txt" }],
+        codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+      }),
+    );
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("accepts ordered Code Mode readback telemetry after its own nested mutation", async () => {
+    const { ctx } = createTestContext({
+      codeModeControlToolNames: new Set(["exec", "wait"]),
+    });
+
+    await startTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-edit-readback",
+      args: {
+        code: 'await tools.edit({ path: "result.txt", oldText: "pending", newText: "done" }); return await tools.read({ path: "result.txt" });',
+      },
+    });
+    // Tool-definition execution records structured trust after agent-core's
+    // lifecycle start event, matching the production ordering.
+    trustCodeModeControlCall("tool-code-mode-edit-readback", "exec");
+    trustCoreToolCall("nested-edit", "edit");
+    recordParentToolCall("nested-edit", "tool-code-mode-edit-readback", "run-test");
+    try {
+      await executeTool(ctx, {
+        toolName: "edit",
+        toolCallId: "nested-edit",
+        args: { path: "result.txt", oldText: "pending", newText: "done" },
+        isError: false,
+        result: { details: { status: "completed" } },
+      });
+    } finally {
+      clearParentToolCall("nested-edit", "run-test");
+    }
+    trustCoreToolCall("nested-read", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "nested-read",
+      args: { path: "result.txt" },
+      isError: false,
+      result: { content: [{ type: "text", text: "done" }] },
+    });
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-edit-readback",
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sideEffectFree: false,
+          telemetry: {
+            hadTargetlessSideEffects: false,
+            successfulObservationFileTargets: [{ path: "result.txt" }],
+            unverifiedMutationFileTargets: [],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        sideEffectFree: false,
+        codeModeHadTargetlessSideEffects: false,
+        codeModeSuccessfulObservationFileTargets: [{ path: "result.txt" }],
+        codeModeUnverifiedMutationFileTargets: [],
+      }),
+    );
+  });
+
+  it("rejects Code Mode readback telemetry after a later unrelated mutation", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-stale-readback", "exec");
+    await startTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-stale-readback",
+      args: {
+        code: 'await tools.edit({ path: "result.txt", oldText: "pending", newText: "done" }); return await tools.read({ path: "result.txt" });',
+      },
+    });
+    trustCoreToolCall("nested-owned-edit", "edit");
+    recordParentToolCall("nested-owned-edit", "tool-code-mode-stale-readback", "run-test");
+    try {
+      await executeTool(ctx, {
+        toolName: "edit",
+        toolCallId: "nested-owned-edit",
+        args: { path: "result.txt", oldText: "pending", newText: "done" },
+        isError: false,
+        result: { details: { status: "completed" } },
+      });
+    } finally {
+      clearParentToolCall("nested-owned-edit", "run-test");
+    }
+    trustCoreToolCall("nested-read-before-race", "read");
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "nested-read-before-race",
+      args: { path: "result.txt" },
+      isError: false,
+      result: { content: [{ type: "text", text: "done" }] },
+    });
+    trustCoreToolCall("unrelated-edit", "edit");
+    await executeTool(ctx, {
+      toolName: "edit",
+      toolCallId: "unrelated-edit",
+      args: { path: "result.txt", oldText: "done", newText: "changed" },
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-stale-readback",
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sideEffectFree: false,
+          telemetry: {
+            successfulObservationFileTargets: [{ path: "result.txt" }],
+            unverifiedMutationFileTargets: [],
+          },
+        },
+      },
+    });
+
+    const codeModeMeta = ctx.state.toolMetas.find((entry) => entry.toolName === "exec");
+    expect(codeModeMeta).not.toHaveProperty("codeModeSuccessfulObservationFileTargets");
+  });
+
+  it("does not let an overlapping Code Mode read verify a concurrent mutation", async () => {
+    const { ctx } = createTestContext();
+
+    trustCodeModeControlCall("tool-code-mode-overlap-read", "exec");
+    await startTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-overlap-read",
+      args: { code: 'return await tools.read({ path: "result.txt" });' },
+    });
+    trustCodeModeControlCall("tool-code-mode-overlap-write", "exec");
+    await startTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-overlap-write",
+      args: { code: 'return await tools.write({ path: "result.txt", content: "done" });' },
+    });
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-overlap-write",
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sideEffectFree: false,
+          telemetry: {
+            unverifiedMutationFileTargets: [{ path: "result.txt" }],
+          },
+        },
+      },
+    });
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-overlap-read",
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sideEffectFree: true,
+          telemetry: {
+            successfulObservationFileTargets: [{ path: "result.txt" }],
+            unverifiedMutationFileTargets: [],
+          },
+        },
+      },
+    });
+
+    const readMeta = ctx.state.toolMetas.find(
+      (entry) => entry.toolName === "exec" && entry.sideEffectFree === true,
+    );
+    expect(readMeta).not.toHaveProperty("codeModeSuccessfulObservationFileTargets");
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        sideEffectFree: false,
+        codeModeUnverifiedMutationFileTargets: [{ path: "result.txt" }],
+      }),
+    );
+  });
+
+  it("does not trust Code Mode result fields from a shadowed exec tool", async () => {
+    const { ctx } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-shadowed-code-mode-exec",
+      args: { code: 'return await tools.read({ path: "facts.txt" });' },
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sideEffectFree: true,
+          telemetry: {
+            successfulObservationFileTargets: [{ path: "facts.txt" }],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        meta: undefined,
+        replaySafe: false,
+        mutatingAction: true,
+      }),
+    );
     expect(ctx.state.replayState).toEqual({
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -2659,6 +3395,11 @@ describe("handleToolExecutionEnd derived tool events", () => {
       modified: ["b.ts"],
       deleted: ["c.ts"],
       summary: "1 added, 1 modified, 1 deleted",
+    });
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "apply_patch",
+      mutatingAction: true,
+      fileTargets: [{ path: "a.ts" }, { path: "b.ts" }, { path: "c.ts", expected: "absent" }],
     });
   });
 });

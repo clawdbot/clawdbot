@@ -46,6 +46,7 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  codeModeControlToolCallIds,
   consumeTrackedToolExecutionStarted,
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
@@ -63,6 +64,7 @@ type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 const beforeToolCallTesting = {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  codeModeControlToolCallIds,
   structuredReplaySafeToolCallIds,
 };
 
@@ -253,6 +255,57 @@ describe("before_tool_call hook integration", () => {
         beforeToolCallTesting.buildAdjustedParamsKey({
           runId: "run-plugin",
           toolCallId: "call-plugin",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("records Code Mode control identity without trusting a shadowed exec", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const controlTool = wrapToolWithBeforeToolCallHook(
+      markCodeModeControlTool(asAgentTool({ name: "exec", execute })),
+      { runId: "run-code-mode-control" },
+    );
+    const shadowTool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }), {
+      runId: "run-shadowed-exec",
+    });
+
+    const [controlDefinition] = toToolDefinitions([controlTool], {
+      runId: "run-code-mode-control",
+    });
+    const [shadowDefinition] = toToolDefinitions([shadowTool], {
+      runId: "run-shadowed-exec",
+    });
+    const extensionContext = {} as ExtensionContext;
+    await controlDefinition?.execute(
+      "call-code-mode-control",
+      { code: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await shadowDefinition?.execute(
+      "call-shadowed-exec",
+      { code: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(
+      beforeToolCallTesting.codeModeControlToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-code-mode-control",
+          toolCallId: "call-code-mode-control",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      beforeToolCallTesting.codeModeControlToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-shadowed-exec",
+          toolCallId: "call-shadowed-exec",
         }),
       ),
     ).toBe(false);

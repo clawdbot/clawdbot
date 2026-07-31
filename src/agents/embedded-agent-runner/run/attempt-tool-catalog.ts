@@ -3,9 +3,12 @@
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { wrapNativeCodeModeToolWithGuidance } from "../../code-mode-native-tool-guidance.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
+  collectCodeModeDirectToolNames,
+  collectCodeModeDirectToolSchemas,
   createCodeModeTools,
 } from "../../code-mode.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -50,6 +53,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const {
     codeModeControlsEnabledForRun,
     codeModeSkills,
+    localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
@@ -84,9 +88,11 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         sessionKey: input.sandboxSessionKey,
         sessionId: attempt.sessionId,
         runId: attempt.runId,
+        cwd: input.effectiveCwd,
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         abortSignal: input.abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
+        forceReadOnlyTools: attempt.forceReadOnlyTools,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
       })
@@ -108,6 +114,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     catalogRef: preparedToolBase.toolSearchCatalogRef,
     toolHookContext: catalogToolHookContext,
     codeModeSkills,
+    forceReadOnlyTools: attempt.forceReadOnlyTools,
   });
   const projectedToolSearchTools = filterLocalModelLeanTools({
     tools: toolSearch.tools,
@@ -124,8 +131,29 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionKey: attempt.sessionKey,
     sessionId: attempt.sessionId,
   });
+  const codeModeDirectToolNames = codeModeControlsEnabledForRun
+    ? collectCodeModeDirectToolNames(preparedToolBase.toolSearchCatalogRef?.current?.entries ?? [])
+    : undefined;
+  const codeModeDirectToolSchemas = codeModeControlsEnabledForRun
+    ? collectCodeModeDirectToolSchemas(
+        preparedToolBase.toolSearchCatalogRef?.current?.entries ?? [],
+      )
+    : undefined;
+  const codeModeNativeToolNames =
+    codeModeControlsEnabledForRun && codeModeDirectToolNames
+      ? new Set(
+          toolSearchSchemaProjection.tools
+            .map((tool) => tool.name)
+            .filter((toolName) => codeModeDirectToolNames.has(toolName)),
+        )
+      : undefined;
   effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
-    wrapEmbeddedAttemptToolWithActivity(tool, attempt.runId),
+    wrapEmbeddedAttemptToolWithActivity(
+      localModelLeanEnabled && codeModeNativeToolNames?.has(tool.name)
+        ? wrapNativeCodeModeToolWithGuidance(tool)
+        : tool,
+      attempt.runId,
+    ),
   );
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
@@ -163,14 +191,15 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         : undefined,
     explicitAllowlistSources: explicitToolAllowlistSources,
   });
-  const emptyExplicitToolAllowlistError = attempt.forceRestartSafeTools
-    ? null
-    : buildEmptyExplicitToolAllowlistError({
-        sources: explicitToolAllowlistSources,
-        callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
-        toolsEnabled,
-        disableTools: attempt.disableTools,
-      });
+  const emptyExplicitToolAllowlistError =
+    attempt.forceRestartSafeTools || attempt.forceReadOnlyTools
+      ? null
+      : buildEmptyExplicitToolAllowlistError({
+          sources: explicitToolAllowlistSources,
+          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          toolsEnabled,
+          disableTools: attempt.disableTools,
+        });
   logAgentRuntimeToolDiagnostics({
     runtimePlan: attempt.runtimePlan,
     tools: effectiveTools,
@@ -186,6 +215,9 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
 
   return {
     catalogToolHookContext,
+    codeModeDirectToolNames,
+    codeModeDirectToolSchemas,
+    codeModeNativeToolNames,
     deferredDirectoryToolsCallable,
     effectiveTools,
     emptyExplicitToolAllowlistError,

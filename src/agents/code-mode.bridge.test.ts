@@ -7,6 +7,7 @@ import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
+  fakeTool,
   pluginTool,
   pluginToolWithExecute,
   resultDetails,
@@ -131,6 +132,86 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details.value).toEqual([0, 1, 2, 3, 4]);
     expect(ticket.execute).toHaveBeenCalledTimes(5);
     expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("reports whether dispatched bridge calls stayed side-effect-free", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const mutation = fakeTool("fake_create_ticket", "Create a fake ticket");
+    mutation.parameters = Type.Object({ content: Type.String() }, { additionalProperties: false });
+    mutation.prepareBeforeToolCallParams = (params) => {
+      if (
+        !params ||
+        typeof params !== "object" ||
+        typeof (params as { content?: unknown }).content !== "string"
+      ) {
+        throw new Error("content is required");
+      }
+      return params;
+    };
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, mutation],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const readOnly = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: 'return await tools.search("ticket");',
+    });
+    expect(readOnly).toMatchObject({ status: "completed", sideEffectFree: true });
+
+    const mutating = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: 'return await tools.callValue("fake_create_ticket", { content: "one" });',
+    });
+    expect(mutating).toMatchObject({ status: "completed", sideEffectFree: false });
+
+    const rejectedMutation = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: 'return await tools.callValue("fake_create_ticket", { path: "one" });',
+    });
+    expect(rejectedMutation).toMatchObject({
+      status: "failed",
+      bridgeDispatchStarted: true,
+      sideEffectFree: true,
+    });
+    expect(mutation.execute).toHaveBeenCalledOnce();
+  });
+
+  it("classifies hook-adjusted inputs at the execution boundary", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const cron = fakeTool("cron", "Cron");
+    cron.parameters = Type.Object({ action: Type.String() }, { additionalProperties: false });
+    cron.prepareBeforeToolCallParams = () => ({ action: "add" });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, cron],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const result = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: 'return await tools.callValue("cron", { action: "list" });',
+    });
+
+    expect(result).toMatchObject({ status: "completed", sideEffectFree: false });
+    expect(cron.execute).toHaveBeenCalledWith(
+      expect.any(String),
+      { action: "add" },
+      expect.any(AbortSignal),
+      undefined,
+      undefined,
+    );
   });
 
   it("keeps the actual winner when the later-started nested tool settles first", async () => {

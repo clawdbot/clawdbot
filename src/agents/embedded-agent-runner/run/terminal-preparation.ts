@@ -116,7 +116,8 @@ export function prepareEmbeddedRunTerminal(input: {
     compactionTokensAfter: input.contextRecoveryState.lastCompactionTokensAfter,
     // Absent attempt engagement (plugin harness routes) intentionally reads as
     // false so config-enabled-but-unengaged code mode is visible to consumers.
-    codeModeEngaged: attempt.codeModeEngaged === true,
+    codeModeEngaged:
+      attempt.codeModeEngaged === true || input.usageAccumulator.codeModeEngaged === true,
     ...(runAssistantTurns > 0 ? { assistantTurns: runAssistantTurns } : {}),
     ...(input.usageAccumulator.bridgeCalls
       ? { bridgeCalls: { ...input.usageAccumulator.bridgeCalls } }
@@ -220,10 +221,12 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
-  const attemptToolSummary = buildTraceToolSummary({
-    toolMetas: attempt.toolMetas,
-    fallbackHadFailure: Boolean(attempt.lastToolError),
-  });
+  const attemptToolSummary =
+    input.usageAccumulator.toolSummary ??
+    buildTraceToolSummary({
+      toolMetas: attempt.toolMetas,
+      fallbackHadFailure: Boolean(attempt.lastToolError),
+    });
   const failureSignal = resolveEmbeddedRunFailureSignal({
     trigger: runParams.trigger,
     lastToolError: attempt.lastToolError,

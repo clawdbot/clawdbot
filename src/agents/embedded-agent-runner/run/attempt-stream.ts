@@ -41,6 +41,7 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+import { wrapStreamFnTranslateCodeModeGuestToolCalls } from "./code-mode-tool-call-repair.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -68,6 +69,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
+  codeModeDirectToolNames?: ReadonlySet<string>;
+  codeModeDirectToolSchemas?: ReadonlyMap<string, unknown>;
+  codeModeNativeToolNames?: ReadonlySet<string>;
   isYieldDetected: () => boolean;
   clientToolLoopDetection: ReturnType<
     typeof import("../../agent-tools.js").resolveToolLoopDetectionConfig
@@ -207,9 +211,23 @@ export function installEmbeddedAttemptStreamGuards(input: {
     input.transcriptPolicy,
     attempt.provider,
   );
+  const codeModeTextToolNames = input.codeModeDirectToolNames
+    ? new Set([...input.codeModeDirectToolNames].flatMap((name) => [name, `tools.${name}`]))
+    : undefined;
   session.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
     session.agent.streamFn,
     input.liveAllowedToolNames,
+    codeModeTextToolNames
+      ? {
+          additionalAllowedToolNames: codeModeTextToolNames,
+          // A few small models emit the guest namespace itself as the function
+          // name. It has no dispatchable arguments, so scrub it and retry.
+          additionalScrubbedToolNames: new Set(["tools"]),
+          // Some small models close every XML parameter but omit only the final
+          // function tag. This remains terminal-only and guest-name allowlisted.
+          allowMissingXmlFunctionCloseForAdditionalTools: true,
+        }
+      : undefined,
   );
   session.agent.streamFn = wrapStreamFnTrimToolCallNames(
     session.agent.streamFn,
@@ -240,6 +258,15 @@ export function installEmbeddedAttemptStreamGuards(input: {
       output: input.providerTextTransforms.output,
     });
   }
+
+  // Code Mode translation is semantic normalization. Run it after provider
+  // argument repair/decoding so those lower layers cannot restore stale args.
+  session.agent.streamFn = wrapStreamFnTranslateCodeModeGuestToolCalls(
+    session.agent.streamFn,
+    input.codeModeDirectToolNames,
+    input.codeModeDirectToolSchemas,
+    input.codeModeNativeToolNames,
+  );
 
   if (input.anthropicPayloadLogger) {
     session.agent.streamFn = input.anthropicPayloadLogger.wrapStreamFn(session.agent.streamFn);

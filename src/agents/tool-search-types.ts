@@ -42,6 +42,7 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
     parentToolCallId?: string;
     signal?: AbortSignal;
     onUpdate?: AgentToolUpdateCallback;
+    onExecutionStart?: (finalInput: unknown) => void;
   };
 
 export type ToolSearchCatalogToolExecutor = (params: {
@@ -87,10 +88,12 @@ export type ToolSearchToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  cwd?: string;
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  forceReadOnlyTools?: boolean;
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -113,6 +116,9 @@ export type ToolSearchCatalogSession = {
   searchCount: number;
   describeCount: number;
   callCount: number;
+  callSequence?: string[];
+  callFailureCount?: number;
+  callSideEffectFreeSequence?: boolean[];
 };
 
 export type ToolSearchCatalogRef = {

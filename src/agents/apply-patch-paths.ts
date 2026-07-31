@@ -47,6 +47,11 @@ export type ApplyPatchPathExtractionOptions = {
   };
 };
 
+type ApplyPatchTargetPath = {
+  path: string;
+  expected: "present" | "absent";
+};
+
 function readPatchText(input: unknown): string | undefined {
   if (typeof input === "string") {
     return input;
@@ -84,21 +89,24 @@ function normalizePatchPath(
   }
 }
 
-function pushPath(
-  target: string[],
-  seen: Set<string>,
+function pushTarget(
+  targets: ApplyPatchTargetPath[],
+  targetIndexes: Map<string, number>,
   raw: string,
+  expected: ApplyPatchTargetPath["expected"],
   options: ApplyPatchPathExtractionOptions,
 ): void {
   const normalized = normalizePatchPath(raw, options);
   if (!normalized) {
     return;
   }
-  if (seen.has(normalized)) {
+  const existingIndex = targetIndexes.get(normalized);
+  if (existingIndex !== undefined) {
+    targets[existingIndex] = { path: normalized, expected };
     return;
   }
-  seen.add(normalized);
-  target.push(normalized);
+  targetIndexes.set(normalized, targets.length);
+  targets.push({ path: normalized, expected });
 }
 
 function readMarkerPath(line: string | undefined, marker: string): string | undefined {
@@ -137,17 +145,17 @@ function normalizeMarkerHeaderLine(
  * referenced multiple times within a single envelope). Returns `[]` for any
  * input that is not a recognised envelope.
  */
-export function extractApplyPatchTargetPaths(
+export function extractApplyPatchTargets(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
-): string[] {
+): ApplyPatchTargetPath[] {
   const text = readPatchText(input);
   if (text === undefined || text.length === 0) {
     return [];
   }
   const lines = text.split(/\r?\n/);
-  const paths: string[] = [];
-  const seen = new Set<string>();
+  const targets: ApplyPatchTargetPath[] = [];
+  const targetIndexes = new Map<string, number>();
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines.at(index);
     if (line === undefined) {
@@ -155,7 +163,7 @@ export function extractApplyPatchTargetPaths(
     }
     const addPath = readMarkerPath(line, ADD_FILE_MARKER);
     if (addPath !== undefined) {
-      pushPath(paths, seen, addPath, options);
+      pushTarget(targets, targetIndexes, addPath, "present", options);
       while (index + 1 < lines.length && lines.at(index + 1)?.startsWith("+")) {
         index += 1;
       }
@@ -163,12 +171,12 @@ export function extractApplyPatchTargetPaths(
     }
     const deletePath = readMarkerPath(line, DELETE_FILE_MARKER);
     if (deletePath !== undefined) {
-      pushPath(paths, seen, deletePath, options);
+      pushTarget(targets, targetIndexes, deletePath, "absent", options);
       continue;
     }
     const updatePath = readMarkerPath(line, UPDATE_FILE_MARKER);
     if (updatePath !== undefined) {
-      pushPath(paths, seen, updatePath, options);
+      pushTarget(targets, targetIndexes, updatePath, "present", options);
       // The Update header may be immediately followed by a `*** Move to:`
       // sub-marker that names the new path. Skip leading blank lines so
       // human-edited patches with extra spacing still pick it up.
@@ -178,7 +186,8 @@ export function extractApplyPatchTargetPaths(
       }
       const movePath = readMarkerPath(lines.at(lookahead), MOVE_TO_MARKER);
       if (movePath !== undefined) {
-        pushPath(paths, seen, movePath, options);
+        pushTarget(targets, targetIndexes, updatePath, "absent", options);
+        pushTarget(targets, targetIndexes, movePath, "present", options);
         lookahead += 1;
       }
       while (lookahead < lines.length) {
@@ -198,5 +207,12 @@ export function extractApplyPatchTargetPaths(
       index = lookahead - 1;
     }
   }
-  return paths;
+  return targets;
+}
+
+export function extractApplyPatchTargetPaths(
+  input: unknown,
+  options: ApplyPatchPathExtractionOptions = {},
+): string[] {
+  return extractApplyPatchTargets(input, options).map((target) => target.path);
 }

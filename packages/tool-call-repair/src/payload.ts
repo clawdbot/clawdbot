@@ -14,6 +14,7 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
+import { parseXmlishPlainTextToolCallBlockAt } from "./payload-xml.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -33,6 +34,8 @@ export type PlainTextToolCallBlock = {
 export type PlainTextToolCallParseOptions = {
   /** Optional allowlist of tool names that may be repaired. */
   allowedToolNames?: Iterable<string>;
+  /** Accept XML calls whose parameters close but whose final function tag is omitted. */
+  allowMissingXmlFunctionClose?: boolean;
   /** Maximum serialized payload size accepted for one repaired call. */
   maxPayloadBytes?: number;
 };
@@ -567,81 +570,25 @@ function parseJsonArguments(
     : null;
 }
 
-function extractXmlishParameterValue(
-  text: string,
-  start: number,
-  end: number,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): string {
-  let value = text.slice(start, end);
-  if (consumeLineBreak(text, skipHorizontalWhitespace(text, start)) === null) {
-    const boundary = consumeStructuralLineBreakAfterHorizontalWhitespace(
-      text,
-      start,
-      structuralLineBreaks,
-    );
-    if (boundary !== null) {
-      const offset = boundary - start;
-      value = `${value.slice(0, offset)}\n${value.slice(offset)}`;
-    }
-  }
-  const payloadStart = consumeLineBreak(value, 0);
-  if (payloadStart === null) {
-    return value;
-  }
-  return value.slice(payloadStart).replace(/(?:\r\n|[\r\n])$/u, "");
-}
-
-function parseXmlishPlainTextToolCallBlockAt(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  const scan = scanXmlishToolCall(text, start, structuralLineBreaks);
-  if (scan.kind !== "complete") {
-    return null;
-  }
-  const name = text.slice(scan.name.start, scan.name.end);
-  if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-    return null;
-  }
-
-  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-  if (
-    utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) === null
-  ) {
-    return null;
-  }
-  const args = Object.fromEntries(
-    scan.parameters.map((parameter) => [
-      text.slice(parameter.name.start, parameter.name.end),
-      extractXmlishParameterValue(
-        text,
-        parameter.value.start,
-        parameter.value.end,
-        structuralLineBreaks,
-      ),
-    ]),
-  );
-  return {
-    arguments: args,
-    end: scan.end,
-    name,
-    raw: text.slice(start, scan.end),
-    start,
-  };
-}
-
 function parsePlainTextToolCallBlockAtAnySyntax(
   text: string,
   start: number,
   options?: NormalizedPlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock | null {
+  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   return (
     parsePlainTextToolCallBlockAt(text, start, options, structuralLineBreaks) ??
-    parseXmlishPlainTextToolCallBlockAt(text, start, options, structuralLineBreaks)
+    parseXmlishPlainTextToolCallBlockAt(
+      text,
+      start,
+      {
+        allowedToolNames: options?.allowedToolNames,
+        allowMissingFunctionClose: options?.allowMissingXmlFunctionClose,
+        maxPayloadBytes,
+      },
+      structuralLineBreaks,
+    )
   );
 }
 

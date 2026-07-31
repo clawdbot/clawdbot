@@ -58,6 +58,39 @@ describe("Code Mode TypeScript execution", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({ value: 42 });
 
+    const importedTools = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      language: "typescript",
+      code: `
+        import { search } from "tools";
+        const result = await search("noop");
+        result;
+      `,
+    });
+
+    expect(importedTools.status).toBe("completed");
+    expect(importedTools.value).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "fake_noop" })]),
+    );
+
+    const hoistedImport = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      language: "typescript",
+      code: `
+        const result = await search("noop");
+        import { search } from "tools";
+        const tools = { search: () => "local" };
+        result;
+      `,
+    });
+
+    expect(hoistedImport.status).toBe("completed");
+    expect(hoistedImport.value).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "fake_noop" })]),
+    );
+
     const moduleShapedTypeScript = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),

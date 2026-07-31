@@ -357,6 +357,28 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it("preserves explicitly reported zero cache fields in cumulative usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant", usage } });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 120,
+    });
+  });
+
   it("retains the last nonzero call when a later aborted message reports zero usage", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = { input: 38_333, output: 66, cacheRead: 120_320, totalTokens: 158_719 };

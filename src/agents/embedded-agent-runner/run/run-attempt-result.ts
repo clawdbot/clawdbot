@@ -77,11 +77,18 @@ export function buildTraceToolSummary(params: {
     tools.push(toolName);
   }
   const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
+  const totalToolTimeMs = params.toolMetas.reduce((total, entry) => {
+    const durationMs = entry.durationMs;
+    return typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs >= 0
+      ? total + durationMs
+      : total;
+  }, 0);
   return {
     calls: params.toolMetas.length,
     tools,
     // Per-call error metadata is additive to the shipped harness result contract.
     // Keep the prior any-failure signal for external harnesses that do not emit it yet.
     failures: failedToolCalls || Number(params.fallbackHadFailure),
+    ...(totalToolTimeMs > 0 ? { totalToolTimeMs } : {}),
   };
 }

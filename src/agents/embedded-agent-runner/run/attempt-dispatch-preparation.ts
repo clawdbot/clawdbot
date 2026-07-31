@@ -16,7 +16,11 @@ import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
-import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
+import {
+  consumeForceRestartSafeToolsForNextAttempt,
+  MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+  resolveForceReadOnlyToolsForAttempt,
+} from "./terminal-retry-state.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
@@ -190,8 +194,21 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
     startupStagesEmitted = true;
   }
+  const forceRestartSafeTools = consumeForceRestartSafeToolsForNextAttempt(
+    terminalRetryState,
+    params.forceRestartSafeTools === true,
+  );
+  const forceReadOnlyTools = resolveForceReadOnlyToolsForAttempt(
+    terminalRetryState,
+    params.forceReadOnlyTools === true,
+  );
+  const attemptRunParams =
+    forceRestartSafeTools === params.forceRestartSafeTools &&
+    forceReadOnlyTools === params.forceReadOnlyTools
+      ? params
+      : { ...params, forceRestartSafeTools, forceReadOnlyTools };
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
-    params,
+    params: attemptRunParams,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },

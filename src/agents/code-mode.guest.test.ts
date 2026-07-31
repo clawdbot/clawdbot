@@ -6,12 +6,14 @@ import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginTool,
+  pluginToolWithExecute,
   resultDetails,
   createCodeModeHarness,
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode guest execution", () => {
   beforeEach(() => {
@@ -223,6 +225,115 @@ describe("Code Mode guest execution", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("supports console output and string methods on text results across bridge resumes", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    let written = "";
+    const read = pluginToolWithExecute("fake_read_text", "Read text", async () =>
+      jsonResult({ kind: "text", content: written || "verification_code=CM-42\n" }),
+    );
+    const write = pluginToolWithExecute("fake_write_text", "Write text", async (_id, input) => {
+      written =
+        input &&
+        typeof input === "object" &&
+        typeof (input as { content?: unknown }).content === "string"
+          ? (input as { content: string }).content
+          : "";
+      return jsonResult({ changed: true });
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read, write],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        const facts = await tools.fake_read_text({});
+        console.log("facts:", facts);
+        const verificationCode = facts.field("verification_code");
+        await tools.fake_write_text({ content: verificationCode });
+        const result = await tools.fake_read_text({});
+        return result.trim();
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: "CM-42",
+      output: [
+        {
+          type: "text",
+          text: 'facts: {"kind":"text","content":"verification_code=CM-42\\n"}',
+        },
+      ],
+    });
+    expect(written).toBe("CM-42");
+  });
+
+  it("normalizes the reserved tools module and returns the trailing local result", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = pluginTool("read", "Read a file");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        import * as tools from "tools";
+        const result = await tools.read({ path: "facts.txt" });
+        result;
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: { name: "read", input: { path: "facts.txt" } },
+    });
+    expect(read.execute).toHaveBeenCalledOnce();
+  });
+
+  it("keeps hoisted named imports bound to the injected tools catalog", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = pluginTool("read", "Read a file");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        const result = await read({ path: "facts.txt" });
+        import { read } from "tools";
+        const tools = { read: () => "local" };
+        result;
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: { name: "read", input: { path: "facts.txt" } },
+    });
+    expect(read.execute).toHaveBeenCalledOnce();
+  });
+
   it("returns structured values from named tools while preserving the raw call envelope", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
@@ -267,6 +378,32 @@ describe("Code Mode guest execution", () => {
     });
     expect(details.telemetry).toMatchObject({ callCount: 3 });
     expect(ticket.execute).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns a trailing direct guest tool call without an explicit return", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: 'await tools.fake_create_ticket({ value: "ship" });',
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      name: "fake_create_ticket",
+      input: { value: "ship" },
+    });
+    expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
   it("uses tools recovery guidance for guessed tool ids", async () => {

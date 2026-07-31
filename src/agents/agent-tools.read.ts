@@ -277,6 +277,29 @@ function isNotFoundError(error: unknown): boolean {
   return /\bENOENT\b|no such file or directory|file not found/i.test(error.message);
 }
 
+function bindReadTargetToNotFoundError(error: unknown, filePath: unknown): unknown {
+  if (!isNotFoundError(error) || typeof filePath !== "string" || !filePath.trim()) {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const existingPath = (error as NodeJS.ErrnoException).path;
+    if (typeof existingPath === "string" && existingPath.trim()) {
+      return error;
+    }
+    try {
+      (error as NodeJS.ErrnoException).path = filePath;
+      return error;
+    } catch {
+      // Some provider errors are frozen; preserve them as the cause instead.
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return Object.assign(new Error(message, { cause: error }), {
+    code: "ENOENT",
+    path: filePath,
+  });
+}
+
 async function executeReadPage(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -293,7 +316,7 @@ async function executeReadPage(params: {
     if (missingDailyMemoryPath && isNotFoundError(error)) {
       return missingDailyMemoryReadResult(missingDailyMemoryPath);
     }
-    throw error;
+    throw bindReadTargetToNotFoundError(error, params.args.path);
   }
 }
 
@@ -1286,6 +1309,7 @@ async function toCanonicalRelativeWorkspacePath(
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
+  error.path = filePath;
   return error;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

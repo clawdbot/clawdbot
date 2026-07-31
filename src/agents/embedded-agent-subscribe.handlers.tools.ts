@@ -43,9 +43,13 @@ import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
+  consumeCodeModeControlToolCall,
   consumePreExecutionBlockedToolCall,
   consumeStructuredReplaySafeToolCall,
   consumeTrackedToolExecutionStarted,
+  peekCodeModeControlToolCall,
+  peekParentToolCall,
+  recordCodeModeControlToolCall,
 } from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -95,9 +99,16 @@ import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
-import { buildToolMutationState } from "./tool-mutation.js";
+import {
+  buildToolFileTarget,
+  buildToolInputFileTargets,
+  buildToolMutationState,
+  buildToolResultFileTargets,
+  mergeFileTargets,
+  type FileTarget,
+} from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { readToolResultDetails } from "./tool-result-error.js";
+import { isFileTargetNotFoundToolFailure, readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import {
   cancelAskUserPromptDelivery,
@@ -125,6 +136,14 @@ const fallbackToolTerminalObservers = new WeakMap<
   ToolHandlerContext["state"],
   ReturnType<typeof createToolTerminalObserver>
 >();
+const nativeMutationOrderByState = new WeakMap<
+  ToolHandlerContext["state"],
+  {
+    completionVersion: number;
+    inFlight: number;
+    activeCodeModeControls: Map<string, { invalidated: boolean }>;
+  }
+>();
 
 function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   const existing = fallbackToolTerminalObservers.get(ctx.state);
@@ -134,6 +153,31 @@ function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   const created = createToolTerminalObserver(ctx.params.runId);
   fallbackToolTerminalObservers.set(ctx.state, created);
   return created;
+}
+
+function resolveNativeMutationOrder(state: ToolHandlerContext["state"]) {
+  const existing = nativeMutationOrderByState.get(state);
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    completionVersion: 0,
+    inFlight: 0,
+    activeCodeModeControls: new Map<string, { invalidated: boolean }>(),
+  };
+  nativeMutationOrderByState.set(state, created);
+  return created;
+}
+
+function invalidateConcurrentCodeModeObservations(
+  mutationOrder: ReturnType<typeof resolveNativeMutationOrder>,
+  ownerToolCallId?: string,
+): void {
+  for (const [toolCallId, control] of mutationOrder.activeCodeModeControls) {
+    if (toolCallId !== ownerToolCallId) {
+      control.invalidated = true;
+    }
+  }
 }
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
@@ -338,6 +382,7 @@ function buildToolCallSummary(
   meta: string | undefined,
   instanceReplaySafe: boolean,
   structuredReplaySafe: boolean,
+  cwd?: string,
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
@@ -348,7 +393,10 @@ function buildToolCallSummary(
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
     actionFingerprint: mutation.actionFingerprint,
-    fileTarget: mutation.fileTarget,
+    fileTarget: buildToolFileTarget(toolName, args),
+    mutationFallbackFileTargets: mutation.mutatingAction
+      ? buildToolInputFileTargets(toolName, args, cwd)
+      : undefined,
   };
 }
 
@@ -362,6 +410,115 @@ function buildToolItemTitle(toolName: string, meta?: string): string {
 
 function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
+}
+
+function isSideEffectFreeCodeModeFailure(toolName: string, result: unknown): boolean {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return false;
+  }
+  const details = readToolResultDetails(result);
+  const repair = asOptionalObjectRecord(details?.repair);
+  return (
+    details?.status === "failed" &&
+    (details.bridgeDispatchStarted === false || details.sideEffectFree === true) &&
+    repair !== undefined &&
+    typeof repair.allowed === "boolean"
+  );
+}
+
+function readCodeModeRepairAllowed(toolName: string, result: unknown): boolean | undefined {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return undefined;
+  }
+  const repair = asOptionalObjectRecord(readToolResultDetails(result)?.repair);
+  return typeof repair?.allowed === "boolean" ? repair.allowed : undefined;
+}
+
+function isSideEffectFreeCodeModeSuccess(toolName: string, result: unknown): boolean {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return false;
+  }
+  const details = readToolResultDetails(result);
+  return (
+    (details?.status === "completed" ||
+      (details?.status === "waiting" && details.replaySafe === true)) &&
+    details.sideEffectFree === true
+  );
+}
+
+function readCodeModeSideEffectFree(toolName: string, result: unknown): boolean | undefined {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return undefined;
+  }
+  const sideEffectFree = readToolResultDetails(result)?.sideEffectFree;
+  return typeof sideEffectFree === "boolean" ? sideEffectFree : undefined;
+}
+
+function readCodeModeLastCallSideEffectFree(
+  toolName: string,
+  result: unknown,
+): boolean | undefined {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return undefined;
+  }
+  const telemetry = asOptionalObjectRecord(readToolResultDetails(result)?.telemetry);
+  return typeof telemetry?.lastCallSideEffectFree === "boolean"
+    ? telemetry.lastCallSideEffectFree
+    : undefined;
+}
+
+function readCodeModeHadTargetlessSideEffects(
+  toolName: string,
+  result: unknown,
+): boolean | undefined {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return undefined;
+  }
+  const telemetry = asOptionalObjectRecord(readToolResultDetails(result)?.telemetry);
+  return typeof telemetry?.hadTargetlessSideEffects === "boolean"
+    ? telemetry.hadTargetlessSideEffects
+    : undefined;
+}
+
+function readCodeModeFileTarget(value: unknown): FileTarget | undefined {
+  const record = asOptionalObjectRecord(value);
+  const path = typeof record?.path === "string" ? record.path : undefined;
+  const oldpath = typeof record?.oldpath === "string" ? record.oldpath : undefined;
+  const expected =
+    record?.expected === "present" ||
+    record?.expected === "absent" ||
+    record?.expected === "unknown"
+      ? record.expected
+      : undefined;
+  if (!path && !oldpath) {
+    return undefined;
+  }
+  return {
+    ...(path ? { path } : {}),
+    ...(oldpath ? { oldpath } : {}),
+    ...(expected ? { expected } : {}),
+  };
+}
+
+function readCodeModeFileTargets(
+  toolName: string,
+  result: unknown,
+  field:
+    | "successfulObservationFileTargets"
+    | "successfulAbsenceObservationFileTargets"
+    | "unverifiedMutationFileTargets",
+): FileTarget[] | undefined {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return undefined;
+  }
+  const telemetry = asOptionalObjectRecord(readToolResultDetails(result)?.telemetry);
+  if (!Array.isArray(telemetry?.[field])) {
+    return undefined;
+  }
+  return telemetry[field].flatMap((value) => {
+    const target = readCodeModeFileTarget(value);
+    return target ? [target] : [];
+  });
 }
 
 function isPatchToolName(toolName: string): boolean {
@@ -1040,6 +1197,11 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    if (ctx.params.codeModeControlToolNames?.has(toolName)) {
+      // Agent-core emits tool_execution_start before invoking the tool
+      // definition. Reserve marked control ownership before nested calls race.
+      recordCodeModeControlToolCall(toolCallId, runId);
+    }
     ctx.state.toolExecutionSinceLastBlockReply = true;
     emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
@@ -1123,10 +1285,34 @@ export function handleToolExecutionStart(
       evt.replaySafe === true ||
       ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
       ctx.params.replaySafeToolNames?.has(toolName) === true;
-    ctx.state.toolMetaById.set(
-      toolCallId,
-      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
+    const callSummary = buildToolCallSummary(
+      toolName,
+      args,
+      meta,
+      instanceReplaySafe,
+      false,
+      ctx.params.cwd,
     );
+    const mutationOrder = resolveNativeMutationOrder(ctx.state);
+    if (peekCodeModeControlToolCall(toolCallId, runId)) {
+      // A control may trust nested readback only when every concurrent mutation
+      // belongs to that exact parent call.
+      const invalidated =
+        mutationOrder.inFlight > 0 || mutationOrder.activeCodeModeControls.size > 0;
+      if (mutationOrder.activeCodeModeControls.size > 0) {
+        invalidateConcurrentCodeModeObservations(mutationOrder);
+      }
+      mutationOrder.activeCodeModeControls.set(toolCallId, { invalidated });
+      callSummary.codeModeObservationTracked = true;
+      mutationOrder.inFlight += 1;
+      callSummary.mutationOrderStarted = true;
+    } else if (callSummary.mutatingAction) {
+      mutationOrder.inFlight += 1;
+      callSummary.mutationOrderStarted = true;
+    } else if (toolName === "read" && callSummary.fileTarget) {
+      callSummary.observedMutationCompletionVersion = mutationOrder.completionVersion;
+    }
+    ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1443,6 +1629,7 @@ export async function handleToolExecutionEnd(
   const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
+  const trustedCodeModeControl = consumeCodeModeControlToolCall(toolCallId, runId);
   const startArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
@@ -1453,19 +1640,138 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.meta,
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
+    ctx.params.cwd,
   );
+  // Only concrete core-owned workspace tools can provide file-mutation or
+  // verification evidence. Plugin/client tools may shadow these names.
+  const trustedCoreTool = structuredReplaySafe;
   // A racing observer can consume the active wrapper boundary. Settled and
   // custom producers use their terminal fact, while policy blocks override it.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
-  const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
+  const workspaceFileMutation =
+    toolName === "write" || toolName === "edit" || toolName === "apply_patch";
+  const fileMutationExecutionStarted =
+    trustedCoreTool && workspaceFileMutation && callSummary.mutatingAction && executionStarted;
+  const resultFileTargets = buildToolResultFileTargets(toolName, sanitizedResult, {
+    includeDeleted: true,
+  });
+  const mutationFileTargets = isToolError
+    ? mergeFileTargets(resultFileTargets, callSummary.mutationFallbackFileTargets)
+    : resultFileTargets;
+  const mutationOrder = resolveNativeMutationOrder(ctx.state);
+  if (initialCallSummary?.mutationOrderStarted) {
+    mutationOrder.inFlight = Math.max(0, mutationOrder.inFlight - 1);
+  }
+  const activeCodeModeControl = mutationOrder.activeCodeModeControls.get(toolCallId);
+  const fileTargetVerified =
+    !isToolError &&
+    trustedCoreTool &&
+    toolName === "read" &&
+    callSummary.fileTarget !== undefined &&
+    initialCallSummary?.observedMutationCompletionVersion !== undefined &&
+    mutationOrder.inFlight === 0 &&
+    mutationOrder.completionVersion === initialCallSummary.observedMutationCompletionVersion;
+  const fileTargetAbsent =
+    isToolError &&
+    trustedCoreTool &&
+    toolName === "read" &&
+    callSummary.fileTarget !== undefined &&
+    initialCallSummary?.observedMutationCompletionVersion !== undefined &&
+    mutationOrder.inFlight === 0 &&
+    mutationOrder.completionVersion === initialCallSummary.observedMutationCompletionVersion &&
+    isFileTargetNotFoundToolFailure(sanitizedResult, callSummary.fileTarget, ctx.params.cwd);
+  // The Code Mode repair envelope proves this exec failed before any nested
+  // tool dispatch, so it must not poison a later corrected attempt.
+  const sideEffectFreeCodeModeFailure =
+    trustedCodeModeControl &&
+    isToolError &&
+    isSideEffectFreeCodeModeFailure(toolName, sanitizedResult);
+  const sideEffectFreeCodeModeSuccess =
+    trustedCodeModeControl &&
+    !isToolError &&
+    isSideEffectFreeCodeModeSuccess(toolName, sanitizedResult);
+  const codeModeSideEffectFree = trustedCodeModeControl
+    ? (readCodeModeSideEffectFree(toolName, sanitizedResult) ??
+      (sideEffectFreeCodeModeFailure || sideEffectFreeCodeModeSuccess ? true : undefined))
+    : undefined;
+  const codeModeLastCallSideEffectFree = trustedCodeModeControl
+    ? readCodeModeLastCallSideEffectFree(toolName, sanitizedResult)
+    : undefined;
+  const codeModeHadTargetlessSideEffects =
+    trustedCodeModeControl && codeModeSideEffectFree === false
+      ? readCodeModeHadTargetlessSideEffects(toolName, sanitizedResult)
+      : undefined;
+  const codeModeObservationOrderValid =
+    trustedCodeModeControl &&
+    initialCallSummary?.codeModeObservationTracked === true &&
+    activeCodeModeControl?.invalidated === false &&
+    mutationOrder.inFlight === 0 &&
+    mutationOrder.activeCodeModeControls.size === 1;
+  const codeModeSuccessfulObservationFileTargets =
+    trustedCodeModeControl && codeModeObservationOrderValid
+      ? readCodeModeFileTargets(toolName, sanitizedResult, "successfulObservationFileTargets")
+      : undefined;
+  const codeModeSuccessfulAbsenceObservationFileTargets =
+    trustedCodeModeControl && codeModeObservationOrderValid
+      ? readCodeModeFileTargets(
+          toolName,
+          sanitizedResult,
+          "successfulAbsenceObservationFileTargets",
+        )
+      : undefined;
+  const codeModeUnverifiedMutationFileTargets = trustedCodeModeControl
+    ? readCodeModeFileTargets(toolName, sanitizedResult, "unverifiedMutationFileTargets")
+    : undefined;
+  const codeModeRepairAllowed =
+    trustedCodeModeControl && isToolError
+      ? readCodeModeRepairAllowed(toolName, sanitizedResult)
+      : undefined;
+  const replaySafe =
+    callSummary.replaySafe || sideEffectFreeCodeModeFailure || sideEffectFreeCodeModeSuccess;
+  const attemptedPotentialSideEffect =
+    executionStarted && (codeModeSideEffectFree === false || !replaySafe);
+  if (initialCallSummary?.codeModeObservationTracked) {
+    mutationOrder.activeCodeModeControls.delete(toolCallId);
+  }
+  if (
+    initialCallSummary?.mutationOrderStarted &&
+    (!trustedCodeModeControl || (executionStarted && codeModeSideEffectFree !== true))
+  ) {
+    // Code Mode controls are pessimistically mutating at start. Advance the
+    // shared clock only after the result proves whether this call could mutate.
+    mutationOrder.completionVersion += 1;
+    invalidateConcurrentCodeModeObservations(mutationOrder, peekParentToolCall(toolCallId, runId));
+  }
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  const durationMs =
+    startData?.startTime != null ? Math.max(0, Date.now() - startData.startTime) : undefined;
   ctx.state.toolMetas.push({
     toolName,
     meta,
-    replaySafe: callSummary.replaySafe,
+    ...(durationMs !== undefined && durationMs > 0 ? { durationMs } : {}),
+    replaySafe,
+    ...(callSummary.mutatingAction ? { mutatingAction: true } : {}),
+    ...(callSummary.fileTarget ? { fileTarget: callSummary.fileTarget } : {}),
+    ...(mutationFileTargets !== undefined ? { fileTargets: mutationFileTargets } : {}),
+    ...(fileMutationExecutionStarted ? { fileMutationExecutionStarted: true } : {}),
+    ...(fileTargetVerified ? { fileTargetVerified: true } : {}),
+    ...(fileTargetAbsent ? { fileTargetAbsent: true } : {}),
+    ...(codeModeSideEffectFree !== undefined ? { sideEffectFree: codeModeSideEffectFree } : {}),
+    ...(codeModeLastCallSideEffectFree !== undefined ? { codeModeLastCallSideEffectFree } : {}),
+    ...(codeModeHadTargetlessSideEffects !== undefined ? { codeModeHadTargetlessSideEffects } : {}),
+    ...(codeModeSuccessfulObservationFileTargets !== undefined
+      ? { codeModeSuccessfulObservationFileTargets }
+      : {}),
+    ...(codeModeSuccessfulAbsenceObservationFileTargets !== undefined
+      ? { codeModeSuccessfulAbsenceObservationFileTargets }
+      : {}),
+    ...(codeModeUnverifiedMutationFileTargets !== undefined
+      ? { codeModeUnverifiedMutationFileTargets }
+      : {}),
+    ...(codeModeRepairAllowed !== undefined ? { codeModeRepairAllowed } : {}),
     ...(isToolError ? { isError: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
@@ -1491,6 +1797,9 @@ export async function handleToolExecutionEnd(
     ...(meta ? { meta } : {}),
     executionStarted,
     outcome: isToolError ? "failure" : "success",
+    ...(sideEffectFreeCodeModeFailure || sideEffectFreeCodeModeSuccess
+      ? { nativeMutation: { mutatingAction: false, replaySafe: true } }
+      : {}),
     ...(isToolError
       ? {
           failure: {
@@ -1882,7 +2191,6 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: startArgs,

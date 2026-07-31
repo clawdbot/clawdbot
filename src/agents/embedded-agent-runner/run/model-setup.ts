@@ -126,6 +126,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
           // Dynamic hooks can resolve an explicit model without generating models.json first.
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+          mergeBundledStaticCatalogMetadata: true,
           preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
           preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir: params.workspaceDir,

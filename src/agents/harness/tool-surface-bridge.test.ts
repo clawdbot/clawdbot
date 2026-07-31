@@ -292,6 +292,33 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
+  it("auto-engages a preferred lean model without exposing native file tools", () => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: {
+        agents: { defaults: { experimental: { localModelLean: true } } },
+        tools: { codeMode: "auto" },
+      },
+      executeTool: async () => ({ content: [], details: {} }),
+      model: {
+        compat: {
+          codeMode: "preferred",
+        },
+      },
+      modelToolsEnabled: true,
+    });
+
+    try {
+      expect(runtime.codeModeControlsEnabled).toBe(true);
+      expect(
+        runtime
+          .compactTools(tools(["read", "edit"]), { localModelLeanApplied: true })
+          .tools.map((tool) => tool.name),
+      ).toEqual(["exec", "wait"]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("preserves explicit code-mode compaction for lean runs", () => {
     testing.setToolSearchCodeModeSupportedForTest(true);
     try {

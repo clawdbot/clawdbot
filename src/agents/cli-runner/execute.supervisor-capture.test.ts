@@ -747,6 +747,69 @@ describe("executePreparedCliRun supervisor output capture", () => {
     }
   });
 
+  it("fills a tool summary sequence name supplied after an unnamed start", async () => {
+    const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
+      const event = JSON.parse(line) as {
+        type: string;
+        id?: string;
+        name?: string;
+        text?: string;
+      };
+      if (event.type === "tool-start") {
+        return {
+          kind: "toolStart",
+          toolCallId: event.id ?? "",
+          name: event.name ?? "",
+          args: {},
+        };
+      }
+      if (event.type === "tool-result") {
+        return {
+          kind: "toolResult",
+          toolCallId: event.id ?? "",
+          name: event.name,
+          result: "done",
+        };
+      }
+      return { kind: "result", text: event.text };
+    };
+    const chunks = [
+      `${JSON.stringify({ type: "tool-start", id: "call-1" })}\n`,
+      `${JSON.stringify({ type: "tool-result", id: "call-1", name: "search" })}\n`,
+      `${JSON.stringify({ type: "result", text: "done" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "acme-cli",
+      parseJsonlEvent,
+    });
+    const result = await executePreparedCliRun(context);
+
+    expect(result.toolSummary).toEqual({
+      calls: 1,
+      tools: ["search"],
+      sequence: ["search"],
+      failures: 0,
+    });
+  });
+
   it("persists plugin-owned successor session ids for forked resumes", async () => {
     const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
       const event = JSON.parse(line) as { type: string; session?: string; text?: string };
@@ -848,7 +911,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
       expect(spawnInput.captureOutput).toBe(false);
       expect(result.text).toBe("Hello world");
-      expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
+      expect(result.toolSummary).toEqual({ calls: 0, tools: [], sequence: [], failures: 0 });
       expect(agentEvents).toEqual([
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
@@ -916,6 +979,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.toolSummary).toEqual({
         calls: 1,
         tools: ["mcp__team__lookup"],
+        sequence: ["mcp__team__lookup"],
         failures: 0,
       });
     } finally {
@@ -1027,6 +1091,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.toolSummary).toEqual({
         calls: 1,
         tools: ["mcp__openclaw__message"],
+        sequence: ["mcp__openclaw__message"],
         failures: 1,
       });
     } finally {
@@ -1111,6 +1176,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.toolSummary).toEqual({
         calls: 1,
         tools: ["mcp__openclaw__message"],
+        sequence: ["mcp__openclaw__message"],
         failures: 1,
       });
     } finally {
@@ -1199,6 +1265,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.toolSummary).toEqual({
         calls: 2,
         tools: ["mcp__openclaw__message"],
+        sequence: ["mcp__openclaw__message", "mcp__openclaw__message"],
         failures: 1,
       });
     } finally {

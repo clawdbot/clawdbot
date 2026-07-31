@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function completeResult(params?: {
   latestMcpAppChannelView?: { viewId: string };
@@ -10,15 +11,7 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
-  toolMetas?: Array<{
-    toolName: string;
-    meta?: string;
-    replaySafe?: boolean;
-    isError?: true;
-    asyncStarted?: boolean;
-    asyncTaskRunId?: string;
-    asyncTaskId?: string;
-  }>;
+  toolMetas?: EmbeddedRunAttemptResult["toolMetas"];
 }) {
   return completeEmbeddedAttemptResult({
     attempt: {
@@ -100,7 +93,15 @@ describe("attempt result projection", () => {
           {
             toolName: "exec",
             meta: "done",
+            durationMs: 25,
             replaySafe: true,
+            mutatingAction: true,
+            fileTarget: { path: "result.txt" },
+            sideEffectFree: false,
+            codeModeHadTargetlessSideEffects: true,
+            codeModeSuccessfulObservationFileTargets: [{ path: "facts.txt" }],
+            codeModeSuccessfulAbsenceObservationFileTargets: [{ path: "old.txt" }],
+            codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "present" }],
             isError: true,
             asyncStarted: true,
             asyncTaskRunId: "run-1",
@@ -112,11 +113,94 @@ describe("attempt result projection", () => {
       {
         toolName: "exec",
         meta: "done",
+        durationMs: 25,
         replaySafe: true,
+        mutatingAction: true,
+        fileTarget: { path: "result.txt" },
+        sideEffectFree: false,
+        codeModeHadTargetlessSideEffects: true,
+        codeModeSuccessfulObservationFileTargets: [{ path: "facts.txt" }],
+        codeModeSuccessfulAbsenceObservationFileTargets: [{ path: "old.txt" }],
+        codeModeUnverifiedMutationFileTargets: [{ path: "result.txt", expected: "present" }],
         isError: true,
         asyncStarted: true,
         asyncTaskRunId: "run-1",
         asyncTaskId: "task-1",
+      },
+    ]);
+  });
+
+  it("preserves native file verification ordering evidence", () => {
+    expect(
+      completeResult({
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            fileTarget: { path: "result.txt" },
+            fileTargetVerified: true,
+          },
+        ],
+      }).toolMetas,
+    ).toEqual([
+      {
+        toolName: "read",
+        meta: undefined,
+        replaySafe: true,
+        fileTarget: { path: "result.txt" },
+        fileTargetVerified: true,
+      },
+    ]);
+  });
+
+  it("preserves native file mutation dispatch evidence", () => {
+    expect(
+      completeResult({
+        toolMetas: [
+          {
+            toolName: "write",
+            replaySafe: false,
+            mutatingAction: true,
+            fileTarget: { path: "result.txt" },
+            fileMutationExecutionStarted: true,
+            isError: true,
+          },
+        ],
+      }).toolMetas,
+    ).toEqual([
+      {
+        toolName: "write",
+        meta: undefined,
+        replaySafe: false,
+        mutatingAction: true,
+        fileTarget: { path: "result.txt" },
+        fileMutationExecutionStarted: true,
+        isError: true,
+      },
+    ]);
+  });
+
+  it("preserves native file absence verification evidence", () => {
+    expect(
+      completeResult({
+        toolMetas: [
+          {
+            toolName: "read",
+            replaySafe: true,
+            fileTarget: { path: "old.txt" },
+            fileTargetAbsent: true,
+            isError: true,
+          },
+        ],
+      }).toolMetas,
+    ).toEqual([
+      {
+        toolName: "read",
+        meta: undefined,
+        replaySafe: true,
+        fileTarget: { path: "old.txt" },
+        fileTargetAbsent: true,
+        isError: true,
       },
     ]);
   });

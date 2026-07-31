@@ -64,6 +64,9 @@ describe("Code Mode master switch resolution", () => {
   const preferredModel = { compat: { codeMode: "preferred" } };
   const capableModel = { compat: { codeMode: "capable" } };
   const unflaggedModel = { compat: { supportsTools: true } };
+  const chatOnlyPreferredModel = {
+    compat: { codeMode: "preferred", supportsTools: false },
+  };
 
   it.each([
     {
@@ -79,10 +82,22 @@ describe("Code Mode master switch resolution", () => {
       engaged: false,
     },
     {
+      name: "true skips a model that explicitly disables tools",
+      enabled: true,
+      model: chatOnlyPreferredModel,
+      engaged: false,
+    },
+    {
       name: "auto engages a preferred model",
       enabled: "auto",
       model: preferredModel,
       engaged: true,
+    },
+    {
+      name: "auto skips a preferred model that explicitly disables tools",
+      enabled: "auto",
+      model: chatOnlyPreferredModel,
+      engaged: false,
     },
     {
       name: "auto skips an explicit capable model",
@@ -174,6 +189,14 @@ describe("Code Mode guest source validation", () => {
       code: 'if (true) /import.meta/.test("import.meta"); return 7;',
     },
     {
+      name: "property access using export and from identifiers",
+      code: "const data = { export: { from: 7 } }; return data.export.from;",
+    },
+    {
+      name: "object keys named export and from",
+      code: "const data = { export: 3, from: 4 }; return data.export + data.from;",
+    },
+    {
       name: "module-shaped regular expression after nested control parentheses",
       code: 'if ((true)) /import.meta/.test("import.meta"); return 7;',
     },
@@ -235,6 +258,226 @@ describe("Code Mode guest source validation", () => {
     },
   ])("preserves $name", async ({ code }) => {
     await expect(prepareSource({ code, config })).resolves.toBe(code);
+  });
+
+  it.each([
+    "await tools.read({ path: 'facts.txt' });",
+    "tools.read({ path: 'facts.txt' });",
+    "await MCP.files.read({ path: 'facts.txt' });",
+  ])("returns a final guest API call automatically: %s", async (code) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(`return ${code}`);
+  });
+
+  it.each(["tools;", "tools.read;", "await tools.read;"])(
+    "does not return a bare guest reference: %s",
+    async (code) => {
+      await expect(prepareSource({ code, config })).resolves.toBe(code);
+    },
+  );
+
+  it.each(["result;", "ALL_TOOLS;", "globalThis;"])(
+    "does not return an unbound or reserved final identifier: %s",
+    async (code) => {
+      await expect(prepareSource({ code, config })).resolves.toBe(code);
+    },
+  );
+
+  it.each([
+    "tools = { read: () => 'local' };\ntools.read();",
+    "({ tools } = { tools: { read: () => 'local' } });\ntools.read();",
+  ])("does not return a call through a shadowed guest root: %s", async (code) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(code);
+  });
+
+  it.each([
+    "typeof tools;\nawait tools.read({ path: 'facts.txt' });",
+    "function inspect(tools) { return tools; }\nawait tools.read({ path: 'facts.txt' });",
+    "{ const tools = { read: () => 'local' }; tools.read(); }\nawait tools.read({ path: 'facts.txt' });",
+  ])("returns a guest call after unrelated read-only or nested bindings: %s", async (code) => {
+    const finalLine = code.slice(code.lastIndexOf("\n") + 1);
+    await expect(prepareSource({ code, config })).resolves.toBe(
+      `${code.slice(0, code.length - finalLine.length)}return ${finalLine}`,
+    );
+  });
+
+  it.each(["const result = 42;\nresult;", "let verificationCode = 'ZX-42';\nverificationCode;"])(
+    "returns a final local result identifier automatically: %s",
+    async (code) => {
+      const finalLine = code.slice(code.lastIndexOf("\n") + 1);
+      await expect(prepareSource({ code, config })).resolves.toBe(
+        `${code.slice(0, code.length - finalLine.length)}return ${finalLine}`,
+      );
+    },
+  );
+
+  it.each([
+    "const text = ' ZX-42 ';\ntext.trim();",
+    "const tools = { read: () => 'local' };\ntools.read();",
+    "function tools() { return 'local'; }\ntools();",
+  ])("returns a final expression rooted in a locally bound reserved name: %s", async (code) => {
+    const finalLine = code.slice(code.lastIndexOf("\n") + 1);
+    await expect(prepareSource({ code, config })).resolves.toBe(
+      `${code.slice(0, code.length - finalLine.length)}return ${finalLine}`,
+    );
+  });
+
+  it.each([
+    {
+      code: "const result = ' ZX-42 ';\nresult.trim();",
+      finalLine: "result.trim();",
+    },
+    {
+      code: "const result = { content: 'ZX-42' };\nresult.content;",
+      finalLine: "result.content;",
+    },
+  ])(
+    "returns a final local result expression automatically: $code",
+    async ({ code, finalLine }) => {
+      await expect(prepareSource({ code, config })).resolves.toBe(
+        `${code.slice(0, code.length - finalLine.length)}return ${finalLine}`,
+      );
+    },
+  );
+
+  it.each([
+    {
+      code: "const first = 'ZX';\nconst second = '42';\nfirst + '-' + second;",
+      finalLine: "first + '-' + second;",
+    },
+    {
+      code: "const first = 'ZX';\nconst second = '42';\n`${first}-${second}`;",
+      finalLine: "`${first}-${second}`;",
+    },
+    {
+      code: "const result = { content: 'ZX-42' };\ntrue ? result.content : 'missing';",
+      finalLine: "true ? result.content : 'missing';",
+    },
+  ])(
+    "returns a final expression that consumes locally bound results: $code",
+    async ({ code, finalLine }) => {
+      await expect(prepareSource({ code, config })).resolves.toBe(
+        `${code.slice(0, code.length - finalLine.length)}return ${finalLine}`,
+      );
+    },
+  );
+
+  it.each([
+    "await tools.read({ path: 'facts.txt' }).then((result) => result.content);",
+    "(await tools.read({ path: 'facts.txt' })).content;",
+  ])("returns an expression containing an unshadowed guest call: %s", async (code) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(`return ${code}`);
+  });
+
+  it.each([
+    "const condition = true;\ncondition && tools.write({ path: 'result.txt', content: 'done' });",
+    "const condition = false;\ncondition ? tools.write({ path: 'result.txt', content: 'done' }) : 'skip';",
+  ])("does not auto-return a control expression containing a guest call: %s", async (code) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(code);
+  });
+
+  it.each([
+    "const first = 'ZX';\n({ first: 'literal' });",
+    "const content = 'ZX-42';\n({ content: 'literal' });",
+  ])("does not infer a result from property names or shadowed guest calls: %s", async (code) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(code);
+  });
+
+  it.each([
+    {
+      name: "namespace binding matching the injected global",
+      code: 'import * as tools from "tools";\nconst result = await tools.read({ path: "facts.txt" });\nresult;',
+      expected: 'const result = await tools.read({ path: "facts.txt" });\nreturn result;',
+    },
+    {
+      name: "named bindings",
+      code: 'import { read, write as save } from "tools";\nconst result = await read({ path: "facts.txt" });\nresult;',
+      expected:
+        'const read = this.tools["read"];\nconst save = this.tools["write"];\nconst result = await read({ path: "facts.txt" });\nreturn result;',
+    },
+    {
+      name: "namespace alias",
+      code: 'import * as guestTools from "tools";\nconst result = await guestTools.read({ path: "facts.txt" });\nresult;',
+      expected:
+        'const guestTools = this.tools;\nconst result = await guestTools.read({ path: "facts.txt" });\nreturn result;',
+    },
+  ])("normalizes the reserved tools module for $name", async ({ code, expected }) => {
+    await expect(prepareSource({ code, config })).resolves.toBe(expected);
+  });
+
+  it("hoists reserved tools bindings ahead of executable statements", async () => {
+    await expect(
+      prepareSource({
+        code: 'const result = await read({ path: "facts.txt" });\nimport { read } from "tools";\nresult;',
+        config,
+      }),
+    ).resolves.toBe(
+      'const read = this.tools["read"];\nconst result = await read({ path: "facts.txt" });\nreturn result;',
+    );
+  });
+
+  it("does not resolve reserved imports through a local tools binding", async () => {
+    await expect(
+      prepareSource({
+        code: 'import { read } from "tools";\nconst tools = { read: () => "local" };\nconst result = await read({ path: "facts.txt" });\nresult;',
+        config,
+      }),
+    ).resolves.toBe(
+      'const read = this.tools["read"];\nconst tools = { read: () => "local" };\nconst result = await read({ path: "facts.txt" });\nreturn result;',
+    );
+  });
+
+  it.each([
+    'import tools from "tools";\nreturn tools;',
+    'import { default as toolsApi } from "tools";\nreturn toolsApi;',
+    'import { read } from "t\\u006fols";\nreturn read;',
+    'import { read } from "tools" with { type: "json" };\nreturn read;',
+    'export { read } from "tools";',
+    'export * from "tools";',
+  ])("rejects unsupported reserved-module syntax: %s", async (code) => {
+    await expect(prepareSource({ code, config })).rejects.toThrow(
+      "code mode module access is disabled",
+    );
+  });
+
+  it("returns only the final top-level guest call", async () => {
+    const code = "const path = 'facts.txt';\nawait tools.read({ path });";
+    await expect(prepareSource({ code, config })).resolves.toBe(
+      "const path = 'facts.txt';\nreturn await tools.read({ path });",
+    );
+  });
+
+  it("returns a final TypeScript guest call after transpilation", async () => {
+    const source = await prepareSource({
+      code: "const path: string = 'facts.txt';\nawait tools.read({ path });",
+      language: "typescript",
+      config,
+    });
+    expect(source).toContain("const path = 'facts.txt';");
+    expect(source).toContain("return await tools.read({ path });");
+  });
+
+  it("normalizes the reserved tools module before TypeScript transpilation", async () => {
+    const source = await prepareSource({
+      code: 'import { read } from "tools";\nconst result: unknown = await read({ path: "facts.txt" });\nresult;',
+      language: "typescript",
+      config,
+    });
+    expect(source).not.toContain('from "tools"');
+    expect(source).toContain('const read = this.tools["read"];');
+    expect(source).toContain("return result;");
+  });
+
+  it("hoists TypeScript reserved imports independently of local tools bindings", async () => {
+    const source = await prepareSource({
+      code: 'const result: unknown = await read({ path: "facts.txt" });\nimport { read } from "tools";\nconst tools = { read: () => "local" };\nresult;',
+      language: "typescript",
+      config,
+    });
+    expect(source).not.toContain('from "tools"');
+    expect(source.indexOf('const read = this.tools["read"];')).toBeLessThan(
+      source.indexOf("const result = await read"),
+    );
+    expect(source).toContain('const tools = { read: () => "local" };');
   });
 
   it.each([
@@ -377,6 +620,21 @@ describe("Code Mode guest source validation", () => {
   ])("rejects $name", async ({ code }) => {
     await expect(prepareSource({ code, config })).rejects.toThrow(
       "code mode module access is disabled",
+    );
+  });
+
+  it("rejects malformed source that still contains an export-from declaration", async () => {
+    await expect(
+      prepareSource({
+        code: "const answer = ;\nexport * from 'node:fs';",
+        config,
+      }),
+    ).rejects.toThrow("code mode module access is disabled");
+  });
+
+  it("guides module-access failures toward guest tools", async () => {
+    await expect(prepareSource({ code: "require('node:fs');", config })).rejects.toThrow(
+      "return await tools.read",
     );
   });
 

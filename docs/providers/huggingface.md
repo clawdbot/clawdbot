@@ -78,7 +78,7 @@ Model refs use the form `huggingface/<org>/<model>` (Hub-style IDs). OpenClaw's 
 | GPT-OSS 120B  | `openai/gpt-oss-120b`            |
 
 <Tip>
-When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the three models above. You can append `:fastest` or `:cheapest` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
+When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the three models above. You can append `:fastest`, `:cheapest`, or `:preferred` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
 </Tip>
 
 ## Advanced configuration
@@ -92,7 +92,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
     Authorization: Bearer $HUGGINGFACE_HUB_TOKEN   # or $HF_TOKEN
     ```
 
-    The response is OpenAI-style: `{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`.
+    The response is OpenAI-style: `{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`. OpenClaw also preserves each live inference provider's `supports_tools` metadata. An exact provider-pinned route that explicitly reports no tool support does not receive tool schemas or Code Mode controls. Unsuffixed and policy-routed refs remain permissive for mixed or incomplete metadata because the router can select or fail over between providers with different capabilities; they are disabled only when every live route explicitly reports no tool support.
 
     With a configured key (onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), the **Default Hugging Face model** dropdown during interactive setup is populated from this endpoint. Gateway startup repeats the same call to refresh the catalog. Discovered models are merged with the built-in catalog above (used for metadata like context window and cost when an id matches). If the request fails, returns no data, or no key is set, OpenClaw falls back to the built-in catalog only.
 
@@ -121,7 +121,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
     }
     ```
 
-    - **Policy suffixes:** `:fastest` and `:cheapest` are HF router conventions, not something OpenClaw rewrites: the suffix is sent verbatim as part of the model id and HF's router picks the matching inference provider. Add each variant as its own entry under `models.providers.huggingface.models` (or in `model.primary`) if you want a distinct alias per suffix.
+    - **Policy suffixes:** `:fastest`, `:cheapest`, and `:preferred` are HF router conventions, not something OpenClaw rewrites: the suffix is sent verbatim as part of the model id and HF's router picks the matching inference provider. Add each variant as its own entry under `models.providers.huggingface.models` (or in `model.primary`) if you want a distinct alias per suffix.
     - **Config merge:** existing entries in `models.providers.huggingface.models` (e.g. in `models.json`) are kept on config merge, so any custom `name`, `alias`, or model options you set there persist across restarts.
 
   </Accordion>

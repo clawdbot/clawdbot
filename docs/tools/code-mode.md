@@ -14,8 +14,11 @@ Code mode is an experimental OpenClaw agent-runtime feature. It defaults to the
 code-mode performers; every other model keeps normal tool exposure. When
 engaged, the model no longer sees every enabled tool schema; instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
-the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
-program that searches, describes, and calls the hidden tool catalog.
+the JSON-only guest bridge. Catalog-preferred models using the lean tool
+surface can also keep native `read`, `edit`, `write`, and `apply_patch`; forced
+Code Mode on an unflagged model keeps file operations behind the guest bridge.
+The model writes a small JavaScript or TypeScript program that searches,
+describes, and calls the hidden tool catalog.
 
 This page documents OpenClaw code mode, not Codex Code Mode. The two features
 share a name and the same control-tool names (`exec`, `wait`), but they are
@@ -44,16 +47,29 @@ commands are rejected before the QuickJS worker starts with actionable
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
   such as `computer` or the native-vision `image` loader whose image result
-  cannot survive the guest bridge.
+  cannot survive the guest bridge. With the lean tool surface, a
+  catalog-preferred model can additionally keep native `read`, `edit`, `write`,
+  and `apply_patch`.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
 - Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
   standalone model tool and exposed inside the guest program through `ALL_TOOLS`
   and `tools`.
-- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
-  catalog ids, compact input hints, and compact declared output hints when a
-  trusted tool provides an output schema. It omits descriptions, full schemas,
-  MCP entries, and overflow entries; guest-side catalog lookup remains the fallback.
+- The `exec` description carries a bounded index of unique OpenClaw/plugin
+  methods such as `tools.read(...)`, with compact input hints and short declared
+  output hints. It omits descriptions, full schemas, ambiguous names, MCP
+  entries, and overflow entries; guest-side catalog lookup remains the fallback.
+- A trailing top-level guest API call is returned automatically, so
+  `await tools.read(...)` does not silently produce `null`. Explicit `return`
+  remains the clearest form for larger programs.
+- When a provider serializes an exact guest method such as `read` or
+  `tools.read` as an outer tool call, OpenClaw converts it into an `exec` cell.
+  The actual tool still runs through the Code Mode bridge with normal policy,
+  approvals, hooks, and telemetry.
+- When a model instead puts guest arguments directly in `exec` without `code`,
+  OpenClaw converts them only if exactly one unique direct method schema
+  explicitly declares every supplied key and accepts the complete argument
+  object. Ambiguous or invalid matches remain rejected.
 - Guest code searches the hidden catalog, describes a tool's schema, and calls
   a tool through the same execution path used by normal agent turns (policy,
   approvals, hooks, telemetry all still apply).
@@ -150,6 +166,15 @@ Set explicit limits for tighter bounds:
 
 ### What the model does
 
+Prefer unique direct methods when they are present in the bounded index:
+
+```javascript
+const file = await tools.read({ path: "notes.txt" });
+return file;
+```
+
+Use workspace-relative file paths. Do not prefix them with `/workspace`.
+
 For a tool with a declared output such as
 `Array<{ id: string; paid: boolean; tons: number }>`, one guest program can
 select, call, and transform it:
@@ -160,10 +185,10 @@ const shipments = await tools.callValue(shipmentTool.id, {});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
 
-When a quick-index line ends in `-> ?`, the output shape is unknown. The first
-`exec` must return `await tools.callValue(...)` unchanged. A later `exec` can
-transform the observed value. This costs an extra model turn, but prevents the
-model from guessing field names.
+If a method is absent from the bounded index, use `ALL_TOOLS` or
+`tools.search(...)` to find its exact catalog id, then call
+`tools.callValue(...)`. When the output shape is unknown, return the raw value
+unchanged before attempting a later transform.
 
 ### Verify the active surface
 
@@ -177,9 +202,12 @@ OPENCLAW_DEBUG_MODEL_PAYLOAD=tools \
 openclaw gateway
 ```
 
-With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+With code mode active, the logged model-facing tools should include `exec` and
+`wait`. Catalog-preferred models using the lean tool surface may also show
+native `read`, `edit`, `write`, and `apply_patch`; tools whose results cannot
+cross the guest bridge can remain direct as well. For the full redacted
+provider payload, add `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short
+debugging session.
 
 ## Use Swarm for agent fan-out
 
@@ -229,7 +257,8 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 ## Terms
 
 - **Code mode**: the OpenClaw runtime mode that hides catalog-compatible model
-  tools and exposes `exec`, `wait`, plus required direct-only tools.
+  tools and exposes `exec`, `wait`, required direct-only tools, and the
+  catalog-preferred lean native file surface when applicable.
 - **Guest runtime**: the QuickJS-WASI JavaScript VM that evaluates model code.
 - **Host bridge**: the narrow JSON-compatible callback surface from guest code
   back into OpenClaw.
@@ -303,12 +332,16 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 | kimi      | `k3`, `k3-256k`                                                                                                                              |
 | minimax   | `MiniMax-M3`                                                                                                                                 |
 | moonshot  | `kimi-k3`                                                                                                                                    |
+| ollama    | `devstral-small-2:24b` when `/api/show` reports both `completion` and `tools`                                                                |
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                          |
 | xiaomi    | `mimo-v2.5`                                                                                                                                  |
 | zai       | `glm-5.2`, `glm-5.1`                                                                                                                         |
 
-Everything else, including all Ollama-served local models, stays unflagged and
-keeps normal tool exposure under `"auto"`.
+Everything else, including other Ollama-served local models, stays unflagged
+and keeps normal tool exposure under `"auto"`. Ollama preference is exact-tag
+and capability gated; aliases, `:latest`, alternate sizes, and custom copies do
+not inherit it. Devstral stays on the compact `exec`/`wait` bridge after
+automatic activation.
 
 ### Models shipped by more than one provider
 
@@ -420,8 +453,11 @@ Rules:
   string enum (`"javascript" | "typescript"`), not a `oneOf`/`anyOf` union,
   since some providers reject those shapes.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
-- `exec` rejects `import`, `require`, dynamic import, and module-loader
-  patterns.
+- `exec` normalizes static imports from the exact reserved virtual module
+  `"tools"` to the injected `tools` global. It rejects every other `import`,
+  `require`, dynamic import, and module-loader pattern.
+- Text tool results keep their structured fields and support common string
+  methods directly. Sandboxed `console` methods append text to Code Mode output.
 - `exec` never exposes the normal shell `exec` implementation recursively.
 - Outer code-mode `exec` hook events carry `toolKind: "code_mode_exec"` and
   `toolInputKind: "javascript" | "typescript"` (when known), so policies can
@@ -436,6 +472,7 @@ type CodeModeResult = CodeModeCompletedResult | CodeModeWaitingResult | CodeMode
 type CodeModeCompletedResult = {
   status: "completed";
   value: unknown;
+  sideEffectFree: boolean;
   output?: CodeModeOutput[];
   telemetry: CodeModeTelemetry;
 };
@@ -445,6 +482,7 @@ type CodeModeWaitingResult = {
   runId: string;
   reason: "pending_tools" | "yield";
   pendingToolCalls?: CodeModePendingToolCall[];
+  sideEffectFree: boolean;
   output?: CodeModeOutput[];
   telemetry: CodeModeTelemetry;
 };

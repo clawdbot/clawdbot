@@ -47,7 +47,7 @@ function createRuntime() {
   return { runtime, log, error };
 }
 
-function successResult(text = "done") {
+function successResult(text = "done"): Parameters<typeof classifyAgentExecResult>[0] {
   return {
     payloads: [{ text }],
     meta: {
@@ -95,6 +95,47 @@ describe("agent exec strict result classification", () => {
       ok: true,
       status: "ok",
       final: "done",
+    });
+  });
+
+  it("projects last-call usage and provider attempt telemetry", () => {
+    const result = successResult();
+    const agentMeta = result.meta.agentMeta;
+    expect(agentMeta).toBeDefined();
+    if (!agentMeta) {
+      throw new Error("success fixture must include agent metadata");
+    }
+    agentMeta.lastCallUsage = {
+      input: 8,
+      output: 2,
+      cacheRead: 0,
+      total: 10,
+    };
+    result.meta.executionTrace = {
+      attempts: [
+        {
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          result: "same_model_rate_limit",
+          stage: "assistant",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          result: "success",
+          stage: "assistant",
+        },
+      ],
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    expect(classifyAgentExecResult(result)).toMatchObject({
+      lastCallUsage: { input: 8, output: 2, cacheRead: 0, total: 10 },
+      providerAttemptCount: 2,
+      providerRetryCount: 1,
+      firstProviderAttemptSucceeded: false,
+      fallbackUsed: false,
     });
   });
 

@@ -5,13 +5,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import { autoReturnFinalGuestCall } from "./code-mode-auto-return.js";
+import { CODE_MODE_MODULE_ACCESS_ERROR } from "./code-mode-errors.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import {
+  normalizeReservedToolsImportsJavaScript,
+  normalizeReservedToolsImportsTypeScript,
+} from "./code-mode-tools-import.js";
 import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+import { supportsModelTools } from "./model-tool-support.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -202,6 +209,9 @@ export function isCodeModeEngagedForModel(
   config: Pick<CodeModeConfig, "enabled">,
   model: { compat?: unknown } | undefined,
 ): boolean {
+  if (model && !supportsModelTools(model)) {
+    return false;
+  }
   if (config.enabled !== "auto") {
     return config.enabled;
   }
@@ -470,6 +480,8 @@ function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   if (
     node.type === "ImportDeclaration" ||
     node.type === "ImportExpression" ||
+    ((node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") &&
+      node.source) ||
     (node.type === "MetaProperty" && node.meta.name === "import") ||
     (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
   ) {
@@ -530,6 +542,7 @@ function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescr
     if (
       ts.isImportDeclaration(node) ||
       ts.isImportEqualsDeclaration(node) ||
+      (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined) ||
       (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) ||
       (ts.isCallExpression(node) &&
         (node.expression.kind === ts.SyntaxKind.ImportKeyword || isLoaderCallee(node.expression)))
@@ -563,7 +576,10 @@ function rejectsModuleAccess(
     }
   }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
-  return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
+  return (
+    /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source) ||
+    /(?:^|[;\n}])\s*export\s*(?:\{[^}]*\}|\*)\s*from\b/u.test(source)
+  );
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
@@ -583,19 +599,21 @@ export async function prepareSource(input: {
     throw new ToolInputError(`code mode ${language} input is disabled.`);
   }
   if (language === "javascript") {
-    if (rejectsModuleAccess(input.code)) {
-      throw new ToolInputError("code mode module access is disabled.");
+    const code = normalizeReservedToolsImportsJavaScript(input.code);
+    if (rejectsModuleAccess(code)) {
+      throw new ToolInputError(CODE_MODE_MODULE_ACCESS_ERROR);
     }
-    if (isShellLikeCodeModeSource(input.code)) {
+    if (isShellLikeCodeModeSource(code)) {
       throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
     }
-    return input.code;
+    return autoReturnFinalGuestCall(code);
   }
   const ts = await loadTypeScriptRuntime();
-  if (rejectsModuleAccess(input.code, ts)) {
-    throw new ToolInputError("code mode module access is disabled.");
+  const code = normalizeReservedToolsImportsTypeScript(input.code, ts);
+  if (rejectsModuleAccess(code, ts)) {
+    throw new ToolInputError(CODE_MODE_MODULE_ACCESS_ERROR);
   }
-  const transformed = ts.transpileModule(input.code, {
+  const transformed = ts.transpileModule(code, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
@@ -612,15 +630,15 @@ export async function prepareSource(input: {
     throw new ToolInputError(`typescript transform failed: ${message}`);
   }
   if (rejectsModuleAccess(transformed.outputText, ts)) {
-    throw new ToolInputError("code mode module access is disabled.");
+    throw new ToolInputError(CODE_MODE_MODULE_ACCESS_ERROR);
   }
   if (
-    isShellLikeCodeModeSource(input.code, transformed.outputText) ||
+    isShellLikeCodeModeSource(code, transformed.outputText) ||
     isShellLikeCodeModeSource(transformed.outputText)
   ) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
-  return transformed.outputText;
+  return autoReturnFinalGuestCall(transformed.outputText);
 }
 
 export function errorMessage(error: unknown): string {

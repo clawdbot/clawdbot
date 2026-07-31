@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isCodeModeExecTool, markCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   collectReplaySafeToolNames,
   isAgentToolReplaySafe,
@@ -45,6 +46,16 @@ describe("agent tool replay safety", () => {
         declaredReplaySafe: () => false,
       }),
     ).toBe(false);
+  });
+
+  it("retains fresh Code Mode exec but not parked wait during restart-safe recovery", () => {
+    const execTool = markCodeModeControlTool({ name: "exec" } as never);
+    const waitTool = markCodeModeControlTool({ name: "wait" } as never);
+    const declaredReplaySafe = (tool: { name?: string }) =>
+      isCodeModeExecTool(tool as never) ? true : undefined;
+
+    expect(isAgentToolRestartSafe(execTool, { declaredReplaySafe })).toBe(true);
+    expect(isAgentToolRestartSafe(waitTool, { declaredReplaySafe })).toBe(false);
   });
 
   it("rejects memory_search because it records durable recall signals", () => {

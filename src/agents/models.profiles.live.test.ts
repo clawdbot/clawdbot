@@ -98,6 +98,7 @@ const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_LOCAL_API_KEY_MARKER = "ollama-local";
 const OLLAMA_REMOTE_API_KEY_ENV = "OLLAMA_API_KEY";
+const FRONTIER_CODE_MODE_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
   "127.0.0.1",
@@ -118,6 +119,14 @@ type OllamaRuntimeApi = {
 };
 
 const describeLive = LIVE ? describe : describe.skip;
+
+function isFrontierCodeModeProof(): boolean {
+  const providers = parseCsvFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+  return (
+    providers?.size === FRONTIER_CODE_MODE_PROVIDERS.size &&
+    [...FRONTIER_CODE_MODE_PROVIDERS].every((provider) => providers.has(provider))
+  );
+}
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
@@ -1702,6 +1711,10 @@ describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
     async () => {
+      if (isFrontierCodeModeProof()) {
+        logProgress("[live-models] generic sweep skipped for frontier Code Mode proof");
+        return;
+      }
       logProgress("[live-models] loading config");
       const loadedCfg = await withLiveStageTimeout(
         readLiveTestConfig(),
@@ -2351,6 +2364,72 @@ describeLive("live models (profile keys)", () => {
       void skipped;
     },
     LIVE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "runs the frontier Code Mode edit-readback proof",
+    async () => {
+      if (!isFrontierCodeModeProof()) {
+        return;
+      }
+      const { parseCodeModeMatrixOptions, runCodeModeModelMatrix } =
+        await import("../../scripts/code-mode-model-matrix.js");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const outputDir = `.artifacts/qa-e2e/code-mode-model-matrix/frontier-ci-${process.pid}`;
+      const args = [
+        "--model",
+        "openai/gpt-5.6",
+        "--model",
+        "anthropic/claude-sonnet-5",
+        "--model",
+        "google/gemini-3.5-flash",
+        "--mode",
+        "auto",
+        "--mode",
+        "code",
+        "--agent-runtime",
+        "openclaw",
+        "--task",
+        "edit-readback",
+        "--repetitions",
+        "1",
+        "--timeout",
+        "240",
+        "--thinking",
+        "off",
+        "--output-dir",
+        outputDir,
+      ];
+      const { stdout: selectedShaOutput } = await execFileAsync(
+        "git",
+        ["-C", "/src", "rev-parse", "HEAD"],
+        { encoding: "utf8" },
+      );
+      const selectedSha = selectedShaOutput.trim();
+      const result = await runCodeModeModelMatrix(parseCodeModeMatrixOptions(args, process.cwd()), {
+        // The workflow already built and bound this selected SHA into the
+        // immutable live-test image. Rebuilding through its dist symlink would
+        // violate the output-root safety guard without changing the runtime.
+        buildCliArtifacts: async () => {},
+        readSourceIdentity: async () => ({
+          gitSha: selectedSha,
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }),
+      });
+      if (result.exitCode !== 0) {
+        const { readFile } = await import("node:fs/promises");
+        const failures = await readFile(`${result.outputDir}/results.jsonl`, "utf8");
+        throw new Error(`frontier Code Mode matrix failed:\n${failures}`);
+      }
+      expect(result.exitCode).toBe(0);
+      expect(result.summary).toMatchObject({
+        counts: { failed: 0, passed: 6, total: 6 },
+      });
+    },
+    35 * 60 * 1000,
   );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

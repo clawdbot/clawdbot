@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { scanXmlishToolCall } from "./grammar.js";
-import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
+import {
+  parseStandalonePlainTextToolCallBlocks,
+  scanPlainTextJsonToolCall,
+  stripPlainTextToolCallBlocks,
+} from "./payload.js";
 
 function trackStringOperations(value: string) {
   let indexedReads = 0;
@@ -142,6 +146,28 @@ describe("scanPlainTextJsonToolCall", () => {
     }
     const mismatch = scanPlainTextJsonToolCall(`${call}<|cap`);
     expect(mismatch).toMatchObject({ kind: "complete", end: call.length });
+  });
+});
+
+describe("parseStandalonePlainTextToolCallBlocks", () => {
+  it("accepts a missing XML function close only when explicitly enabled", () => {
+    const raw = ["<function=exec>", "<parameter=command>", "pwd", "</parameter>"].join("\n");
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw)).toBeNull();
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["exec"],
+        allowMissingXmlFunctionClose: true,
+      }),
+    ).toEqual([
+      {
+        arguments: { command: "pwd" },
+        end: raw.length,
+        name: "exec",
+        raw,
+        start: 0,
+      },
+    ]);
   });
 });
 

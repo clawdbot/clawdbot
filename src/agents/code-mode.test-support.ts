@@ -226,6 +226,7 @@ export function createCodeModeHarness(
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
     forceRestartSafeTools?: boolean;
+    forceReadOnlyTools?: boolean;
   } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
@@ -239,6 +240,7 @@ export function createCodeModeHarness(
     runId: "run-code-mode",
     catalogRef,
     forceRestartSafeTools: params.forceRestartSafeTools,
+    forceReadOnlyTools: params.forceReadOnlyTools,
     codeModeSkills: params.codeModeSkills,
   };
   const tools = createCodeModeTools(ctx);

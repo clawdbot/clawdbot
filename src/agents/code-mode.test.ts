@@ -155,7 +155,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
-    expect(execTool?.description).toContain("Use `return` to pass the final value back");
+    expect(execTool?.description).toContain("Explicitly `return` the final value");
   });
 
   it("hides normal tools when only the active agent enables code mode", () => {
@@ -214,62 +214,193 @@ describe("Code Mode catalog and model-visible surface", () => {
     };
 
     expect(execTool.description).toContain("Node.js modules");
-    expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("process them in the first exec");
-    expect(execTool.description).toContain("do not spend another exec inspecting");
-    expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
-    expect(execTool.description).toContain("normal tool policy and approvals");
-    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
-    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
-    expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(id: string)`");
-    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
-    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
-    expect(execTool.description).toContain("Never invent or transform a tool id");
-    expect(execTool.description).toContain("Quick-index arrows show trusted declared output hints");
-    expect(execTool.description).toContain("`-> ?` means never guess result field names");
-    expect(execTool.description).toContain("never guess result field names");
-    expect(execTool.description).toContain("return the raw tool value unchanged");
-    expect(execTool.description).toContain("final dependent call after declared-output calls");
-    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
-    expect(execTool.description).toContain("filter or map it only in a later exec");
-    expect(execTool.description).toContain("returns its JSON value directly");
-    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
-    expect(execTool.description).toContain('"javascript" or "typescript"');
-    expect(execTool.description).toContain("never a shell command");
-    expect(execTool.description).toContain("do not retry failed shell source");
+    expect(execTool.description).toContain(
+      "`require`, `import`, `process`, and `fs` are unavailable",
+    );
+    expect(execTool.description).toContain("Prefer enabled direct methods on `tools`");
+    expect(execTool.description).toContain(
+      "a trailing guest tool call or local result expression is auto-returned",
+    );
+    expect(execTool.description).toContain(
+      "A requested verification is incomplete until its verification tool call runs",
+    );
+    expect(execTool.description).toContain("never add `state/workspaces` or `/workspace` prefixes");
+    expect(execTool.description).not.toContain("include write and read in one cell");
+    expect(execTool.description).not.toContain('tools.read({ path: "notes.txt" })');
+    expect(execTool.description).toContain("Use the requested workspace-relative path exactly");
+    expect(execTool.description).toContain("Await dependent calls in order");
+    expect(execTool.description).toContain("normal policy and approvals");
+    expect(execTool.description).toContain("ALL_TOOLS");
+    expect(execTool.description).toContain("`await tools.search(query)`");
+    expect(execTool.description).toContain("`tools.callValue(id, args)`");
+    expect(execTool.description).toContain("Never invent or transform ids");
+    expect(execTool.description).toContain("Return unknown result shapes raw");
+    expect(parameters.properties?.code?.description).not.toContain("tools.read");
+    expect(parameters.properties?.code?.description).toContain("Obey every step");
+    expect(parameters.properties?.code?.description).toContain("No imports/process/fs");
+    expect(parameters.properties?.language?.description).toContain("Defaults to javascript");
+    expect(parameters).toMatchObject({ required: ["code"] });
+    expect(parameters.properties).not.toHaveProperty("command");
+    expect(parameters.properties).not.toHaveProperty("restartSafe");
+  });
+
+  it("describes host-enforced read-only recovery without repeating mutations", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness({
+      forceReadOnlyTools: true,
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        fakeTool("read", "Read a file"),
+        fakeTool("write", "Write a file"),
+        fakeTool("edit", "Edit a file"),
+        fakeTool("apply_patch", "Apply a patch"),
+        pluginTool("search", "Search a plugin"),
+      ],
+      config,
+      catalogRef,
+      directToolNames: ["read", "write", "edit", "apply_patch", "search"],
+      forceReadOnlyTools: true,
+    });
+    const exec = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+    const parameters = exec?.parameters as {
+      properties?: { code?: { description?: string } };
+    };
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
+    expect(exec?.description).toContain("read-only recovery");
+    expect(exec?.description).toContain("- tools.read(");
+    expect(exec?.description).not.toContain("- tools.write(");
+    expect(exec?.description).not.toContain("- tools.edit(");
+    expect(exec?.description).not.toContain("- tools.apply_patch(");
+    expect(exec?.description).not.toContain("- tools.search(");
+    expect(exec?.description).not.toContain("For write verification");
+    expect(exec?.description).not.toContain("tools.edit({");
+    expect(parameters.properties?.code?.description).toMatch(
+      /Read-only recovery.*Do not repeat mutations.*verify existing state/,
+    );
+    expect(parameters.properties?.code?.description).toContain("Multiple reads:");
+    expect(parameters.properties?.code?.description).not.toContain("await tools.write");
+    expect(parameters.properties?.code?.description).not.toContain("await tools.edit");
+  });
+
+  it("advertises concrete read/write patterns only when both methods exist", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const edit = fakeTool("edit", "Edit a file");
+    edit.parameters = Type.Object({
+      path: Type.String(),
+      edits: Type.Array(
+        Type.Object({
+          oldText: Type.String(),
+          newText: Type.String(),
+        }),
+      ),
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        fakeTool("read", "Read a file"),
+        fakeTool("write", "Write a file"),
+        edit,
+        fakeTool("nodes", "Use paired nodes"),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    const parameters = execTool.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
     const nodesGuidance =
       "- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)";
+
+    expect(execTool.description).toContain("include write and read in one cell");
+    expect(execTool.description).toContain(
+      'tools.edit({ path: "file.txt", edits: [{ oldText: "old", newText: "new" }] })',
+    );
+    expect(execTool.description).toContain(
+      "`oldText` is the exact text being removed and `newText` is its replacement",
+    );
+    expect(execTool.description).toContain("use its result; never use the key name as the value");
+    expect(execTool.description).toContain("never substitute `tools.write`");
+    expect(execTool.description).toContain('tools.read({ path: "notes.txt" })');
+    expect(execTool.description).toContain("call every read in the same exec");
+    expect(execTool.description).toContain(
+      "- tools.edit({ edits: Array<{ newText: string; oldText: string }>; path: string })",
+    );
     expect(execTool.description).toContain(nodesGuidance);
     expect(execTool.description.indexOf(nodesGuidance)).toBe(
       execTool.description.lastIndexOf(nodesGuidance),
     );
+    expect(parameters.properties?.code?.description).toContain("Read -> write -> verify");
+    expect(parameters.properties?.code?.description).toContain(
+      'tools.edit({path:"file.txt",edits:[{oldText:"exact old",newText:"exact new"}]})',
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'const a=await tools.read({path:"first.txt"})',
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "code ending at the mutation is invalid",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'const value=source.field("requested_key")',
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'await tools.write({path:"output.txt",content:value})',
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'return (await tools.read({path:"output.txt"})).content',
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Use the extracted value, never the key name",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "do not use Number/parseInt/parseFloat",
+    );
+  });
 
-    expect(parameters.properties?.code?.description).toContain("no Python, shell");
-    expect(parameters.properties?.code?.description).toContain(
-      "a trailing expression is discarded and yields `null`",
+  it("keeps core coding methods visible when the direct-method index is truncated", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const edit = fakeTool("edit", "Edit a file");
+    edit.parameters = Type.Object({
+      path: Type.String(),
+      edits: Type.Array(
+        Type.Object({
+          oldText: Type.String(),
+          newText: Type.String(),
+        }),
+      ),
+    });
+    const fillers = Array.from({ length: 80 }, (_, index) =>
+      fakeTool(`tool_${index}`, "Short filler tool"),
     );
-    expect(parameters.properties?.code?.description).toContain(
-      'tools.callValue("openclaw:core:read", { path: "notes.txt" })',
-    );
-    expect(parameters.properties?.code?.description).toContain("Use `callValue`, not `call`");
-    expect(parameters.properties?.code?.description).toContain("return file.content");
-    expect(parameters.properties?.code?.description).toContain(
-      "return it first, then parse it in a later exec",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      "exact ids from `ALL_TOOLS` or `tools.search(query)`",
-    );
-    expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
-    expect(parameters.properties?.code?.description).toContain("`require`, `import`");
-    expect(parameters.properties?.restartSafe?.description).toContain(
-      "Leave unset for ordinary calls",
-    );
-    expect(parameters.properties?.language?.description).toContain(
-      'Must be "javascript" or "typescript"',
-    );
-    expect(parameters).toMatchObject({ required: ["code"] });
-    expect(parameters.properties).not.toHaveProperty("command");
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        ...fillers,
+        fakeTool("read", "Read a file"),
+        fakeTool("write", "Write a file"),
+        edit,
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("- tools.read(");
+    expect(description).toContain("- tools.write(");
+    expect(description).toContain("- tools.edit(");
+    expect(description.match(/^- tools\./gmu)).toHaveLength(12);
+    expect(description).toContain("more direct methods omitted");
   });
 
   it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
@@ -289,15 +420,15 @@ describe("Code Mode catalog and model-visible surface", () => {
     };
     const codeDescription = parameters.properties?.code?.description;
 
-    expect(execTool.description.length).toBeLessThan(2_400);
-    expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description.length).toBeLessThan(1_200);
+    expect(execTool.description).toContain("`Promise.all` only for independent work");
     expect(codeDescription).toEqual(expect.any(String));
-    expect(String(codeDescription).length).toBeLessThan(620);
+    expect(String(codeDescription).length).toBeLessThan(140);
     expect(codeDescription).not.toContain("MCP namespace globals");
     expect(codeDescription).not.toContain("`API` virtual declaration files");
   });
 
-  it("primes the exec schema with exact native tool ids and compact contracts", () => {
+  it("primes exec with direct native tool signatures and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
@@ -313,24 +444,28 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    expect(description).toContain("descriptions are intentionally deferred");
-    expect(description).toContain("OUTPUT DECLARED RULE");
     expect(description).toContain(
-      '- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> Array<{ id: string; score: number }>',
+      "- tools.alpha_tool({ value?: string }) -> Array<{ id: string; score: number }>",
     );
-    expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
-    expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
+    expect(description).toContain("- tools.zeta_tool({ value?: string })");
     expect(description).not.toContain("Description stays deferred.");
     expect(description).not.toContain("Another deferred description.");
+    expect(description).not.toContain("openclaw:fake-code-mode:");
   });
 
-  it("keeps a typical 72-tool catalog fully indexed", () => {
+  it("omits direct methods that the guest cannot expose unambiguously", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
-    const catalogTools = Array.from({ length: 72 }, (_, index) =>
-      pluginTool(`tool_${index.toString().padStart(3, "0")}`, "Deferred", "catalog-owner"),
-    );
     const compacted = applyCodeModeCatalog({
-      tools: [...tools, ...catalogTools],
+      tools: [
+        ...tools,
+        pluginTool("shared_name", "First", "first"),
+        pluginTool("shared_name", "Second", "second"),
+        pluginTool("bad-name", "Invalid identifier"),
+        pluginTool("search", "Reserved method"),
+        pluginTool("exec", "Reserved control name"),
+        pluginTool("wait", "Reserved control name"),
+        pluginTool("safe_name", "Usable method"),
+      ],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -339,11 +474,15 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    expect(description).toContain('"openclaw:catalog-owner:tool_071"');
-    expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+    expect(description).toContain("tools.safe_name");
+    expect(description).not.toContain("tools.shared_name");
+    expect(description).not.toContain("tools.bad-name");
+    expect(description).not.toContain("tools.search(input:");
+    expect(description).not.toContain("tools.exec(input:");
+    expect(description).not.toContain("tools.wait(input:");
   });
 
-  it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
+  it("keeps short methods when verbose contracts exceed the signature budget", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;
     const catalogTools = Array.from({ length: 100 }, (_, index) =>
@@ -365,17 +504,16 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled direct methods inside code");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
-    expect(index).toContain("zzz_contracted_tool");
-    expect(index).toContain("-> { ok: boolean }");
+    expect(index).toContain("more direct methods omitted");
+    expect(index).toContain("tools.fake_011");
+    expect(index).not.toContain("tools.zzz_contracted_tool");
+    expect(index).not.toContain("tools.fake_012");
   });
 
-  it("skips a single oversized entry instead of blanking the whole index", () => {
+  it("skips one oversized method signature without blanking the index", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
-    // One declared tool whose line alone blows the 8000-char budget; it sorts
-    // first among declared tools, so a prefix cut would zero the entire index.
     const oversized = pluginTool(`a_${"z".repeat(9_000)}`, "Deferred");
     (oversized as { outputSchema?: unknown }).outputSchema = Type.Object(
       { ok: Type.Boolean() },
@@ -399,25 +537,20 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled direct methods inside code");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
-    expect(index.length).toBeLessThanOrEqual(8_000);
-    // The oversized line is skipped, but every short declared contract survives.
+    expect(index.length).toBeLessThanOrEqual(1_600);
     expect(index).not.toContain("z".repeat(9_000));
     for (let i = 0; i < 4; i += 1) {
       expect(index).toContain(`b_short_${i}`);
     }
   });
 
-  it("renders a deterministic truncated index across rebuilds", () => {
+  it("keeps a thousand-tool method index deterministic and bounded", () => {
     const build = () => {
       const { config, catalogRef, tools } = createCodeModeHarness();
-      const catalogTools = Array.from({ length: 100 }, (_, index) =>
-        pluginTool(
-          `fake_${index.toString().padStart(3, "0")}`,
-          "Deferred",
-          `fake-${"x".repeat(120)}`,
-        ),
+      const catalogTools = Array.from({ length: 1_024 }, (_, index) =>
+        pluginTool(`tool_${index.toString().padStart(4, "0")}`, "Deferred", "catalog-owner"),
       );
       const compacted = applyCodeModeCatalog({
         tools: [...tools, ...catalogTools],
@@ -428,61 +561,17 @@ describe("Code Mode catalog and model-visible surface", () => {
         catalogRef,
       });
       const description = compacted.tools[0]?.description ?? "";
-      const start = description.indexOf("OpenClaw/plugin tool quick index");
+      const start = description.indexOf("Enabled direct methods inside code");
       return start >= 0 ? description.slice(start) : "";
     };
     const first = build();
     for (let i = 0; i < 5; i += 1) {
       expect(build()).toBe(first);
     }
-    expect(first).toContain("additional OpenClaw/plugin tools omitted");
-  });
-
-  it("bounds the model-visible native tool index", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
-    const pluginId = `fake-${"x".repeat(120)}`;
-    const catalogTools = Array.from({ length: 100 }, (_, index) =>
-      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
-    );
-    const compacted = applyCodeModeCatalog({
-      tools: [...tools, ...catalogTools],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
-    const index = indexStart >= 0 ? description.slice(indexStart) : "";
-    expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
-    expect(index).not.toContain("fake_099");
-  });
-
-  it("keeps a thousand-tool catalog index deterministic and within its character budget", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
-    const catalogTools = Array.from({ length: 1_024 }, (_, index) =>
-      pluginTool(`tool_${index.toString().padStart(4, "0")}`, "Deferred", "catalog-owner"),
-    );
-    const compacted = applyCodeModeCatalog({
-      tools: [...tools, ...catalogTools],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
-    const index = indexStart >= 0 ? description.slice(indexStart) : "";
-
-    expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).toContain('"openclaw:catalog-owner:tool_0000"');
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
-    expect(index).not.toContain('"openclaw:catalog-owner:tool_1023"');
+    expect(first.length).toBeLessThanOrEqual(1_600);
+    expect(first).toContain("tools.tool_0000");
+    expect(first).toContain("more direct methods omitted");
+    expect(first).not.toContain("tools.tool_1023");
   });
 
   it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
@@ -499,7 +588,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const description = compacted.tools[0]?.description ?? "";
     // Base tool guidance always stays; MCP/API and namespace guidance drop out so
     // the model never probes an empty virtual API surface.
-    expect(description).toContain("`tools.search(query: string, options?)`");
+    expect(description).toContain("`await tools.search(query)`");
     expect(description).not.toContain("API.list");
     expect(description).not.toContain("MCP tools are available only through");
     expect(description).not.toContain("MCP namespace globals");
@@ -531,7 +620,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("API.list(prefix?)");
     expect(description).toContain("MCP tools are available only through");
-    expect(description).toContain('"openclaw:fake-code-mode:fake_noop"');
+    expect(description).toContain("tools.fake_noop");
     expect(description).not.toContain("github__create_issue");
     expect(description).not.toContain("malicious_prompt");
   });

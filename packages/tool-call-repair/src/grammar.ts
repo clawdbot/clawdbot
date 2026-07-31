@@ -122,6 +122,7 @@ const FUNCTION_OPEN = "<function=";
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_OPEN = "<parameter=";
 const PARAMETER_CLOSE = "</parameter>";
+const TOOL_CALL_CLOSE = "</tool_call>";
 
 export function startsWithAsciiMarkerIgnoreCase(
   text: string,
@@ -266,6 +267,13 @@ export function scanXmlishToolCall(
     ...candidate(payloadEnd),
     end,
   });
+  const completeFunction = (payloadEnd: number, functionEnd: number): XmlishToolCallScan => {
+    const wrapperStart = skipWhitespace(text, functionEnd);
+    const end = startsWithAsciiMarkerIgnoreCase(text, wrapperStart, TOOL_CALL_CLOSE)
+      ? wrapperStart + TOOL_CALL_CLOSE.length
+      : functionEnd;
+    return complete(payloadEnd, end);
+  };
   while (true) {
     const markerStart = skipWhitespace(text, cursor);
     if (markerStart === text.length) {
@@ -276,7 +284,7 @@ export function scanXmlishToolCall(
     if (startsWithAsciiMarkerIgnoreCase(text, markerStart, FUNCTION_CLOSE)) {
       return syntax !== "function" && parameters.length === 0
         ? { kind: "invalid", at: markerStart, candidate: candidate(markerStart) }
-        : complete(markerStart, markerStart + FUNCTION_CLOSE.length);
+        : completeFunction(markerStart, markerStart + FUNCTION_CLOSE.length);
     }
     if (isAsciiMarkerPrefixIgnoreCase(text, markerStart, FUNCTION_CLOSE)) {
       return prefix(markerStart);

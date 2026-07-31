@@ -21,6 +21,9 @@ export type PendingBridgeState = PendingBridgeRequest & {
   promise: Promise<SettledBridgeRequest>;
   settled?: SettledBridgeRequest;
   settledSequence?: number;
+  knownSideEffectFree: boolean;
+  executionBoundaryClassified: boolean;
+  potentialSideEffectStarted: boolean;
   cancel?: () => void;
 };
 
@@ -35,6 +38,10 @@ type CodeModeRunState = {
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
+  readOnly: boolean;
+  // Tracks calls already dispatched by this run; unlike replaySafe this does
+  // not constrain what a future resumed guest may request.
+  sideEffectFree: boolean;
   output: unknown[];
   // Retain all output for cumulative limits, but never replay blocks already returned to the model.
   deliveredOutputCount: number;
@@ -217,6 +224,8 @@ export function snapshotState(params: {
   deliveredOutputCount?: number;
   reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
+  readOnly: boolean;
+  sideEffectFree: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -244,28 +253,71 @@ export function snapshotState(params: {
   }
 }
 
+function pendingBridgeRequestReplaySafe(
+  request: PendingBridgeRequest,
+  runtime: ToolSearchRuntime,
+): boolean {
+  if (
+    request.method === "search" ||
+    request.method === "describe" ||
+    request.method === "yield" ||
+    request.method === "agentSpawn" ||
+    request.method === "agentWait" ||
+    request.method === "skillsList" ||
+    request.method === "skillsRead"
+  ) {
+    return true;
+  }
+  if (request.method !== "call" && request.method !== "callValue") {
+    return false;
+  }
+  const id = Array.isArray(request.args) ? request.args[0] : undefined;
+  return typeof id === "string" && runtime.isReplaySafeExactId(id);
+}
+
 export function pendingBridgeRequestsReplaySafe(
   pending: readonly PendingBridgeRequest[],
   runtime: ToolSearchRuntime,
 ): boolean {
-  return pending.every((request) => {
-    if (
-      request.method === "search" ||
-      request.method === "describe" ||
-      request.method === "yield" ||
-      request.method === "agentSpawn" ||
-      request.method === "agentWait" ||
-      request.method === "skillsList" ||
-      request.method === "skillsRead"
-    ) {
-      return true;
-    }
-    if (request.method !== "call" && request.method !== "callValue") {
-      return false;
-    }
-    const id = Array.isArray(request.args) ? request.args[0] : undefined;
-    return typeof id === "string" && runtime.isReplaySafeExactId(id);
-  });
+  return pending.every((request) => pendingBridgeRequestReplaySafe(request, runtime));
+}
+
+export function mergePendingBridgeSideEffectFree(
+  current: boolean,
+  pending: readonly PendingBridgeState[],
+): boolean {
+  // An unclassified async hook is not evidence of a side effect. Only the
+  // final execution boundary can permanently clear this monotonic flag.
+  return current && !pending.some((request) => request.potentialSideEffectStarted);
+}
+
+function pendingBridgeRequestSideEffectFree(
+  request: PendingBridgeRequest,
+  runtime: ToolSearchRuntime,
+): boolean {
+  if (
+    request.method === "search" ||
+    request.method === "describe" ||
+    request.method === "yield" ||
+    request.method === "agentWait" ||
+    request.method === "skillsList" ||
+    request.method === "skillsRead"
+  ) {
+    return true;
+  }
+  if (request.method !== "call" && request.method !== "callValue") {
+    return false;
+  }
+  const id = Array.isArray(request.args) ? request.args[0] : undefined;
+  const input = Array.isArray(request.args) ? request.args[1] : undefined;
+  return typeof id === "string" && runtime.isSideEffectFreeExactCall(id, input);
+}
+
+export function pendingBridgeRequestsSideEffectFree(
+  pending: readonly PendingBridgeRequest[],
+  runtime: ToolSearchRuntime,
+): boolean {
+  return pending.every((request) => pendingBridgeRequestSideEffectFree(request, runtime));
 }
 
 function enforceSnapshotStateLimits(params: {
@@ -298,8 +350,17 @@ export function createPendingBridgeStates(params: {
     const signal = params.signal
       ? AbortSignal.any([params.signal, abortController.signal])
       : abortController.signal;
+    const knownSideEffectFree = pendingBridgeRequestSideEffectFree(request, params.runtime);
     const state: PendingBridgeState = {
       ...request,
+      knownSideEffectFree,
+      // Hooks may replace call input asynchronously. Do not trust the original
+      // classification until the final execution boundary has been reached.
+      executionBoundaryClassified: request.method !== "call" && request.method !== "callValue",
+      // call/callValue record actual execution only after target validation.
+      // While still pending, unclassified calls remain conservatively effectful.
+      potentialSideEffectStarted:
+        !knownSideEffectFree && request.method !== "call" && request.method !== "callValue",
       promise: runBridgeRequest({
         runtime: params.runtime,
         namespaceRuntime: params.namespaceRuntime,
@@ -309,6 +370,21 @@ export function createPendingBridgeStates(params: {
         request,
         signal,
         onUpdate: params.onUpdate,
+        onExecutionStart: (finalInput) => {
+          state.executionBoundaryClassified = true;
+          const id = Array.isArray(request.args) ? request.args[0] : undefined;
+          const finalSideEffectFree =
+            typeof id === "string" && params.runtime.isSideEffectFreeExactCall(id, finalInput);
+          state.knownSideEffectFree = finalSideEffectFree;
+          if (finalSideEffectFree) {
+            return;
+          }
+          state.potentialSideEffectStarted = true;
+          const active = params.activeRunId ? activeRuns.get(params.activeRunId) : undefined;
+          if (active) {
+            active.sideEffectFree = false;
+          }
+        },
       }).then((settled) => {
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
@@ -338,6 +414,8 @@ export function storeSnapshotState(params: {
   replayId: string;
   pending: PendingBridgeState[];
   replaySafe: boolean;
+  readOnly: boolean;
+  sideEffectFree: boolean;
   settlementMode: CodeModeSettlementMode;
   snapshotBytes: Uint8Array;
   parentToolCallId: string;
@@ -372,6 +450,8 @@ export function storeSnapshotState(params: {
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
+    readOnly: params.readOnly,
+    sideEffectFree: params.sideEffectFree,
     output: params.output,
     deliveredOutputCount: params.output.length,
     expiresAt,
@@ -386,6 +466,7 @@ export function storeSnapshotState(params: {
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
+    sideEffectFree: params.sideEffectFree,
     output: params.output.slice(params.deliveredOutputCount ?? 0),
     telemetry: telemetry(params.runtime),
   };

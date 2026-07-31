@@ -28,6 +28,8 @@ import {
   codeModeWaitingReason,
   createPendingBridgeStates,
   disposeCodeModeRun,
+  mergePendingBridgeSideEffectFree,
+  pendingBridgeRequestsSideEffectFree,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
@@ -55,6 +57,7 @@ export async function runExec(params: {
   assistantTurnId?: string;
   language?: CodeModeLanguage;
   restartSafe: boolean;
+  readOnly: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -68,7 +71,13 @@ export async function runExec(params: {
   if (config.enabled === false) {
     throw new ToolInputError("code mode is disabled.");
   }
-  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
+    enforceSideEffectFree: params.readOnly,
+    repairInput: true,
+    // Reject malformed core-tool inputs before the execution boundary. This
+    // preserves proof that a failed mutating call had no observable effects.
+    validateInput: "core",
+  });
   const bridgeDispatch = { started: false };
   if (params.signal?.aborted) {
     return {
@@ -78,6 +87,7 @@ export async function runExec(params: {
       failurePhase: "host" as const,
       bridgeDispatchStarted: false,
       output: [],
+      readOnly: params.readOnly,
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
     };
@@ -125,10 +135,12 @@ export async function runExec(params: {
         params.signal,
       ),
     );
-    return await settleCodeModeResult({
+    const settled = await settleCodeModeResult({
       result,
       output: result.output,
       replaySafe: params.restartSafe,
+      readOnly: params.readOnly,
+      sideEffectFree: true,
       deadlineMs,
       parentToolCallId: params.toolCallId,
       codeModeReplayId,
@@ -140,6 +152,7 @@ export async function runExec(params: {
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
+    return { ...settled, readOnly: params.readOnly };
   } catch (error) {
     const code = params.signal?.aborted ? ("aborted" as const) : codeModeFailureCode(error);
     return {
@@ -153,6 +166,7 @@ export async function runExec(params: {
           : ("host" as const),
       bridgeDispatchStarted: bridgeDispatch.started,
       output: [],
+      readOnly: params.readOnly,
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
     };
@@ -219,6 +233,8 @@ async function settleCodeModeResult(params: {
   result: CodeModeWorkerResult;
   output: unknown[];
   replaySafe: boolean;
+  readOnly: boolean;
+  sideEffectFree: boolean;
   parentToolCallId: string;
   codeModeReplayId: string;
   ctx: ToolSearchToolContext;
@@ -236,6 +252,7 @@ async function settleCodeModeResult(params: {
 }) {
   let result = params.result;
   let pending = params.pending ?? [];
+  let sideEffectFree = params.sideEffectFree;
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
   const deliveredOutputCount = params.deliveredOutputCount ?? 0;
@@ -267,10 +284,26 @@ async function settleCodeModeResult(params: {
     result.pendingRequests.length > 0 &&
     result.pendingRequests.every((request) => request.method !== "yield")
   ) {
-    if (params.replaySafe) {
-      // Replay-safe runs never inline-drain: namespace calls stay a hard error
-      // and other pending work falls through to the replay-safe snapshot check.
-      if (result.pendingRequests.every((request) => request.method === "namespace")) {
+    if (params.readOnly) {
+      if (!pendingBridgeRequestsSideEffectFree(result.pendingRequests, params.runtime)) {
+        cancelPendingBridgeStates(pending);
+        return {
+          status: "failed" as const,
+          error: "read-only code mode cannot call side-effecting tools.",
+          code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+          output: output.slice(deliveredOutputCount),
+          replaySafe: true,
+          sideEffectFree,
+          telemetry: telemetry(params.runtime),
+        };
+      }
+    } else if (params.replaySafe) {
+      // Restart-safe runs may drain only requests proven safe before dispatch.
+      // This keeps ordinary reads inside exec instead of exposing a suspended
+      // snapshot that a later outer continuation cannot reliably resume.
+      if (result.pendingRequests.some((request) => request.method === "namespace")) {
         cancelPendingBridgeStates(pending);
         return {
           status: "failed" as const,
@@ -280,10 +313,24 @@ async function settleCodeModeResult(params: {
           bridgeDispatchStarted: params.bridgeDispatch.started,
           output: output.slice(deliveredOutputCount),
           replaySafe: true,
+          sideEffectFree,
           telemetry: telemetry(params.runtime),
         };
       }
-      break;
+      if (!pendingBridgeRequestsReplaySafe(result.pendingRequests, params.runtime)) {
+        cancelPendingBridgeStates(pending);
+        return {
+          status: "failed" as const,
+          error: "restart-safe code mode cannot call side-effecting tools.",
+          code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+          output: output.slice(deliveredOutputCount),
+          replaySafe: true,
+          sideEffectFree,
+          telemetry: telemetry(params.runtime),
+        };
+      }
     }
     const remainingMs = settleDeadline - Date.now();
     if (remainingMs <= 0) {
@@ -312,25 +359,25 @@ async function settleCodeModeResult(params: {
         // evidence first so every later failure is permanently non-retryable.
         params.bridgeDispatch.started = true;
       }
-      pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
-          runtime: params.runtime,
-          namespaceRuntime: params.namespaceRuntime,
-          parentToolCallId: params.parentToolCallId,
-          codeModeRunId: params.codeModeReplayId,
-          activeRunId,
-          ctx: params.ctx,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-        }),
-      );
+      const newPendingStates = createPendingBridgeStates({
+        pendingRequests: newPendingRequests,
+        runtime: params.runtime,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeReplayId,
+        activeRunId,
+        ctx: params.ctx,
+        signal: params.signal,
+        onUpdate: params.onUpdate,
+      });
+      pending.push(...newPendingStates);
       const ready = await waitForPending(
         pending,
         result.settlementMode,
         remainingMs,
         params.signal,
       );
+      sideEffectFree = mergePendingBridgeSideEffectFree(sideEffectFree, pending);
       const resumeBudgetMs = ready
         ? usableResumeBudgetMs(settleDeadline, params.config)
         : undefined;
@@ -348,7 +395,9 @@ async function settleCodeModeResult(params: {
           runId: activeRunId,
           replayId: params.codeModeReplayId,
           pending,
-          replaySafe: false,
+          replaySafe: params.readOnly || params.replaySafe,
+          readOnly: params.readOnly,
+          sideEffectFree,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
@@ -403,7 +452,25 @@ async function settleCodeModeResult(params: {
       result.pendingRequests,
       params.runtime,
     );
-    if (params.replaySafe && !pendingReplaySafe) {
+    const pendingSideEffectFree = pendingBridgeRequestsSideEffectFree(
+      result.pendingRequests,
+      params.runtime,
+    );
+    if (params.readOnly && !pendingSideEffectFree) {
+      cancelPendingBridgeStates(pending);
+      return {
+        status: "failed" as const,
+        error: "read-only code mode cannot call side-effecting tools.",
+        code: "invalid_input" as const,
+        failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+        bridgeDispatchStarted: params.bridgeDispatch.started,
+        output: output.slice(deliveredOutputCount),
+        replaySafe: true,
+        sideEffectFree,
+        telemetry: telemetry(params.runtime),
+      };
+    }
+    if (!params.readOnly && params.replaySafe && !pendingReplaySafe) {
       cancelPendingBridgeStates(pending);
       return {
         status: "failed" as const,
@@ -413,6 +480,7 @@ async function settleCodeModeResult(params: {
         bridgeDispatchStarted: params.bridgeDispatch.started,
         output: output.slice(deliveredOutputCount),
         replaySafe: true,
+        sideEffectFree,
         telemetry: telemetry(params.runtime),
       };
     }
@@ -438,24 +506,26 @@ async function settleCodeModeResult(params: {
         if (newPendingRequests.length > 0) {
           params.bridgeDispatch.started = true;
         }
-        pending.push(
-          ...createPendingBridgeStates({
-            pendingRequests: newPendingRequests,
-            runtime: params.runtime,
-            namespaceRuntime: params.namespaceRuntime,
-            parentToolCallId: params.parentToolCallId,
-            codeModeRunId: params.codeModeReplayId,
-            activeRunId,
-            ctx: params.ctx,
-            signal: params.signal,
-            onUpdate: params.onUpdate,
-          }),
-        );
+        const newPendingStates = createPendingBridgeStates({
+          pendingRequests: newPendingRequests,
+          runtime: params.runtime,
+          namespaceRuntime: params.namespaceRuntime,
+          parentToolCallId: params.parentToolCallId,
+          codeModeRunId: params.codeModeReplayId,
+          activeRunId,
+          ctx: params.ctx,
+          signal: params.signal,
+          onUpdate: params.onUpdate,
+        });
+        pending.push(...newPendingStates);
+        sideEffectFree = mergePendingBridgeSideEffectFree(sideEffectFree, pending);
         return storeSnapshotState({
           runId: activeRunId,
           replayId: params.codeModeReplayId,
           pending,
-          replaySafe: params.replaySafe && pendingReplaySafe,
+          replaySafe: params.readOnly || (params.replaySafe && pendingReplaySafe),
+          readOnly: params.readOnly,
+          sideEffectFree,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
@@ -489,6 +559,8 @@ async function settleCodeModeResult(params: {
       deliveredOutputCount,
       reservedActiveRunSlot: params.reservedActiveRunSlot,
       replaySafe: params.replaySafe,
+      readOnly: params.readOnly,
+      sideEffectFree,
       settlementMode: result.settlementMode,
       signal: params.signal,
       onUpdate: params.onUpdate,
@@ -512,6 +584,7 @@ async function settleCodeModeResult(params: {
       : {}),
     output: output.slice(deliveredOutputCount),
     replaySafe: params.replaySafe,
+    sideEffectFree,
     telemetry: telemetry(params.runtime),
   };
 }
@@ -520,6 +593,8 @@ export async function runWait(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
   runId: string;
+  requireRestartSafe?: boolean;
+  requireReadOnly?: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -538,6 +613,12 @@ export async function runWait(params: {
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
   }
+  if (params.requireReadOnly && !state.readOnly) {
+    throw new ToolInputError("code mode run was not created under the read-only policy.");
+  }
+  if (params.requireRestartSafe && !state.replaySafe) {
+    throw new ToolInputError("code mode run was not created under the restart-safe policy.");
+  }
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");
   }
@@ -553,6 +634,7 @@ export async function runWait(params: {
       Math.max(1, deadlineMs - Date.now()),
       params.signal,
     );
+    state.sideEffectFree = mergePendingBridgeSideEffectFree(state.sideEffectFree, state.pending);
     const resumeBudgetMs = ready ? usableResumeBudgetMs(deadlineMs, state.config) : undefined;
     if (!ready || resumeBudgetMs === undefined) {
       // An aborted wait drops the suspended run: nothing will resume it, and
@@ -566,7 +648,9 @@ export async function runWait(params: {
           failurePhase: "bridge" as const,
           bridgeDispatchStarted: true,
           output: takeUndeliveredCodeModeRunOutput(state),
+          readOnly: state.readOnly,
           replaySafe: state.replaySafe,
+          sideEffectFree: state.sideEffectFree,
           telemetry: telemetry(state.runtime),
         };
       }
@@ -579,7 +663,9 @@ export async function runWait(params: {
         runId: state.runId,
         reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
         pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
+        readOnly: state.readOnly,
         replaySafe: state.replaySafe,
+        sideEffectFree: state.sideEffectFree,
         output: takeUndeliveredCodeModeRunOutput(state),
         telemetry: telemetry(state.runtime),
       };
@@ -613,10 +699,12 @@ export async function runWait(params: {
     );
     const output = [...state.output, ...result.output];
     enforceOutputLimit(output, state.config);
-    return await settleCodeModeResult({
+    const settled = await settleCodeModeResult({
       result,
       output,
       replaySafe: state.replaySafe,
+      readOnly: state.readOnly,
+      sideEffectFree: state.sideEffectFree,
       deadlineMs,
       parentToolCallId: state.parentToolCallId,
       codeModeReplayId: state.replayId,
@@ -632,7 +720,9 @@ export async function runWait(params: {
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
+    return { ...settled, readOnly: state.readOnly };
   } catch (error) {
+    state.sideEffectFree = mergePendingBridgeSideEffectFree(state.sideEffectFree, state.pending);
     // After ownership leaves activeRuns, worker/limit failures must cancel
     // every transferred loser; there is no parked snapshot left to own it.
     if (!activeRuns.has(state.runId)) {
@@ -645,7 +735,9 @@ export async function runWait(params: {
       failurePhase: "bridge" as const,
       bridgeDispatchStarted: true,
       output: takeUndeliveredCodeModeRunOutput(state),
+      readOnly: state.readOnly,
       replaySafe: state.replaySafe,
+      sideEffectFree: state.sideEffectFree,
       telemetry: telemetry(state.runtime),
     };
   } finally {

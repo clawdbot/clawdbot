@@ -65,11 +65,15 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       }),
   });
   const clientTools =
-    toolsEnabled && !params.isRawModelRun && !params.attempt.forceRestartSafeTools
+    toolsEnabled &&
+    !params.isRawModelRun &&
+    !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceReadOnlyTools
       ? params.attempt.clientTools
       : undefined;
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceReadOnlyTools &&
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -111,6 +115,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
+      !params.attempt.forceReadOnlyTools &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,

@@ -1318,6 +1318,23 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.85);
   });
 
+  it("omits unsupported temperature for GPT-5.6 Responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+      }),
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      { temperature: 0 },
+    ) as Record<string, unknown>;
+
+    expect(params).not.toHaveProperty("temperature");
+  });
+
   it("forwards response_format to responses text format request params", () => {
     const model = makeResponsesModel({
       id: "gpt-5.4",

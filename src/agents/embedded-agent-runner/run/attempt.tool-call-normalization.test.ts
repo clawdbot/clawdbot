@@ -276,6 +276,159 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     });
   });
 
+  it("promotes allowlisted guest XML with an omitted final function tag", async () => {
+    const rawToolText = [
+      "<function=tools.read>",
+      "<parameter=path>",
+      "facts.txt",
+      "</parameter>",
+    ].join("\n");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: structuredClone(resultMessage) },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]), {
+      additionalAllowedToolNames: new Set(["tools.read"]),
+      allowMissingXmlFunctionCloseForAdditionalTools: true,
+    });
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "tools.read",
+      arguments: { path: "facts.txt" },
+    });
+    expect(JSON.stringify({ events, result })).not.toContain(rawToolText);
+  });
+
+  it("does not promote outer tools with an omitted final function tag", async () => {
+    const rawToolText = [
+      "<function=exec>",
+      "<parameter=command>",
+      "rm -rf target",
+      "</parameter>",
+    ].join("\n");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: structuredClone(resultMessage) },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]), {
+      additionalAllowedToolNames: new Set(["tools.read"]),
+      allowMissingXmlFunctionCloseForAdditionalTools: true,
+    });
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(
+      events.some((event) => String(requireRecord(event, "event").type).startsWith("toolcall_")),
+    ).toBe(false);
+    expect(result).toMatchObject({ role: "assistant", content: [] });
+    expect(JSON.stringify({ events, result })).not.toContain(rawToolText);
+  });
+
+  it("scrubs a namespace-only guest XML call without promoting it", async () => {
+    const rawToolText = [
+      "<function=tools>",
+      "<parameter=type>",
+      "id",
+      "</parameter>",
+      "<parameter=name>",
+      "read",
+      "</parameter>",
+      "</function>",
+      "</tool_call>",
+    ].join("\n");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: structuredClone(resultMessage) },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]), {
+      additionalAllowedToolNames: new Set(["tools.read"]),
+      additionalScrubbedToolNames: new Set(["tools"]),
+      allowMissingXmlFunctionCloseForAdditionalTools: true,
+    });
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.filter((event) => requireRecord(event, "event").type === "text_delta")).toEqual(
+      [],
+    );
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { role: "assistant", content: [] },
+    });
+    expect(result).toMatchObject({ role: "assistant", content: [] });
+    expect(JSON.stringify({ events, result })).not.toContain(rawToolText);
+  });
+
+  it("preserves inline prose that mentions a scrub-only guest namespace", async () => {
+    const text = "The literal <function=tools> marker is malformed.";
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage }));
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]), {
+      additionalScrubbedToolNames: new Set(["tools"]),
+    });
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    await expect(stream.result()).resolves.toBe(resultMessage);
+  });
+
   it("preserves content indexes when promoting text before thinking", async () => {
     const rawToolText = [
       "[tool:exec]",

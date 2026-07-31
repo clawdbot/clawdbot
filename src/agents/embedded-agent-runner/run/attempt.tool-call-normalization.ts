@@ -887,15 +887,92 @@ function createStandaloneToolCallNameMatcher(
 
 function wrapStreamPromoteStandaloneTextToolCalls(
   stream: AssistantStream,
-  allowedToolNames: Set<string>,
+  promotionAllowedToolNames: Set<string>,
+  options?: {
+    missingXmlFunctionCloseAllowedToolNames?: ReadonlySet<string>;
+    scrubbedToolNames?: ReadonlySet<string>;
+  },
 ): AssistantStream {
-  const matcher = createStandaloneToolCallNameMatcher(allowedToolNames);
+  const scrubbedToolNames = new Set(options?.scrubbedToolNames ?? []);
+  const missingXmlFunctionCloseAllowedToolNames = new Set(
+    options?.missingXmlFunctionCloseAllowedToolNames ?? [],
+  );
+  const matcher = createStandaloneToolCallNameMatcher(
+    new Set([...promotionAllowedToolNames, ...scrubbedToolNames]),
+  );
+  const scrubOnlyMatcher =
+    scrubbedToolNames.size > 0 ? createStandaloneToolCallNameMatcher(scrubbedToolNames) : undefined;
   const promotedIdBySource = new Map<string, string>();
   const normalizeTerminalMessage = (params: {
     allowPromotion: boolean;
     message: unknown;
     preserveEmptyTextBlocks?: boolean;
   }): PlainTextToolCallMessageNormalization => {
+    const promote = (
+      allowedToolNames: Set<string>,
+      allowMissingXmlFunctionClose = false,
+    ): PlainTextToolCallMessageNormalization => {
+      if (!params.allowPromotion) {
+        return undefined;
+      }
+      let ordinal = 0;
+      const createStableToolCallBlock = (
+        block: PlainTextToolCallBlock,
+        name: string,
+      ): Record<string, unknown> => {
+        const sourceKey = `${ordinal}:${block.start}:${block.end}`;
+        ordinal += 1;
+        let id = promotedIdBySource.get(sourceKey);
+        if (!id) {
+          id = createStandaloneTextToolCallId();
+          promotedIdBySource.set(sourceKey, id);
+        }
+        return {
+          type: "toolCall",
+          id,
+          name,
+          arguments: block.arguments,
+          partialArgs: JSON.stringify(block.arguments),
+        };
+      };
+      const promoted = projectPlainTextToolCallMessage({
+        allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
+        allowedToolNames,
+        createToolCallBlock: createStableToolCallBlock,
+        isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+        message: params.message,
+        ...(allowMissingXmlFunctionClose
+          ? { parseOptions: { allowMissingXmlFunctionClose: true } }
+          : {}),
+        requireAssistantRole: true,
+        resolveToolName: resolveExactAllowedToolName,
+      });
+      return promoted ? { kind: "promoted", ...promoted } : undefined;
+    };
+    if (missingXmlFunctionCloseAllowedToolNames.size > 0) {
+      const promoted = promote(promotionAllowedToolNames);
+      if (promoted) {
+        return promoted;
+      }
+      // Missing-close repair is deliberately narrower than normal promotion:
+      // only Code Mode guest names may recover from a truncated outer function.
+      const repaired = promote(missingXmlFunctionCloseAllowedToolNames, true);
+      if (repaired) {
+        return repaired;
+      }
+    }
+    const scrubbedOnly =
+      scrubOnlyMatcher &&
+      projectScrubbedPlainTextToolCallMessage({
+        forceKnownCandidates: true,
+        matcher: scrubOnlyMatcher,
+        message: params.message,
+        preserveEmptyTextBlocks: params.preserveEmptyTextBlocks,
+        requireAssistantRole: true,
+      });
+    if (scrubbedOnly) {
+      return { kind: "scrubbed", ...scrubbedOnly };
+    }
     const scrubbed = projectScrubbedPlainTextToolCallMessage({
       forceIncompleteCandidates: true,
       matcher,
@@ -906,39 +983,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     if (scrubbed) {
       return { kind: "scrubbed", ...scrubbed };
     }
-    if (!params.allowPromotion) {
-      return undefined;
-    }
-    let ordinal = 0;
-    const createStableToolCallBlock = (
-      block: PlainTextToolCallBlock,
-      name: string,
-    ): Record<string, unknown> => {
-      const sourceKey = `${ordinal}:${block.start}:${block.end}`;
-      ordinal += 1;
-      let id = promotedIdBySource.get(sourceKey);
-      if (!id) {
-        id = createStandaloneTextToolCallId();
-        promotedIdBySource.set(sourceKey, id);
-      }
-      return {
-        type: "toolCall",
-        id,
-        name,
-        arguments: block.arguments,
-        partialArgs: JSON.stringify(block.arguments),
-      };
-    };
-    const promoted = projectPlainTextToolCallMessage({
-      allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
-      allowedToolNames,
-      createToolCallBlock: createStableToolCallBlock,
-      isRetainableNonTextBlock: isRetainableNonVisibleBlock,
-      message: params.message,
-      requireAssistantRole: true,
-      resolveToolName: resolveExactAllowedToolName,
-    });
-    return promoted ? { kind: "promoted", ...promoted } : undefined;
+    return promote(promotionAllowedToolNames);
   };
 
   const originalResult = stream.result.bind(stream);
@@ -975,18 +1020,39 @@ function wrapStreamPromoteStandaloneTextToolCalls(
 export function wrapStreamFnPromoteStandaloneTextToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
+  options?: {
+    additionalAllowedToolNames?: ReadonlySet<string>;
+    additionalScrubbedToolNames?: ReadonlySet<string>;
+    allowMissingXmlFunctionCloseForAdditionalTools?: boolean;
+  },
 ): StreamFn {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
+  const additionalAllowedToolNames = new Set(options?.additionalAllowedToolNames ?? []);
+  const promotionAllowedToolNames = new Set([
+    ...(allowedToolNames ?? []),
+    ...additionalAllowedToolNames,
+  ]);
+  const scrubbedToolNames = options?.additionalScrubbedToolNames;
+  const missingXmlFunctionCloseAllowedToolNames =
+    options?.allowMissingXmlFunctionCloseForAdditionalTools && additionalAllowedToolNames.size > 0
+      ? additionalAllowedToolNames
+      : undefined;
+  if (promotionAllowedToolNames.size === 0 && !scrubbedToolNames?.size) {
     return baseFn;
   }
   return (model, context, streamOptions) => {
     const maybeStream = baseFn(model, context, streamOptions);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+        wrapStreamPromoteStandaloneTextToolCalls(stream, promotionAllowedToolNames, {
+          missingXmlFunctionCloseAllowedToolNames,
+          scrubbedToolNames,
+        }),
       );
     }
-    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, allowedToolNames);
+    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, promotionAllowedToolNames, {
+      missingXmlFunctionCloseAllowedToolNames,
+      scrubbedToolNames,
+    });
   };
 }
 

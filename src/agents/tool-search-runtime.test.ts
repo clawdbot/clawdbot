@@ -5,10 +5,12 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { readToolSearchCallArgs } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import {
+  addClientToolsToToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -215,6 +217,529 @@ describe("Tool Search flattened call arguments", () => {
 });
 
 describe("Tool Search input schemas", () => {
+  it("records cumulative calls while keeping last-call evidence runtime-local", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const { catalogRef, config, runtime } = createRuntime([read, write]);
+
+    await runtime.call("read", { path: "facts.txt" });
+    await runtime.call("write", { path: "result.txt", content: "done" });
+    await runtime.call("read", { path: "result.txt" });
+    addClientToolsToToolSearchCatalog({
+      tools: [fakeTool("client_followup")],
+      config,
+      catalogRef,
+    });
+
+    expect(catalogRef.current?.callSequence).toEqual(["read", "write", "read"]);
+    expect(catalogRef.current?.callSideEffectFreeSequence).toEqual([true, false, true]);
+    expect(runtime.telemetry()).toMatchObject({
+      lastCallSideEffectFree: true,
+      hadTargetlessSideEffects: false,
+      successfulObservationFileTargets: [{ path: "facts.txt" }, { path: "result.txt" }],
+      unverifiedMutationFileTargets: [],
+    });
+
+    const nextRuntime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config), {
+      validateInput: true,
+    });
+    expect(nextRuntime.telemetry()).not.toHaveProperty("lastCallSideEffectFree");
+    await nextRuntime.call("write", { path: "next.txt", content: "done" });
+    expect(nextRuntime.telemetry()).toMatchObject({
+      lastCallSideEffectFree: false,
+      successfulObservationFileTargets: [],
+      unverifiedMutationFileTargets: [{ path: "next.txt" }],
+    });
+  });
+
+  it("clears an edited target after an ordered readback", async () => {
+    const edit = fakeTool(
+      "edit",
+      Type.Object({
+        path: Type.String(),
+        oldText: Type.String(),
+        newText: Type.String(),
+      }),
+    );
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const { runtime } = createRuntime([edit, read]);
+
+    await runtime.call("edit", {
+      path: "editable.txt",
+      oldText: "status=pending",
+      newText: "status=verified",
+    });
+    await runtime.call("read", { path: "editable.txt" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      callSequence: ["edit", "read"],
+      lastCallSideEffectFree: true,
+      successfulObservationFileTargets: [{ path: "editable.txt" }],
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("keeps a mutation unverified when a nested read returns an error result", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    read.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "read failed" }],
+      details: { status: "failed", error: "read failed" },
+    }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const { runtime } = createRuntime([read, write]);
+
+    await runtime.call("write", { path: "result.txt", content: "done" });
+    await runtime.call("read", { path: "result.txt" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      lastCallSideEffectFree: true,
+      successfulObservationFileTargets: [],
+      unverifiedMutationFileTargets: [{ path: "result.txt" }],
+    });
+  });
+
+  it("preserves apply_patch targets reported after a bridged failure", async () => {
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "patch failed" }],
+      details: {
+        status: "failed",
+        summary: {
+          added: ["a.ts"],
+          modified: ["b.ts"],
+          deleted: ["old.ts"],
+        },
+      },
+    }));
+    const { runtime } = createRuntime([applyPatch]);
+
+    await runtime.call("apply_patch", {
+      input: [
+        "*** Begin Patch",
+        "*** Delete File: old.ts",
+        "*** Add File: a.ts",
+        "+export {};",
+        "*** Update File: b.ts",
+        "@@",
+        "-old",
+        "+new",
+        "*** End Patch",
+      ].join("\n"),
+    });
+
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      unverifiedMutationFileTargets: [
+        { path: "a.ts", expected: "unknown" },
+        { path: "b.ts", expected: "unknown" },
+        { path: "old.ts", expected: "unknown" },
+      ],
+    });
+  });
+
+  it("treats successful read contents mentioning ENOENT as presence evidence", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    read.execute = vi.fn(async () => jsonResult({ content: "handle ENOENT: file not found" }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const { runtime } = createRuntime([read, write]);
+
+    await runtime.call("write", { path: "result.txt", content: "done" });
+    await runtime.call("read", { path: "result.txt" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      successfulObservationFileTargets: [{ path: "result.txt" }],
+      successfulAbsenceObservationFileTargets: [],
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("preserves apply_patch input targets when bridged execution rejects", async () => {
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.execute = vi.fn(async () => {
+      throw new Error("patch crashed after applying an earlier hunk");
+    });
+    const { runtime } = createRuntime([applyPatch]);
+
+    await expect(
+      runtime.call("apply_patch", {
+        input: [
+          "*** Begin Patch",
+          "*** Add File: a.ts",
+          "+export {};",
+          "*** Update File: b.ts",
+          "@@",
+          "-old",
+          "+next",
+          "*** End Patch",
+        ].join("\n"),
+      }),
+    ).rejects.toThrow("patch crashed");
+
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      unverifiedMutationFileTargets: [
+        { path: "a.ts", expected: "unknown" },
+        { path: "b.ts", expected: "unknown" },
+      ],
+    });
+  });
+
+  it("verifies moved apply_patch targets with presence and absence reads", async () => {
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.execute = vi.fn(async () => {
+      throw new Error("patch crashed after moving the file");
+    });
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    read.execute = vi.fn(async (_toolCallId, input) =>
+      (input as { path?: string }).path === "old.ts"
+        ? {
+            content: [{ type: "text" as const, text: "File not found: old.ts" }],
+            details: { status: "failed", code: "ENOENT", error: "file not found" },
+          }
+        : jsonResult({ content: "moved" }),
+    );
+    const { runtime } = createRuntime([applyPatch, read]);
+
+    await expect(
+      runtime.call("apply_patch", {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: old.ts",
+          "*** Move to: new.ts",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      }),
+    ).rejects.toThrow("patch crashed");
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [
+        { path: "old.ts", expected: "unknown" },
+        { path: "new.ts", expected: "unknown" },
+      ],
+    });
+
+    await runtime.call("read", { path: "old.ts" });
+    expect(runtime.telemetry()).toMatchObject({
+      successfulAbsenceObservationFileTargets: [{ path: "old.ts" }],
+      unverifiedMutationFileTargets: [{ path: "new.ts", expected: "unknown" }],
+    });
+
+    await runtime.call("read", { path: "new.ts" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("counts nested tool executions that reject", async () => {
+    const failingRead = fakeTool("read", Type.Object({ path: Type.String() }));
+    failingRead.execute = vi.fn(async () => {
+      throw new Error("read crashed");
+    });
+    const { runtime } = createRuntime([failingRead]);
+
+    await expect(runtime.call("read", { path: "result.txt" })).rejects.toThrow("read crashed");
+
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      successfulObservationFileTargets: [],
+    });
+  });
+
+  it("keeps an executed mutation unverified when result acceptance rejects", async () => {
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    write.outputSchema = Type.Object({ status: Type.Literal("written") });
+    write.execute = vi.fn(async () => jsonResult({ status: "invalid" }));
+    const { catalogRef, config } = createRuntime([write]);
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async (params) =>
+          await params.tool.execute(
+            params.toolCallId,
+            params.input,
+            params.signal,
+            params.onUpdate,
+            undefined as never,
+          ),
+      },
+      resolveToolSearchConfig(config),
+      { validateInput: true },
+    );
+
+    await expect(runtime.call("write", { path: "result.txt", content: "done" })).rejects.toThrow(
+      "declared outputSchema",
+    );
+
+    expect(write.execute).toHaveBeenCalledOnce();
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      unverifiedMutationFileTargets: [{ path: "result.txt", expected: "unknown" }],
+    });
+  });
+
+  it("preserves apply_patch input targets when result acceptance rejects", async () => {
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.outputSchema = Type.Object({ status: Type.Literal("patched") });
+    applyPatch.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "patched" }],
+      details: {
+        summary: {
+          added: ["a.ts"],
+          modified: [],
+          deleted: [],
+        },
+      },
+    }));
+    const { catalogRef, config } = createRuntime([applyPatch]);
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async (params) =>
+          await params.tool.execute(
+            params.toolCallId,
+            params.input,
+            params.signal,
+            params.onUpdate,
+            undefined as never,
+          ),
+      },
+      resolveToolSearchConfig(config),
+      { validateInput: true },
+    );
+
+    await expect(
+      runtime.call("apply_patch", {
+        input: ["*** Begin Patch", "*** Add File: a.ts", "+export {};", "*** End Patch"].join("\n"),
+      }),
+    ).rejects.toThrow("declared outputSchema");
+
+    expect(runtime.telemetry()).toMatchObject({
+      failures: 1,
+      unverifiedMutationFileTargets: [{ path: "a.ts", expected: "unknown" }],
+    });
+  });
+
+  it("does not let an observation before a mutation verify the later write", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const { runtime } = createRuntime([read, write]);
+
+    await runtime.call("read", { path: "result.txt" });
+    await runtime.call("write", { path: "result.txt", content: "done" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      lastCallSideEffectFree: false,
+      successfulObservationFileTargets: [{ path: "result.txt" }],
+      unverifiedMutationFileTargets: [{ path: "result.txt" }],
+    });
+  });
+
+  it("does not let an overlapping read verify an in-flight write", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    let finishRead: ((value: ReturnType<typeof jsonResult>) => void) | undefined;
+    let finishWrite: ((value: ReturnType<typeof jsonResult>) => void) | undefined;
+    read.execute = vi.fn(
+      async () =>
+        await new Promise<ReturnType<typeof jsonResult>>((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    write.execute = vi.fn(
+      async () =>
+        await new Promise<ReturnType<typeof jsonResult>>((resolve) => {
+          finishWrite = resolve;
+        }),
+    );
+    const { runtime } = createRuntime([read, write]);
+
+    const writeCall = runtime.call("write", { path: "result.txt", content: "done" });
+    await vi.waitFor(() => expect(write.execute).toHaveBeenCalledOnce());
+    const readCall = runtime.call("read", { path: "./result.txt" });
+    await vi.waitFor(() => expect(read.execute).toHaveBeenCalledOnce());
+    finishWrite?.(jsonResult({ status: "written" }));
+    await writeCall;
+    finishRead?.(jsonResult({ content: "done" }));
+    await readCall;
+
+    expect(runtime.telemetry()).toMatchObject({
+      successfulObservationFileTargets: [{ path: "./result.txt" }],
+      unverifiedMutationFileTargets: [{ path: "result.txt" }],
+    });
+
+    read.execute = vi.fn(async () => jsonResult({ content: "done" }));
+    await runtime.call("read", { path: "./result.txt" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("matches absolute read-back paths against relative mutation targets", async () => {
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [read, write] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef, cwd: "/workspace" },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+      { validateInput: true },
+    );
+
+    await runtime.call("write", { path: "result.txt", content: "done" });
+    await runtime.call("read", { path: "/workspace/result.txt" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      successfulObservationFileTargets: [{ path: "/workspace/result.txt" }],
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("does not convert plugin replay uncertainty into mutation evidence", async () => {
+    const pluginRead = fakeTool("plugin_read", Type.Object({ id: Type.String() }));
+    setPluginToolMeta(pluginRead, { pluginId: "example", optional: false });
+    const { runtime } = createRuntime([pluginRead]);
+
+    await runtime.call("plugin_read", { id: "record-1" });
+
+    expect(runtime.telemetry()).toMatchObject({
+      lastCallSideEffectFree: false,
+      hadTargetlessSideEffects: true,
+      successfulObservationFileTargets: [],
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("tracks and verifies every file changed by a nested apply_patch call", async () => {
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "patched" }],
+      details: {
+        summary: {
+          added: ["a.ts"],
+          modified: ["b.ts"],
+          deleted: [],
+        },
+      },
+    }));
+    const read = fakeTool("read", Type.Object({ path: Type.String() }));
+    const { runtime } = createRuntime([applyPatch, read]);
+
+    await runtime.call("apply_patch", { input: "*** Begin Patch\n*** End Patch" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [{ path: "a.ts" }, { path: "b.ts" }],
+    });
+
+    await runtime.call("read", { path: "a.ts" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [{ path: "b.ts" }],
+    });
+
+    await runtime.call("read", { path: "b.ts" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("publishes successful nested apply_patch deletions as authoritative absence", async () => {
+    const write = fakeTool("write", Type.Object({ path: Type.String(), content: Type.String() }));
+    const applyPatch = fakeTool("apply_patch", Type.Object({ input: Type.String() }));
+    applyPatch.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "deleted" }],
+      details: {
+        summary: {
+          added: [],
+          modified: [],
+          deleted: ["temporary.ts"],
+        },
+      },
+    }));
+    const { runtime } = createRuntime([write, applyPatch]);
+
+    await runtime.call("write", { path: "temporary.ts", content: "temporary" });
+    expect(runtime.telemetry()).toMatchObject({
+      unverifiedMutationFileTargets: [{ path: "temporary.ts" }],
+    });
+
+    await runtime.call("apply_patch", { input: "*** Begin Patch\n*** End Patch" });
+    expect(runtime.telemetry()).toMatchObject({
+      successfulAbsenceObservationFileTargets: [{ path: "temporary.ts" }],
+      unverifiedMutationFileTargets: [],
+    });
+  });
+
+  it("repairs schema-bounded Code Mode scalar and optional-null drift", async () => {
+    const target = fakeTool(
+      "small_model_input",
+      Type.Object(
+        {
+          enabled: Type.Optional(Type.Boolean()),
+          limit: Type.Optional(Type.Number()),
+          nullable: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          rows: Type.Optional(Type.Array(Type.Object({ line: Type.Number() }))),
+        },
+        { additionalProperties: false },
+      ),
+    );
+    const { catalogRef, config } = createRuntime([target]);
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config), {
+      repairInput: true,
+      validateInput: true,
+    });
+
+    await expect(
+      runtime.call("small_model_input", {
+        enabled: "false",
+        limit: null,
+        nullable: null,
+        rows: '[{"line":"2"}]',
+      }),
+    ).resolves.toMatchObject({
+      result: {
+        details: {
+          input: {
+            enabled: false,
+            nullable: null,
+            rows: [{ line: 2 }],
+          },
+        },
+      },
+    });
+    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({
+      enabled: false,
+      nullable: null,
+      rows: [{ line: 2 }],
+    });
+  });
+
+  it("preserves relative Code Mode paths even when they resemble the cwd suffix", async () => {
+    const target = fakeTool("read", Type.Object({ path: Type.String() }));
+    const { catalogRef, config } = createRuntime([target]);
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        cwd: "/tmp/openclaw/state/workspaces/cell",
+      },
+      resolveToolSearchConfig(config),
+      {
+        repairInput: true,
+        validateInput: true,
+      },
+    );
+
+    await runtime.call("read", { path: "state/workspaces/cell/facts.txt" });
+    await runtime.call("read", { path: "fixtures/facts.txt" });
+    await runtime.call("read", { path: "../facts.txt" });
+
+    expect(vi.mocked(target.execute).mock.calls.map((call) => call[1])).toEqual([
+      { path: "state/workspaces/cell/facts.txt" },
+      { path: "fixtures/facts.txt" },
+      { path: "../facts.txt" },
+    ]);
+  });
+
   it("validates arguments after a policy hook repairs them", async () => {
     const hook = vi.fn(async () => ({ params: { instruction: "repaired" } }));
     initializeGlobalHookRunner(
@@ -250,6 +775,30 @@ describe("Tool Search input schemas", () => {
     );
     expect(hook).toHaveBeenCalledOnce();
     expect(target.execute).not.toHaveBeenCalled();
+    expect(runtime.telemetry()).toMatchObject({ failures: 1 });
+  });
+
+  it("rechecks read-only safety after a policy hook adjusts arguments", async () => {
+    const hook = vi.fn(async () => ({ params: { action: "add" } }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
+    );
+    const target = fakeTool(
+      "cron",
+      Type.Object({ action: Type.String() }, { additionalProperties: false }),
+    );
+    const { catalogRef, config } = createRuntime([target]);
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config), {
+      validateInput: true,
+      enforceSideEffectFree: true,
+    });
+
+    await expect(runtime.call("cron", { action: "list" })).rejects.toThrow(
+      "read-only Code Mode policy",
+    );
+    expect(hook).toHaveBeenCalledOnce();
+    expect(target.execute).not.toHaveBeenCalled();
+    expect(runtime.telemetry()).toMatchObject({ failures: 1 });
   });
 
   it("lets policy hooks block invalid arguments before schema validation", async () => {

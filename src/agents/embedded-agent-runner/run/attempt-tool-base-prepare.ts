@@ -5,6 +5,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
@@ -14,7 +15,7 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
-import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
+import { isAgentToolReplaySafe, isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
@@ -189,12 +190,24 @@ export function prepareEmbeddedAttemptToolBase(params: {
   };
   const restartSafetyOptions = {
     declaredReplaySafe: (candidate: { name?: string }) => {
+      if (isCodeModeExecTool(candidate as Parameters<typeof isCodeModeExecTool>[0])) {
+        // A fresh exec rebuilds its nested catalog under the restart-safe policy.
+        // Do not retain wait: it can resume an older unrestricted parked run.
+        return true;
+      }
       const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
       if (pluginMeta?.mcp) {
         return false;
       }
       return replaySafetyOptions.declaredReplaySafe(candidate);
     },
+  };
+  const readOnlySafetyOptions = {
+    declaredReplaySafe: (candidate: { name?: string }) =>
+      getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]) ||
+      getChannelAgentToolMeta(candidate as never)
+        ? false
+        : undefined,
   };
   const constructedToolsRaw = !shouldConstructTools
     ? []
@@ -318,10 +331,16 @@ export function prepareEmbeddedAttemptToolBase(params: {
         params.markCoreToolStage("attempt:tools-allow");
         return filteredTools;
       })();
-  const toolsRaw = attempt.forceRestartSafeTools
-    ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
-    : constructedToolsRaw;
-  if (attempt.forceRestartSafeTools) {
+  const toolsRaw = attempt.forceReadOnlyTools
+    ? constructedToolsRaw.filter((tool) => isAgentToolReplaySafe(tool, readOnlySafetyOptions))
+    : attempt.forceRestartSafeTools
+      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      : constructedToolsRaw;
+  if (attempt.forceReadOnlyTools) {
+    log.info(
+      `read-only recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
+    );
+  } else if (attempt.forceRestartSafeTools) {
     log.info(
       `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
     );

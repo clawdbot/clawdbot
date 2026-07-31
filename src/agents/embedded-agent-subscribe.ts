@@ -281,7 +281,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     input: 0,
     output: 0,
     cacheRead: 0,
+    cacheReadReported: false,
     cacheWrite: 0,
+    cacheWriteReported: false,
     reasoningTokens: 0,
     total: 0,
   };
@@ -696,7 +698,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const usage = state.pendingAssistantUsage;
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
+    usageTotals.cacheReadReported ||= typeof usage.cacheRead === "number";
     usageTotals.cacheRead += usage.cacheRead ?? 0;
+    usageTotals.cacheWriteReported ||= typeof usage.cacheWrite === "number";
     usageTotals.cacheWrite += usage.cacheWrite ?? 0;
     usageTotals.reasoningTokens += usage.reasoningTokens ?? 0;
     const usageTotal =
@@ -735,8 +739,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     return {
       input: usageTotals.input || undefined,
       output: usageTotals.output || undefined,
-      cacheRead: usageTotals.cacheRead || undefined,
-      cacheWrite: usageTotals.cacheWrite || undefined,
+      cacheRead: usageTotals.cacheReadReported ? usageTotals.cacheRead : undefined,
+      cacheWrite: usageTotals.cacheWriteReported ? usageTotals.cacheWrite : undefined,
       ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
       total: usageTotals.total || derivedTotal || undefined,
     };

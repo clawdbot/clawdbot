@@ -5,6 +5,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
+import { CODE_MODE_MODULE_ACCESS_ERROR } from "./code-mode-errors.js";
 import { toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import type {
@@ -319,7 +320,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped.name === "ReferenceError" &&
         /^(?:require|module|process) is not defined$/u.test(dumped.message)
       ) {
-        throw new CodeModeWorkerFailure("invalid_input", "code mode module access is disabled.");
+        throw new CodeModeWorkerFailure("invalid_input", CODE_MODE_MODULE_ACCESS_ERROR);
       }
       const text =
         dumped instanceof Error

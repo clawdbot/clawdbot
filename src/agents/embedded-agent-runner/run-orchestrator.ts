@@ -223,6 +223,7 @@ async function runEmbeddedAgentInternal(
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
             : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
       );
+      startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,
@@ -245,6 +246,7 @@ async function runEmbeddedAgentInternal(
           params.sessionId,
           projectKey,
         );
+        startupStages.mark("project-scope");
         const preparedModelRuntime = Object.freeze({
           ...preparedModelRuntimeOwnerSnapshot,
           repoRoot,

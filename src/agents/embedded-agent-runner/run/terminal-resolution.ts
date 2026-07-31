@@ -26,6 +26,7 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
+  resolveReplaySafeCodeModeErrorRetryInstruction,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   resolveSettledToolTerminalContinuationInstruction,
@@ -34,6 +35,10 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import {
+  resolveCodeModeTerminalContinuation,
+  type EmbeddedRunToolCapableContinuation,
+} from "./terminal-code-mode-continuation.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -61,6 +66,8 @@ type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
 
+export type { EmbeddedRunToolCapableContinuation } from "./terminal-code-mode-continuation.js";
+
 export function resolveSettledTurnFinalizationRequest(input: {
   runParams: TerminalRunParams;
   attempt: EmbeddedRunAttemptResult;
@@ -74,8 +81,10 @@ export function resolveSettledTurnFinalizationRequest(input: {
   hasTerminalToolPresentation: boolean;
   terminalState: EmbeddedRunTerminalState;
   settledTurnFinalizationAvailable: boolean;
+  toolCapableContinuationAvailable?: boolean;
+  requireCodeModeMutationVerification?: boolean;
 }): string | null {
-  if (!input.settledTurnFinalizationAvailable) {
+  if (!input.settledTurnFinalizationAvailable && input.toolCapableContinuationAvailable !== true) {
     return null;
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
@@ -107,17 +116,21 @@ export function resolveSettledTurnFinalizationRequest(input: {
   if (emptyAssistantReplyIsSilent) {
     return null;
   }
+  const allowRequiredReplyContinuation =
+    input.runParams.terminalReplyExpectation === "required" ||
+    (input.runParams.terminalReplyExpectation == null &&
+      (input.runParams.trigger == null ||
+        input.runParams.trigger === "user" ||
+        input.runParams.trigger === "manual"));
   return resolveSettledToolTerminalContinuationInstruction({
     provider: input.activeErrorContext.provider,
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
     executionContract: input.executionContract,
-    allowEmptyStopContinuation:
-      input.runParams.terminalReplyExpectation === "required" ||
-      (input.runParams.terminalReplyExpectation == null &&
-        (input.runParams.trigger == null ||
-          input.runParams.trigger === "user" ||
-          input.runParams.trigger === "manual")),
+    allowCodeModeContinuation: input.toolCapableContinuationAvailable === true,
+    allowEmptyStopContinuation: allowRequiredReplyContinuation,
+    requireCodeModeMutationVerification:
+      allowRequiredReplyContinuation && input.requireCodeModeMutationVerification === true,
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
@@ -173,6 +186,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
   settledTurnFinalizationAttempted: boolean;
+  toolCapableContinuation?: EmbeddedRunToolCapableContinuation | null;
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
@@ -226,8 +240,20 @@ export async function resolveEmbeddedRunTerminal(input: {
           timedOut: terminalTimedOut,
           attempt,
         });
-  const nextEmptyResponseRetryInstruction =
+  const nextCodeModeErrorRetryInstruction =
     emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+      ? null
+      : resolveReplaySafeCodeModeErrorRetryInstruction({
+          payloadCount,
+          aborted: terminalAborted,
+          timedOut: terminalTimedOut,
+          attempt,
+        });
+  const nextEmptyResponseRetryInstruction =
+    emptyAssistantReplyIsSilent ||
+    settledTurnFinalizationAttempted ||
+    nextCodeModeErrorRetryInstruction ||
+    input.toolCapableContinuation
       ? null
       : resolveEmptyResponseRetryInstruction({
           provider: input.activeErrorContext.provider,
@@ -276,6 +302,37 @@ export async function resolveEmbeddedRunTerminal(input: {
     return { action: "retry" };
   }
   const availableTerminalToolPresentation = input.readTerminalToolPresentation();
+  const incompleteTurnFallbackEligible =
+    !terminalInterrupted &&
+    !promptError &&
+    !attempt.lastToolError &&
+    !hasAttemptTerminalState(attempt) &&
+    !input.replayState.hadPotentialSideEffects;
+  const codeModeContinuation = resolveCodeModeTerminalContinuation({
+    retryState,
+    nextReasoningOnlyRetryInstruction,
+    nextCodeModeErrorRetryInstruction,
+    toolCapableContinuation: input.toolCapableContinuation,
+    activateInternalPrompt: input.activateInternalPrompt,
+    runId: runParams.runId,
+    sessionId: runParams.sessionId,
+    provider: input.activeErrorContext.provider,
+    model: input.activeErrorContext.model,
+    incompleteTurnFallbackEligible,
+    availableTerminalToolPresentation,
+  });
+  if (codeModeContinuation?.action === "retry") {
+    return { action: "retry" };
+  }
+  if (codeModeContinuation?.action === "incomplete") {
+    return surfaceIncompleteTurn({
+      ...input,
+      text: codeModeContinuation.text,
+      payloadCount,
+      incompleteTurnFallbackSafe: codeModeContinuation.fallbackSafe,
+      terminalToolPresentation: codeModeContinuation.terminalToolPresentation,
+    });
+  }
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
@@ -300,14 +357,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         attempt,
       });
-  const incompleteTurnFallbackSafe = Boolean(
-    incompleteTurnText &&
-    !terminalInterrupted &&
-    !promptError &&
-    !attempt.lastToolError &&
-    !hasAttemptTerminalState(attempt) &&
-    !input.replayState.hadPotentialSideEffects,
-  );
+  const incompleteTurnFallbackSafe = Boolean(incompleteTurnText && incompleteTurnFallbackEligible);
   const terminalToolPresentation = incompleteTurnFallbackSafe
     ? availableTerminalToolPresentation
     : undefined;

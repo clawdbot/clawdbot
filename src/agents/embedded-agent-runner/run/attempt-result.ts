@@ -93,7 +93,21 @@ function normalizeEmbeddedAttemptToolMetas(
       ): entry is {
         toolName: string;
         meta?: string;
+        durationMs?: number;
         replaySafe?: boolean;
+        mutatingAction?: boolean;
+        fileTarget?: EmbeddedRunAttemptResult["toolMetas"][number]["fileTarget"];
+        fileTargets?: EmbeddedRunAttemptResult["toolMetas"][number]["fileTargets"];
+        fileMutationExecutionStarted?: true;
+        fileTargetVerified?: true;
+        fileTargetAbsent?: true;
+        sideEffectFree?: boolean;
+        codeModeLastCallSideEffectFree?: boolean;
+        codeModeHadTargetlessSideEffects?: boolean;
+        codeModeSuccessfulObservationFileTargets?: EmbeddedRunAttemptResult["toolMetas"][number]["codeModeSuccessfulObservationFileTargets"];
+        codeModeSuccessfulAbsenceObservationFileTargets?: EmbeddedRunAttemptResult["toolMetas"][number]["codeModeSuccessfulAbsenceObservationFileTargets"];
+        codeModeUnverifiedMutationFileTargets?: EmbeddedRunAttemptResult["toolMetas"][number]["codeModeUnverifiedMutationFileTargets"];
+        codeModeRepairAllowed?: boolean;
         isError?: true;
         asyncStarted?: boolean;
         asyncTaskRunId?: string;
@@ -106,6 +120,55 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
+      if (
+        typeof entry.durationMs === "number" &&
+        Number.isFinite(entry.durationMs) &&
+        entry.durationMs >= 0
+      ) {
+        normalized.durationMs = entry.durationMs;
+      }
+      if (entry.sideEffectFree !== undefined) {
+        normalized.sideEffectFree = entry.sideEffectFree;
+      }
+      if (entry.mutatingAction !== undefined) {
+        normalized.mutatingAction = entry.mutatingAction;
+      }
+      if (entry.fileTarget !== undefined) {
+        normalized.fileTarget = entry.fileTarget;
+      }
+      if (entry.fileTargets !== undefined) {
+        normalized.fileTargets = entry.fileTargets;
+      }
+      if (entry.fileMutationExecutionStarted === true) {
+        normalized.fileMutationExecutionStarted = true;
+      }
+      if (entry.fileTargetVerified === true) {
+        normalized.fileTargetVerified = true;
+      }
+      if (entry.fileTargetAbsent === true) {
+        normalized.fileTargetAbsent = true;
+      }
+      if (entry.codeModeLastCallSideEffectFree !== undefined) {
+        normalized.codeModeLastCallSideEffectFree = entry.codeModeLastCallSideEffectFree;
+      }
+      if (entry.codeModeHadTargetlessSideEffects !== undefined) {
+        normalized.codeModeHadTargetlessSideEffects = entry.codeModeHadTargetlessSideEffects;
+      }
+      if (entry.codeModeSuccessfulObservationFileTargets !== undefined) {
+        normalized.codeModeSuccessfulObservationFileTargets =
+          entry.codeModeSuccessfulObservationFileTargets;
+      }
+      if (entry.codeModeSuccessfulAbsenceObservationFileTargets !== undefined) {
+        normalized.codeModeSuccessfulAbsenceObservationFileTargets =
+          entry.codeModeSuccessfulAbsenceObservationFileTargets;
+      }
+      if (entry.codeModeUnverifiedMutationFileTargets !== undefined) {
+        normalized.codeModeUnverifiedMutationFileTargets =
+          entry.codeModeUnverifiedMutationFileTargets;
+      }
+      if (entry.codeModeRepairAllowed !== undefined) {
+        normalized.codeModeRepairAllowed = entry.codeModeRepairAllowed;
+      }
       if (entry.isError === true) {
         normalized.isError = true;
       }
