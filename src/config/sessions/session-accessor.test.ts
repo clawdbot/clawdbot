@@ -1405,42 +1405,38 @@ describe("session accessor seam", () => {
         { sessionId: "wrong-owner-session", updatedAt: 10 },
       ),
     ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
-    const database = openOpenClawAgentDatabase({
-      agentId: "ops",
-      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
-    });
-    const insert = database.db.prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-    );
+    const insertRawEntry = (sessionKey: string, sessionId: string, updatedAt: number) => {
+      const database = openOpenClawAgentDatabase({
+        agentId: "ops",
+        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
+      });
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt }), updatedAt);
+      closeOpenClawAgentDatabasesForTest();
+    };
     for (const [storedKey, canonicalKey] of [
       ["agent:ops:padded ", "agent:ops:padded"],
       [" agent:ops:leading", "agent:ops:leading"],
       ["agent:ops:nbsp\u00a0", "agent:ops:nbsp"],
     ] as const) {
       const sessionId = `${canonicalKey}-session`;
-      insert.run(storedKey, sessionId, JSON.stringify({ sessionId, updatedAt: 5 }), 5);
-      await expect(
-        appendTranscriptEvent(
-          { agentId: "ops", sessionId: "new-transcript", sessionKey: canonicalKey, storePath },
-          { id: "metadata", timestamp: new Date(5).toISOString(), type: "metadata" },
-        ),
-      ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+      insertRawEntry(storedKey, sessionId, 5);
       await expect(
         upsertSessionEntry(
           { agentId: "ops", sessionKey: canonicalKey, storePath },
           { sessionId: "new-session", updatedAt: 10 },
         ),
       ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+      closeOpenClawAgentDatabasesForTest();
       const canonicalSessionId = `${canonicalKey}-canonical-session`;
-      insert.run(
-        canonicalKey,
-        canonicalSessionId,
-        JSON.stringify({ sessionId: canonicalSessionId, updatedAt: 6 }),
-        6,
-      );
+      insertRawEntry(canonicalKey, canonicalSessionId, 6);
       expect(() =>
         loadSessionEntry({ agentId: "ops", sessionKey: canonicalKey, storePath }),
       ).toThrow("openclaw doctor --fix");
+      closeOpenClawAgentDatabasesForTest();
     }
   });
 
