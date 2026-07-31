@@ -506,10 +506,9 @@ export type DoctorDeprecationCompatCode =
   (typeof DOCTOR_DEPRECATION_COMPAT_RECORDS)[number]["code"];
 export type KnownDoctorDeprecationCompatRecord = DoctorDeprecationCompatRecord;
 
-const doctorDeprecationCompatRecordByCode = new Map<
-  DoctorDeprecationCompatCode,
-  KnownDoctorDeprecationCompatRecord
->(DOCTOR_DEPRECATION_COMPAT_RECORDS.map((record) => [record.code, record]));
+const doctorDeprecationCompatRecordByCode = new Map<string, KnownDoctorDeprecationCompatRecord>(
+  DOCTOR_DEPRECATION_COMPAT_RECORDS.map((record) => [record.code, record]),
+);
 
 /** List every doctor compatibility record, including removed or still-active entries. */
 export function listDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
