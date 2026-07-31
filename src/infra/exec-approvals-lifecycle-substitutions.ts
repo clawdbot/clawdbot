@@ -22,7 +22,7 @@ const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
 const DRY_RUN_OPTION = new Set(["--dry-run"]);
 
-export type ShellSubstitutionScan = {
+type ShellSubstitutionScan = {
   commands: string[];
   uncertain: boolean;
 };

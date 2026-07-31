@@ -98,7 +98,7 @@ export function lifecycleIsJavaScriptExecutableRunner(value: string | undefined)
   return JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(value ?? ""));
 }
 
-export type LifecyclePackageRunnerPlan =
+type LifecyclePackageRunnerPlan =
   | { kind: "not-runner" }
   | { kind: "approval-required" }
   | { kind: "argv"; argv: string[] };

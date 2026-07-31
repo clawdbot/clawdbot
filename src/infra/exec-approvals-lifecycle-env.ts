@@ -56,7 +56,7 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "--type",
 ]);
 
-export type LifecycleEnvironmentExpansion = {
+type LifecycleEnvironmentExpansion = {
   argv: string[];
   fieldSplitUncertain: boolean;
   unresolved: boolean;
@@ -414,55 +414,6 @@ function readEnvironmentValue(
     (candidate) => candidate.toLowerCase() === key.toLowerCase(),
   );
   return matchedKey === undefined ? undefined : env[matchedKey];
-}
-
-function expandKnownEnvironmentReferences(
-  value: string,
-  env: NodeJS.ProcessEnv | undefined,
-  shadowedKeys: ReadonlySet<string>,
-  dialect: LifecycleShellDialect,
-  platform: NodeJS.Platform,
-): string {
-  const replaceKnown = (match: string, key: string): string =>
-    shadowedKeys.has(key.toLowerCase())
-      ? match
-      : (readEnvironmentValue(env, key, platform) ?? match);
-  if (dialect === "powershell") {
-    return value.replace(POWERSHELL_VARIABLE_RE, replaceKnown);
-  }
-  if (dialect === "cmd") {
-    return value
-      .replace(CMD_VARIABLE_RE, replaceKnown)
-      .replace(CMD_DELAYED_VARIABLE_RE, replaceKnown);
-  }
-  return value.replace(
-    POSIX_VARIABLE_RE,
-    (match, braced: string | undefined, bare: string | undefined) =>
-      replaceKnown(match, braced ?? bare ?? ""),
-  );
-}
-
-/** Expand known references in executable command text while preserving single-quoted literals. */
-export function expandKnownLifecycleEnvironmentCommand(
-  command: string,
-  env: NodeJS.ProcessEnv | undefined,
-  shadowedKeys: ReadonlySet<string> = new Set(),
-  dialect: LifecycleShellDialect = "posix",
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (dialect === "cmd") {
-    return expandKnownEnvironmentReferences(command, env, shadowedKeys, dialect, platform);
-  }
-  // POSIX shells and PowerShell both suppress environment expansion inside
-  // single-quoted strings. cmd.exe does not and is handled above.
-  return command
-    .split(/('[^']*')/u)
-    .map((part, index) =>
-      index % 2 === 0
-        ? expandKnownEnvironmentReferences(part, env, shadowedKeys, dialect, platform)
-        : part,
-    )
-    .join("");
 }
 
 /** Expand variables whose environment value is known and report partial-env uncertainty. */

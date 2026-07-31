@@ -100,7 +100,7 @@ const STDIN_APPEND_SENSITIVE_EXECUTABLES = new Set([
   "yarnpkg",
 ]);
 
-export type LifecycleXargsPlan =
+type LifecycleXargsPlan =
   | { kind: "not-xargs" }
   | { kind: "approval-required" }
   | { kind: "argv"; argv: string[] };

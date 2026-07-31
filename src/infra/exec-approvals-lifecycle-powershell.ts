@@ -439,7 +439,7 @@ function classifyPowerShellAliasedInvocation(argv: readonly string[], depth = 0)
   if (runner.kind === "argv") {
     return classifyPowerShellAliasedInvocation(runner.argv, depth + 1);
   }
-  const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
+  const carried = resolveCarrierCommandArgv([...argv], depth, { includeExec: true });
   return carried?.length ? classifyPowerShellAliasedInvocation(carried, depth + 1) : false;
 }
 
@@ -509,7 +509,7 @@ function extractPowerShellPipelineScriptBlocks(command: string): string[] {
 }
 
 /** Recursively classify executable fragments embedded in PowerShell pipeline script blocks. */
-export function powerShellPipelineScriptBlocksRequireApproval(
+function powerShellPipelineScriptBlocksRequireApproval(
   command: string,
   classify: (argv: string[], raw: string) => boolean,
 ): boolean {
