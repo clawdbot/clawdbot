@@ -550,6 +550,54 @@ describe("openclaw live updater", () => {
     ]);
   });
 
+  test("routes managed Gateway health through the injected port", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    const callsPath = path.join(root, "managed-probe-calls.jsonl");
+    writeFileSync(
+      entrypoint,
+      `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
+  args,
+  port: process.env.OPENCLAW_GATEWAY_PORT,
+}) + "\\n");
+if (args.includes("--port")) process.exit(2);
+`,
+    );
+
+    verifyGatewayReadiness(
+      () => {
+        throw new Error("managed probes must use the exact built Gateway CLI");
+      },
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      () => {},
+      {
+        configPath: path.join(root, "openclaw.json"),
+        entrypoint,
+        executable: process.execPath,
+        invocationPrefix: [entrypoint],
+        port: 18789,
+        runtime: process.execPath,
+      },
+    );
+
+    expect(
+      readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+        port: "18789",
+      },
+      { args: ["health", "--verbose", "--json"], port: "18789" },
+    ]);
+  });
+
   test("bounds built Gateway CLI probes and cleans their config overlay", () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);

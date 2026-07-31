@@ -1481,7 +1481,7 @@ function verifyGateway(runCommand, checkout, expectedSha, deployment = null) {
     );
     runBuiltGatewayCli(
       checkout,
-      ["health", "--port", String(deployment.port), "--verbose", "--json"],
+      ["health", "--verbose", "--json"],
       deployment,
     );
     return;
