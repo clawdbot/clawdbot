@@ -77,7 +77,7 @@ function createContext(opts?: {
     context: {
       getRuntimeConfig:
         opts?.getRuntimeConfig ??
-        (() => ({ gateway: { nodes: { allowCommands: [DEMO_COMMAND] } } })),
+        (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
       nodeRegistry: { get: () => nodeSession, invoke },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
@@ -275,6 +275,88 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
+  it.each([5_000, 0])(
+    "bounds plugin timeout override %i by the remaining invocation deadline",
+    async (overrideTimeoutMs) => {
+      setDangerousDemoCommandRegistry([
+        createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) =>
+          ctx.invokeNode({ timeoutMs: overrideTimeoutMs }),
+        ),
+      ]);
+      const { context, invoke } = createContext();
+      const controller = new AbortController();
+
+      const result = await applyPluginNodeInvokePolicy({
+        context,
+        client: null,
+        nodeSession: createNodeSession(),
+        command: DEMO_COMMAND,
+        params: DEMO_PARAMS,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+        resolveRemainingTimeoutMs: () => 250,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(invoke).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 250, signal: controller.signal }),
+      );
+    },
+  );
+
+  it("marks plugin-owned work dispatched before calling the node transport", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+    const dispatchOrder: string[] = [];
+    invoke.mockImplementationOnce(async () => {
+      dispatchOrder.push("node transport");
+      return {
+        ok: true,
+        payload: { ok: true, value: 1 },
+        payloadJSON: null,
+        error: null,
+      };
+    });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      onNodeCommandDispatched: () => dispatchOrder.push("dispatched"),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dispatchOrder).toStrictEqual(["dispatched", "node transport"]);
+  });
+
+  it("rejects expired plugin-owned work without dispatching it", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      timeoutMs: 1_000,
+      resolveRemainingTimeoutMs: () => 0,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "TIMEOUT",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("rechecks command authorization immediately before plugin transport dispatch", async () => {
     let allowCommand = true;
     setDangerousDemoCommandRegistry([
@@ -286,9 +368,9 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context, invoke } = createContext({
       getRuntimeConfig: () => ({
         gateway: {
-          nodes: allowCommand
-            ? { allowCommands: [DEMO_COMMAND] }
-            : { denyCommands: [DEMO_COMMAND] },
+          nodes: {
+            commands: allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] },
+          },
         },
       }),
     });
@@ -303,6 +385,53 @@ describe("applyPluginNodeInvokePolicy", () => {
         reason: "command not allowlisted",
         nodeCommandDispatched: false,
       },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin transport dispatch after invocation ownership changes", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PAIRING_CHANGED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin transport dispatch through an invalidated node session", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const nodeSession = createNodeSession();
+    nodeSession.client.invalidated = true;
+    const { context, invoke } = createContext({ nodeSession });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession,
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PAIRING_CHANGED",
+      details: { nodeCommandDispatched: false },
     });
     expect(invoke).not.toHaveBeenCalled();
   });

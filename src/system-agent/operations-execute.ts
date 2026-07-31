@@ -1,21 +1,25 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
-import { resolveSystemAgentAuditPath } from "./audit.js";
+import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
+  createNoExitRuntime,
   executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
   formatConfigValidationLine,
   formatGatewayStatusLine,
+  isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
@@ -105,7 +109,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "audit":
-      runtime.log(`Audit log: ${resolveSystemAgentAuditPath()}`);
+      runtime.log(`Audit state: ${SYSTEM_AGENT_AUDIT_STORE_LABEL}`);
       runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
       return { applied: false };
     case "config-validate": {
@@ -247,6 +251,42 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "skills-setup":
+      runtime.log(
+        [
+          "Skills setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure skills`,",
+          "or run `openclaw configure --section skills` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "search-setup":
+      runtime.log(
+        [
+          "Web search setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure search`,",
+          "or run `openclaw configure --section web` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "gateway-config-setup":
+      runtime.log(
+        [
+          "Gateway configuration needs an interactive session.",
+          "Run `openclaw setup` and say `configure gateway`,",
+          "or run `openclaw configure --section gateway` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "memory-import":
+      runtime.log(
+        [
+          "Memory import needs an interactive session.",
+          "Open the Memory page in the Control UI,",
+          "or run `openclaw onboard` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [
@@ -261,7 +301,11 @@ export async function executeSystemAgentOperation(
           ? "openclaw onboard"
           : operation.target === "classic"
             ? "openclaw onboard --classic"
-            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+            : operation.target === "channels"
+              ? `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`
+              : operation.target === "search"
+                ? "openclaw configure --section web"
+                : "openclaw configure --section gateway";
       runtime.log(
         `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
       );
@@ -303,12 +347,48 @@ export async function executeSystemAgentOperation(
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
     case "plugin-uninstall": {
-      const message = [
-        "OpenClaw cannot prove that uninstalling a plugin will preserve its own active inference route.",
-        `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
-      ].join("\n");
-      runtime.log(message);
-      return { applied: false, message };
+      if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+        const message = [
+          `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
+          `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+        ].join("\n");
+        runtime.log(message);
+        return { applied: false, message };
+      }
+      const result = await applyPersistentOperation({
+        auditOperation: "plugin.uninstall",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runPluginUninstall =
+            ctx.deps?.runPluginUninstall ??
+            (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+              const { runPluginUninstallCommand } =
+                await import("../cli/plugins-uninstall-command.js");
+              await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
+            });
+          await ctx.commit(async () => {
+            // A concurrent config write can retarget the default route between
+            // the pre-approval check and this commit; re-verify at the last
+            // moment so the destructive removal never hits the active route.
+            if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+              throw new Error(
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+              );
+            }
+            await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
+          });
+          return {
+            summary: `Uninstalled plugin ${operation.pluginId}`,
+            details: { pluginId: operation.pluginId },
+          };
+        },
+      });
+      if (result.applied) {
+        runtime.log("Restart the Gateway to apply plugin changes.");
+      }
+      return result;
     }
     case "create-agent": {
       if (isReservedSystemAgentId(operation.agentId)) {
@@ -318,35 +398,31 @@ export async function executeSystemAgentOperation(
       }
       if (operation.model?.trim()) {
         throw new Error(
-          "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent will inherit the already verified default model.",
+          "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
-      const workspace = resolveUserPath(operation.workspace ?? process.cwd());
       return await applyPersistentOperation({
         auditOperation: "agents.create",
         operation,
         runtime,
         opts,
         run: async (ctx) => {
-          const runAgentsAdd =
-            ctx.deps?.runAgentsAdd ??
-            (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-          await ctx.commit(async () => {
-            await runAgentsAdd(
-              {
-                name: operation.agentId,
-                workspace,
-                nonInteractive: true,
-              },
-              ctx.runtime,
-              { hasFlags: true },
-            );
+          const result = await ctx.commit(async () => {
+            return await (ctx.deps?.createAgent ?? createAgent)({
+              name: operation.agentId,
+              ...(operation.workspace ? { workspace: operation.workspace } : {}),
+            });
           });
+          if (result.status === "error") {
+            throw new Error(result.message);
+          }
           return {
-            summary: `Created agent ${operation.agentId}`,
+            summary: `Created agent ${result.agentId}`,
+            bootstrapPending: result.bootstrapPending,
+            agentId: result.agentId,
             details: {
-              agentId: operation.agentId,
-              workspace,
+              agentId: result.agentId,
+              workspace: result.workspace,
             },
           };
         },
@@ -426,7 +502,15 @@ export async function executeSystemAgentOperation(
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
-      const result = await runTui({ local: true, session, deliver: false, historyLimit: 200 });
+      const result = await runTui({
+        local: true,
+        session,
+        deliver: false,
+        historyLimit: 200,
+        ...(operation.agentDraft === "hatch"
+          ? { message: t("wizard.finalize.bootstrapHatchMessage") }
+          : {}),
+      });
       if (result?.exitReason === "return-to-system-agent") {
         runtime.log(
           result.systemAgentMessage

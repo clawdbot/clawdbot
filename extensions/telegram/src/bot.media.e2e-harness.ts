@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -72,6 +74,7 @@ async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
 }
 
 const saveMediaBufferSpy: Mock = vi.fn(defaultSaveMediaBuffer);
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 let mediaHarnessStoreRoot: string | undefined;
 
 function ensureMediaHarnessStoreRoot(): string {
@@ -187,10 +190,47 @@ const mediaHarnessReplySpy = vi.hoisted(() =>
 );
 export { mediaHarnessReplySpy };
 
+const LEGACY_MEDIA_KEYS = [
+  "MediaPath",
+  "MediaUrl",
+  "MediaType",
+  "MediaPaths",
+  "MediaUrls",
+  "MediaTypes",
+  "MediaDir",
+  "MediaWorkspaceDir",
+  "MediaTranscribedIndexes",
+  "MediaStaged",
+] as const;
+
 const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(async (params: DispatchReplyHarnessParams) => {
     await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
-    const reply = await mediaHarnessReplySpy(params.ctx, params.replyOptions);
+    const input = params.ctx as MsgContext & Record<string, unknown>;
+    const legacyMedia = Object.fromEntries(
+      LEGACY_MEDIA_KEYS.flatMap((key) => (key in input ? [[key, input[key]]] : [])),
+    );
+    // Preserve SDK aliases while projecting canonical media compactly, as the mocked
+    // agent boundary did before routed core acquired its own internal dispatcher.
+    const finalized = Object.assign(finalizeInboundContext(params.ctx), legacyMedia);
+    const mediaPaths = (finalized.media ?? []).flatMap((fact) => (fact.path ? [fact.path] : []));
+    const mediaUrls = (finalized.media ?? []).flatMap((fact) => {
+      const value = fact.url ?? fact.path;
+      return value ? [value] : [];
+    });
+    const mediaTypes = (finalized.media ?? []).flatMap((fact) => {
+      const value = fact.contentType ?? fact.kind;
+      return value ? [value] : [];
+    });
+    Object.assign(finalized, {
+      MediaPath: mediaPaths[0],
+      MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      MediaUrl: mediaUrls[0],
+      MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+      MediaType: mediaTypes[0],
+      MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+    });
+    const reply = await mediaHarnessReplySpy(finalized, params.replyOptions);
     const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
     for (const payload of payloads) {
       await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
@@ -201,6 +241,19 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
     };
   }),
 );
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
+      await runTelegramChannelInboundEventWithHarness(
+        actual,
+        params,
+        mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
+      ),
+  };
+});
 
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: defaultRuntimeConfig,
@@ -225,8 +278,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 };
 
 beforeEach(() => {
+  resetPluginStateStoreForTests();
   cleanupMediaHarnessStoreRoot();
-  ensureMediaHarnessStoreRoot();
+  process.env.OPENCLAW_STATE_DIR = ensureMediaHarnessStoreRoot();
   telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
   topicNameStoresForTest.clear();
@@ -238,6 +292,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetPluginStateStoreForTests();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   cleanupMediaHarnessStoreRoot();
 });
 
@@ -305,6 +365,7 @@ vi.mock("./bot.agent.runtime.js", () => ({
 
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
@@ -314,9 +375,10 @@ vi.mock("./bot-handlers.agent.runtime.js", () => ({
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   findModelInCatalog: vi.fn(() => undefined),
-  loadModelCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: vi.fn(async () => []),
   modelSupportsVision: vi.fn(() => false),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

@@ -1,5 +1,6 @@
-// Channel legacy config migration tests cover doctor repair of old channel config shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Channel legacy config migration tests cover doctor repair of old channel config shapes.
+import type { OpenClawConfig } from "../../../config/types.js";
 
 const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(
   () => ({
@@ -47,6 +48,46 @@ function firstMigrationCall() {
 }
 
 describe("bundled channel legacy config migrations", () => {
+  it("only renames heartbeat blocks that use the common visibility shape", () => {
+    collectRelevantDoctorPluginIds.mockReturnValue([]);
+    loadBundledChannelDoctorContractApi.mockReturnValue({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        config: cfg,
+        changes: [],
+      }),
+    });
+
+    const result = applyChannelDoctorCompatibilityMigrations({
+      channels: {
+        feishu: {
+          heartbeat: { visibility: "hidden", intervalMs: 1000 },
+          accounts: {
+            work: { heartbeat: { visibility: "visible" } },
+            empty: { heartbeat: {} },
+          },
+        },
+        slack: {
+          heartbeat: { showOk: true },
+          accounts: {
+            work: { heartbeat: { showAlerts: false } },
+          },
+        },
+      },
+    });
+
+    const channels = result.next.channels as Record<string, Record<string, unknown>>;
+    const feishu = channels.feishu ?? {};
+    const feishuAccounts = feishu.accounts as Record<string, Record<string, unknown>>;
+    expect(feishu.heartbeat).toEqual({ visibility: "hidden", intervalMs: 1000 });
+    expect(feishuAccounts.work?.heartbeat).toEqual({ visibility: "visible" });
+    expect(feishuAccounts.empty?.heartbeat).toEqual({});
+    const slack = channels.slack ?? {};
+    const slackAccounts = slack.accounts as Record<string, Record<string, unknown>>;
+    expect(slack.heartbeat).toBeUndefined();
+    expect(slack.heartbeatVisibility).toEqual({ showOk: true });
+    expect(slackAccounts.work?.heartbeatVisibility).toEqual({ showAlerts: false });
+  });
+
   it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
     loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>

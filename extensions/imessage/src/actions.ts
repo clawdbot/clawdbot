@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -54,6 +55,10 @@ const GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "leaveGroup",
 ]);
+
+type IMessageConversationReadOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
@@ -169,6 +174,7 @@ async function resolveChatGuid(params: {
   action: ChannelMessageActionName;
   actionParams: Record<string, unknown>;
   currentChannelId?: string;
+  conversationReadOrigin: IMessageConversationReadOrigin;
   runtime: IMessageActionsRuntime;
   options: {
     cliPath: string;
@@ -185,6 +191,7 @@ async function resolveChatGuid(params: {
       const resolved = await params.runtime.resolveChatGuidForTarget({
         target,
         options: params.options,
+        conversationReadOrigin: params.conversationReadOrigin,
       });
       if (resolved) {
         return resolved;
@@ -202,6 +209,7 @@ async function resolveChatGuid(params: {
       const resolved = await params.runtime.resolveChatGuidForTarget({
         target: { kind: "chat_identifier", chatIdentifier: synthesizedIdentifier },
         options: params.options,
+        conversationReadOrigin: params.conversationReadOrigin,
       });
       if (resolved) {
         return resolved;
@@ -491,11 +499,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       timeoutMs: account.config.probeTimeoutMs,
       chatGuid: "",
     };
+    const attestedConversationReadOrigin = conversationReadOrigin ?? "delegated";
     const chatGuid = async () =>
       await resolveChatGuid({
         action,
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
+        conversationReadOrigin: attestedConversationReadOrigin,
         runtime,
         options: opts,
       });
@@ -525,7 +535,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
             dbPath: opts.dbPath,
           }),
           remoteHost: opts.remoteHost,
-          conversationReadOrigin,
+          conversationReadOrigin: attestedConversationReadOrigin,
         },
       });
     };

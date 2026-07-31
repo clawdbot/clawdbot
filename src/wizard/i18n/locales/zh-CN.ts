@@ -152,6 +152,26 @@ export const zh_CN = {
       summaryTitle: "Memory 导入摘要",
       title: "发现 memory",
     },
+    appRecommendations: {
+      catalogEntryMissing: "官方插件目录条目不可用。",
+      detected: "检测到的应用：{apps}",
+      disclosure: "应用名称使用你配置的模型和 ClawHub 搜索进行匹配。",
+      installFailed: "无法安装 {name}：{reason}",
+      noneFound: "未找到基于应用的插件或技能推荐。",
+      option: "{name} — {reason}（检测到：{app}）",
+      optionThirdParty:
+        "{name} — {reason}（检测到：{app}）— 第三方 ClawHub 技能；将安装其发布者的代码",
+      scanDisclosure:
+        "应用名称将使用你配置的模型和 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）。",
+      scanning: "正在扫描已安装应用…",
+      scanningCandidate: "发现 1 个应用 — 正在为 {sample} 搜索插件和技能…",
+      scanningCandidates: "发现 {count} 个应用 — 正在为 {sample} 搜索插件和技能…",
+      scanningMatch: "正在请你的模型挑选最佳匹配…",
+      select: "安装推荐的插件和技能",
+      skillTrust: "信任并安装 ClawHub 技能 {name}？",
+      skipped: "已跳过应用推荐：{reason}",
+      title: "应用推荐",
+    },
     plugins: {
       configureBackHint: "返回分区菜单",
       configureEmpty: "没有找到带可配置字段的插件。",
@@ -257,6 +277,11 @@ export const zh_CN = {
       aiAccessTitle: "AI 访问",
       alreadySetUp: "这里已经全部设置好了 — 你的 AI 刚刚通过了一次新的检查。",
       applyFailedFallback: "应用设置时出了问题：{detail}\n我们改为在聊天中一起完成吧。",
+      browserHandoffContinuing: "仪表盘已连接 — 请在浏览器中继续。",
+      browserHandoffCopy: "请在浏览器中打开此 URL：\n\n{url}\n\n正在等待仪表盘连接…",
+      browserHandoffOpening: "正在打开 Control UI 仪表盘并等待连接…",
+      browserHandoffReady: "浏览器已准备好 — 之后可以在设置中找到我。",
+      browserHandoffTitle: "在浏览器中继续",
       codingAgentQuip:
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",
@@ -280,6 +305,8 @@ export const zh_CN = {
       completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "在这台机器上检测到的 AI",
+      detectedGroupPrompt: "要使用哪个检测到的 AI？",
       detectedTitle: "找到的 AI",
       detecting: "正在查找你已使用的 AI…",
       enterApiKey: "输入 API key — {label}",
@@ -324,6 +351,8 @@ export const zh_CN = {
       ttyRequired:
         "Onboarding 需要交互式 TTY。自动化请使用 `openclaw onboard --non-interactive --accept-risk ...`。",
       welcomeTitle: "设置选项",
+      workspaceConflictClassic:
+        "本次验证保留了已配置的工作区。运行 `{command}` 以查看并明确批准迁移现有 agent fleet。",
     },
     setup: {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",
@@ -386,10 +415,16 @@ export const zh_CN = {
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
       whatSetup: "你想设置什么？",
+      workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
+      workspaceConflictNotice:
+        "现有 agent 当前使用 {current}。请求的工作区是 {requested}。更改此 fleet-wide 默认值可能会使 agent 与其记忆和 bootstrap 文件断开连接。",
+      workspaceConflictTitle: "现有 agent 工作区",
       workspaceDirectory: "工作区目录",
     },
     security: {
       askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",
+      attribution:
+        "OpenClaw 是由 OpenClaw 基金会（非营利组织）开发的开源助手，会与你一同学习成长。",
       baselineDmSessions:
         "共享收件箱：隔离 DM 会话（session.dmScope: per-channel-peer），并尽量减少工具访问权限。",
       baselinePairing: "配对/允许列表 + @ 提及门控。",
@@ -398,7 +433,6 @@ export const zh_CN = {
       baselineSharedInbox:
         "多用户/共享收件箱：拆分信任边界（分离 gateway/凭据，最好使用独立 OS 用户/主机）。",
       baselineStrongModel: "对启用工具或面对不可信收件箱的 bot，使用可用的最强模型。",
-      beta: "OpenClaw 是一个爱好项目，仍处于 beta 阶段。请预期会有边缘问题。",
       confirm: "我理解 OpenClaw 默认面向个人使用；共享/多用户使用需要加固。继续？",
       hardeningRequired: "如果你不熟悉安全加固和访问控制，请不要运行 OpenClaw。",
       learnMore: "了解更多",
@@ -469,6 +503,8 @@ export const zh_CN = {
         "{channel} 插件不可用（继续设置）。如果设置后频道仍无法工作，请运行 `{listCommand}` 和 `{enableCommand}`，然后重启 Gateway。",
       pluginNotAvailable: "{channel} 插件不可用。",
       removeTitle: "移除频道",
+      resumeDisabledPluginSetup: "{channel} 插件已禁用。现在启用并继续设置吗？",
+      resumeDisabledSetup: "{channel} 已禁用。现在启用并继续设置吗？",
       select: "选择频道",
       selectQuickstart: "选择频道（QuickStart）",
       selectedTitle: "已选择频道",
@@ -651,7 +687,6 @@ export const zh_CN = {
       channelsLabel: "Slack 频道",
       envPrompt: "检测到 SLACK_BOT_TOKEN + SLACK_APP_TOKEN。使用环境变量？",
       examples: "示例：",
-      interactiveRepliesPrompt: "为 agent 响应启用 Slack 交互回复（按钮/选择器）？",
       multipleEntries: "多个条目请用逗号分隔。",
       socketModeTokensTitle: "Slack socket mode token",
     },

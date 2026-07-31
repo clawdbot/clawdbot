@@ -2,6 +2,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -107,6 +108,17 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       spawnedBy: params.spawnedBy,
     });
     state.client = startupResult.client;
+    toolBridge.setRemoteWorkspaceFileReader?.(
+      ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
+        readBoundedCodexRemoteWorkspaceFile({
+          client: startupResult.client,
+          path,
+          maxBytes,
+          workspaceRoot,
+          signal,
+          timeoutMs,
+        }),
+    );
     state.thread = startupResult.thread;
     state.runtimeArtifact = startupResult.runtimeArtifact;
     state.turnRouter = startupResult.turnRouter;
@@ -159,7 +171,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.codexSandboxPolicy = startupResult.sandboxPolicy;
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "thread_ready", threadId: state.thread.threadId },
+      data: {
+        phase: "thread_ready",
+        threadId: state.thread.threadId,
+        action: state.thread.lifecycle.action,
+        clientId: state.client.getInstanceId(),
+      },
     });
   } catch (error) {
     activateNativePreToolUseFailureFallback();

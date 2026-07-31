@@ -1,5 +1,6 @@
 /** Collects core config secret refs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
@@ -7,8 +8,14 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
+import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
+import {
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "./runtime-media-secret-owner.js";
 import {
   collectSecretInputAssignment,
   collectRuntimeSecretInputAssignment,
@@ -49,6 +56,7 @@ function collectModelProviderAssignments(params: {
       ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
       requiredForGateway: false,
       disposition: "isolate",
+      contract: provider,
     } satisfies SecretAssignmentOwner;
     collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
@@ -119,97 +127,13 @@ function collectSkillAssignments(params: {
         ownerId: `skill:${skillKey}`,
         requiredForGateway: false,
         disposition: "isolate",
+        contract: entry,
       },
       apply: (value) => {
         entry.apiKey = value;
       },
     });
   }
-}
-
-function collectAgentMemorySearchAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  if (!isRecord(agents)) {
-    return;
-  }
-  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsMemorySearch = isRecord(defaultsConfig?.memorySearch)
-    ? defaultsConfig.memorySearch
-    : undefined;
-  const defaultsEnabled = defaultsMemorySearch?.enabled !== false;
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  let hasEnabledAgentWithoutOverride = false;
-  for (const rawAgent of list) {
-    if (!isRecord(rawAgent)) {
-      continue;
-    }
-    if (rawAgent.enabled === false) {
-      continue;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (memorySearch?.enabled === false) {
-      continue;
-    }
-    if (!memorySearch || !Object.hasOwn(memorySearch, "remote")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.hasOwn(remote, "apiKey")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-  }
-
-  if (defaultsMemorySearch && isRecord(defaultsMemorySearch.remote)) {
-    const remote = defaultsMemorySearch.remote;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: "agents.defaults.memorySearch.remote.apiKey",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsEnabled && (hasEnabledAgentWithoutOverride || list.length === 0),
-      inactiveReason: hasEnabledAgentWithoutOverride
-        ? undefined
-        : "all enabled agents override memorySearch.remote.apiKey.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  }
-
-  list.forEach((rawAgent, index) => {
-    if (!isRecord(rawAgent)) {
-      return;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (!memorySearch) {
-      return;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.hasOwn(remote, "apiKey")) {
-      return;
-    }
-    const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: `agents.list.${index}.memorySearch.remote.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: "agent or memorySearch override is disabled.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  });
 }
 
 function collectTalkAssignments(params: {
@@ -294,6 +218,7 @@ function collectGatewayAssignments(params: {
       ownerId: "ingress-auth",
       requiredForGateway: true,
       disposition: "fail-closed",
+      contract: auth,
     } satisfies SecretAssignmentOwner;
     collectRuntimeSecretInputAssignment({
       value: auth.token,
@@ -468,6 +393,7 @@ function collectMediaRequestAssignments(params: {
   const collectModelAssignments = (
     models: unknown,
     pathPrefix: string,
+    resolveOwnerId: (index: number) => string,
     resolveActivity: (rawModel: Record<string, unknown>) => {
       active: boolean;
       inactiveReason: string;
@@ -488,61 +414,68 @@ function collectMediaRequestAssignments(params: {
         context: params.context,
         active,
         inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: resolveOwnerId(index),
+          requiredForGateway: false,
+          disposition: "isolate",
+          contract: rawModel,
+        },
       });
     });
   };
 
-  collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
-    const entry = rawModel as MediaUnderstandingModelConfig;
-    const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-    // Shared models are active only for enabled capabilities; when the config omits explicit
-    // capabilities, provider metadata is the contract for which media sections can use it.
-    const capabilities =
-      configuredCapabilities ??
-      resolveEffectiveMediaEntryCapabilities({
-        entry,
-        source: "shared",
-        providerRegistry: getProviderRegistry(),
-      });
-    if (!capabilities || capabilities.length === 0) {
+  collectModelAssignments(
+    media.models,
+    "tools.media.models",
+    (index) => runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    (rawModel) => {
+      const entry = rawModel as MediaUnderstandingModelConfig;
+      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+      // Shared models are active only for enabled capabilities; when the config omits explicit
+      // capabilities, provider metadata is the contract for which media sections can use it.
+      const capabilities =
+        configuredCapabilities ??
+        resolveEffectiveMediaEntryCapabilities({
+          entry,
+          source: "shared",
+          providerRegistry: getProviderRegistry(),
+        });
+      if (!capabilities || capabilities.length === 0) {
+        return {
+          active: false,
+          inactiveReason:
+            "shared media model does not declare capabilities and none could be inferred from its provider.",
+        };
+      }
       return {
-        active: false,
-        inactiveReason:
-          "shared media model does not declare capabilities and none could be inferred from its provider.",
+        active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+        inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
       };
-    }
-    return {
-      active: capabilities.some((capability) => isCapabilityEnabled(capability)),
-      inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
-    };
-  });
+    },
+  );
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
-    const active = isCapabilityEnabled(capability);
-    const inactiveReason = `${capability} media understanding is disabled.`;
-    if (section && isRecord(section.request)) {
-      collectProviderRequestAssignments({
-        request: section.request,
-        pathPrefix: `tools.media.${capability}.request`,
-        defaults: params.defaults,
-        context: params.context,
-        active,
-        inactiveReason,
-      });
+    if (!section || !isRecord(section.request)) {
+      continue;
     }
-    collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
-      active:
-        active &&
-        (() => {
-          const entry = rawModel as MediaUnderstandingModelConfig;
-          const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-          return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
-        })(),
-      inactiveReason: active
-        ? `${capability} media model is filtered out by its configured capabilities.`
-        : inactiveReason,
-    }));
+    const active = isCapabilityEnabled(capability);
+    collectProviderRequestAssignments({
+      request: section.request,
+      pathPrefix: `tools.media.${capability}.request`,
+      defaults: params.defaults,
+      context: params.context,
+      active,
+      inactiveReason: `${capability} media understanding is disabled.`,
+      owner: {
+        ownerKind: "capability",
+        ownerId: runtimeMediaRequestSecretOwnerId(capability),
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: section,
+      },
+    });
   }
 }
 
@@ -551,13 +484,13 @@ function collectMessagesTtsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const messages = params.config.messages as Record<string, unknown> | undefined;
-  if (!isRecord(messages) || !isRecord(messages.tts)) {
+  const tts = params.config.tts as Record<string, unknown> | undefined;
+  if (!isRecord(tts)) {
     return;
   }
   collectTtsApiKeyAssignments({
-    tts: messages.tts,
-    pathPrefix: "messages.tts",
+    tts,
+    pathPrefix: "tts",
     defaults: params.defaults,
     context: params.context,
   });
@@ -568,18 +501,16 @@ function collectAgentTtsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
-    return;
-  }
-  for (const [index, entry] of list.entries()) {
-    if (!isRecord(entry) || !isRecord(entry.tts)) {
+  for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
+    if (!isRecord(entry.tts)) {
       continue;
     }
     collectTtsApiKeyAssignments({
       tts: entry.tts,
-      pathPrefix: `agents.list.${index}.tts`,
+      pathPrefix:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.tts`
+          : `agents.list.${source.index}.tts`,
       defaults: params.defaults,
       context: params.context,
     });
@@ -606,6 +537,7 @@ function collectCronAssignments(params: {
       ownerId: "cron-webhook",
       requiredForGateway: false,
       disposition: "isolate",
+      contract: cron,
     },
     apply: (value) => {
       cron.webhookToken = value;
@@ -613,93 +545,6 @@ function collectCronAssignments(params: {
   });
 }
 
-function collectSandboxSshAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = isRecord(params.config.agents) ? params.config.agents : undefined;
-  if (!agents) {
-    return;
-  }
-  const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
-  const defaultsSsh = isRecord(defaultsSandbox?.ssh)
-    ? (defaultsSandbox.ssh as Record<string, unknown>)
-    : undefined;
-  const defaultsBackend =
-    typeof defaultsSandbox?.backend === "string" ? defaultsSandbox.backend : undefined;
-  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : undefined;
-
-  const inheritedDefaultsUsage = {
-    identityData: false,
-    certificateData: false,
-    knownHostsData: false,
-  };
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((rawAgent, index) => {
-    const agentRecord = isRecord(rawAgent) ? (rawAgent as Record<string, unknown>) : null;
-    if (!agentRecord || agentRecord.enabled === false) {
-      return;
-    }
-    const sandbox = isRecord(agentRecord.sandbox) ? agentRecord.sandbox : undefined;
-    const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
-    const effectiveBackend =
-      (typeof sandbox?.backend === "string" ? sandbox.backend : undefined) ??
-      defaultsBackend ??
-      "docker";
-    const effectiveMode =
-      (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
-    const active =
-      normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
-    for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-      if (ssh && Object.hasOwn(ssh, key)) {
-        collectSecretInputAssignment({
-          value: ssh[key],
-          path: `agents.list.${index}.sandbox.ssh.${key}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active,
-          inactiveReason: "sandbox SSH backend is not active for this agent.",
-          apply: (value) => {
-            ssh[key] = value;
-          },
-        });
-      } else if (active) {
-        // Defaults are active when at least one enabled SSH agent inherits this material.
-        inheritedDefaultsUsage[key] = true;
-      }
-    }
-  });
-
-  if (!defaultsSsh) {
-    return;
-  }
-
-  const defaultsActive =
-    (normalizeOptionalLowercaseString(defaultsBackend) === "ssh" && defaultsMode !== "off") ||
-    inheritedDefaultsUsage.identityData ||
-    inheritedDefaultsUsage.certificateData ||
-    inheritedDefaultsUsage.knownHostsData;
-  for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-    collectSecretInputAssignment({
-      value: defaultsSsh[key],
-      path: `agents.defaults.sandbox.ssh.${key}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsActive || inheritedDefaultsUsage[key],
-      inactiveReason: "sandbox SSH backend is not active.",
-      apply: (value) => {
-        defaultsSsh[key] = value;
-      },
-    });
-  }
-}
-
-/** Collects SecretRef assignments from core-owned config surfaces. */
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
@@ -727,7 +572,7 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
-  collectSandboxSshAssignments(params);
+  collectAgentSandboxAssignments(params);
   collectMessagesTtsAssignments(params);
   collectAgentTtsAssignments(params);
   collectCronAssignments(params);

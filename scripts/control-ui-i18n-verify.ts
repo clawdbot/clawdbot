@@ -28,6 +28,13 @@ function toRepoPath(filePath: string): string {
   return path.relative(ROOT, filePath).split(path.sep).join("/");
 }
 
+export function formatControlUiCatalogFallbackDriftError(): string {
+  return [
+    "control-ui catalog fallback baseline drift detected.",
+    "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
+  ].join("\n");
+}
+
 async function importLocaleModule<T>(filePath: string): Promise<T> {
   const stats = await stat(filePath);
   return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
@@ -206,12 +213,7 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
     await writeFile(FALLBACK_BASELINE_PATH, expected, "utf8");
   }
   if (options.checkOnly && current !== expected) {
-    throw new Error(
-      [
-        "control-ui catalog fallback baseline drift detected.",
-        `Run \`pnpm ui:i18n:baseline\` and commit ${toRepoPath(FALLBACK_BASELINE_PATH)}.`,
-      ].join("\n"),
-    );
+    throw new Error(formatControlUiCatalogFallbackDriftError());
   }
   printCatalogFallbackSummary(baseline);
 }

@@ -25,7 +25,6 @@ type PersistPendingFinalDeliveryMarkerParams = {
 
 type PendingFinalDeliveryMarkerResult = {
   sessionEntry?: SessionEntry;
-  pendingFinalDeliveryTextForThisRun?: string;
   pendingFinalDeliveryMarkerPersisted: boolean;
   hasSendableFinalPayload: boolean;
 };
@@ -72,22 +71,23 @@ export async function persistPendingFinalDeliveryMarker(
     initialEntry: entry,
     entry: {
       ...entry,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: recoverableText,
-      pendingFinalDeliveryContext: params.deliveryContext,
-      pendingFinalDeliveryCreatedAt: now,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: recoverableText,
+        createdAt: now,
+        ...(params.deliveryContext ? { context: params.deliveryContext } : {}),
+      },
       updatedAt: now,
     },
     shouldPersist: (current) =>
       current?.sessionId === params.runOwnedSessionId && current.abortedLastRun !== true,
   });
   const markerPersisted =
-    persisted?.pendingFinalDelivery === true &&
-    persisted.pendingFinalDeliveryText === recoverableText;
+    persisted?.pendingFinalDelivery?.kind === "replayable" &&
+    persisted.pendingFinalDelivery.text === recoverableText;
 
   return {
     sessionEntry: persisted,
-    pendingFinalDeliveryTextForThisRun: markerPersisted ? recoverableText : undefined,
     pendingFinalDeliveryMarkerPersisted: markerPersisted,
     hasSendableFinalPayload,
   };

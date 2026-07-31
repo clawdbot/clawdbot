@@ -6,6 +6,7 @@
         android:name="android.hardware.type.watch"
         android:required="true" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <queries>
         <intent>
@@ -18,11 +19,11 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@drawable/ic_openclaw_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_openclaw_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.OpenClawWear">
 
         <meta-data
             android:name="com.google.android.wearable.standalone"
@@ -31,6 +32,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:taskAffinity=".main">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -62,7 +64,7 @@
             android:name=".OpenClawTileService"
             android:description="@string/tile_description"
             android:exported="true"
-            android:icon="@drawable/ic_openclaw_launcher"
+            android:icon="@mipmap/ic_launcher_foreground"
             android:label="@string/tile_label"
             android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
             <intent-filter>

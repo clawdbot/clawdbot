@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -206,6 +207,35 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
+  it("stops before polling status after the batch timeout expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fetchMock = stubBatchFetch();
+
+    const result = runGeminiEmbeddingBatches({
+      gemini: makeGeminiClient(),
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 2_000,
+      timeoutMs: 1_000,
+      debug: (message) => {
+        if (message.includes("batches/b-0 pending")) {
+          vi.setSystemTime(1_000);
+        }
+      },
+    });
+    const rejection = captureRejection(result);
+
+    await expect(rejection).resolves.toMatchObject({
+      message: "gemini batch batches/b-0 timed out after 1000ms",
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) => fetchInputUrl(input).includes("/batches/")),
+    ).toHaveLength(0);
+  });
+
   it.each([
     { stage: "upload", label: "gemini.batch-file-upload" },
     { stage: "create", label: "gemini.batch-create" },

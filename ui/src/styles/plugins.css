@@ -113,17 +113,18 @@
 
 /* ---------- panel + notices ---------- */
 
-/* Sections inside the tabpanel keep the settings-page rhythm. */
+/* Sections inside the tabpanel keep the settings-page rhythm. wa-tab-panel's
+   shadow slot (part=base) owns the slotted children's layout, so the column
+   flex + gap must live on the part — host-level gap never reaches them. */
 .plugins-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-7);
   min-width: 0;
 }
 
-/* Keep the installed-state filter shrink-to-fit inside the panel column. */
-.plugins-panel > .settings-segmented {
-  align-self: flex-start;
+.plugins-panel::part(base) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
 }
 
 .plugins-readonly {
@@ -201,6 +202,50 @@
 .plugins-item__detail-button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.clawhub-skill-result__button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-result__copy {
+  display: grid;
+  min-width: 0;
+}
+
+.clawhub-skill-result__copy:first-child {
+  grid-column: 1 / -1;
+}
+
+.clawhub-skill-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  object-fit: contain;
+}
+
+.clawhub-skill-detail__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-icon--detail {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.clawhub-skill-icon--profile {
+  border-radius: var(--radius-full);
+  object-fit: cover;
 }
 
 .plugins-version {
@@ -475,35 +520,6 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
-/* ---------- MCP inline form ---------- */
-
-/* Lives inside the MCP group surface; hairline divider instead of a nested card. */
-.plugins-mcp-form {
-  display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.plugins-mcp-form label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.plugins-mcp-form label span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 580;
-}
-
-.plugins-mcp-form__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 /* ---------- detail overlay ---------- */
 
 .plugins-detail-backdrop {
@@ -683,11 +699,6 @@ h3.plugins-subheader {
 @media (max-width: 768px) {
   .plugins-content-header {
     display: flex;
-  }
-
-  .plugins-mcp-form {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
   }
 }
 

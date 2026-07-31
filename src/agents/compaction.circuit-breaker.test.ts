@@ -50,33 +50,39 @@ async function summarize() {
   });
 }
 
-describe("compaction staged fallback circuit breaker", () => {
+describe("compaction staged summarization failures", () => {
   beforeEach(() => {
     agentSessionMocks.estimateTokens.mockClear();
     agentSessionMocks.generateSummary.mockReset();
   });
 
-  it("stops the fallback storm and rejects the incomplete compaction", async () => {
+  it("throws CompactionError when any chunk summarization fails", async () => {
     agentSessionMocks.generateSummary.mockRejectedValue(new Error("fetch failed"));
 
-    await expect(summarize()).rejects.toThrow(
-      "Compaction staged summarization stopped after repeated generic fallbacks",
-    );
-
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
+    // The first chunk failure propagates as a CompactionError — no
+    // circuit-breaker / generic-fallback recovery.
+    await expect(summarize()).rejects.toThrow();
   });
 
-  it("resets after a successful split, completes the merge, and remains degraded", async () => {
+  it("completes the merge successfully when all chunks succeed", async () => {
     agentSessionMocks.generateSummary
-      .mockRejectedValueOnce(new Error("fetch failed"))
-      .mockResolvedValueOnce("middle summary")
-      .mockRejectedValueOnce(new Error("fetch failed"))
-      .mockResolvedValueOnce("merged summary");
+      .mockResolvedValueOnce("summary of chunk 1")
+      .mockResolvedValueOnce("summary of chunk 2")
+      .mockResolvedValueOnce("summary of chunk 3")
+      .mockResolvedValue("merged: chunk 1 + chunk 2 + chunk 3");
 
     await expect(summarize()).resolves.toEqual({
-      kind: "generic-fallback",
-      text: "merged summary",
+      kind: "summary",
+      text: expect.stringContaining("merged"),
     });
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(4);
+  });
+
+  it("throws CompactionError when a later chunk fails after earlier successes", async () => {
+    agentSessionMocks.generateSummary
+      .mockResolvedValueOnce("summary of chunk 1")
+      .mockRejectedValue(new Error("fetch failed on chunk 2"));
+
+    // Chunk 2 failure stops the pipeline — no merge attempted.
+    await expect(summarize()).rejects.toThrow();
   });
 });

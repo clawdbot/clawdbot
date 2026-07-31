@@ -1,5 +1,7 @@
 // Ollama tests cover provider models plugin behavior.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,42 +10,34 @@ import {
   buildOllamaModelDefinition,
   capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
+  isOllamaCloudModel,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
+  readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
 
-async function withLiveOllamaHttpServer(
-  handle: (request: IncomingMessage, response: ServerResponse) => Promise<void> | void,
-  run: (baseUrl: string) => Promise<void>,
-): Promise<void> {
-  const server = createServer((request, response) => {
-    void Promise.resolve(handle(request, response)).catch(() => {
-      response.statusCode = 500;
-      response.end(JSON.stringify({ error: "handler failed" }));
-    });
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("live Ollama test server did not expose a TCP address");
-  }
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
-  }
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 describe("ollama provider models", () => {
@@ -63,13 +57,33 @@ describe("ollama provider models", () => {
       models: [
         buildOllamaModelDefinition("qwen3.5:4b", 262_144),
         buildOllamaModelDefinition("small", 16_384),
+        buildOllamaModelDefinition("glm-5.2:cloud", 1_000_000),
+        buildOllamaModelDefinition("gpt-oss:120b-cloud", 131_072),
+        buildOllamaModelDefinition("local-cloud", 65_536),
       ],
     });
 
     expect(provider.models).toEqual([
       expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
       expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+      expect.objectContaining({ id: "glm-5.2:cloud", contextWindow: 1_000_000 }),
+      expect.objectContaining({ id: "gpt-oss:120b-cloud", contextWindow: 131_072 }),
+      expect.objectContaining({ id: "local-cloud", contextTokens: 32_768 }),
     ]);
+    expect(provider.models?.[2]).not.toHaveProperty("contextTokens");
+    expect(provider.models?.[3]).not.toHaveProperty("contextTokens");
+  });
+
+  it.each([
+    ["glm-5.2:cloud", true],
+    ["gpt-oss:120b-cloud", true],
+    ["local-cloud", false],
+    ["invalid:cloud-cloud", false],
+    ["invalid:local:cloud", false],
+    ["invalid:local-cloud", false],
+    ["invalid:cloud:local", false],
+  ])("classifies Ollama model source %s", (modelId, expected) => {
+    expect(isOllamaCloudModel(modelId)).toBe(expected);
   });
 
   it("sets discovered models with context windows from /api/show", async () => {
@@ -133,6 +147,36 @@ describe("ollama provider models", () => {
       }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("discovers a chat model after 200 embedding-only catalog entries", async () => {
+    const embeddingModels = Array.from({ length: 200 }, (_, index) => ({
+      name: `embedding-${index}:latest`,
+    }));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/api/tags")) {
+        return jsonResponse({
+          models: [...embeddingModels, { name: "qwen-chat:latest" }],
+        });
+      }
+      if (url.endsWith("/api/show")) {
+        const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
+        const completion = body.name === "qwen-chat:latest";
+        return jsonResponse({
+          capabilities: completion ? ["completion", "tools"] : ["embedding"],
+          model_info: completion ? { "qwen.context_length": 32_768 } : {},
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+
+    expect(provider.models?.map((model) => model.id)).toEqual(["qwen-chat:latest"]);
+    expect(provider.models?.[0]?.contextWindow).toBe(32_768);
+    expect(fetchMock).toHaveBeenCalledTimes(202);
   });
 
   it("scopes cached show metadata by credential", async () => {
@@ -391,6 +435,7 @@ describe("ollama provider models", () => {
     expect(visionModel.reasoning).toBe(true);
     expect(visionModel.compat?.supportsTools).toBe(true);
     expect(visionModel.compat?.supportsUsageInStreaming).toBe(true);
+    expect(visionModel.compat?.supportsJsonSchemaResponseFormat).toBe(false);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
@@ -415,6 +460,7 @@ describe("ollama provider models", () => {
     expect(noCapabilities.input).toEqual(["text"]);
     expect(noCapabilities.compat?.supportsTools).toBe(true);
     expect(noCapabilities.compat?.supportsUsageInStreaming).toBe(true);
+    expect(noCapabilities.compat?.supportsJsonSchemaResponseFormat).toBe(true);
   });
 
   it("disables tool support when Ollama capabilities omit tools", () => {
@@ -423,6 +469,27 @@ describe("ollama provider models", () => {
     expect(model.reasoning).toBe(false);
     expect(model.compat?.supportsTools).toBe(false);
     expect(model.compat?.supportsUsageInStreaming).toBe(true);
+  });
+
+  it("keeps failed inspection distinct from omitted and empty capabilities", () => {
+    const uninspected = buildOllamaModelDefinition("deepseek-r1:14b", 65536);
+    const authoritativeEmpty = buildOllamaModelDefinition("deepseek-r1:14b", 65536, []);
+    const inspectionFailed = buildOllamaModelDefinition("deepseek-r1:14b", 65536, undefined, {
+      showInspectionFailed: true,
+    });
+
+    expect(uninspected).toMatchObject({
+      reasoning: true,
+      compat: { supportsTools: true },
+    });
+    expect(authoritativeEmpty).toMatchObject({
+      reasoning: false,
+      compat: { supportsTools: false },
+    });
+    expect(inspectionFailed).toMatchObject({
+      reasoning: true,
+      compat: { supportsTools: false },
+    });
   });
 
   it.each([
@@ -439,6 +506,204 @@ describe("ollama provider models", () => {
     const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
 
     expect(info.contextWindow).toBe(expected);
+  });
+
+  it("cancels non-OK discovery response bodies before fallback results", async () => {
+    const tagsResponse = cancelTrackedResponse("ollama unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tagsResponse.response),
+    );
+
+    await expect(fetchOllamaModels("http://127.0.0.1:11434")).resolves.toEqual({
+      reachable: true,
+      models: [],
+    });
+    expect(tagsResponse.wasCanceled()).toBe(true);
+
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(queryOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).resolves.toEqual({
+      showInspectionFailed: true,
+    });
+    expect(showResponse.wasCanceled()).toBe(true);
+  });
+
+  it("reports failed strict model inspections while releasing their response bodies", async () => {
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(readOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).rejects.toThrow(
+      "Ollama model inspection failed with HTTP 503",
+    );
+    expect(showResponse.wasCanceled()).toBe(true);
+  });
+
+  it("closes real failed discovery sockets while preserving successful discovery", async () => {
+    const sockets = new Set<Socket>();
+    const socketClosures = new Map<string, Promise<void>>();
+    let mode: "failure" | "success" = "failure";
+
+    const server = createServer((request, response) => {
+      const path = request.url;
+      if (path !== "/api/tags" && path !== "/api/show") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+
+      if (mode === "failure") {
+        socketClosures.set(
+          path,
+          new Promise<void>((resolve) => {
+            request.socket.once("close", () => resolve());
+          }),
+        );
+        response.writeHead(503, { "content-type": "text/plain" });
+        // Leave the body open so only real client cancellation can close its socket.
+        response.write("ollama unavailable");
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      if (path === "/api/tags") {
+        response.end(JSON.stringify({ models: [{ name: "llama3:8b" }] }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          model_info: { "llama.context_length": 32768 },
+          capabilities: ["completion", "tools"],
+        }),
+      );
+    });
+
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+
+    const waitForSocketClose = async (path: string): Promise<void> => {
+      const closed = socketClosures.get(path);
+      if (!closed) {
+        throw new Error(`No failed discovery socket was recorded for ${path}`);
+      }
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          closed,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error(`Failed discovery socket was not closed for ${path}`));
+            }, 2_000);
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+        }
+      }
+    };
+
+    const listening = once(server, "listening");
+    try {
+      server.listen(0, "127.0.0.1");
+      await listening;
+
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Ollama test server did not expose a TCP address");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+
+      await expect(fetchOllamaModels(baseUrl)).resolves.toEqual({
+        reachable: true,
+        models: [],
+      });
+      await waitForSocketClose("/api/tags");
+
+      await expect(queryOllamaModelShowInfo(baseUrl, "llama3:8b")).resolves.toEqual({
+        showInspectionFailed: true,
+      });
+      await waitForSocketClose("/api/show");
+
+      mode = "success";
+      await expect(fetchOllamaModels(baseUrl)).resolves.toEqual({
+        reachable: true,
+        models: [{ name: "llama3:8b" }],
+      });
+      await expect(queryOllamaModelShowInfo(baseUrl, "llama3:8b")).resolves.toEqual({
+        contextWindow: 32768,
+        capabilities: ["completion", "tools"],
+      });
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
+        });
+      }
+    }
+  });
+
+  it("keeps tools off after a live /api/show failure", async () => {
+    const server = createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      if (request.url === "/api/tags") {
+        response.end(
+          JSON.stringify({
+            models: [{ name: "deepseek-r1:14b", digest: "sha256:show-failure" }],
+          }),
+        );
+        return;
+      }
+      if (request.url === "/api/show") {
+        response.statusCode = 500;
+        response.end(JSON.stringify({ error: "show failed" }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "not found" }));
+    });
+
+    const listening = once(server, "listening");
+    try {
+      server.listen(0, "127.0.0.1");
+      await listening;
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Ollama test server did not expose a TCP address");
+      }
+
+      const provider = await buildOllamaProvider(`http://127.0.0.1:${address.port}`);
+      const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
+
+      expect(model.id).toBe("deepseek-r1:14b");
+      expect(model.compat?.supportsTools).toBe(false);
+      expect(model.reasoning).toBe(true);
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
   });
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
@@ -492,106 +757,5 @@ describe("ollama provider models", () => {
     expect(showInfo).toEqual({ showInspectionFailed: true });
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
-  });
-
-  it("keeps three capability states for tools and reasoning", () => {
-    const uninspected = buildOllamaModelDefinition("deepseek-r1:14b", 65536);
-    expect(uninspected.compat?.supportsTools).toBe(true);
-    expect(uninspected.reasoning).toBe(true);
-
-    const authoritativeEmpty = buildOllamaModelDefinition("deepseek-r1:14b", 65536, []);
-    expect(authoritativeEmpty.compat?.supportsTools).toBe(false);
-    expect(authoritativeEmpty.reasoning).toBe(false);
-
-    const inspectionFailed = buildOllamaModelDefinition("deepseek-r1:14b", 65536, undefined, {
-      showInspectionFailed: true,
-    });
-    expect(inspectionFailed.compat?.supportsTools).toBe(false);
-    expect(inspectionFailed.reasoning).toBe(true);
-  });
-
-  it("does not advertise tools when /api/show returns a non-OK status", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/api/tags")) {
-        return jsonResponse({
-          models: [{ name: "deepseek-r1:14b", digest: "sha256:broken" }],
-        });
-      }
-      if (url.endsWith("/api/show")) {
-        return jsonResponse({ error: "model not found" }, 404);
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
-    const model = expectDefined(provider.models[0], "broken Ollama model");
-
-    expect(model.id).toBe("deepseek-r1:14b");
-    expect(model.compat?.supportsTools).toBe(false);
-    expect(model.reasoning).toBe(true);
-  });
-
-  it("does not advertise tools when /api/show throws", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/api/tags")) {
-        return jsonResponse({ models: [{ name: "down:latest", digest: "sha256:down" }] });
-      }
-      if (url.endsWith("/api/show")) {
-        throw new Error("ECONNREFUSED");
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
-    const model = expectDefined(provider.models[0], "unreachable Ollama model");
-
-    expect(model.compat?.supportsTools).toBe(false);
-
-    const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "down:latest");
-    expect(showInfo).toEqual({ showInspectionFailed: true });
-  });
-
-  it("live HTTP: /api/show 500 keeps tools off and reasoning heuristic on", async () => {
-    // L3: real TCP + undici fetch (no vi.stubGlobal). Matches node-inference live stub shape.
-    let showHits = 0;
-    await withLiveOllamaHttpServer(
-      (request, response) => {
-        response.setHeader("Content-Type", "application/json");
-        if (request.url === "/api/tags") {
-          response.end(
-            JSON.stringify({
-              models: [{ name: "deepseek-r1:14b", digest: "sha256:stale-show-fail", size: 1 }],
-            }),
-          );
-          return;
-        }
-        if (request.url === "/api/show") {
-          showHits += 1;
-          response.statusCode = 500;
-          response.end(JSON.stringify({ error: "show failed" }));
-          return;
-        }
-        response.statusCode = 404;
-        response.end(JSON.stringify({ error: "not found" }));
-      },
-      async (baseUrl) => {
-        const provider = await buildOllamaProvider(baseUrl);
-        const model = expectDefined(provider.models[0], "live show-fail Ollama model");
-
-        expect(showHits).toBeGreaterThan(0);
-        expect(model.id).toBe("deepseek-r1:14b");
-        expect(model.compat?.supportsTools).toBe(false);
-        expect(model.reasoning).toBe(true);
-
-        // Scrapable Evidence line for PR body (counts only; no secrets).
-        console.info(
-          `[ollama show-fail live proof] base=${baseUrl} model=${model.id} showHits=${showHits} supportsTools=${String(model.compat?.supportsTools)} reasoning=${String(model.reasoning)}`,
-        );
-      },
-    );
   });
 });

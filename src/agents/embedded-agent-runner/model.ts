@@ -1,124 +1,70 @@
-/**
- * Resolves embedded-agent provider/model selections from config, registry, and catalogs.
- */
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
-import type { Api, Model } from "../../llm/types.js";
+import type { Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import {
-  applyProviderResolvedTransportWithPlugin,
-  buildProviderUnknownModelHintWithPlugin,
-  normalizeProviderTransportWithPlugin,
-  prepareProviderDynamicModel,
-  runProviderDynamicModel,
-  normalizeProviderResolvedModelWithPlugin,
-  shouldPreferProviderRuntimeResolvedModel,
-} from "../../plugins/provider-runtime.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
-import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
-  buildSuppressedBuiltInModelError,
-  shouldSuppressBuiltInModel,
-  shouldUnconditionallySuppress,
-} from "../model-suppression.js";
-import {
-  canonicalizeOpenAIModelId,
-  listOpenAIAuthProfileProvidersForAgentRuntime,
-} from "../openai-routing.js";
-import { attachModelProviderLocalService } from "../provider-local-service.js";
-import {
-  attachModelProviderRequestTransport,
-  resolveProviderRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-} from "../provider-request-config.js";
+  getPreparedModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import {
   AuthStorage as AgentAuthStorageClass,
   ModelRegistry as AgentModelRegistryClass,
   type AuthStorage,
   type ModelRegistry,
 } from "../sessions/index.js";
-import { discoverCachedAgentStores } from "./model-discovery-cache.js";
+import { mergeModelMediaInput } from "./model.compat.js";
+import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
-  buildInlineProviderModels,
-  type InlineProviderConfig,
-  normalizeResolvedTransportApi,
-  resolveProviderModelInput,
-  sanitizeModelHeaders,
-} from "./model.inline-provider.js";
-import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+  applyConfiguredProviderOverrides,
+  resolveConfiguredProviderConfig,
+} from "./model.configured-overrides.js";
 import {
-  canonicalizeManifestModelCatalogProviderAlias,
+  DEFAULT_PROVIDER_RUNTIME_HOOKS,
+  normalizeResolvedModel,
+  type ProviderRuntimeHooks,
+  resolveRuntimeHooks,
+} from "./model.provider-hooks.js";
+import {
+  normalizeProviderModelRef,
+  resolveDynamicModelAuthProfile,
+  resolveExplicitModelWithRegistry,
+  resolveModelWithPreparedRegistry,
+  resolveRuntimePreferredSuppressedModel,
+  shouldCompareProviderRuntimeResolvedModel,
+} from "./model.registry-resolution.js";
+import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
+import { staticModelIdMatches } from "./model.static-id.js";
 
-type ProviderRuntimeHooks = {
-  applyProviderResolvedTransportWithPlugin?: (
-    params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
-  ) => unknown;
-  buildProviderUnknownModelHintWithPlugin: (
-    params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
-  ) => string | undefined;
-  prepareProviderDynamicModel: (
-    params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => Promise<void>;
-  runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
-  shouldPreferProviderRuntimeResolvedModel?: (
-    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
-  ) => boolean;
-  normalizeProviderResolvedModelWithPlugin: (
-    params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
-  ) => unknown;
-  normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
+export { resolveModelWithRegistry } from "./model.registry-resolution.js";
+
+type CommonModelResolutionOptions = {
+  authStorage?: AuthStorage;
+  modelRegistry?: ModelRegistry;
+  agentId?: string;
+  runtimeHooks?: ProviderRuntimeHooks;
+  skipProviderRuntimeHooks?: boolean;
+  workspaceDir?: string;
+  authProfileId?: string;
+  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
+  preferredProfile?: string;
 };
 
-type StaticCatalogFallbackModel = Model & {
-  compat?: ModelCompatConfig;
-  contextTokens?: number;
-  params?: Record<string, unknown>;
-  mediaInput?: ModelMediaInputConfig;
-};
-
-const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  buildProviderUnknownModelHintWithPlugin,
-  prepareProviderDynamicModel,
-  runProviderDynamicModel,
-  shouldPreferProviderRuntimeResolvedModel,
-  normalizeProviderResolvedModelWithPlugin,
-  // Target-provider resolution keeps owner hooks, but avoids broad
-  // cross-provider hooks that can load unrelated bundled provider runtimes.
-  applyProviderResolvedTransportWithPlugin: () => undefined,
-  normalizeProviderTransportWithPlugin: () => undefined,
-};
-
-const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  ...TARGET_PROVIDER_RUNTIME_HOOKS,
-  applyProviderResolvedTransportWithPlugin,
-  normalizeProviderTransportWithPlugin,
-};
-
-const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  applyProviderResolvedTransportWithPlugin: () => undefined,
-  buildProviderUnknownModelHintWithPlugin: () => undefined,
-  prepareProviderDynamicModel: async () => {},
-  runProviderDynamicModel: () => undefined,
-  normalizeProviderResolvedModelWithPlugin: () => undefined,
-  normalizeProviderTransportWithPlugin: () => undefined,
-};
-
-const SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  // skipAgentDiscovery is the lean path used before agent discovery/models.json has run.
-  ...TARGET_PROVIDER_RUNTIME_HOOKS,
+type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  allowBundledStaticCatalogFallback?: boolean;
+  preferBundledStaticCatalogTransport?: boolean;
+  retryTransientProviderRuntimeMiss?: boolean;
+  agentRuntimeId?: string;
+  skipAgentDiscovery?: boolean;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -137,1450 +83,29 @@ export function createEmptyAgentDiscoveryStores(): {
   return { authStorage, modelRegistry };
 }
 
-function resolveRuntimeHooks(params?: {
-  runtimeHooks?: ProviderRuntimeHooks;
-  skipProviderRuntimeHooks?: boolean;
-  skipAgentDiscovery?: boolean;
-}): ProviderRuntimeHooks {
-  if (params?.skipProviderRuntimeHooks) {
-    return STATIC_PROVIDER_RUNTIME_HOOKS;
-  }
-  if (params?.runtimeHooks) {
-    return params.runtimeHooks;
-  }
-  if (params?.skipAgentDiscovery) {
-    return SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS;
-  }
-  return DEFAULT_PROVIDER_RUNTIME_HOOKS;
-}
-
-function discoverCachedAgentStoresForAgent(
+function resolvePreparedAgentSnapshot(
   resolvedAgentDir: string,
   cfg: OpenClawConfig | undefined,
-  workspaceDir: string | undefined,
-): {
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-} {
-  return discoverCachedAgentStores({
+  explicitWorkspaceDir: string | undefined,
+  derivedWorkspaceDir: string | undefined,
+  agentId: string | undefined,
+): ReturnType<typeof getPreparedModelRuntimeSnapshot> {
+  const base = {
+    ...(agentId ? { agentId } : {}),
     agentDir: resolvedAgentDir,
-    ...(cfg ? { config: cfg } : {}),
+    config: cfg ?? {},
     inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
-    ...(workspaceDir ? { workspaceDir } : {}),
-  });
-}
-
-function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
-  const canonicalModelId = canonicalizeOpenAIModelId(params.provider, params.model.id);
-  if (canonicalModelId === params.model.id) {
-    return params.model;
-  }
-  return {
-    ...params.model,
-    id: canonicalModelId,
-    name:
-      canonicalizeOpenAIModelId(params.provider, params.model.name) === canonicalModelId
-        ? canonicalModelId
-        : params.model.name,
   };
-}
-
-function applyResolvedTransportFallback(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHooks: ProviderRuntimeHooks;
-  model: Model;
-}): Model | undefined {
-  const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelId: params.model.id,
-    context: {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: params.model.id,
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-    },
-  }) as { api?: Api | null; baseUrl?: string } | undefined;
-  if (!normalized) {
-    return undefined;
-  }
-  const nextApi = normalizeResolvedTransportApi(normalized.api) ?? params.model.api;
-  const nextBaseUrl = normalized.baseUrl ?? params.model.baseUrl;
-  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    api: nextApi,
-    baseUrl: nextBaseUrl,
-  };
-}
-
-function normalizeResolvedModel(params: {
-  provider: string;
-  model: Model;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model {
-  const normalizeModelCost = (cost: unknown): Model["cost"] => {
-    if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
-      return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    }
-    const record = cost as Partial<Model["cost"]>;
-    const input =
-      typeof record.input === "number" && Number.isFinite(record.input) ? record.input : 0;
-    const output =
-      typeof record.output === "number" && Number.isFinite(record.output) ? record.output : 0;
-    const cacheRead =
-      typeof record.cacheRead === "number" && Number.isFinite(record.cacheRead)
-        ? record.cacheRead
-        : 0;
-    const cacheWrite =
-      typeof record.cacheWrite === "number" && Number.isFinite(record.cacheWrite)
-        ? record.cacheWrite
-        : 0;
-    if (
-      input === record.input &&
-      output === record.output &&
-      cacheRead === record.cacheRead &&
-      cacheWrite === record.cacheWrite
-    ) {
-      return record as Model["cost"];
-    }
-    return {
-      ...cost,
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-    };
-  };
-
-  const normalizedInputModel = {
-    ...params.model,
-    input: resolveProviderModelInput({
-      provider: params.provider,
-      modelId: params.model.id,
-      modelName: params.model.name,
-      input: params.model.input,
-    }),
-    cost: normalizeModelCost((params.model as { cost?: unknown }).cost),
-  } as Model;
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: normalizedInputModel.id,
-      model: normalizedInputModel,
-    },
-  }) as Model | undefined;
-  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: normalizedInputModel.id,
-      model: (pluginNormalized ?? normalizedInputModel) as never,
-    },
-  }) as Model | undefined;
-  const fallbackTransportNormalized =
-    transportNormalized ??
-    applyResolvedTransportFallback({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      runtimeHooks,
-      model: pluginNormalized ?? normalizedInputModel,
-    });
-  return canonicalizeLegacyResolvedModel({
-    provider: params.provider,
-    model: normalizeResolvedProviderModel({
-      provider: params.provider,
-      model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
-    }),
-  });
-}
-
-function resolveProviderTransport(params: {
-  provider: string;
-  modelId?: string;
-  api?: Api | null;
-  baseUrl?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): {
-  api?: Api;
-  baseUrl?: string;
-} {
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    ...(params.modelId ? { modelId: params.modelId } : {}),
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      ...(params.modelId ? { modelId: params.modelId } : {}),
-      api: params.api,
-      baseUrl: params.baseUrl,
-    },
-  }) as { api?: Api | null; baseUrl?: string } | undefined;
-
-  return {
-    api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
-    baseUrl: normalized?.baseUrl ?? params.baseUrl,
-  };
-}
-
-function resolveConfiguredProviderDefaultApi(params: {
-  provider: string;
-  providerConfig: InlineProviderConfig | undefined;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Api | undefined {
-  const { providerConfig } = params;
-  const explicit = normalizeResolvedTransportApi(providerConfig?.api);
-  if (explicit) {
-    return explicit;
-  }
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
-  if (!providerConfiguredBaseUrl) {
-    return undefined;
-  }
-  const normalized = resolveProviderTransport({
-    provider: params.provider,
-    api: undefined,
-    baseUrl: providerConfiguredBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
-  });
-  return normalized.api ?? "openai-completions";
-}
-
-function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {
-  if (typeof baseUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = baseUrl.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
-}
-
-function mergeModelMediaInput(
-  base: ModelMediaInputConfig | undefined,
-  override: ModelMediaInputConfig | undefined,
-): ModelMediaInputConfig | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
-  }
-  return {
+  const published = getPreparedModelRuntimeSnapshot({
     ...base,
-    ...override,
-    image:
-      base.image || override.image
-        ? {
-            ...base.image,
-            ...override.image,
-          }
-        : undefined,
-  };
-}
-
-function matchesProviderScopedModelId(params: {
-  candidateId?: string;
-  provider: string;
-  modelId: string;
-}): boolean {
-  const { candidateId, provider, modelId } = params;
-  if (candidateId === modelId) {
-    return true;
-  }
-  const slashIndex = candidateId?.indexOf("/") ?? -1;
-  if (!candidateId || slashIndex <= 0) {
-    return false;
-  }
-  const candidateProvider = candidateId.slice(0, slashIndex);
-  const candidateModelId = candidateId.slice(slashIndex + 1);
-  return (
-    candidateModelId === modelId &&
-    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
-  );
-}
-
-function findInlineModelMatch(params: {
-  providers: Record<string, InlineProviderConfig>;
-  provider: string;
-  modelId: string;
-}) {
-  const matchesModelId = (entry: { provider: string; id?: string }) =>
-    matchesProviderScopedModelId({
-      candidateId: entry.id,
-      provider: entry.provider,
-      modelId: params.modelId,
-    });
-  const inlineModels = buildInlineProviderModels(params.providers);
-  const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && matchesModelId(entry),
-  );
-  if (exact) {
-    return exact;
-  }
-  const normalizedProvider = normalizeProviderId(params.provider);
-  return inlineModels.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
-  );
-}
-
-function resolveConfiguredProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): InlineProviderConfig | undefined {
-  const configuredProviders = cfg?.models?.providers;
-  if (!configuredProviders) {
-    return undefined;
-  }
-  const exactProviderConfig = configuredProviders[provider];
-  if (exactProviderConfig) {
-    return exactProviderConfig;
-  }
-  return findNormalizedProviderValue(configuredProviders, provider);
-}
-
-function isModelsAddMetadataModel(params: {
-  model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
-}) {
-  return (
-    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add"
-  );
-}
-
-function findConfiguredProviderModel(
-  providerConfig: InlineProviderConfig | undefined,
-  provider: string,
-  modelId: string,
-) {
-  return providerConfig?.models?.find((candidate) =>
-    matchesProviderScopedModelId({
-      candidateId: candidate.id,
-      provider,
-      modelId,
-    }),
-  );
-}
-
-function mergeStaticCatalogInlineModel(
-  staticCatalogModel: StaticCatalogFallbackModel | undefined,
-  inlineModel: Model,
-): Model {
-  if (!staticCatalogModel) {
-    return inlineModel;
-  }
-  const compat = mergeModelCompat(staticCatalogModel.compat, inlineModel.compat);
-  const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
-  const params = mergeModelParams(
-    readModelParams(staticCatalogModel.params),
-    readModelParams(inlineModel.params),
-  );
-  return {
-    ...staticCatalogModel,
-    ...inlineModel,
-    api: inlineModel.api ?? staticCatalogModel.api,
-    baseUrl:
-      normalizeTransportBaseUrl(inlineModel.baseUrl) ??
-      normalizeTransportBaseUrl(staticCatalogModel.baseUrl),
-    headers: inlineModel.headers ?? staticCatalogModel.headers,
-    ...(compat ? { compat } : {}),
-    ...(mediaInput ? { mediaInput } : {}),
-    ...(params ? { params } : {}),
-  } as Model;
-}
-
-function hasConfiguredFallbackSurface(params: {
-  providerConfig: InlineProviderConfig | undefined;
-  configuredModel: ReturnType<typeof findConfiguredProviderModel>;
-  modelId: string;
-}): boolean {
-  if (params.modelId.startsWith("mock-")) {
-    return true;
-  }
-  if (params.configuredModel) {
-    return true;
-  }
-  const baseUrl = params.providerConfig?.baseUrl?.trim();
-  return Boolean(baseUrl);
-}
-
-function readModelParams(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-function mergeModelParams(
-  ...entries: Array<Record<string, unknown> | undefined>
-): Record<string, unknown> | undefined {
-  const merged = Object.assign({}, ...entries.filter(Boolean));
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-function findConfiguredAgentModelParams(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-}): Record<string, unknown> | undefined {
-  const configuredModels = params.cfg?.agents?.defaults?.models;
-  if (!configuredModels) {
-    return undefined;
-  }
-  const directKeys = [
-    modelKey(params.provider, params.modelId),
-    `${params.provider}/${params.modelId}`,
-  ];
-  for (const key of directKeys) {
-    const direct = readModelParams(configuredModels[key]?.params);
-    if (direct) {
-      return direct;
-    }
-  }
-
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
-    .trim()
-    .toLowerCase();
-  for (const [rawKey, entry] of Object.entries(configuredModels)) {
-    const slashIndex = rawKey.indexOf("/");
-    if (slashIndex <= 0) {
-      continue;
-    }
-    const candidateProvider = rawKey.slice(0, slashIndex);
-    const candidateModelId = rawKey.slice(slashIndex + 1);
-    if (
-      normalizeProviderId(candidateProvider) === normalizedProvider &&
-      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
-        normalizedModelId
-    ) {
-      return readModelParams(entry.params);
-    }
-  }
-  return undefined;
-}
-
-function mergeConfiguredRuntimeModelParams(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  discoveredParams?: unknown;
-  providerParams?: unknown;
-  configuredParams?: unknown;
-}): Record<string, unknown> | undefined {
-  return mergeModelParams(
-    readModelParams(params.discoveredParams),
-    readModelParams(params.providerParams),
-    findConfiguredAgentModelParams({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-    }),
-    readModelParams(params.configuredParams),
-  );
-}
-
-function applyConfiguredProviderOverrides(params: {
-  provider: string;
-  discoveredModel: ProviderRuntimeModel;
-  providerConfig?: InlineProviderConfig;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  runtimeHooks?: ProviderRuntimeHooks;
-  preferDiscoveredModelMetadata?: boolean;
-  preferDiscoveredTransport?: boolean;
-  workspaceDir?: string;
-}): ProviderRuntimeModel {
-  const { discoveredModel, providerConfig, modelId } = params;
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const defaultModelParams = findConfiguredAgentModelParams({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId,
+    ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
   });
-  if (!providerConfig) {
-    const resolvedParams = mergeModelParams(
-      readModelParams(discoveredModel.params),
-      defaultModelParams,
-    );
-    const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-      stripSecretRefMarkers: true,
-    });
-    const requestConfig = resolveProviderRequestConfig({
-      provider: params.provider,
-      api: discoveredModel.api,
-      baseUrl: discoveredModel.baseUrl,
-      discoveredHeaders,
-      capability: "llm",
-      transport: "stream",
-    });
-    return {
-      ...discoveredModel,
-      ...(resolvedParams ? { params: resolvedParams } : {}),
-      // Discovered models originate from models.json and may contain persistence markers.
-      headers: requestConfig.headers,
-    };
+  if (published || explicitWorkspaceDir || !derivedWorkspaceDir) {
+    return published;
   }
-  const configuredModel =
-    findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
-    (discoveredModel.id !== modelId
-      ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
-      : undefined);
-  const configuredStaticCatalogModel = configuredModel
-    ? (resolveBundledStaticCatalogModel({
-        provider: params.provider,
-        modelId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        includeRuntimeDiscovery: true,
-      }) as StaticCatalogFallbackModel | undefined)
-    : undefined;
-  const metadataOverrideModel =
-    params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
-      ? undefined
-      : configuredModel;
-  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
-  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const providerParams = readModelParams(providerConfig.params);
-  const passthroughRequestConfig = resolveProviderRequestConfig({
-    provider: params.provider,
-    api: discoveredModel.api,
-    baseUrl: discoveredModel.baseUrl,
-    discoveredHeaders,
-    providerHeaders,
-    modelHeaders: configuredHeaders,
-    authHeader: providerConfig.authHeader,
-    request: providerRequest,
-    capability: "llm",
-    transport: "stream",
-  });
-  if (
-    !configuredModel &&
-    !providerConfig.baseUrl &&
-    !providerConfig.api &&
-    providerConfig.contextWindow === undefined &&
-    providerConfig.contextTokens === undefined &&
-    providerConfig.maxTokens === undefined &&
-    requestTimeoutMs === undefined &&
-    !providerHeaders &&
-    !providerRequest &&
-    !providerParams &&
-    !providerConfig.localService
-  ) {
-    const resolvedParams = mergeModelParams(
-      readModelParams(discoveredModel.params),
-      defaultModelParams,
-    );
-    return {
-      ...discoveredModel,
-      ...(resolvedParams ? { params: resolvedParams } : {}),
-      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-      headers: passthroughRequestConfig.headers,
-      ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
-    };
-  }
-  const resolvedParams = mergeModelParams(
-    readModelParams(configuredStaticCatalogModel?.params),
-    readModelParams(discoveredModel.params),
-    providerParams,
-    defaultModelParams,
-    readModelParams(configuredModel?.params),
-  );
-  const normalizedInput = resolveProviderModelInput({
-    provider: params.provider,
-    modelId,
-    modelName: metadataOverrideModel?.name ?? discoveredModel.name,
-    input: metadataOverrideModel?.input,
-    fallbackInput: discoveredModel.input,
-  });
-  const providerDefaultApi = resolveConfiguredProviderDefaultApi({
-    provider: params.provider,
-    providerConfig,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
-  });
-  const metadataOverrideBaseUrl = normalizeTransportBaseUrl(metadataOverrideModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig.baseUrl);
-  const discoveredBaseUrl = normalizeTransportBaseUrl(discoveredModel.baseUrl);
-  const configuredStaticCatalogBaseUrl = normalizeTransportBaseUrl(
-    configuredStaticCatalogModel?.baseUrl,
-  );
-  const resolvedTransportApi = params.preferDiscoveredTransport
-    ? (discoveredModel.api ??
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi)
-    : (metadataOverrideModel?.api ??
-      providerConfig.api ??
-      discoveredModel.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi);
-  const resolvedTransportBaseUrl = params.preferDiscoveredTransport
-    ? (discoveredBaseUrl ??
-      metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      configuredStaticCatalogBaseUrl)
-    : (metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      discoveredBaseUrl ??
-      configuredStaticCatalogBaseUrl);
-
-  const resolvedTransport = resolveProviderTransport({
-    provider: params.provider,
-    modelId: discoveredModel.id,
-    api: resolvedTransportApi,
-    baseUrl: resolvedTransportBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
-  });
-  const resolvedContextWindow =
-    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
-  const resolvedMaxTokens =
-    metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
-  const normalizedResolvedMaxTokens =
-    typeof resolvedMaxTokens === "number" && Number.isFinite(resolvedMaxTokens)
-      ? typeof resolvedContextWindow === "number" && Number.isFinite(resolvedContextWindow)
-        ? Math.min(resolvedMaxTokens, resolvedContextWindow)
-        : resolvedMaxTokens
-      : undefined;
-  const resolvedCompat = mergeModelCompat(
-    mergeModelCompat(configuredStaticCatalogModel?.compat, discoveredModel.compat),
-    metadataOverrideModel?.compat,
-  );
-  const resolvedReasoning = resolveMergedConfiguredModelReasoning({
-    provider: params.provider,
-    configuredCompat: metadataOverrideModel?.compat,
-    resolvedCompat,
-    configuredReasoning: metadataOverrideModel?.reasoning,
-    discoveredReasoning: discoveredModel.reasoning,
-  });
-  const requestConfig = resolveProviderRequestConfig({
-    provider: params.provider,
-    api:
-      resolvedTransport.api ??
-      normalizeResolvedTransportApi(configuredStaticCatalogModel?.api) ??
-      normalizeResolvedTransportApi(discoveredModel.api) ??
-      providerDefaultApi ??
-      "openai-responses",
-    baseUrl:
-      resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
-    discoveredHeaders,
-    providerHeaders,
-    modelHeaders: configuredHeaders,
-    authHeader: providerConfig.authHeader,
-    request: providerRequest,
-    capability: "llm",
-    transport: "stream",
-  });
-  return attachModelProviderLocalService(
-    attachModelProviderRequestTransport(
-      {
-        ...discoveredModel,
-        api: requestConfig.api ?? "openai-responses",
-        baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-        reasoning: resolvedReasoning,
-        input: normalizedInput,
-        cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-        contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-        contextTokens:
-          metadataOverrideModel?.contextTokens ??
-          providerConfig.contextTokens ??
-          discoveredModel.contextTokens,
-        ...(normalizedResolvedMaxTokens !== undefined
-          ? { maxTokens: normalizedResolvedMaxTokens }
-          : {}),
-        ...(resolvedParams ? { params: resolvedParams } : {}),
-        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        headers: requestConfig.headers,
-        ...(providerConfig.authHeader !== undefined
-          ? { authHeader: providerConfig.authHeader }
-          : {}),
-        compat: resolvedCompat,
-        mediaInput: mergeModelMediaInput(
-          mergeModelMediaInput(
-            configuredStaticCatalogModel?.mediaInput,
-            discoveredModel.mediaInput,
-          ),
-          metadataOverrideModel?.mediaInput,
-        ),
-      },
-      providerRequest,
-    ),
-    providerConfig.localService,
-  );
-}
-type ExplicitModelResolution =
-  | { kind: "resolved"; model: Model; source: "configured" }
-  | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
-  | { kind: "suppressed" };
-
-function shouldSuppressInlineConfiguredModel(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  baseUrl?: string;
-}): boolean {
-  if (
-    shouldUnconditionallySuppress({
-      provider: params.provider,
-      id: params.modelId,
-      ...(params.cfg ? { config: params.cfg } : {}),
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    })
-  ) {
-    return true;
-  }
-  if (
-    normalizeProviderId(params.provider) !== "openai" ||
-    normalizeLowercaseStringOrEmpty(params.modelId) !== "gpt-5.3-codex-spark"
-  ) {
-    return false;
-  }
-  return shouldSuppressBuiltInModel({
-    provider: params.provider,
-    id: params.modelId,
-    ...(params.cfg ? { config: params.cfg } : {}),
-    ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-}
-
-function resolveExplicitModelWithRegistry(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: CoreModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): ExplicitModelResolution | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const inlineMatch = findInlineModelMatch({
-    providers: cfg?.models?.providers ?? {},
-    provider,
-    modelId,
-  });
-  if (inlineMatch?.api) {
-    const transport = resolveProviderTransport({
-      provider,
-      modelId,
-      api: inlineMatch.api,
-      baseUrl: inlineMatch.baseUrl ?? providerConfig?.baseUrl,
-      cfg,
-      workspaceDir,
-      runtimeHooks,
-    });
-    if (
-      shouldSuppressInlineConfiguredModel({
-        provider,
-        modelId,
-        cfg,
-        workspaceDir,
-        baseUrl: transport.baseUrl,
-      })
-    ) {
-      return { kind: "suppressed" };
-    }
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider,
-      modelId,
-      cfg,
-      workspaceDir,
-      includeRuntimeDiscovery: true,
-    }) as StaticCatalogFallbackModel | undefined;
-    return {
-      kind: "resolved",
-      source: "configured",
-      model: normalizeResolvedModel({
-        provider,
-        cfg,
-        agentDir,
-        workspaceDir,
-        model: applyConfiguredProviderOverrides({
-          provider,
-          discoveredModel: mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
-          providerConfig,
-          modelId,
-          cfg,
-          runtimeHooks,
-          workspaceDir,
-          preferDiscoveredTransport: true,
-        }),
-        runtimeHooks,
-      }),
-    };
-  }
-  if (
-    shouldUnconditionallySuppress({
-      provider,
-      id: modelId,
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    })
-  ) {
-    return { kind: "suppressed" };
-  }
-  const model = modelRegistry.find(provider, modelId) as Model | null;
-
-  if (model) {
-    const configuredBaseUrl =
-      typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
-    const discoveredBaseUrl =
-      typeof (model as { baseUrl?: unknown }).baseUrl === "string"
-        ? (model as { baseUrl: string }).baseUrl
-        : undefined;
-    const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
-    if (
-      shouldSuppressBuiltInModel({
-        provider,
-        id: modelId,
-        ...(cfg ? { config: cfg } : {}),
-        ...(effectiveBaseUrl ? { baseUrl: effectiveBaseUrl } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-      })
-    ) {
-      return { kind: "suppressed" };
-    }
-    return {
-      kind: "resolved",
-      source: "registry",
-      dropOnRuntimeMiss:
-        normalizeProviderId(provider) === "openai" &&
-        modelId.trim().toLowerCase() === "gpt-5.3-codex-spark" &&
-        !effectiveBaseUrl,
-      model: normalizeResolvedModel({
-        provider,
-        cfg,
-        agentDir,
-        workspaceDir,
-        model: applyConfiguredProviderOverrides({
-          provider,
-          discoveredModel: model,
-          providerConfig,
-          modelId,
-          cfg,
-          runtimeHooks,
-          workspaceDir,
-        }),
-        runtimeHooks,
-      }),
-    };
-  }
-
-  const providers = cfg?.models?.providers ?? {};
-  const fallbackInlineMatch = findInlineModelMatch({
-    providers,
-    provider,
-    modelId,
-  });
-  if (fallbackInlineMatch?.api) {
-    const resolvedParams = mergeConfiguredRuntimeModelParams({
-      cfg,
-      provider,
-      modelId,
-      providerParams: providerConfig?.params,
-      configuredParams: fallbackInlineMatch.params,
-    });
-    return {
-      kind: "resolved",
-      source: "configured",
-      model: normalizeResolvedModel({
-        provider,
-        cfg,
-        agentDir,
-        workspaceDir,
-        model: {
-          ...fallbackInlineMatch,
-          reasoning: resolveConfiguredModelReasoning({
-            provider,
-            compat: fallbackInlineMatch.compat,
-            reasoning: fallbackInlineMatch.reasoning,
-          }),
-          ...(resolvedParams ? { params: resolvedParams } : {}),
-          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        } as Model,
-        runtimeHooks,
-      }),
-    };
-  }
-  if (fallbackInlineMatch) {
-    return undefined;
-  }
-
-  if (
-    shouldSuppressBuiltInModel({
-      provider,
-      id: modelId,
-      ...(cfg ? { config: cfg } : {}),
-      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    })
-  ) {
-    return { kind: "suppressed" };
-  }
-
-  return undefined;
-}
-
-function resolveDynamicModelAuthProfile(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-  preferredProfile?: string;
-}): {
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-} {
-  const explicitProfileId = params.authProfileId?.trim() || undefined;
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  if (explicitProfileId) {
-    const credential = store.profiles[explicitProfileId];
-    const configuredMode = params.cfg?.auth?.profiles?.[explicitProfileId]?.mode;
-    return {
-      authProfileId: explicitProfileId,
-      ...(params.authProfileMode || credential?.type || configuredMode
-        ? { authProfileMode: params.authProfileMode ?? credential?.type ?? configuredMode }
-        : {}),
-    };
-  }
-  if (params.authProfileMode) {
-    return { authProfileMode: params.authProfileMode };
-  }
-  const order = [
-    ...new Set(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: params.provider,
-        config: params.cfg,
-      }).flatMap((provider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider,
-          preferredProfile: params.preferredProfile,
-          forModel: params.modelId,
-        }),
-      ),
-    ),
-  ];
-  const profileId = order[0];
-  if (!profileId) {
-    return {};
-  }
-  const credential = store.profiles[profileId];
-  const configuredMode = params.cfg?.auth?.profiles?.[profileId]?.mode;
-  return {
-    authProfileId: profileId,
-    ...(credential?.type || configuredMode
-      ? { authProfileMode: credential?.type ?? configuredMode }
-      : {}),
-  };
-}
-
-function resolvePluginDynamicModelWithRegistry(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: CoreModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  agentRuntimeId?: string;
-  workspaceDir?: string;
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-  preferredProfile?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
-  const inferredAgentRuntimeId =
-    agentHarnessPolicy.runtimeSource !== "implicit" ||
-    cfg?.plugins?.entries?.codex?.enabled === true
-      ? agentHarnessPolicy.runtime
-      : undefined;
-  const agentRuntimeId = params.agentRuntimeId ?? inferredAgentRuntimeId;
-  const authProfile = resolveDynamicModelAuthProfile({
-    provider,
-    modelId,
-    cfg,
-    agentDir,
-    authProfileId: params.authProfileId,
-    authProfileMode: params.authProfileMode,
-    preferredProfile: params.preferredProfile,
-  });
-  const preferDiscoveredModelMetadata = shouldCompareProviderRuntimeResolvedModel({
-    provider,
-    modelId,
-    cfg,
-    agentDir,
-    workspaceDir,
-    runtimeHooks,
-  });
-  const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
-    provider,
-    config: cfg,
-    workspaceDir,
-    context: {
-      config: cfg,
-      agentDir,
-      workspaceDir,
-      ...(agentRuntimeId ? { agentRuntimeId } : {}),
-      provider,
-      modelId,
-      modelRegistry,
-      providerConfig,
-      ...authProfile,
-    },
-  }) as Model | undefined;
-  if (!pluginDynamicModel) {
-    return undefined;
-  }
-  const overriddenDynamicModel = applyConfiguredProviderOverrides({
-    provider,
-    discoveredModel: pluginDynamicModel,
-    providerConfig,
-    modelId,
-    cfg,
-    runtimeHooks,
-    workspaceDir,
-    preferDiscoveredModelMetadata,
-  });
-  return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
-    model: overriddenDynamicModel,
-    runtimeHooks,
-  });
-}
-
-function resolveRuntimePreferredSuppressedModel(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: CoreModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  agentRuntimeId?: string;
-  workspaceDir?: string;
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-  preferredProfile?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model | undefined {
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  if (
-    !shouldCompareProviderRuntimeResolvedModel({
-      provider: params.provider,
-      modelId: params.modelId,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      runtimeHooks,
-    })
-  ) {
-    return undefined;
-  }
-  return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
-}
-
-function shouldDropRuntimePreferredExplicitMiss(params: {
-  provider: string;
-  modelId: string;
-  explicitModel: ExplicitModelResolution;
-}): boolean {
-  return (
-    params.explicitModel.kind === "resolved" &&
-    params.explicitModel.source === "registry" &&
-    params.explicitModel.dropOnRuntimeMiss
-  );
-}
-
-function resolveConfiguredFallbackModel(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): Model | undefined {
-  const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
-  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
-    return undefined;
-  }
-  const staticCatalogModel = resolveBundledStaticCatalogModel({
-    provider,
-    modelId,
-    cfg,
-    workspaceDir,
-    includeRuntimeDiscovery: true,
-  }) as StaticCatalogFallbackModel | undefined;
-  const metadataModel = configuredModel ?? staticCatalogModel;
-  const fallbackCompat = mergeModelCompat(staticCatalogModel?.compat, configuredModel?.compat);
-  const fallbackMediaInput = mergeModelMediaInput(
-    staticCatalogModel?.mediaInput,
-    configuredModel?.mediaInput,
-  );
-  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
-  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const resolvedParams = mergeConfiguredRuntimeModelParams({
-    cfg,
-    provider,
-    modelId,
-    discoveredParams: staticCatalogModel?.params,
-    providerParams: providerConfig?.params,
-    configuredParams: configuredModel?.params,
-  });
-  const providerConfiguredApi = normalizeResolvedTransportApi(providerConfig?.api);
-  const configuredModelBaseUrl = normalizeTransportBaseUrl(configuredModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
-  const staticCatalogBaseUrl = normalizeTransportBaseUrl(staticCatalogModel?.baseUrl);
-  const fallbackTransport = resolveProviderTransport({
-    provider,
-    modelId,
-    api:
-      normalizeResolvedTransportApi(configuredModel?.api) ??
-      providerConfiguredApi ??
-      normalizeResolvedTransportApi(staticCatalogModel?.api) ??
-      resolveConfiguredProviderDefaultApi({
-        provider,
-        providerConfig,
-        cfg,
-        workspaceDir,
-        runtimeHooks,
-      }) ??
-      "openai-responses",
-    baseUrl: configuredModelBaseUrl ?? providerConfiguredBaseUrl ?? staticCatalogBaseUrl,
-    cfg,
-    workspaceDir,
-    runtimeHooks,
-  });
-  if (
-    configuredModel &&
-    shouldSuppressInlineConfiguredModel({
-      provider,
-      modelId,
-      cfg,
-      workspaceDir,
-      baseUrl: fallbackTransport.baseUrl,
-    })
-  ) {
-    return undefined;
-  }
-  const requestConfig = resolveProviderRequestConfig({
-    provider,
-    api: fallbackTransport.api ?? "openai-responses",
-    baseUrl: fallbackTransport.baseUrl,
-    discoveredHeaders: staticCatalogHeaders,
-    providerHeaders,
-    modelHeaders,
-    authHeader: providerConfig?.authHeader,
-    request: providerRequest,
-    capability: "llm",
-    transport: "stream",
-  });
-  const fallbackReasoning = resolveConfiguredFallbackReasoning({
-    provider,
-    compat: fallbackCompat,
-    reasoning: metadataModel?.reasoning,
-  });
-  const resolvedFallbackMaxTokens =
-    configuredModel?.maxTokens ??
-    providerConfig?.maxTokens ??
-    providerConfig?.models?.[0]?.maxTokens ??
-    staticCatalogModel?.maxTokens;
-  return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
-    model: attachModelProviderLocalService(
-      attachModelProviderRequestTransport(
-        {
-          id: modelId,
-          name: metadataModel?.name ?? modelId,
-          api: requestConfig.api ?? "openai-responses",
-          provider,
-          baseUrl: requestConfig.baseUrl,
-          reasoning: fallbackReasoning,
-          input: resolveProviderModelInput({
-            provider,
-            modelId,
-            modelName: metadataModel?.name ?? modelId,
-            input: metadataModel?.input,
-          }),
-          ...(configuredModel?.thinkingLevelMap !== undefined
-            ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
-            : {}),
-          cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow:
-            configuredModel?.contextWindow ??
-            providerConfig?.contextWindow ??
-            providerConfig?.models?.[0]?.contextWindow ??
-            staticCatalogModel?.contextWindow ??
-            DEFAULT_CONTEXT_TOKENS,
-          contextTokens:
-            configuredModel?.contextTokens ??
-            providerConfig?.contextTokens ??
-            providerConfig?.models?.[0]?.contextTokens ??
-            staticCatalogModel?.contextTokens,
-          // maxTokens is a wire-level output cap, not a context-budget fallback.
-          // Omit an unknown cap so strict providers can apply their own limit.
-          ...(resolvedFallbackMaxTokens !== undefined
-            ? { maxTokens: resolvedFallbackMaxTokens }
-            : {}),
-          ...(resolvedParams ? { params: resolvedParams } : {}),
-          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-          headers: requestConfig.headers,
-          ...(providerConfig?.authHeader !== undefined
-            ? { authHeader: providerConfig.authHeader }
-            : {}),
-          compat: fallbackCompat,
-          mediaInput: fallbackMediaInput,
-        } as Model,
-        providerRequest,
-      ),
-      providerConfig?.localService,
-    ),
-    runtimeHooks,
-  });
-}
-
-function shouldCompareProviderRuntimeResolvedModel(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  runtimeHooks: ProviderRuntimeHooks;
-}): boolean {
-  return (
-    params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
-      provider: params.provider,
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      context: {
-        provider: params.provider,
-        modelId: params.modelId,
-        config: params.cfg,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-      },
-    }) ?? false
-  );
-}
-
-function resolveConfiguredFallbackReasoning(params: {
-  provider: string;
-  compat?: unknown;
-  reasoning?: boolean;
-}): boolean {
-  return resolveConfiguredModelReasoning(params) ?? false;
-}
-
-function resolveConfiguredModelReasoning(params: {
-  provider: string;
-  compat?: unknown;
-  reasoning?: boolean;
-}): boolean | undefined {
-  if (params.reasoning !== undefined) {
-    return params.reasoning;
-  }
-  return isVllmQwenThinkingCompat(params) ? true : undefined;
-}
-
-function resolveMergedConfiguredModelReasoning(params: {
-  provider: string;
-  configuredCompat?: unknown;
-  resolvedCompat?: unknown;
-  configuredReasoning?: boolean;
-  discoveredReasoning?: boolean;
-}): boolean {
-  if (params.configuredReasoning !== undefined) {
-    return params.configuredReasoning;
-  }
-  if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
-    return true;
-  }
-  return (
-    resolveConfiguredModelReasoning({
-      provider: params.provider,
-      compat: params.resolvedCompat,
-      reasoning: params.discoveredReasoning,
-    }) ?? false
-  );
-}
-
-function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
-  const thinkingFormat = readCompatThinkingFormat(params.compat);
-  return (
-    normalizeProviderId(params.provider) === "vllm" &&
-    (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
-  );
-}
-
-function readCompatThinkingFormat(compat: unknown): string | undefined {
-  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
-    return undefined;
-  }
-  const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
-  return typeof thinkingFormat === "string" ? thinkingFormat : undefined;
-}
-
-function mergeModelCompat(
-  base: ModelCompatConfig | undefined,
-  override: ModelCompatConfig | undefined,
-): ModelCompatConfig | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
-  }
-  return { ...base, ...override };
-}
-
-function normalizeProviderModelRef(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-}): { provider: string; model: string } {
-  const provider = canonicalizeManifestModelCatalogProviderAlias({
-    provider: params.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  return {
-    provider,
-    model: normalizeStaticProviderModelId(normalizeProviderId(provider), params.modelId),
-  };
-}
-
-export function resolveModelWithRegistry(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: CoreModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  agentRuntimeId?: string;
-  workspaceDir?: string;
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-  preferredProfile?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-  skipConfiguredFallback?: boolean;
-}): Model | undefined {
-  const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
-  const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
-  const normalizedParams = {
-    ...params,
-    provider: normalizedRef.provider,
-    modelId: normalizedRef.model,
-  };
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const scopedParams = {
-    ...normalizedParams,
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-  };
-  const explicitModel = resolveExplicitModelWithRegistry(scopedParams);
-  if (explicitModel?.kind === "suppressed") {
-    return resolveRuntimePreferredSuppressedModel(scopedParams);
-  }
-  if (explicitModel?.kind === "resolved") {
-    if (
-      !shouldCompareProviderRuntimeResolvedModel({
-        provider: scopedParams.provider,
-        modelId: scopedParams.modelId,
-        cfg: scopedParams.cfg,
-        agentDir: scopedParams.agentDir,
-        workspaceDir,
-        runtimeHooks,
-      })
-    ) {
-      return explicitModel.model;
-    }
-    return (
-      resolvePluginDynamicModelWithRegistry(scopedParams) ??
-      (shouldDropRuntimePreferredExplicitMiss({
-        provider: scopedParams.provider,
-        modelId: scopedParams.modelId,
-        explicitModel,
-      })
-        ? undefined
-        : explicitModel.model)
-    );
-  }
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
-  if (pluginDynamicModel) {
-    return pluginDynamicModel;
-  }
-
-  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(scopedParams);
+  // Standalone runs publish an exact workspace owner. Gateway owners may instead carry an
+  // authoritative launch workspace, which the workspace-free lookup above resolves by agent.
+  return getPreparedModelRuntimeSnapshot({ ...base, workspaceDir: derivedWorkspaceDir });
 }
 
 export function resolveModel(
@@ -1588,45 +113,50 @@ export function resolveModel(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
-  options?: {
-    authStorage?: AuthStorage;
-    modelRegistry?: ModelRegistry;
-    runtimeHooks?: ProviderRuntimeHooks;
-    skipProviderRuntimeHooks?: boolean;
-    workspaceDir?: string;
-    authProfileId?: string;
-    authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-    preferredProfile?: string;
-  },
+  options?: CommonModelResolutionOptions,
 ): {
   model?: Model;
   error?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
-  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
-  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const cachedStores =
-    !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const preparedSnapshot =
+    !options?.authStorage || !options?.modelRegistry
+      ? resolvePreparedAgentSnapshot(
+          resolvedAgentDir,
+          cfg,
+          options?.workspaceDir,
+          derivedWorkspaceDir,
+          options?.agentId,
+        )
       : undefined;
-  const authStorage =
-    options?.authStorage ?? cachedStores?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
+    // Synchronous callers must enter through a lifecycle that already published discovery.
+    // Falling back to an empty registry turns a stale/pending generation into a false model miss.
+    throw new Error(
+      `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
+    );
+  }
+  const workspaceDir =
+    options?.workspaceDir ?? preparedSnapshot?.workspaceDir ?? derivedWorkspaceDir;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const preparedStores = preparedSnapshot?.createStores();
+  const authStorage = options?.authStorage ?? preparedStores!.authStorage;
   const modelRegistry =
     options?.modelRegistry ??
-    cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+    (options?.authStorage
+      ? preparedStores!.modelRegistry.fork(authStorage)
+      : preparedStores!.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
-  const model = resolveModelWithRegistry({
+  const model = resolveModelWithPreparedRegistry({
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
+    manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     authProfileId: options?.authProfileId,
     authProfileMode: options?.authProfileMode,
@@ -1636,7 +166,6 @@ export function resolveModel(
   if (model) {
     return { model, authStorage, modelRegistry };
   }
-
   return {
     error: buildUnknownModelError({
       provider: normalizedRef.provider,
@@ -1656,60 +185,89 @@ export async function resolveModelAsync(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
-  options?: {
-    authStorage?: AuthStorage;
-    modelRegistry?: ModelRegistry;
-    allowBundledStaticCatalogFallback?: boolean;
-    preferBundledStaticCatalogTransport?: boolean;
-    retryTransientProviderRuntimeMiss?: boolean;
-    agentRuntimeId?: string;
-    runtimeHooks?: ProviderRuntimeHooks;
-    skipProviderRuntimeHooks?: boolean;
-    skipAgentDiscovery?: boolean;
-    workspaceDir?: string;
-    authProfileId?: string;
-    authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-    preferredProfile?: string;
-  },
+  options?: AsyncModelResolutionOptions,
 ): Promise<{
   model?: Model;
   error?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
-  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
-  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
   const emptyDiscoveryStores =
     options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyAgentDiscoveryStores()
       : undefined;
-  const cachedStores =
-    !emptyDiscoveryStores && !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
+  const publishedSnapshot =
+    !emptyDiscoveryStores && (!options?.authStorage || !options?.modelRegistry)
+      ? resolvePreparedAgentSnapshot(
+          resolvedAgentDir,
+          cfg,
+          options?.workspaceDir,
+          derivedWorkspaceDir,
+          options?.agentId,
+        )
       : undefined;
-  const authStorage =
-    options?.authStorage ??
-    emptyDiscoveryStores?.authStorage ??
-    cachedStores?.authStorage ??
-    discoverAuthStorage(resolvedAgentDir);
+  const preparedSnapshot =
+    publishedSnapshot ??
+    (!emptyDiscoveryStores && (!options?.authStorage || !options?.modelRegistry)
+      ? await loadPreparedModelRuntimeSnapshot({
+          ...(options?.agentId ? { agentId: options.agentId } : {}),
+          agentDir: resolvedAgentDir,
+          config: cfg ?? {},
+          inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+          ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
+        })
+      : undefined);
+  const workspaceDir =
+    options?.workspaceDir ?? preparedSnapshot?.workspaceDir ?? derivedWorkspaceDir;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const preparedStores = preparedSnapshot?.createStores();
+  const fallbackStores =
+    emptyDiscoveryStores ?? preparedStores ?? createEmptyAgentDiscoveryStores();
+  const authStorage = options?.authStorage ?? fallbackStores.authStorage;
   const modelRegistry =
     options?.modelRegistry ??
-    emptyDiscoveryStores?.modelRegistry ??
-    cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir, {
-      ...(cfg ? { config: cfg } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
+    (options?.authStorage
+      ? fallbackStores.modelRegistry.fork(authStorage)
+      : fallbackStores.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
+  // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
+  const preparedModelRuntime = options?.preparedModelRuntime ?? preparedSnapshot;
+  const preparedStaticCatalogModel = preparedModelRuntime?.configuredRuntimeModels?.find(
+    ({ modelId: candidateId, provider: rowProvider }) =>
+      staticModelIdMatches({
+        candidateId,
+        rowProvider,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+      }),
+  )?.model;
+  if (normalizedRef.manifestAlias.ambiguous) {
+    return {
+      error: buildUnknownModelError({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        agentDir: resolvedAgentDir,
+        workspaceDir,
+        runtimeHooks,
+      }),
+      authStorage,
+      modelRegistry,
+    };
+  }
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
+    manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     runtimeHooks,
+    preparedInlineProviderModels: preparedModelRuntime?.inlineProviderModels,
+    preparedStaticCatalogModel,
   });
   if (explicitModel?.kind === "suppressed") {
     const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({
@@ -1719,6 +277,7 @@ export async function resolveModelAsync(
       cfg,
       agentDir: resolvedAgentDir,
       ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1757,11 +316,15 @@ export async function resolveModelAsync(
       return undefined;
     }
     staticCatalogLookup ??= (async () => {
+      if (preparedStaticCatalogModel) {
+        return preparedStaticCatalogModel;
+      }
       const manifestModel = resolveBundledStaticCatalogModel({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
         workspaceDir,
+        includeRuntimeDiscovery: true,
       });
       if (manifestModel) {
         return manifestModel;
@@ -1786,10 +349,12 @@ export async function resolveModelAsync(
       providerConfig,
       modelId: normalizedRef.model,
       cfg,
+      manifestAlias: normalizedRef.manifestAlias,
       runtimeHooks,
       workspaceDir,
       preferDiscoveredModelMetadata: true,
       preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
+      staticCatalogModel: catalogModel,
     });
     return normalizeResolvedModel({
       provider: normalizedRef.provider,
@@ -1817,13 +382,14 @@ export async function resolveModelAsync(
         ...authProfile,
       },
     });
-    return resolveModelWithRegistry({
+    return resolveModelWithPreparedRegistry({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
       ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1860,6 +426,7 @@ export async function resolveModelAsync(
       modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       runtimeHooks,
     });
@@ -1875,7 +442,6 @@ export async function resolveModelAsync(
   if (model) {
     return { model, authStorage, modelRegistry };
   }
-
   return {
     error: buildUnknownModelError({
       provider: normalizedRef.provider,
@@ -1993,4 +559,3 @@ function buildMissingProviderModelRegistrationHint(params: {
   }
   return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}", "name": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.`;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

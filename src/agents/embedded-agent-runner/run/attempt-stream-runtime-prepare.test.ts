@@ -90,7 +90,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     order.push("guards");
     return {
       cacheObservabilityEnabled: true,
-      promptCacheToolNames: new Set(["read"]),
+      promptCacheTools: [{ name: "read" }],
     };
   });
   mocks.prepareHistory.mockImplementation(async () => {
@@ -133,7 +133,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     trackPromptSettlePromise,
     compactionTimeoutMs: 1_000,
     guards: {},
-    history: {},
+    history: { sandboxed: false },
     stream: {},
     lifecycle: {
       isYieldDetected: () => false,
@@ -194,7 +194,7 @@ describe("prepareEmbeddedAttemptStreamRuntime", () => {
       expect.objectContaining({
         cache: {
           observabilityEnabled: true,
-          promptToolNames: new Set(["read"]),
+          promptTools: [{ name: "read" }],
         },
         history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
         isProbeSession: false,
@@ -226,6 +226,25 @@ describe("prepareEmbeddedAttemptStreamRuntime", () => {
     expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
     expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
     expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { label: "external cancellation", message: "run cancelled" },
+    { label: "run timeout", message: "run timed out" },
+  ])("does not start a prompt after $label", async ({ message }) => {
+    const fixture = createFixture();
+    const runtime = await prepareEmbeddedAttemptStreamRuntime(fixture.input);
+    const reason = new Error(message);
+    const abortError = new Error(message, { cause: reason });
+    abortError.name = "AbortError";
+    fixture.input.runAbortController.abort(reason);
+    mocks.abortable.mockImplementationOnce((_signal, _promise) => Promise.reject(abortError));
+
+    await expect(runtime.promptActiveSession("must not start")).rejects.toBe(abortError);
+
+    expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
+    expect(fixture.trackPromptSettlePromise).not.toHaveBeenCalled();
+    expect(mocks.abortable).toHaveBeenCalledOnce();
   });
 
   it("flushes pending tool results and disposes the session when history preparation fails", async () => {

@@ -21,6 +21,28 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node presence activity updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
+
+  it("advertises skill invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("skills.changed");
+  });
+
+  it("advertises session observer digests", () => {
+    expect(GATEWAY_EVENTS).toContain("session.observer");
+  });
+
+  it("advertises question methods and events", () => {
+    expect(GATEWAY_EVENTS).toContain("question.requested");
+    expect(GATEWAY_EVENTS).toContain("question.resolved");
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "question.request",
+        "question.waitAnswer",
+        "question.resolve",
+        "question.get",
+        "question.list",
+      ]),
+    );
+  });
 });
 
 describe("listGatewayMethods", () => {
@@ -44,13 +66,34 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-6)).toEqual([
+    expect(listGatewayMethods().slice(-27)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.visibility",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
+      "sessions.companion.ask",
+      "sessions.companion.state",
+      "sessions.companion.reset",
+      "memory.search",
+      "skills.proposals.events.list",
+      "skills.proposals.evaluate",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -72,7 +115,12 @@ describe("listGatewayMethods", () => {
   });
 
   it("advertises Control UI session pull request detection", () => {
-    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.subscribe");
+    expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
+  });
+
+  it("advertises explicit session viewer presence", () => {
+    expect(listGatewayMethods()).toContain("sessions.viewers.set");
   });
 
   it("advertises session workspace reveal", () => {
@@ -111,7 +159,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-13)).toEqual([
+    expect(coreMethods.slice(-34)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -125,6 +173,27 @@ describe("listGatewayMethods", () => {
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.visibility",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
+      "sessions.companion.ask",
+      "sessions.companion.state",
+      "sessions.companion.reset",
+      "memory.search",
+      "skills.proposals.events.list",
+      "skills.proposals.evaluate",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -133,6 +202,8 @@ describe("listGatewayMethods", () => {
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
+    expect(methods).toContain("talk.client.transcript");
+    expect(methods).toContain("talk.client.close");
     expect(methods).toContain("talk.client.toolCall");
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
@@ -164,6 +235,17 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
+  });
+
+  it("classifies proposal evaluation as a control-plane write", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    expect(
+      descriptors.find((descriptor) => descriptor.name === "skills.proposals.evaluate"),
+    ).toMatchObject({
+      scope: "operator.admin",
+      controlPlaneWrite: true,
+    });
   });
 
   it("wires a dispatchable handler for every core descriptor", () => {

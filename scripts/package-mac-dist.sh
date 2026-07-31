@@ -20,6 +20,7 @@ APP_VERSION_INPUT="${APP_VERSION:-}"
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
 export BUILD_CONFIG
+export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1
 DSYM_ARCHS_VALUE="$BUILD_ARCHS"
 if [[ "$DSYM_ARCHS_VALUE" == "all" ]]; then
   DSYM_ARCHS_VALUE="arm64 x86_64"

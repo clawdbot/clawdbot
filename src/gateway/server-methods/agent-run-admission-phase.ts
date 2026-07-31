@@ -5,6 +5,10 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import {
+  commitMainSessionRecovery,
+  type MainSessionRecoveryPendingTarget,
+} from "../../agents/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -14,7 +18,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-events.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -45,6 +48,9 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
+    MainSessionRecoveryPendingTarget | undefined
+  >;
 };
 
 export async function prepareAgentRunDispatch(params: {
@@ -73,6 +79,7 @@ export async function prepareAgentRunDispatch(params: {
   pendingChatRun?: { sessionKey: string; agentId?: string };
   inputProvenance?: InputProvenance;
   isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
   context: GatewayRequestHandlerOptions["context"];
@@ -285,12 +292,7 @@ export async function prepareAgentRunDispatch(params: {
         runId: params.runId,
         childSessionKey: params.resolvedSessionKey,
         task: params.request.message.trim(),
-        requesterOrigin: normalizeDeliveryContext({
-          channel: params.delivery.resolvedChannel,
-          to: params.delivery.resolvedTo,
-          accountId: params.delivery.resolvedAccountId,
-          threadId: resolvedThreadId,
-        }),
+        requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
       });
     } catch (err) {
@@ -298,6 +300,75 @@ export async function prepareAgentRunDispatch(params: {
         `failed to register plugin subagent run ${params.runId}; falling back to cli task tracking: ${formatForLog(err)}`,
       );
       dispatchTaskTrackingMode = "cli";
+    }
+  }
+  let restoreAdmittedRestartRecoveryInterrupted:
+    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
+    | undefined;
+  if (params.isRestartRecoveryResumeRun) {
+    const recoverySessionKey = params.resolvedSessionKey;
+    if (!recoverySessionKey) {
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
+      );
+      return undefined;
+    }
+    try {
+      const recoveryAdmission = await commitMainSessionRecovery({
+        command: {
+          kind: "admit_recovery",
+          lifecycleGeneration: params.lifecycleGeneration,
+          now: Date.now(),
+          runId: params.runId,
+          sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+        },
+        requireWriteSuccess: true,
+        target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
+      });
+      if (recoveryAdmission.transition.kind !== "admitted_recovery") {
+        throw new Error(
+          `Session "${recoverySessionKey}" restart recovery reservation is stale; recovery was skipped.`,
+        );
+      }
+      const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
+      let restored = false;
+      restoreAdmittedRestartRecoveryInterrupted = async () => {
+        if (restored) {
+          return undefined;
+        }
+        const recovery = await commitMainSessionRecovery({
+          command: {
+            kind: "mark_admitted_recovery_interrupted",
+            lifecycleGeneration: params.lifecycleGeneration,
+            now: Date.now(),
+            runId: params.runId,
+            sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+          },
+          requireWriteSuccess: true,
+          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
+        });
+        restored = true;
+        const expectedSessionId =
+          params.request.expectedExistingSessionId ?? params.getAdmittedSessionId();
+        return recovery.transition.kind === "applied" &&
+          recovery.entry?.sessionId === expectedSessionId &&
+          recovery.sessionKey
+          ? {
+              sessionId: recovery.entry.sessionId,
+              sessionKey: recovery.sessionKey,
+              storePath: lifecycleStorePath,
+            }
+          : undefined;
+      };
+    } catch (err) {
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      return undefined;
     }
   }
   const accepted = {
@@ -336,5 +407,6 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    restoreAdmittedRestartRecoveryInterrupted,
   };
 }

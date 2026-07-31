@@ -1,7 +1,7 @@
 // Trajectory path helpers resolve storage paths for trajectory artifacts.
 
 import path from "node:path";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 
@@ -10,6 +10,8 @@ import { isPathInside } from "../infra/path-guards.js";
 export const TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
+// Pointer JSON only records schema metadata and one runtime path.
+export const TRAJECTORY_POINTER_FILE_MAX_BYTES = 64 * 1024;
 
 export function safeTrajectorySessionFileName(sessionId: string): string {
   const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);

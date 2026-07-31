@@ -36,6 +36,7 @@ import {
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
@@ -226,12 +227,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
-  const {
-    createOpenClawCodingTools: defaultCreateOpenClawCodingTools,
-    resolveWebSearchToolPolicy,
-  } = await import("openclaw/plugin-sdk/agent-harness");
+  const injectedOpenClawCodingToolsFactory = dynamicToolBuildState.openClawCodingToolsFactory;
+  let agentHarnessModule: typeof import("openclaw/plugin-sdk/agent-harness") | undefined;
+  const loadAgentHarnessModule = async () =>
+    (agentHarnessModule ??= await import("openclaw/plugin-sdk/agent-harness"));
   const createOpenClawCodingTools =
-    dynamicToolBuildState.openClawCodingToolsFactory ?? defaultCreateOpenClawCodingTools;
+    injectedOpenClawCodingToolsFactory ??
+    (await loadAgentHarnessModule()).createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
@@ -265,6 +267,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -375,33 +380,41 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   toolBuildStages.mark("vision-filtering");
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
-  const webSearchPolicy = resolveWebSearchToolPolicy({
-    config: params.config,
-    modelProvider: params.model.provider,
-    modelId: params.modelId,
-    agentId: input.sessionAgentId,
-    sessionKey: input.sandboxSessionKey,
-    sandboxToolPolicy: input.sandbox?.tools,
-    messageProvider: resolveCodexMessageToolProvider(params),
-    agentAccountId: params.agentAccountId,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const senderScopedWebSearchRestriction =
-    !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
-  const transientWebSearchRestriction =
-    senderScopedWebSearchRestriction || isCodexMemoryFlushRun(params);
   const persistentCodexWebSearchSurface =
     params.config?.tools?.web?.search?.enabled !== false &&
     !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
       (name) => normalizeCodexDynamicToolName(name) === "web_search",
     );
+  // An injected tool factory can prove that no managed or native search surface exists.
+  // Avoid loading the heavyweight default factory graph when no search policy can affect output.
+  const webSearchPolicy =
+    webSearchPresent || persistentCodexWebSearchSurface
+      ? (await loadAgentHarnessModule()).resolveWebSearchToolPolicy({
+          config: params.config,
+          modelProvider: params.model.provider,
+          modelId: params.modelId,
+          agentId: input.sessionAgentId,
+          sessionKey: input.sandboxSessionKey,
+          sandboxToolPolicy: input.sandbox?.tools,
+          messageProvider: resolveCodexMessageToolProvider(params),
+          agentAccountId: params.agentAccountId,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          inputProvenance: params.inputProvenance,
+          trustedInternalHandoff: params.trustedInternalHandoff,
+          scheduledToolPolicy: params.scheduledToolPolicy,
+        })
+      : { allowed: false, persistentAllowed: false };
+  const senderScopedWebSearchRestriction =
+    !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
+  const transientWebSearchRestriction =
+    senderScopedWebSearchRestriction || isCodexMemoryFlushRun(params);
   input.onPersistentWebSearchPolicyResolved?.(
     webSearchPresent ||
       (persistentCodexWebSearchSurface &&
@@ -502,6 +515,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  if (params.disableTools) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
@@ -617,41 +633,6 @@ export function resolveCodexAppServerExecutionCwd(params: {
     localWorkspaceRoot: params.localWorkspaceRoot,
     remoteWorkspaceRoot: params.remoteWorkspaceRoot,
   });
-}
-/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
-function mapCodexAppServerRemoteWorkspacePath(params: {
-  value: string;
-  localWorkspaceRoot: string;
-  remoteWorkspaceRoot?: string;
-}): string {
-  if (!params.remoteWorkspaceRoot) {
-    return params.value;
-  }
-  const localRoot = normalizeRemoteWorkspaceMatchPath(params.localWorkspaceRoot);
-  const remoteRoot = normalizeRemoteWorkspaceMatchPath(params.remoteWorkspaceRoot);
-  const normalizedValue = normalizeRemoteWorkspaceMatchPath(params.value);
-  if (!localRoot || !remoteRoot) {
-    throw new Error("Codex remoteWorkspaceRoot requires non-empty workspace roots.");
-  }
-  if (normalizedValue === localRoot) {
-    return remoteRoot;
-  }
-  const prefix = `${localRoot}/`;
-  if (!normalizedValue.startsWith(prefix)) {
-    throw new Error(
-      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
-    );
-  }
-  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
-}
-function normalizeRemoteWorkspaceMatchPath(value: string): string {
-  return trimTrailingPathSeparator(value.replace(/\\/gu, "/"));
-}
-function trimTrailingPathSeparator(value: string): string {
-  return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
-}
-function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
-  return remoteRoot === "/" ? `/${suffix}` : `${remoteRoot}/${suffix}`;
 }
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
 export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(

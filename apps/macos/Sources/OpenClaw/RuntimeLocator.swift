@@ -74,7 +74,8 @@ enum RuntimeLocator {
     }
 
     static func resolve(
-        searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
+        searchPaths: [String] = CommandResolver.preferredPaths()) async
+        -> Result<RuntimeResolution, RuntimeResolutionError>
     {
         let pathEnv = searchPaths.joined(separator: ":")
         let runtime: RuntimeKind = .node
@@ -82,7 +83,7 @@ enum RuntimeLocator {
         guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else {
             return .failure(.notFound(searchPaths: searchPaths))
         }
-        guard let rawVersion = readVersion(of: binary, pathEnv: pathEnv) else {
+        guard let rawVersion = await readVersion(of: binary, pathEnv: pathEnv) else {
             return .failure(.versionParse(
                 kind: runtime,
                 raw: "(unreadable)",
@@ -139,19 +140,14 @@ enum RuntimeLocator {
         return nil
     }
 
-    private static func readVersion(of binary: String, pathEnv: String) -> String? {
+    private static func readVersion(of binary: String, pathEnv: String) async -> String? {
         let start = Date()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        process.environment = ["PATH": pathEnv]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
         do {
-            let data = try process.runAndReadToEnd(from: pipe)
+            let result = try await BoundedProcess.run(
+                path: binary,
+                arguments: ["--version"],
+                environment: ["PATH": pathEnv],
+                timeout: 2)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -166,7 +162,8 @@ enum RuntimeLocator {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(data: result.output, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(

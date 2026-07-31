@@ -83,15 +83,24 @@ describe("cross-OS release checks workflow", () => {
     const release = readWorkflow(RELEASE_CHECKS_PATH);
     const producer = job(release, "prepare_release_package");
     expect(producer.outputs).toMatchObject({
-      artifact_digest: "${{ steps.release_package_upload.outputs.artifact-digest }}",
-      artifact_id: "${{ steps.release_package_upload.outputs.artifact-id }}",
-      artifact_name: "${{ steps.artifact.outputs.name }}",
-      artifact_run_attempt: "${{ steps.artifact.outputs.run_attempt }}",
-      artifact_run_id: "${{ steps.artifact.outputs.run_id }}",
-      package_file_name: "${{ steps.artifact.outputs.file_name }}",
-      package_sha256: "${{ steps.package.outputs.sha256 }}",
-      package_version: "${{ steps.package.outputs.package_version }}",
-      source_sha: "${{ steps.package.outputs.source_sha }}",
+      artifact_digest:
+        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
+      artifact_id:
+        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}",
+      artifact_name:
+        "${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}",
+      artifact_run_attempt:
+        "${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
+      artifact_run_id:
+        "${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
+      package_file_name:
+        "${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}",
+      package_sha256:
+        "${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}",
+      package_version:
+        "${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}",
+      source_sha:
+        "${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}",
     });
     expect(step(producer, "Checkout trusted workflow ref").with).toMatchObject({
       ref: "${{ github.sha }}",
@@ -252,6 +261,10 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const resolve = step(prepare, "Resolve provided candidate package");
+    expect(step(prepare, "Install workflow validation dependencies")).toMatchObject({
+      if: "inputs.candidate_artifact_name != ''",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
     expect(resolve.run).toContain("resolve-openclaw-package-candidate.mjs");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');

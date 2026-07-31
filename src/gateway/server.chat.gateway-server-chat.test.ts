@@ -38,6 +38,13 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 let ws: WebSocket;
 let port: number;
 
@@ -278,11 +285,11 @@ describe("gateway server chat", () => {
 
       expect(res.ok).toBe(true);
       expect(res.payload?.status).toBe("started");
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(subordinateAdmissionClosed).toBe(false);
       });
       await finalPromise;
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
     });
@@ -664,7 +671,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+      await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -800,6 +807,64 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history applies the reset boundary kept-tail cut", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      await replaceSqliteTranscriptEvents(
+        { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+        [
+          { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+          {
+            type: "message",
+            id: "kept-user",
+            parentId: "old",
+            message: { role: "user", content: "kept question" },
+          },
+          {
+            type: "message",
+            id: "kept-tool",
+            parentId: "kept-user",
+            message: { role: "toolResult", content: "hidden tool" },
+          },
+          {
+            type: "message",
+            id: "kept-assistant",
+            parentId: "kept-tool",
+            message: { role: "assistant", content: "kept answer" },
+          },
+          {
+            type: "reset",
+            id: "reset-boundary",
+            parentId: "kept-assistant",
+            timestamp: "2026-07-22T00:00:00.000Z",
+            reason: "new",
+            firstKeptEntryId: "kept-user",
+          },
+          {
+            type: "message",
+            id: "post-reset",
+            parentId: "reset-boundary",
+            message: { role: "user", content: "new turn" },
+          },
+        ],
+      );
+
+      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+
+      expect(history.ok).toBe(true);
+      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toEqual([
+        "kept question",
+        "kept answer",
+        "new turn",
+      ]);
+    });
+  });
+
   test("marks a running webchat session failed when restart drain overlaps dispatch rejection", async () => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
@@ -858,19 +923,19 @@ describe("gateway server chat", () => {
             idempotencyKey: "idem-dispatch-error-1",
           });
           expect(res.ok).toBe(true);
-          await vi.waitFor(() => {
+          await waitForFast(() => {
             expect(dispatchStarted).toBe(true);
           });
           markGatewayRestartDraining();
           rejectDispatch.resolve();
           await errorPromise;
-          await vi.waitFor(() => {
+          await waitForFast(() => {
             expect(persistenceEntered).toBe(true);
           });
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;
-          await vi.waitFor(() => {
+          await waitForFast(() => {
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           });
           return changed;
@@ -904,6 +969,77 @@ describe("gateway server chat", () => {
       expect(typeof actualSession.runtimeMs).toBe("number");
     });
   });
+
+  test.each([
+    {
+      name: "structured context-overflow code",
+      fields: {
+        errorCode: "context_overflow",
+        errorMessage: "private upstream body: 203557 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider request-too-large code",
+      fields: {
+        errorCode: "request_too_large",
+        errorMessage: "private upstream body: 196607 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider context-window message",
+      fields: {
+        errorType: "invalid_request_error",
+        errorMessage: "Request size exceeds model context window: 203557 tokens",
+      },
+      overflow: true,
+    },
+    {
+      name: "embedded context-overflow message",
+      fields: { errorMessage: "Unhandled stop reason: context_overflow" },
+      overflow: true,
+    },
+    {
+      name: "token-per-minute rate limit",
+      fields: {
+        errorCode: "rate_limit_exceeded",
+        errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
+      },
+      overflow: false,
+    },
+    {
+      name: "private upstream failure",
+      fields: { errorMessage: "private upstream at secret.internal.example failed" },
+      overflow: false,
+    },
+  ])(
+    "chat.history safely displays $name over authenticated WebSocket",
+    async ({ fields, overflow }) => {
+      const historyMessages = await loadChatHistoryWithMessages([
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          ...fields,
+          timestamp: 1,
+        },
+      ]);
+
+      expect(collectHistoryTextValues(historyMessages)).toEqual([
+        overflow
+          ? "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit."
+          : "The agent run failed before producing a reply.",
+      ]);
+      const wirePayload = JSON.stringify(historyMessages);
+      expect(wirePayload).not.toContain("203557");
+      expect(wirePayload).not.toContain("196607");
+      expect(wirePayload).not.toContain("secret.internal.example");
+      expect(historyMessages[0]).not.toHaveProperty("errorCode");
+      expect(historyMessages[0]).not.toHaveProperty("errorType");
+      expect(historyMessages[0]).not.toHaveProperty("errorMessage");
+    },
+  );
 
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
@@ -1389,6 +1525,125 @@ describe("gateway server chat", () => {
     ).toBe(false);
   });
 
+  test("chat.history keeps confirmed current-source sends before a later final", async () => {
+    const sourceReply = "Visible reply delivered to Telegram.";
+    const laterFinal = "A later run produced this different final.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply in this Telegram chat" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-current-source",
+            name: "message",
+            arguments: {
+              action: "send",
+              channel: "telegram",
+              target: "8455538490",
+              message: sourceReply,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-current-source",
+        content: { ok: true, messageId: "24269", chatId: "8455538490" },
+        details: {
+          ok: true,
+          messageId: "24269",
+          chatId: "8455538490",
+          sourceReplyRoute: "current-source",
+        },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue" }],
+        timestamp: 5,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: laterFinal }],
+        timestamp: 6,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "reply in this Telegram chat",
+      sourceReply,
+      "continue",
+      laterFinal,
+    ]);
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: sourceReply }],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-current-source",
+        }),
+      }),
+    );
+  });
+
+  test("chat.history does not mirror suppressed current-source sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-suppressed-current-source",
+            name: "message",
+            arguments: {
+              action: "send",
+              target: "8455538490",
+              message: "Must not appear",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-suppressed-current-source",
+        content: { ok: true, messageId: "suppressed" },
+        details: {
+          ok: true,
+          messageId: "suppressed",
+          deliveryStatus: "suppressed",
+          sourceReplyRoute: "current-source",
+        },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
+  });
+
   test("chat.history does not mirror message tool sends from unmatched results", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {
@@ -1553,6 +1808,53 @@ describe("gateway server chat", () => {
 
     expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
   });
+  test("preserves split fenced-code indentation in chat.send events and history", async () => {
+    await withMainSessionStore(async () => {
+      const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
+        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const finalPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === "idem-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "show the YAML",
+        idempotencyKey: "idem-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      const finalEvent = await finalPromise;
+      expect(extractFirstTextBlock(finalEvent.payload?.message)).toBe(expected);
+
+      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(history.ok).toBe(true);
+      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(expected);
+    });
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);
@@ -1636,7 +1938,7 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
@@ -1660,6 +1962,56 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("preserves split fenced-code indentation in /btw side-result events", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendBlockReply({
+          text: "```yaml\nroot:\n",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.sendBlockReply({
+          text: "  nested:\n    value: true\n```",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat.side_result" &&
+          event.payload?.kind === "btw" &&
+          event.payload?.runId === "idem-btw-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw show YAML",
+        idempotencyKey: "idem-btw-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      expectRecordFields((await sideResultPromise).payload, {
+        kind: "btw",
+        runId: "idem-btw-fenced-code-indentation",
+        question: "show YAML",
+        text: "```yaml\nroot:\n  nested:\n    value: true\n```",
+      });
     });
   });
 
@@ -1717,7 +2069,7 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
@@ -1781,7 +2133,7 @@ describe("gateway server chat", () => {
           await finalPromise;
 
           let assistantMessage: Record<string, unknown> | undefined;
-          await vi.waitFor(
+          await waitForFast(
             async () => {
               const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
                 sessionKey: "main",

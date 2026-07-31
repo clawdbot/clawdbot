@@ -1,7 +1,7 @@
 // Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { formatFastModeAutoLabel, normalizeFastModeSource } from "../shared/fast-mode.js";
+import { formatFastModeAutoLabel } from "../shared/fast-mode.js";
 import {
   formatFastModeAutoProgressText,
   formatFastModeCommandOptions,
@@ -76,53 +76,6 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("config");
   });
 
-  it("uses OpenAI model config for the Codex app-server runtime provider", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
-
-    expect(state.mode).toBe("auto");
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(30);
-  });
-
-  it("prefers exact Codex app-server model config over the OpenAI alias", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: true, fastAutoOnSeconds: 30 } },
-            "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
-
-    expect(state.enabled).toBe(false);
-    expect(state.mode).toBe(false);
-    expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(45);
-  });
-
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
     expect(formatFastModeStatusValue({ mode: "auto" })).toBe("auto (60 sec)");
@@ -141,8 +94,6 @@ describe("resolveFastModeState", () => {
         fastAutoOnSeconds: 30,
       }),
     ).toBe("Current fast mode: auto (30 sec) (default: model).");
-    expect(normalizeFastModeSource("config")).toBe("config");
-    expect(normalizeFastModeSource("bad")).toBeUndefined();
   });
 
   it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {

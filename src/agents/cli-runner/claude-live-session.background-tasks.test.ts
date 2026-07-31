@@ -8,6 +8,7 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
@@ -31,6 +32,7 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   restoreCliRunnerPrepareTestDeps();
   setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
@@ -49,6 +51,7 @@ function buildPreparedCliRunContext(params: {
   timeoutMs?: number;
   sessionId?: string;
   sessionKey?: string;
+  credentialFingerprint?: string;
 }): PreparedCliRunContext {
   const backend = {
     command: "claude",
@@ -56,7 +59,7 @@ function buildPreparedCliRunContext(params: {
     output: "jsonl" as const,
     input: "stdin" as const,
     modelArg: "--model",
-    sessionArg: "--session-id",
+    sessionArgs: ["--session-id", "{sessionId}"],
     sessionMode: "always" as const,
     systemPromptFileArg: "--append-system-prompt-file",
     systemPromptWhen: "first" as const,
@@ -86,6 +89,15 @@ function buildPreparedCliRunContext(params: {
     preparedBackend: {
       backend,
       env: {},
+      ...(params.credentialFingerprint
+        ? {
+            secretInput: {
+              fd: 3,
+              fingerprint: params.credentialFingerprint,
+              createData: () => Buffer.from("secret"),
+            },
+          }
+        : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -163,10 +175,13 @@ function startLiveTurn(params: {
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   useResume?: boolean;
+  onPhase?: (phase: "send" | "resolve") => void;
+  credentialFingerprint?: string;
 }) {
   const context = buildPreparedCliRunContext({
     runId: params.runId,
     timeoutMs: params.timeoutMs,
+    credentialFingerprint: params.credentialFingerprint,
   });
   return runClaudeLiveSessionTurn({
     context,
@@ -177,11 +192,47 @@ function startLiveTurn(params: {
     noOutputTimeoutMs: params.noOutputTimeoutMs ?? 5_000,
     getProcessSupervisor: getProcessSupervisorForTest,
     onAssistantDelta: () => {},
+    onPhase: params.onPhase,
     cleanup: async () => {},
   });
 }
 
 describe("claude live session provisional results", () => {
+  it("reuses the same credential generation and restarts when it rotates", async () => {
+    const driver = installLiveStdoutDriver({
+      onWrite: (stdout) => {
+        stdout(
+          jsonl([
+            { type: "system", subtype: "init", session_id: "live-credential-rotation" },
+            {
+              type: "result",
+              subtype: "success",
+              session_id: "live-credential-rotation",
+              result: "done",
+            },
+          ]),
+        );
+      },
+    });
+
+    await startLiveTurn({
+      runId: "run-credential-a-first",
+      credentialFingerprint: "credential-a",
+    });
+    await startLiveTurn({
+      runId: "run-credential-a-second",
+      credentialFingerprint: "credential-a",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+
+    await startLiveTurn({
+      runId: "run-credential-b",
+      credentialFingerprint: "credential-b",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(driver.cancel).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { taskType: "local_agent", label: "subagent" },
     { taskType: "local_workflow", label: "workflow" },
@@ -189,7 +240,11 @@ describe("claude live session provisional results", () => {
     "defers the interim success result until $taskType ($label) tasks drain",
     async ({ taskType }) => {
       const driver = installLiveStdoutDriver();
-      const resultPromise = startLiveTurn({ runId: `run-bg-interim-${taskType}` });
+      const phases: Array<"send" | "resolve"> = [];
+      const resultPromise = startLiveTurn({
+        runId: `run-bg-interim-${taskType}`,
+        onPhase: (phase) => phases.push(phase),
+      });
       await driver.stdout.waitReady();
 
       // Tool spawn + authoritative outstanding-task list + immediate tool_result.
@@ -267,6 +322,7 @@ describe("claude live session provisional results", () => {
       );
       await Promise.resolve();
       expect(settled).toBe(false);
+      expect(phases).toEqual(["resolve", "send"]);
       expect(driver.cancel).not.toHaveBeenCalled();
       await waitForDiagnosticEventsDrained();
       expect(
@@ -308,6 +364,7 @@ describe("claude live session provisional results", () => {
       );
 
       const result = await resultPromise;
+      expect(phases).toEqual(["resolve", "send", "resolve"]);
       expect(result.output.text).toContain("Working on it in the background.");
       expect(result.output.text).toContain("Subagent finished: subagent final output");
       expect(driver.cancel).not.toHaveBeenCalled();
@@ -633,6 +690,98 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "marks a resumed synthetic-only stall as safe for cache-preserving recovery",
+      useResume: true,
+      expectedCode: "cli_no_output_timeout",
+      chunk: jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-no-result" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-no-result",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+      ]),
+    },
+    {
+      label: "marks a resumed init-only stall as safe for recovery",
+      useResume: true,
+      expectedCode: "cli_no_output_timeout",
+      chunk: jsonl([{ type: "system", subtype: "init", session_id: "live-init-no-result" }]),
+    },
+    {
+      label: "does not mark a fresh init-only stall as safe to replay",
+      useResume: false,
+      expectedCode: undefined,
+      chunk: jsonl([{ type: "system", subtype: "init", session_id: "live-fresh-init-no-result" }]),
+    },
+    {
+      label: "does not mark a stall as retryable after substantive assistant output",
+      useResume: true,
+      expectedCode: undefined,
+      chunk: jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-substantive" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-substantive",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-substantive",
+          message: {
+            model: "claude-fable-5",
+            role: "assistant",
+            content: [{ type: "text", text: "Partial real answer" }],
+          },
+        },
+      ]),
+    },
+    {
+      label: "does not mark an incomplete stdout record as safe to replay",
+      useResume: true,
+      expectedCode: undefined,
+      chunk: '{"type":"assistant","message":{"model":"claude-fable-5"',
+    },
+  ])("$label", async ({ useResume, expectedCode, chunk }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: `run-replay-safe-stall-${useResume ? "resume" : "fresh"}`,
+      timeoutMs: 60_000,
+      noOutputTimeoutMs: 1_000,
+      useResume,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.stdout.waitReady();
+    driver.stdout.emit(chunk);
+
+    const errorPromise = resultPromise.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = (await errorPromise) as { code?: string; cliTimeout?: unknown };
+    expect(error).toMatchObject({
+      name: "FailoverError",
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 1,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
+    });
+    expect(error.code).toBe(expectedCode);
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
+  });
+
   it("still aborts on the turn timeout while waiting after a synthetic placeholder", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const driver = installLiveStdoutDriver();
@@ -669,6 +818,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
@@ -713,7 +870,11 @@ describe("claude live session provisional results", () => {
 
   it("fails the turn on an error result even when background tasks are outstanding", async () => {
     const driver = installLiveStdoutDriver();
-    const resultPromise = startLiveTurn({ runId: "run-bg-error" });
+    const phases: Array<"send" | "resolve"> = [];
+    const resultPromise = startLiveTurn({
+      runId: "run-bg-error",
+      onPhase: (phase) => phases.push(phase),
+    });
     await driver.stdout.waitReady();
 
     driver.stdout.emit(
@@ -738,6 +899,7 @@ describe("claude live session provisional results", () => {
       name: "FailoverError",
       rawError: expect.stringMatching(/agent crashed/i),
     });
+    expect(phases).toEqual(["resolve"]);
   });
 
   it("does not no-output-abort while a background task is outstanding within the blocked-tool floor", async () => {
@@ -837,6 +999,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;

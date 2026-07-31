@@ -13,6 +13,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
+import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
@@ -31,10 +32,11 @@ type TwitchMonitorOptions = {
 };
 
 type TwitchMonitorResult = {
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 type TwitchCoreRuntime = ReturnType<typeof getTwitchRuntime>;
+type TwitchIngressLifecycle = Parameters<Parameters<typeof createTwitchIngress>[0]["deliver"]>[1];
 
 /**
  * Process an incoming Twitch message and dispatch to agent.
@@ -46,19 +48,22 @@ async function processTwitchMessage(params: {
   config: unknown;
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
+  turnAdoptionLifecycle: TwitchIngressLifecycle;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { message, account, accountId, config, runtime, core, statusSink } = params;
+  const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
+    params;
   const cfg = config as OpenClawConfig;
 
   await core.channel.inbound.run({
     channel: "twitch",
     accountId,
     raw: message,
+    turnAdoptionLifecycle,
     adapter: {
       ingest: (incoming) => ({
-        id: incoming.id ?? `${incoming.channel}:${incoming.timestamp?.getTime() ?? Date.now()}`,
-        timestamp: incoming.timestamp?.getTime(),
+        id: incoming.id,
+        timestamp: incoming.timestamp,
         rawText: incoming.message,
         textForAgent: incoming.message,
         textForCommands: incoming.message,
@@ -100,6 +105,7 @@ async function processTwitchMessage(params: {
           },
           route: {
             agentId: route.agentId,
+            dmScope: route.dmScope,
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
           },
@@ -122,7 +128,7 @@ async function processTwitchMessage(params: {
           cfg,
           channel: "twitch",
           accountId,
-          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
           ctxPayload,
           delivery: {
             durable: () => ({
@@ -219,6 +225,7 @@ export async function monitorTwitchProvider(
 
   const core = getTwitchRuntime();
   let stopped = false;
+  let stopTask: Promise<void> | undefined;
 
   const coreLogger = core.logging.getChildLogger({ module: "twitch" });
   const logVerboseMessage = (message: string) => {
@@ -248,12 +255,10 @@ export async function monitorTwitchProvider(
     throw error;
   }
 
-  const unregisterHandler = clientManager.onMessage(account, (message) => {
-    if (stopped) {
-      return;
-    }
-
-    void (async () => {
+  const ingress = createTwitchIngress({
+    accountId,
+    runtime,
+    deliver: async (message, turnAdoptionLifecycle) => {
       const botUsername = normalizeLowercaseStringOrEmpty(account.username);
       if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
         return;
@@ -265,7 +270,7 @@ export async function monitorTwitchProvider(
         botUsername,
       });
 
-      if (stopped || !access.allowed) {
+      if (!access.allowed) {
         return;
       }
 
@@ -278,19 +283,41 @@ export async function monitorTwitchProvider(
         config,
         runtime,
         core,
+        turnAdoptionLifecycle,
         statusSink,
       });
-    })().catch((err: unknown) => {
-      runtime.error?.(`Message processing failed: ${String(err)}`);
+    },
+  });
+  ingress.start();
+
+  const unregisterHandler = clientManager.onMessage(account, (message) => {
+    if (stopped) {
+      return;
+    }
+
+    void ingress.accept(message).catch((err: unknown) => {
+      runtime.error?.(`Message durable admission failed: ${String(err)}`);
     });
   });
 
-  const stop = () => {
-    stopped = true;
-    unregisterHandler();
+  const stop = (): Promise<void> => {
+    stopTask ??= (async () => {
+      stopped = true;
+      unregisterHandler();
+      await ingress.stop();
+    })();
+    return stopTask;
   };
 
-  abortSignal.addEventListener("abort", stop, { once: true });
+  abortSignal.addEventListener(
+    "abort",
+    () => {
+      void stop().catch((error: unknown) => {
+        runtime.error?.(`Twitch ingress stop failed: ${String(error)}`);
+      });
+    },
+    { once: true },
+  );
 
   return { stop };
 }

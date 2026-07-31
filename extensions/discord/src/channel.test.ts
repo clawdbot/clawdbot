@@ -237,6 +237,26 @@ describe("discordPlugin outbound", () => {
     );
   });
 
+  it("requires trusted requester identity for registered privileged tool actions", () => {
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+      }),
+    ).toBe(false);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+  });
+
   it("adds Discord mention formatting to agent prompt hints", () => {
     const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 
@@ -341,29 +361,6 @@ describe("discordPlugin outbound", () => {
 
     expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
-  });
-
-  it("inherits Discord gateway READY timeout settings per account", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "discord-token",
-          gatewayReadyTimeoutMs: 90_000,
-          gatewayRuntimeReadyTimeoutMs: 120_000,
-          accounts: {
-            work: {
-              token: "discord-token-work",
-              gatewayReadyTimeoutMs: 60_000,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveAccount(cfg).config.gatewayReadyTimeoutMs).toBe(90_000);
-    expect(resolveAccount(cfg).config.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
-    expect(resolveAccount(cfg, "work").config.gatewayReadyTimeoutMs).toBe(60_000);
-    expect(resolveAccount(cfg, "work").config.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
   });
 
   it("forwards full media send context to sendMessageDiscord", async () => {

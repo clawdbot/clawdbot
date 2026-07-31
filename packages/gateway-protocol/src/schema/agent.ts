@@ -23,7 +23,7 @@ const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as c
 const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
 /** Generated media/file attachment metadata carried by internal agent events. */
-export const AgentGeneratedAttachmentSchema = closedObject({
+const AgentGeneratedAttachmentSchema = closedObject({
   type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
   path: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
@@ -31,10 +31,14 @@ export const AgentGeneratedAttachmentSchema = closedObject({
   filePath: Type.Optional(Type.String()),
   mimeType: Type.Optional(Type.String()),
   name: Type.Optional(Type.String()),
+  sizeBytes: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number()),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
 });
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */
-export const AgentInternalEventSchema = closedObject({
+const AgentInternalEventSchema = closedObject({
   type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
   source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
   childSessionKey: Type.String(),
@@ -62,7 +66,7 @@ export const AgentEventSchema = closedObject({
 });
 
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
-export const MessageActionToolContextSchema = closedObject({
+const MessageActionToolContextSchema = closedObject({
   currentChannelId: Type.Optional(Type.String()),
   currentMessagingTarget: Type.Optional(Type.String()),
   currentGraphChannelId: Type.Optional(Type.String()),
@@ -143,6 +147,30 @@ export const SendParamsSchema = closedObject({
   /** Optional session key for mirroring delivered output back into the transcript. */
   sessionKey: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
+});
+
+/** Gateway-owned request that lists persisted and channel-directory addresses. */
+export const ConversationListParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  channel: Type.Optional(NonEmptyString),
+  query: Type.Optional(NonEmptyString),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+});
+
+export const ConversationListItemSchema = closedObject({
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  kind: Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
+  target: NonEmptyString,
+  threadId: Type.Optional(NonEmptyString),
+  label: Type.Optional(NonEmptyString),
+  firstSeenAt: Type.Integer({ minimum: 0 }),
+  lastSeenAt: Type.Integer({ minimum: 0 }),
+});
+
+export const ConversationListResultSchema = closedObject({
+  conversations: Type.Array(ConversationListItemSchema),
 });
 
 /** Gateway-owned request that sends to one durable external conversation. */
@@ -302,9 +330,12 @@ export const AgentParamsSchema = closedObject({
     Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
   ),
   disableMessageTool: Type.Optional(Type.Boolean()),
+  swarmCollector: Type.Optional(Type.Boolean()),
+  swarmOutputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   // Host-owned recovery turns can force every Code Mode exec onto the
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
+  forceCodeModeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),
@@ -356,6 +387,9 @@ export const WakeParamsSchema = Type.Object(
 export type AgentEvent = Static<typeof AgentEventSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type ConversationListParams = Static<typeof ConversationListParamsSchema>;
+export type ConversationListItem = Static<typeof ConversationListItemSchema>;
+export type ConversationListResult = Static<typeof ConversationListResultSchema>;
 export type ConversationSendParams = Static<typeof ConversationSendParamsSchema>;
 export type ConversationSendResult = Static<typeof ConversationSendResultSchema>;
 export type ConversationTurnParams = Static<typeof ConversationTurnParamsSchema>;

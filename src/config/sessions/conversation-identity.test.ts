@@ -1,8 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
+  buildConversationIdentity,
   conversationIdentityFromMsgContext,
-  conversationIdentityFromSessionEntry,
+  conversationIdentityFromSessionEntry as conversationIdentityFromCanonicalSessionEntry,
 } from "./conversation-identity.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type LegacyDeliveryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastAccountId?: string;
+  lastChannel?: string;
+};
+
+function conversationIdentityFromSessionEntry(entry: LegacyDeliveryFixture) {
+  return conversationIdentityFromCanonicalSessionEntry(normalizeLegacySessionEntryDelivery(entry));
+}
 
 function directEntry(peer: string) {
   return {
@@ -101,6 +119,70 @@ describe("conversation identity", () => {
     );
   });
 
+  it("keeps a paired canonical outbound peer separate from its delivery alias", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-main",
+      updatedAt: 100,
+      chatType: "direct",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "default",
+        to: "user:delivery-alias-456",
+      },
+      origin: {
+        provider: "discord",
+        accountId: "default",
+        chatType: "direct",
+        from: "discord:canonical-peer-123",
+        to: "user:delivery-alias-456",
+        nativeDirectUserId: "canonical-peer-123",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      channel: "discord",
+      deliveryTarget: "user:delivery-alias-456",
+      nativeDirectUserId: "canonical-peer-123",
+      peerId: "canonical-peer-123",
+    });
+    expect(identity?.conversationRef).toBe(
+      buildConversationIdentity({
+        channel: "discord",
+        accountId: "default",
+        kind: "direct",
+        peerId: "canonical-peer-123",
+        deliveryTarget: "user:delivery-alias-456",
+      })?.conversationRef,
+    );
+  });
+
+  it("keeps a group bound to its room instead of the paired origin sender", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-group",
+      updatedAt: 100,
+      chatType: "group",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "default",
+        to: "channel:ops-room",
+      },
+      origin: {
+        provider: "discord",
+        accountId: "default",
+        chatType: "group",
+        from: "discord:user:participant-123",
+        to: "channel:ops-room",
+        nativeChannelId: "ops-room",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      deliveryTarget: "channel:ops-room",
+      nativeChannelId: "ops-room",
+      peerId: "ops-room",
+    });
+  });
+
   it("keeps fallback origin targets paired with their origin channel", () => {
     const identity = conversationIdentityFromSessionEntry({
       sessionId: "session-main",
@@ -145,7 +227,7 @@ describe("conversation identity", () => {
 
   it.each([
     { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },
-    { fallback: { lastAccountId: "work" }, label: "last route" },
+    { fallback: { lastChannel: "reef", lastAccountId: "work" }, label: "last route" },
   ])("fills an omitted delivery account from the persisted $label", ({ fallback }) => {
     const identity = conversationIdentityFromSessionEntry({
       sessionId: "session-main",

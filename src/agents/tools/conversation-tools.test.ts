@@ -1,8 +1,15 @@
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import {
+  ConversationListResultSchema,
+  ConversationSendResultSchema,
+  ConversationTurnResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/agent.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import {
   createConversationsListTool,
   createConversationsSendTool,
@@ -33,47 +40,93 @@ type MockGatewayCall = {
 
 function createDeps() {
   const callGatewayMock = vi.fn(async (input: MockGatewayCall) =>
-    input.method === "conversations.send"
+    input.method === "conversations.list"
       ? {
-          status: "sent" as const,
-          conversationRef: conversation.conversationRef,
-          channel: "reef",
-          messageId: "reef-outbound-1",
-          queueId: "queue-1",
+          conversations: [
+            {
+              conversationRef: conversation.conversationRef,
+              channel: conversation.channel,
+              accountId: conversation.accountId,
+              kind: conversation.kind,
+              target: conversation.target,
+              firstSeenAt: conversation.firstSeenAt,
+              lastSeenAt: conversation.lastSeenAt,
+            },
+          ],
         }
-      : {
-          status: "replied" as const,
-          conversationRef: conversation.conversationRef,
-          channel: "reef",
-          messageId: "reef-outbound-1",
-          correlationPersisted: true,
-          reply: {
+      : input.method === "conversations.send"
+        ? {
+            status: "sent" as const,
             conversationRef: conversation.conversationRef,
-            messageId: "reef-inbound-1",
-            replyToId: "reef-outbound-1",
-            text: "peer acknowledged",
-            timestamp: 300,
+            channel: "reef",
+            messageId: "reef-outbound-1",
+            queueId: "queue-1",
+          }
+        : {
+            status: "replied" as const,
+            conversationRef: conversation.conversationRef,
+            channel: "reef",
+            messageId: "reef-outbound-1",
+            correlationPersisted: true,
+            reply: {
+              conversationRef: conversation.conversationRef,
+              messageId: "reef-inbound-1",
+              replyToId: "reef-outbound-1",
+              text: "peer acknowledged",
+              timestamp: 300,
+            },
           },
-        },
   );
   return {
     callGateway: callGatewayMock as never,
     callGatewayMock,
-    listConversations: vi.fn(() => [conversation]),
   };
 }
 
 describe("conversation tools", () => {
+  it("declares exact Gateway output contracts and promotes only bounded complete hints", async () => {
+    const deps = createDeps();
+    const list = createConversationsListTool({ agentId: "main" }, deps);
+    const send = createConversationsSendTool({ agentId: "main" }, deps);
+    const turn = createConversationsTurnTool({ agentId: "main" }, deps);
+    const listResult = await list.execute("list-contract", {});
+    const sendResult = await send.execute("send-contract", {
+      conversationRef: conversation.conversationRef,
+      message: "hello peer",
+    });
+    const turnResult = await turn.execute("turn-contract", {
+      conversationRef: conversation.conversationRef,
+      message: "please acknowledge",
+    });
+
+    expect(list.outputSchema).toBe(ConversationListResultSchema);
+    expect(send.outputSchema).toBe(ConversationSendResultSchema);
+    expect(turn.outputSchema).toBe(ConversationTurnResultSchema);
+    expect(Value.Check(list.outputSchema!, listResult.details)).toBe(true);
+    expect(Value.Check(send.outputSchema!, sendResult.details)).toBe(true);
+    expect(Value.Check(turn.outputSchema!, turnResult.details)).toBe(true);
+    expect(compactToolOutputHint(list.outputSchema)).toBe(
+      '{ conversations: Array<{ accountId: string; channel: string; conversationRef: string; firstSeenAt: number; kind: "direct" | "group" | "channel"; lastSeenAt: number; target: string; label?: string; threadId?: string }> }',
+    );
+    expect(compactToolOutputHint(send.outputSchema)).toBe(
+      '{ channel: string; conversationRef: string; status: "sent" | "queued" | "suppressed" | "unknown"; messageId?: string; queueId?: string }',
+    );
+    expect(compactToolOutputHint(turn.outputSchema)).toBe(
+      '{ channel: string; conversationRef: string; correlationPersisted: boolean; messageId: string; reply: { conversationRef: string; messageId: string; text: string; timestamp: number; replyToId?: string; threadId?: string; transcriptArtifactId?: string; transcriptMessageId?: string }; status: "replied" } | { channel: string; conversationRef: string; correlationPersisted: boolean; messageId: string; status: "timeout" } | { channel: string; conversationRef: string; correlationPersisted: boolean; error: string; status: "sent" | "queued" | "suppressed" | "unknown"; messageId?: string }',
+    );
+  });
+
   it("lists opaque external addresses independently from sessions", async () => {
     const deps = createDeps();
     const result = await createConversationsListTool({ agentId: "main" }, deps).execute("list", {
       channel: "reef",
+      query: "@peer-agent",
     });
 
-    expect(deps.listConversations).toHaveBeenCalledWith(
-      { agentId: "main" },
-      { channel: "reef", limit: 50 },
-    );
+    expect(deps.callGatewayMock).toHaveBeenCalledWith({
+      method: "conversations.list",
+      params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
+    });
     expect(result.details).toEqual({
       conversations: [
         {

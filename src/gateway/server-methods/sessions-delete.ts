@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -31,8 +32,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
-  rejectPluginRuntimeDeleteMismatch,
-  rejectWebchatSessionMutation,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -43,7 +43,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionDeleteHandlers: GatewayRequestHandlers = {
-  "sessions.delete": async ({ req, params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({
+    req,
+    params,
+    respond,
+    client,
+    isWebchatConnect,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -52,10 +60,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
@@ -177,7 +181,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      rejectPluginRuntimeDeleteMismatch({
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "delete",
         client,
         key: target.canonicalKey ?? key,
         entry: initialDeleteEntry,
@@ -197,6 +202,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!chatAbort) {
       throw new Error("chat.abort handler is not registered");
     }
+    sessionMutationAuthorization?.assertCurrent();
     await chatAbort({
       req,
       params: {
@@ -209,6 +215,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       context,
       client,
       isWebchatConnect,
+      ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
     });
     if (abortResult?.ok === false) {
       respond(false, undefined, abortResult.error);
@@ -228,6 +235,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       scope: storePath,
       identities: deleteLifecycleIdentities,
       prepare: async () => {
+        sessionMutationAuthorization?.assertCurrent();
         const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
         deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
           preparedEntry,
@@ -273,6 +281,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
+        sessionMutationAuthorization?.assertCurrent();
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
@@ -296,7 +305,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (
-          rejectPluginRuntimeDeleteMismatch({
+          rejectPluginRuntimeSessionOwnershipMismatch({
+            action: "delete",
             client,
             key: canonicalKey ?? key,
             entry,
@@ -324,6 +334,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         });
         const postCleanupEntry = postCleanupTarget.entry;
+        sessionMutationAuthorization?.assertCurrent();
         if (
           !expectedLifecycleRevisionMatches(postCleanupEntry) ||
           !expectedSessionIdMatches(postCleanupEntry)
@@ -332,9 +343,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+        const incognito =
+          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
         const deletionParams = {
           agentId: target.agentId,
-          archiveTranscript: deleteTranscript,
+          archiveTranscript: incognito ? false : deleteTranscript,
+          deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,
           expectedSessionId,
@@ -390,8 +404,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
 
-    // Dirty or unpushed worktrees survive session deletion; tell the caller so
-    // operator UIs can point at the preserved checkout instead of orphaning it.
+    // Session deletion ends worktree ownership. Snapshot before removal so
+    // inherited unpushed history or local edits do not leave an ownerless checkout.
     let worktreePreserved: { id: string; branch: string; path: string } | undefined;
     if (deleted) {
       // requestedAgentId wins: "global" canonical keys resolve to the default store
@@ -400,12 +414,16 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         target.canonicalKey ?? key,
         requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
       );
+      let worktree: ReturnType<typeof managedWorktrees.findLiveByOwner> = undefined;
       try {
-        const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
-        if (worktree && !(await managedWorktrees.removeIfLossless(worktree.id))) {
-          worktreePreserved = { id: worktree.id, branch: worktree.branch, path: worktree.path };
+        worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
+        if (worktree) {
+          await managedWorktrees.remove({ id: worktree.id, reason: "session-delete" });
         }
       } catch (error) {
+        if (worktree) {
+          worktreePreserved = { id: worktree.id, branch: worktree.branch, path: worktree.path };
+        }
         sessionLog.warn(
           `failed to clean up worktree for deleted session ${target.canonicalKey}: ${formatErrorMessage(error)}`,
         );
@@ -429,6 +447,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         agentId: target.agentId,
         reason: "delete",
       });
+      emitSessionsChanged(context, { reason: "delete" });
     }
   },
 };

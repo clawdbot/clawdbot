@@ -42,7 +42,7 @@ export type HookStatusEntry = {
   enabledByConfig: boolean;
   requirementsSatisfied: boolean;
   loadable: boolean;
-  blockedReason?: HookEnableStateReason | "missing requirements";
+  blockedReason?: HookEnableStateReason | "missing requirements" | "no events defined";
   managedByPlugin: boolean;
   requirements: Requirements;
   missing: Requirements;
@@ -114,9 +114,11 @@ function buildHookStatus(
     });
 
   const enabledByConfig = enableState.enabled;
-  const loadable = enabledByConfig && requirementsSatisfied;
+  const hasEvents = events.length > 0;
+  const loadable = enabledByConfig && requirementsSatisfied && hasEvents;
   const blockedReason =
-    enableState.reason ?? (requirementsSatisfied ? undefined : "missing requirements");
+    enableState.reason ??
+    (!requirementsSatisfied ? "missing requirements" : hasEvents ? undefined : "no events defined");
 
   return {
     name: entry.hook.name,

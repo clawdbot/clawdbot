@@ -95,8 +95,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | ------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_run_completed_total`                   | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                  | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
-| `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `outcome`, `provider`, `transport`                      |
-| `openclaw_model_call_duration_seconds`           | histogram | `api`, `error_category`, `model`, `outcome`, `provider`, `transport`                      |
+| `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
+| `openclaw_model_call_duration_seconds`           | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_failover_total`                  | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
 | `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `provider`, `token_type`                                     |
 | `openclaw_gen_ai_client_token_usage`             | histogram | `model`, `provider`, `token_type`                                                         |
@@ -147,6 +147,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_prometheus_series_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`  | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`         | gauge     | none                                                                                      |
+
+For model-call metrics, `observation_unit="request"` measures one observable
+provider request. `observation_unit="turn"` measures a synthetic Claude Code
+or Codex CLI agent turn that can contain multiple hidden provider requests.
+Keep those series separate when comparing latency.
 
 ## Label policy
 

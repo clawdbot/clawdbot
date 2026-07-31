@@ -19,7 +19,8 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
-- discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
+- discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
+  Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
 - opens the Control UI in onboarding mode after its first-run install, which
   offers to import detected Claude Code, Codex, or Hermes memories into the
@@ -27,6 +28,11 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
   Settings → Import Memory)
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
+
+Realtime voice Talk inside the companion's embedded WebView is not validated:
+the shell does not grant microphone capture to the WebKitGTK WebView, so
+`getUserMedia` is expected to fail there. Until that lands, open the Gateway's
+Control UI in a regular browser for [Talk mode](/nodes/talk).
 
 Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
@@ -36,6 +42,23 @@ with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
 or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+### Media codecs
+
+The companion uses GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` uses the host's plugins and declares all three packages as
+dependencies. The AppImage bundles the GStreamer media framework and the
+plugins available on its Ubuntu build host. For a source build or when
+rebuilding either Linux bundle, install the packages explicitly:
+
+```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The released AppImage therefore carries the codecs installed by the release
+workflow instead of relying on GStreamer packages from the user's system.
 
 You can also build the same bundles from a source checkout:
 
@@ -49,6 +72,43 @@ The `Linux App` CI workflow uploads the same bundles as the
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
 
+### Quick Chat
+
+Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
+chip shows the configured avatar, emoji, or monogram; select it to switch agents.
+Messages use the selected agent's main session and honor global session scope.
+The native Rust client owns a persistent Ed25519 device identity. It uses the
+CLI handoff's shared token or password only to bootstrap pairing, then stores and
+prefers the Gateway-issued device token on later connections. The identity and
+device token live in the app config directory in a mode `0600` file; Quick
+Chat's WebView receives neither credentials nor the WebSocket.
+
+When the native connection is unavailable, Quick Chat shows **Gateway
+unreachable — retrying** and disables send until reconnection. A remote device
+that has reached the pairing phase shows **Approve this device in the dashboard
+(Nodes)** instead, with a short device ID when the Gateway provides one. A
+Gateway that requires a missing shared credential shows **Gateway requires a
+credential — open the dashboard on the gateway host**; no pairing request is
+waiting for approval in that state. Server-provided remediation guidance
+replaces these fallback notices when it is more specific.
+For TLS Gateways, the CLI hands the app the Gateway certificate's SHA-256
+fingerprint; the native client pins that certificate and reports **Gateway TLS
+trust failed — check the certificate fingerprint** separately from downtime.
+Gateways whose shared secret is configured through a SecretRef omit it from the
+CLI handoff. Existing paired installs keep working through their stored device
+token, but a fresh install cannot create a pending pairing request under shared-secret
+authentication without that bootstrap credential.
+Setup-code and `bootstrapToken` redemption need dedicated product UI and remain
+a follow-up; Quick Chat does not attempt either flow.
+
+On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
+**Quick Chat shortcut** tray toggle enables or disables it without disabling the
+plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
+the shortcut settings are hidden and the tray item remains the entry point.
+After an accepted send, Quick Chat stays open and streams the selected agent's
+plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
+`Ctrl+Enter` still opens the dashboard.
+
 ### Canvas
 
 Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
@@ -61,7 +121,7 @@ Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI a
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
-1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
+1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -112,7 +172,7 @@ A node can be connected and device-paired while its effective `caps` and `comman
 
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
-`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 
@@ -165,6 +225,8 @@ KillMode=control-group
 [Install]
 WantedBy=default.target
 ```
+
+Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom.
 
 Enable it:
 

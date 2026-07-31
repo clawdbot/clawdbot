@@ -8,6 +8,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { modelKey, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -18,8 +19,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { applySessionModelSelectionToEntry } from "../../model-picker/apply-session-model-selection.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -67,6 +68,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
   messageProvider?: string;
   surface?: string;
@@ -152,6 +154,7 @@ export async function persistInlineDirectives(params: {
         allowedModelKeys,
         allowedModelCatalog: params.modelCatalog ?? [],
         provider,
+        agentId: activeAgentId,
       })
     : undefined;
   const modelRuntimeResolution = modelResolution?.modelSelection
@@ -291,17 +294,20 @@ export async function persistInlineDirectives(params: {
     let modelApplied = true;
     let modelSwitchEvent: { alias?: string; label: string } | undefined;
     if (modelDirective && modelResolution?.modelSelection) {
-      const appliedModelOverride = applyModelOverrideToSessionEntry({
+      if (modelRuntimeResolution.kind === "invalid") {
+        throw new Error("invalid model runtime reached persistence");
+      }
+      const appliedSelection = applySessionModelSelectionToEntry({
         entry: sessionEntry,
-        selection: modelResolution.modelSelection,
-        profileOverride: modelResolution.profileOverride,
+        request: {
+          ...modelResolution.modelSelection,
+          profileOverride: modelResolution.profileOverride,
+          runtime: modelRuntimeResolution,
+        },
+        runtime: modelRuntimeResolution,
         markLiveSwitchPending: params.markLiveSwitchPending,
       });
-      const appliedRuntimeOverride = applyModelRuntimeDirective(
-        sessionEntry,
-        modelRuntimeResolution,
-      );
-      modelUpdated = appliedModelOverride.updated || appliedRuntimeOverride.updated;
+      modelUpdated = appliedSelection.changed;
       provider = modelResolution.modelSelection.provider;
       model = modelResolution.modelSelection.model;
       const thinkingRuntime = resolveEffectiveAgentRuntime({
@@ -418,6 +424,18 @@ export async function persistInlineDirectives(params: {
         model = persistedEntry?.modelOverride?.trim() || defaultModel;
         thinkingRemap = undefined;
       }
+      if (
+        modelDirective &&
+        modelResolution?.modelSelection &&
+        modelApplied &&
+        !modelResolution.modelSelection.isDefault &&
+        params.canPersistStickyModelSelection === true
+      ) {
+        persistStickyModelSelectionBestEffort({
+          agentId: activeAgentId,
+          model: `${provider}/${model}`,
+        });
+      }
       if (modelDirective && modelUpdated && modelApplied) {
         triggerSessionPatchHook({
           cfg,
@@ -429,6 +447,7 @@ export async function persistInlineDirectives(params: {
           key: sessionKey,
           nextProvider: provider,
           nextModel: model,
+          nextRouteResolution: "resolved",
           nextModelOverrideSource: "user",
           nextAuthProfileId: appliedSessionEntry.authProfileOverride,
           nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,

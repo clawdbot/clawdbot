@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type AuditActivityEventV1,
   type AuditEvent,
   validateAuditActivityListParams,
@@ -15,6 +14,7 @@ import type {
   ToolActionAuditEventRecord,
 } from "../../audit/audit-event-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
@@ -23,10 +23,11 @@ function parseAuditCursor(cursor: string | undefined): number | undefined | null
   if (cursor === undefined) {
     return undefined;
   }
-  if (!/^\d+$/.test(cursor)) {
+  const trimmed = cursor.trim();
+  if (!/^\d+$/.test(trimmed)) {
     return null;
   }
-  const parsed = Number(cursor);
+  const parsed = Number(trimmed);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
@@ -77,15 +78,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
 
 export const auditHandlers: GatewayRequestHandlers = {
   "audit.list": ({ params, respond }) => {
-    if (!validateAuditListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid audit.list params: ${formatValidationErrors(validateAuditListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateAuditListParams, "audit.list", respond)) {
       return;
     }
     const parsed = invalidRangeOrCursor(params);
@@ -121,17 +114,9 @@ export const auditHandlers: GatewayRequestHandlers = {
     });
   },
   "audit.activity.list": ({ params, respond }) => {
-    if (!validateAuditActivityListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid audit.activity.list params: ${formatValidationErrors(
-            validateAuditActivityListParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateAuditActivityListParams, "audit.activity.list", respond)
+    ) {
       return;
     }
     const parsed = invalidRangeOrCursor(params);

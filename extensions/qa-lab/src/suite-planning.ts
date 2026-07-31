@@ -45,8 +45,8 @@ function selectQaFlowSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    const selectedScenarios = [...requestedScenarioIds].map(
-      (scenarioId) => scenarioById.get(scenarioId)!,
+    const selectedScenarios = [...requestedScenarioIds].map((scenarioId) =>
+      scenarioById.get(scenarioId)!,
     );
     const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
@@ -80,6 +80,10 @@ function selectQaFlowSuiteScenarios(params: {
   return params.scenarios.filter(
     (scenario) =>
       scenario.execution.kind === "flow" &&
+      // Explicit single-scenario runs adopt this provider later. Implicit suites must
+      // filter it here so a scenario-pinned provider cannot leak into another lane.
+      (scenario.execution.providerMode === undefined ||
+        scenario.execution.providerMode === params.providerMode) &&
       scenarioMatchesQaProviderLane({
         scenario,
         providerMode: params.providerMode,

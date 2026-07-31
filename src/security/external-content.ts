@@ -241,14 +241,17 @@ function replaceMarkers(content: string): string {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  // Match markers with or without id attribute (handles both legacy and spoofed markers)
+  // Match markers with or without id attribute (handles both legacy and spoofed
+  // markers). The id body is an unbounded negated class: any finite cap lets a
+  // forged marker with a longer id slip through unsanitized (a real injection
+  // bypass), while `[^"]*` stays linear-time with no catastrophic backtracking.
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
-      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];
@@ -311,6 +314,8 @@ type WrapExternalContentOptions = {
   sender?: string;
   /** Subject line (for emails) */
   subject?: string;
+  /** External task label associated with the content */
+  taskName?: string;
   /** Whether to include detailed security warning */
   includeWarning?: boolean;
 };
@@ -332,7 +337,7 @@ type WrapExternalContentOptions = {
  * ```
  */
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
-  const { source, sender, subject, includeWarning = true } = options;
+  const { source, sender, subject, taskName, includeWarning = true } = options;
 
   const sanitized = sanitizeExternalContentText(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
@@ -340,6 +345,9 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitizeMetadataValue = (value: string) =>
     sanitizeExternalContentText(value).replace(/[\r\n]+/g, " ");
 
+  if (taskName) {
+    metadataLines.push(`Task: ${sanitizeMetadataValue(taskName)}`);
+  }
   if (sender) {
     metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
   }
@@ -380,13 +388,11 @@ export function buildSafeExternalPrompt(params: {
     source,
     sender,
     subject,
+    taskName: jobName,
     includeWarning: true,
   });
 
   const contextLines: string[] = [];
-  if (jobName) {
-    contextLines.push(`Task: ${jobName}`);
-  }
   if (jobId) {
     contextLines.push(`Job ID: ${jobId}`);
   }

@@ -1,11 +1,15 @@
 import fs from "node:fs";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import {
+  PluginDashboardDeclarationError,
+  registerPluginDashboardCapabilities,
+} from "./dashboard-capabilities.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -21,6 +25,7 @@ import {
   formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
+  recordPluginConfiguredUnavailable,
   recordPluginError,
 } from "./loader-records.js";
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
@@ -50,6 +55,11 @@ import {
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
+import {
+  clearActiveDegradedPlugin,
+  degradedPluginMatchesRoot,
+  findActiveDegradedPlugin,
+} from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -145,6 +155,26 @@ export function loadRuntimePluginCandidate(params: {
     activationState,
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
+  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+  const degradedPluginForId = findActiveDegradedPlugin(pluginId);
+  const degradedPlugin =
+    degradedPluginForId && degradedPluginMatchesRoot(degradedPluginForId, pluginRoot)
+      ? degradedPluginForId
+      : undefined;
+  const clearMismatchedQuarantineAfterLoad =
+    enableState.enabled && Boolean(degradedPluginForId) && !degradedPlugin;
+  if (enableState.enabled && degradedPlugin) {
+    // Startup verification owns this boot-stable quarantine. Return before
+    // artifact resolution so no top-level plugin code can execute this boot.
+    recordPluginConfiguredUnavailable({
+      registry,
+      record,
+      seenIds: state.seenIds,
+      origin: candidate.origin,
+      degradedPlugin,
+    });
+    return;
+  }
   const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
     plugin: { id: pluginId },
     normalizedConfig: context.normalized,
@@ -186,7 +216,6 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
-  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
@@ -343,7 +372,14 @@ export function loadRuntimePluginCandidate(params: {
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
-    pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+    pushPluginLoadError(
+      describeRootFileOpenFailure({
+        failure: opened,
+        subject: "plugin entry path",
+        boundaryLabel: "plugin root",
+        filePath: moduleLoadSource,
+      }),
+    );
     return;
   }
   const safeSource = opened.path;
@@ -493,6 +529,7 @@ export function loadRuntimePluginCandidate(params: {
   });
   const transaction = createPluginRegistrationTransaction({
     registry,
+    activeRecord: record,
     rollbackGlobalSideEffects: () =>
       params.registryBuilder.rollbackPluginGlobalSideEffects(record.id),
   });
@@ -504,9 +541,19 @@ export function loadRuntimePluginCandidate(params: {
       `${registrationPlan.mode}:register`,
       () => runPluginRegisterSync(register, api),
     );
+    // Dashboard entries stay inside the same registry snapshot as their RPC handlers.
+    // Non-activating snapshots are private until cached activation; rollback restores both.
+    if (registrationPlan.runRuntimeCapabilityPolicy) {
+      registerPluginDashboardCapabilities({ record, registry });
+    }
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
     transaction.commit({ activate: context.shouldActivate });
+    if (clearMismatchedQuarantineAfterLoad) {
+      // Plugin ids can intentionally shadow an installed source via load.paths.
+      // Clear stale install state only after the selected override registers.
+      clearActiveDegradedPlugin(pluginId);
+    }
   } catch (error) {
     transaction.rollback();
     recordPluginError({
@@ -520,6 +567,9 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      ...(error instanceof PluginDashboardDeclarationError
+        ? { diagnosticCode: "dashboard-declaration-invalid" }
+        : {}),
     });
     registerFailed = true;
   } finally {

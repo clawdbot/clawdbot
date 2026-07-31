@@ -95,6 +95,7 @@ async function processEvent(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
+  log?: { info: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
     return;
@@ -107,7 +108,7 @@ async function processEvent(params: {
   // under the same safe correlation id before dispatching any model work.
   const messageClient = correlationId
     ? createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId,
       })
@@ -125,6 +126,14 @@ async function processEvent(params: {
     message,
   });
   if (!access.shouldDispatch) {
+    params.log?.info(
+      `[${params.account.accountId}] skipped ClickClack message before agent dispatch: ` +
+        `kind=${message.direct_conversation_id ? "dm" : "group"} ` +
+        `requireMention=${access.requireMention ?? "unknown"} ` +
+        `wasMentioned=${access.mentionFacts.wasMentioned} ` +
+        `hasAnyMention=${access.mentionFacts.hasAnyMention ?? "unknown"} ` +
+        `commandAuthorized=${access.commandAuthorized}`,
+    );
     return;
   }
   await handleClickClackInbound({
@@ -178,7 +187,7 @@ export async function startClickClackGatewayAccount(
     throw new Error(`ClickClack is not configured for account "${configuredAccount.accountId}"`);
   }
   const client = createClickClackClient({
-    baseUrl: configuredAccount.baseUrl,
+    baseUrl: configuredAccount.apiEndpoint,
     token: configuredAccount.token,
   });
   const workspaceId = await resolveWorkspaceId(client, configuredAccount.workspace);
@@ -187,6 +196,7 @@ export async function startClickClackGatewayAccount(
     ...configuredAccount,
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
+    botHandle: me.handle,
   };
   const processIncomingEvent = (event: ClickClackEvent) =>
     processEvent({
@@ -195,6 +205,7 @@ export async function startClickClackGatewayAccount(
       client,
       event,
       botUserId: account.botUserId,
+      log: ctx.log,
     });
   if (account.commandMenu) {
     await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });

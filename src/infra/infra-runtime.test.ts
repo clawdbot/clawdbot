@@ -1,7 +1,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 // Tests infra runtime loading and platform-dependent helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
   beginGatewayRestartSignalAdmission,
   isGatewayWorkAdmissionClosed,
@@ -10,7 +10,6 @@ import {
 } from "../process/gateway-work-admission.js";
 type RestartModule = typeof import("./restart.js");
 
-let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
 let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
 let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
@@ -26,6 +25,18 @@ let freshRestartModuleId = 0;
 const relaunchGatewayScheduledTaskMock = vi.hoisted(() => vi.fn());
 const cleanStaleGatewayProcessesSyncMock = vi.hoisted(() => vi.fn());
 const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
+const restartLogWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "restart" ? { ...logger, warn: restartLogWarnMock } : logger;
+    },
+  };
+});
 
 vi.mock("./restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: (...args: unknown[]) =>
@@ -96,12 +107,12 @@ function countSigusr1Emits(calls: readonly unknown[][]): number {
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
     beforeEach(async () => {
+      restartLogWarnMock.mockReset();
       const restart = await importFreshModule<RestartModule>(
         import.meta.url,
         `./restart.js?infra-runtime=${freshRestartModuleId++}`,
       );
       ({
-        consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
         deferGatewayRestartUntilIdle,
         isGatewaySigusr1RestartExternallyAllowed,
@@ -765,19 +776,36 @@ describe("infra runtime", () => {
 
     it("rolls back prepared restart state when emission is rejected", async () => {
       const beforeEmit = vi.fn(async () => {});
-      const afterEmitRejected = vi.fn(async () => {});
+      const unformattableFailure = new Error();
+      Object.defineProperty(unformattableFailure, "message", {
+        get() {
+          throw new Error("message read failed");
+        },
+      });
+      const afterEmitRejected = vi.fn(async () => {
+        throw unformattableFailure;
+      });
+      const afterEmitFailed = vi.fn(async () => {});
       vi.spyOn(process, "kill").mockImplementation(() => {
         throw new Error("no signal");
       });
 
       scheduleGatewaySigusr1Restart({
         delayMs: 0,
-        emitHooks: { beforeEmit, afterEmitRejected },
+        emitHooks: { beforeEmit, afterEmitRejected, afterEmitFailed },
       });
       await vi.advanceTimersByTimeAsync(0);
 
       expect(beforeEmit).toHaveBeenCalledTimes(1);
       expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+      expect(afterEmitFailed).toHaveBeenCalledTimes(1);
+      expect(restartLogWarnMock).toHaveBeenCalledWith(
+        "restart hook callback failed; restart will continue",
+        {
+          hook: "afterEmitRejected",
+          error: "Unknown error",
+        },
+      );
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
     });
 
@@ -945,6 +973,13 @@ describe("infra runtime", () => {
 
         expect(parkedAfterEmitFailed).toHaveBeenCalledTimes(1);
         expect(callerAfterEmitFailed).toHaveBeenCalledTimes(1);
+        expect(restartLogWarnMock).toHaveBeenCalledWith(
+          "restart hook callback failed; restart will continue",
+          {
+            hook: "afterEmitFailed",
+            error: "sentinel cleanup failed",
+          },
+        );
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -1280,47 +1315,6 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("keeps SIGUSR1 deferred when deferral timeout is explicitly disabled", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(300_000);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("emits SIGUSR1 after explicit deferral timeout even if still pending", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 1_000 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
-          force: true,
-        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

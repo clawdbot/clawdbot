@@ -2,7 +2,11 @@
 // it can load unbundled in Chrome). Kept in sync with relay-core.js.
 
 export const OPENCLAW_TAB_GROUP_TITLE: string;
-export function parsePairingString(raw: unknown): { relayUrl: string; token: string } | null;
+export function parsePairingString(raw: unknown): {
+  relayUrl: string;
+  token: string;
+  gatewayUrl?: string;
+} | null;
 
 export function buildRelayWsProtocols(token: string): string[];
 

@@ -289,69 +289,28 @@ final class ShareViewController: UIViewController {
                 attachmentError: nil)
         }
 
-        var title: String?
-        var sharedURL: URL?
-        var sharedText: String?
-        var attributedContentText: String?
+        let providerContent = await ShareContentExtractor.extract(from: items)
         var attachments: [LoadedAttachment] = []
-        var attachmentSummary = ShareAttachmentSummary()
+        var attachmentSummary = providerContent.attachmentSummary
         var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
 
-        for item in items {
-            if title == nil {
-                title = item.attributedTitle?.string
-            }
-            if attributedContentText == nil {
-                attributedContentText = item.attributedContentText?.string
-            }
-
-            for provider in item.attachments ?? [] {
-                let providerURL = sharedURL == nil ? await self.loadURL(from: provider) : nil
-                let providerText = sharedText == nil ? await self.loadText(from: provider) : nil
-                if let providerURL {
-                    sharedURL = providerURL
-                }
-                if let providerText {
-                    sharedText = providerText
-                }
-
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                    attachmentSummary.selectedImageCount += 1
-                    if attachments.count < maxImageAttachments, attachmentError == nil {
-                        do {
-                            let attachment = try await self.loadImageAttachment(
-                                from: provider,
-                                index: attachments.count)
-                            attachments.append(attachment)
-                        } catch let error as ShareImageProcessor.ProcessError {
-                            attachmentError = error
-                        } catch {
-                            attachmentError = .encodeFailed
-                        }
-                    }
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                    attachmentSummary.videoCount += 1
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    attachmentSummary.fileCount += 1
-                } else {
-                    // UTI conformance only promises a representation exists; count it as handled
-                    // only after the provider successfully delivers content we can send.
-                    attachmentSummary.recordUnclassifiedProvider(
-                        didLoadContent: providerURL != nil || providerText != nil)
-                }
+        for provider in providerContent.imageProviders.prefix(maxImageAttachments) {
+            guard attachmentError == nil else { break }
+            do {
+                let attachment = try await self.loadImageAttachment(
+                    from: provider,
+                    index: attachments.count)
+                attachments.append(attachment)
+            } catch let error as ShareImageProcessor.ProcessError {
+                attachmentError = error
+            } catch {
+                attachmentError = .encodeFailed
             }
         }
         attachmentSummary.acceptedImageCount = attachments.count
-
-        // Share hosts often mirror provider text in attributedContentText.
-        // Preserve distinct content as the historical title, but do not duplicate provider data.
-        let supplementalTitle = SharePayloadNormalizer.distinctAttributedText(
-            attributedContentText,
-            sharedText: sharedText,
-            sharedURL: sharedURL)
         return ExtractedShareContent(
-            payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
+            payload: providerContent.payload,
             attachments: attachments,
             attachmentSummary: attachmentSummary,
             attachmentError: attachmentError)
@@ -424,89 +383,6 @@ final class ShareViewController: UIViewController {
             }
         }
         return nil
-    }
-
-    private func loadURL(from provider: NSItemProvider) async -> URL? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-            if let url = await self.loadURLValue(
-                from: provider,
-                typeIdentifier: UTType.url.identifier)
-            {
-                return url
-            }
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-            if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier),
-               let url = SharePayloadNormalizer.webURL(from: text)
-            {
-                return url
-            }
-        }
-
-        return nil
-    }
-
-    private func loadText(from provider: NSItemProvider) async -> String? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-            if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.plainText.identifier) {
-                return text
-            }
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-            if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier) {
-                return text
-            }
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-            if let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier) {
-                return url.absoluteString
-            }
-        }
-
-        return nil
-    }
-
-    private func loadURLValue(from provider: NSItemProvider, typeIdentifier: String) async -> URL? {
-        await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let url = item as? URL {
-                    continuation.resume(returning: url)
-                    return
-                }
-                if let str = item as? String, let url = URL(string: str) {
-                    continuation.resume(returning: url)
-                    return
-                }
-                if let ns = item as? NSString, let url = URL(string: ns as String) {
-                    continuation.resume(returning: url)
-                    return
-                }
-                continuation.resume(returning: nil)
-            }
-        }
-    }
-
-    private func loadTextValue(from provider: NSItemProvider, typeIdentifier: String) async -> String? {
-        await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let text = item as? String {
-                    continuation.resume(returning: text)
-                    return
-                }
-                if let text = item as? NSString {
-                    continuation.resume(returning: text as String)
-                    return
-                }
-                if let text = item as? NSAttributedString {
-                    continuation.resume(returning: text.string)
-                    return
-                }
-                continuation.resume(returning: nil)
-            }
-        }
     }
 
     private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {
