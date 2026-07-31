@@ -758,8 +758,11 @@ describe("voice-call plugin", () => {
     expect(error?.message).not.toContain("endedAt=");
   });
 
-  it("freezes the invoking agent on tool-created calls", async () => {
-    const { tools } = setup({ provider: "mock" }, { agentId: "support" });
+  it("freezes the invoking agent and session context on tool-created calls", async () => {
+    const { tools } = setup(
+      { provider: "mock" },
+      { agentId: "support", sessionKey: "agent:support:discord:channel:general" },
+    );
     const tool = tools[0] as {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
@@ -768,12 +771,18 @@ describe("voice-call plugin", () => {
       action: "initiate_call",
       to: "+15550001234",
       message: "Hello",
+      requesterSessionKey: "agent:spoofed:requester",
+      sessionKey: "agent:support:voice:call-1",
     });
 
     expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
       "+15550001234",
-      undefined,
-      expect.objectContaining({ agentId: "support", message: "Hello" }),
+      "agent:support:voice:call-1",
+      expect.objectContaining({
+        agentId: "support",
+        message: "Hello",
+        requesterSessionKey: "agent:support:discord:channel:general",
+      }),
     );
   });
 

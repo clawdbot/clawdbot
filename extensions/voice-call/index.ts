@@ -2,7 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -723,7 +723,11 @@ export default definePluginEntry({
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
-        const agentId = normalizeOptionalString(toolContext.agentId);
+        const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
+        const contextAgentId =
+          normalizeOptionalString(toolContext.agentId) ??
+          parseAgentSessionKey(requesterSessionKey)?.agentId;
+        const agentId = contextAgentId ? normalizeAgentId(contextAgentId) : undefined;
         try {
           const rt = await ensureRuntime();
 
@@ -738,15 +742,20 @@ export default definePluginEntry({
                 if (!to) {
                   throw new Error("to required");
                 }
-                const result = await rt.manager.initiateCall(to, undefined, {
-                  message,
-                  dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-                  mode:
-                    rawParams.mode === "notify" || rawParams.mode === "conversation"
-                      ? rawParams.mode
-                      : undefined,
-                  ...(agentId ? { agentId } : {}),
-                });
+                const result = await rt.manager.initiateCall(
+                  to,
+                  normalizeOptionalString(rawParams.sessionKey),
+                  {
+                    message,
+                    dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                    mode:
+                      rawParams.mode === "notify" || rawParams.mode === "conversation"
+                        ? rawParams.mode
+                        : undefined,
+                    ...(agentId ? { agentId } : {}),
+                    ...(requesterSessionKey ? { requesterSessionKey } : {}),
+                  },
+                );
                 if (!result.success) {
                   throw new Error(result.error || "initiate failed");
                 }
