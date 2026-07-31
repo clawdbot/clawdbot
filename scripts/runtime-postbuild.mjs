@@ -5,6 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import {
   copyStaticExtensionAssets,
@@ -337,6 +338,9 @@ export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
+  // Alias rewrites delete files under dist; fail closed on a symlinked root
+  // so a stale alias removal cannot land inside the link target.
+  assertRealOutputRoot(distDir, { fs: fsImpl });
   const candidatesByAlias = collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl });
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {

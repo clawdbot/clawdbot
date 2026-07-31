@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -75,13 +76,18 @@ function removeDistPluginNodeModulesSymlinks(rootDir) {
   }
 }
 
-function pruneStaleRuntimeSymlinks() {
-  const cwd = process.cwd();
+export function pruneStaleRuntimeSymlinks(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const distRoot = path.join(cwd, "dist");
+  const distRuntimeRoot = path.join(cwd, "dist-runtime");
+  assertRealOutputRoot(distRoot, { fs: fsImpl });
+  assertRealOutputRoot(distRuntimeRoot, { fs: fsImpl });
   // runtime-postbuild stages plugin-owned node_modules into dist/ and links the
   // dist-runtime overlay back to that tree. Remove only those symlinks up front
   // so tsdown's clean step cannot traverse stale runtime overlays on rebuilds.
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist"));
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
+  removeDistPluginNodeModulesSymlinks(distRoot);
+  removeDistPluginNodeModulesSymlinks(distRuntimeRoot);
 }
 
 /**
@@ -106,6 +112,9 @@ export function cleanTsdownOutputRoots(params = {}) {
   ]);
   for (const root of roots) {
     const rootPath = path.join(cwd, root);
+    // The guard throws outside the best-effort catch below: a symlinked root
+    // must abort the build, not be swallowed as a skippable cleanup error.
+    assertRealOutputRoot(rootPath, { fs: fsImpl });
     try {
       if (hasProtectedChild({ rootPath, protectedPaths })) {
         cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
@@ -204,6 +213,7 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
+    assertRealOutputRoot(root, { fs: fsImpl });
     let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });

@@ -415,6 +415,22 @@ describe("runtime postbuild static assets", () => {
     await expectPathMissing(path.join(distDir, "library.js"));
   });
 
+  it("refuses to rewrite stable aliases through a symlinked dist root", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    await fs.mkdir(targetDir, { recursive: true });
+    const hashedFile = path.join(targetDir, "runtime-model-auth.runtime-XyZ987.js");
+    await fs.writeFile(hashedFile, "export const auth = true;\n", "utf8");
+    const distLink = path.join(rootDir, "dist");
+    await fs.symlink(targetDir, distLink, "dir");
+
+    expect(() => writeStableRootRuntimeAliases({ rootDir })).toThrow(/symbolic link/u);
+
+    expect(await fs.readlink(distLink)).toBe(targetDir);
+    expect(await fs.readFile(hashedFile, "utf8")).toBe("export const auth = true;\n");
+    await expectPathMissing(path.join(targetDir, "runtime-model-auth.runtime.js"));
+  });
+
   it("forwards default exports through stable and legacy aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
