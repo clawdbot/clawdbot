@@ -91,6 +91,33 @@ describe("llama-server provider catalog", () => {
     });
   });
 
+  it("prefers configured Authorization over ambient API-key discovery auth", async () => {
+    discoverMock.mockResolvedValue(success());
+    const ctx = catalogContext();
+    ctx.config.models = {
+      providers: {
+        "llama-server": {
+          baseUrl: "http://localhost:8080/v1",
+          headers: { Authorization: "Bearer proxy-key" },
+          models: [],
+        },
+      },
+    };
+    ctx.resolveProviderApiKey = vi.fn(() => ({
+      apiKey: "LLAMA_SERVER_API_KEY",
+      discoveryApiKey: "ambient-key",
+    }));
+
+    await discoverLlamaServerProvider(ctx);
+
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+        headers: { Authorization: "Bearer proxy-key" },
+      }),
+    );
+  });
+
   it("preserves explicit models when the server is unavailable", async () => {
     discoverMock.mockResolvedValue({
       kind: "unreachable",

@@ -7,7 +7,11 @@ import type {
   UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import {
+  hasLlamaServerAuthorizationHeader,
+  resolveLlamaServerProviderHeaders,
+  resolveLlamaServerRuntimeApiKey,
+} from "./auth.js";
 import { LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
@@ -95,7 +99,9 @@ async function discoverFromCatalogContext(
   });
   return await discoverLlamaServer({
     baseUrl: providerConfig?.baseUrl,
-    apiKey: auth.discoveryApiKey ?? auth.apiKey,
+    apiKey: hasLlamaServerAuthorizationHeader(headers)
+      ? undefined
+      : (auth.discoveryApiKey ?? auth.apiKey),
     headers,
     signal: "signal" in ctx ? ctx.signal : undefined,
     timeoutMs: "timeoutMs" in ctx ? ctx.timeoutMs : undefined,
@@ -158,7 +164,7 @@ export async function prepareLlamaServerDynamicModels(
   });
   const discovery = await discoverLlamaServer({
     baseUrl: ctx.providerConfig?.baseUrl,
-    apiKey,
+    apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
     cacheTtlMs: 0,
   });
