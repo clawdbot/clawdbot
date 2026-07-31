@@ -1150,6 +1150,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       }),
     );
+    expect(
+      generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery,
+    ).not.toHaveBeenCalled();
     if (expectsMessageToolMode) {
       expectGatewayAgentParams(callGateway, {
         deliver: false,
@@ -2604,6 +2607,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The generated music is ready.",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
+    expect(generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:dm:U123",
+        mediaLabel: "music",
+        status: "ok",
+        contextKey: "announce-dm-fallback-empty:generated-media-direct",
       }),
     );
   });
