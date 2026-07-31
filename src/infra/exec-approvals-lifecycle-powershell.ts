@@ -56,6 +56,8 @@ const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
 ]);
 const POWERSHELL_ALIAS_OPTIONS_WITH_VALUE = new Set(["-description", "-option", "-scope"]);
 const POWERSHELL_ALIAS_SETTERS = new Set(["nal", "new-alias", "sal", "set-alias"]);
+const POWERSHELL_PIPELINE_OBJECT_MUTATION_RE =
+  /(?:\$_|\$psitem)\??\.(?:closemainwindow|continue|kill|pause|start|stop)\(/iu;
 
 function optionName(token: string): string {
   return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
@@ -236,11 +238,18 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
   if (mutations.has(normalizeExecutableToken(argv[0] ?? ""))) {
     return true;
   }
-  return (
-    ["%", "foreach", "foreach-object", "where", "where-object"].includes(
+  if (
+    !["%", "foreach", "foreach-object", "where", "where-object"].includes(
       normalizeExecutableToken(argv[0] ?? ""),
-    ) && argv.slice(1).some((token) => mutations.has(normalizeExecutableToken(token)))
-  );
+    )
+  ) {
+    return false;
+  }
+  if (argv.slice(1).some((token) => mutations.has(normalizeExecutableToken(token)))) {
+    return true;
+  }
+  const script = argv.slice(1).join("").replaceAll("`", "");
+  return POWERSHELL_PIPELINE_OBJECT_MUTATION_RE.test(script);
 }
 
 function parsePowerShellAlias(

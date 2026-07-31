@@ -123,6 +123,37 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(true);
   });
 
+  it.each([
+    [
+      "Get-Process OpenClaw | ForEach-Object { $_.Kill() }",
+      ["Get-Process", "OpenClaw", "|", "ForEach-Object", "{", "$_.Kill()", "}"],
+    ],
+    [
+      "Get-Service OpenClaw | % { $_.Stop() }",
+      ["Get-Service", "OpenClaw", "|", "%", "{", "$_.Stop()", "}"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "recognizes pipeline object lifecycle methods: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it("keeps non-mutating pipeline object methods non-blocking", () => {
+    const command = "Get-Process OpenClaw | ForEach-Object { $_.Refresh() }";
+    expect(
+      requiresApproval(command, [
+        "Get-Process",
+        "OpenClaw",
+        "|",
+        "ForEach-Object",
+        "{",
+        "$_.Refresh()",
+        "}",
+      ]),
+    ).toBe(false);
+  });
+
   it("recursively classifies OpenClaw commands in pipeline script blocks", () => {
     const inline = "1 | % { openclaw gateway restart }";
     const command = `powershell -Command '${inline}'`;

@@ -521,7 +521,7 @@ export function expandLifecycleEnvironmentArgv(params: {
     }
     const value = readEnvironmentValue(params.env, key, params.platform ?? process.platform);
     if (value !== undefined) {
-      fieldSplitUncertain ||= /\s/u.test(value);
+      fieldSplitUncertain ||= value.length === 0 || /\s/u.test(value);
       return value;
     }
     if (!params.envComplete) {

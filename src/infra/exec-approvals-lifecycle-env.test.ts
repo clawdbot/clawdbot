@@ -53,6 +53,19 @@ describe("OpenClaw lifecycle environment data positions", () => {
     ).toBe(true);
   });
 
+  it("preserves POSIX field-removal uncertainty for known empty references", () => {
+    const command = `$EMPTY openclaw gateway restart`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env: { EMPTY: "" },
+        envComplete: true,
+        platform: "linux",
+        segments: [{ raw: command, argv: ["$EMPTY", "openclaw", "gateway", "restart"] }],
+      }),
+    ).toBe(true);
+  });
+
   it("uses target-platform environment name semantics", () => {
     const command = `$tool gateway restart`;
     expect(
