@@ -290,6 +290,40 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     );
   });
 
+  it("preserves the primary topic on immediate failure alerts", async () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+    });
+
+    await sendGatewayCronFailureAlert({
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      job,
+      text: "cron failed",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+      mode: "announce",
+    });
+
+    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          channel: "telegram",
+          to: "-1001234567890",
+          accountId: "bot-a",
+          threadId: 42,
+        }),
+      }),
+    );
+  });
+
   it("keeps immediate failure webhook messages stable and adds structured runAtMs", async () => {
     const runAtMs = Date.parse("2026-01-15T15:30:00.000Z");
     const job = createWebhookJob({
@@ -771,6 +805,38 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
       inheritSessionThread: false,
     });
+  });
+
+  it("preserves the primary topic when a failed run falls back to its delivery route", () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "error", error: "boom" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "main",
+      job.id,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "-1001234567890",
+        accountId: "bot-a",
+        threadId: 42,
+      }),
+      expect.any(String),
+    );
   });
 
   it("announces channel-shaped failure destinations without mode under a global webhook default (#102235)", () => {
