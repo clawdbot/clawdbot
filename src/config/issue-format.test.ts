@@ -8,6 +8,21 @@ import {
 } from "./issue-format.js";
 
 describe("config issue format", () => {
+  it("formats issue lines with source locations", () => {
+    expect(
+      formatConfigIssueLine(
+        {
+          path: "agents.list[3].tools.profile",
+          message: 'Invalid input, got: "none"',
+          line: 247,
+          sourceFile: "openclaw.json",
+        },
+        "×",
+        { normalizeRoot: true },
+      ),
+    ).toBe('× openclaw.json:247 — agents.list[3].tools.profile: Invalid input, got: "none"');
+  });
+
   it("formats issue lines with and without markers", () => {
     expect(formatConfigIssueLine({ path: "", message: "broken" }, "-")).toBe("- : broken");
     expect(
@@ -55,15 +70,18 @@ describe("config issue format", () => {
   });
 
   it("normalizes issue collections for machine output", () => {
-    expect(
-      normalizeConfigIssues([
-        {
-          path: "update.channel",
-          message: "invalid",
-          allowedValues: [],
-          allowedValuesHiddenCount: 2,
-        },
-      ]),
-    ).toEqual([{ path: "update.channel", message: "invalid" }]);
+    const issues = normalizeConfigIssues([
+      {
+        path: "update.channel",
+        pathSegments: ["update", "channel"],
+        message: "invalid",
+        allowedValues: [],
+        allowedValuesHiddenCount: 2,
+      },
+    ]);
+
+    expect(issues).toEqual([{ path: "update.channel", message: "invalid" }]);
+    expect(issues[0]?.pathSegments).toEqual(["update", "channel"]);
+    expect(JSON.stringify(issues)).not.toContain("pathSegments");
   });
 });

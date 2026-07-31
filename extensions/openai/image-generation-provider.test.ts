@@ -1014,7 +1014,7 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it("forwards output and OpenAI-only options on multipart edits", async () => {
+  it("forwards supported OpenAI options on multipart edits", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
@@ -1029,7 +1029,6 @@ describe("openai image generation provider", () => {
       providerOptions: {
         openai: {
           background: "transparent",
-          moderation: "auto",
           outputCompression: 75,
           user: "end-user-99",
         },
@@ -1043,12 +1042,42 @@ describe("openai image generation provider", () => {
     expect(form.get("quality")).toBe("high");
     expect(form.get("output_format")).toBe("webp");
     expect(form.get("background")).toBe("transparent");
-    expect(form.get("moderation")).toBe("auto");
+    expect(form.get("moderation")).toBeNull();
     expect(form.get("output_compression")).toBe("75");
     expect(form.get("user")).toBe("end-user-99");
     expect(result.images[0]?.mimeType).toBe("image/webp");
     expect(result.images[0]?.fileName).toBe("image-1.webp");
   });
+
+  it.each(["low", "auto"] as const)(
+    "forwards %s moderation on multipart image edits",
+    async (moderation) => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Edit with supported moderation",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        providerOptions: {
+          openai: { moderation },
+        },
+      });
+
+      const request = multipartRequestCall() as RequestCall & {
+        body: FormData;
+      };
+      expect(postMultipartRequestMock).toHaveBeenCalledOnce();
+      expect(request.url).toBe("https://api.openai.com/v1/images/edits");
+      expect(request.body).toBeInstanceOf(FormData);
+      expect(request.body.get("moderation")).toBe(moderation);
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(result.images).toHaveLength(1);
+      expect(result.images[0]?.mimeType).toBe("image/png");
+    },
+  );
 
   it("falls back to Codex OAuth image generation through Responses streaming", async () => {
     mockCodexAuthOnly();
@@ -1627,6 +1656,79 @@ describe("openai image generation provider", () => {
         },
       ],
     });
+  });
+
+  it.each([
+    {
+      name: "invalid alphabet from output item",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs!bG8=" },
+      },
+    },
+    {
+      name: "invalid alphabet from completed output",
+      event: {
+        type: "response.completed",
+        response: {
+          output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
+        },
+      },
+    },
+    {
+      name: "missing canonical padding",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVsbG8" },
+      },
+    },
+    {
+      name: "internal whitespace",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs bG8=" },
+      },
+    },
+    {
+      name: "non-zero trailing bits",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "Zh==" },
+      },
+    },
+  ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw from malformed image data",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+  });
+
+  it("accepts Codex-compatible surrounding Unicode whitespace", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
+      })}\n\n`,
+    );
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw from valid image data",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("hello"));
   });
 
   it("honors configured Codex transport overrides for OAuth image generation", async () => {
@@ -2278,3 +2380,4 @@ describe("openai image generation provider", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

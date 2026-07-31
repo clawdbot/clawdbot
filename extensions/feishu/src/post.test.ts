@@ -205,15 +205,16 @@ describe("parsePostContent", () => {
     );
   });
 
-  it("renders content_v2 mentions via existing at handling (AC-M1-E3)", () => {
-    // 默认 content_v2 @ 仍走结构化 tag:at（与 content 一致），renderElement case "at" 抽 open_id。
+  it("extracts content_v2 native markdown mentions (AC-M1-E3)", () => {
     const content = JSON.stringify({
       title: "",
       content: [[{ tag: "text", text: "x" }]],
       content_v2: [
         [
-          { tag: "at", open_id: "ou_bot" },
-          { tag: "md", text: " /help" },
+          {
+            tag: "md",
+            text: '<at user_id="ou_bot">OpenClaw</at> /help',
+          },
         ],
       ],
     });

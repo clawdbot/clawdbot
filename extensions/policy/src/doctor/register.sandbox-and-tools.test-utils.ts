@@ -1433,8 +1433,6 @@ describe("registerPolicyDoctorChecks", () => {
         bind: "lan",
         auth: { mode: "none" },
         controlUi: {
-          allowInsecureAuth: true,
-          dangerouslyDisableDeviceAuth: true,
           dangerouslyAllowHostHeaderOriginFallback: true,
         },
         tailscale: { mode: "funnel" },
@@ -1453,7 +1451,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
         nodes: {
-          allowCommands: ["mcp.help", "mcp.invoke", "system.run"],
+          commands: { allow: ["mcp.help", "mcp.invoke", "system.run"] },
         },
       },
     } as unknown as OpenClawConfig;
@@ -1512,12 +1510,6 @@ describe("registerPolicyDoctorChecks", () => {
           requirement: "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
         }),
         expect.objectContaining({
-          checkId: "policy/gateway-control-ui-insecure",
-          severity: "error",
-          ocPath: "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
-          requirement: "oc://policy.jsonc/gateway/controlUi/allowInsecure",
-        }),
-        expect.objectContaining({
           checkId: "policy/gateway-tailscale-funnel",
           severity: "error",
           ocPath: "oc://openclaw.config/gateway/tailscale/mode",
@@ -1544,12 +1536,12 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/gateway-node-command-denied",
           severity: "error",
-          ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+          ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
           requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
         }),
       ]),
     );
-    expect(result.findings).toHaveLength(13);
+    expect(result.findings).toHaveLength(11);
   });
 
   it("does not report gateway node commands denied by runtime config", async () => {
@@ -1558,8 +1550,10 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy(),
       gateway: {
         nodes: {
-          allowCommands: ["system.run"],
-          denyCommands: ["system.run"],
+          commands: {
+            allow: ["system.run"],
+            deny: ["system.run"],
+          },
         },
       },
     } as unknown as OpenClawConfig;
@@ -1610,7 +1604,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/gateway-node-command-denied",
         severity: "error",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
       }),
     ]);
@@ -2055,3 +2049,4 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toHaveLength(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,13 +8,13 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  CodexAppServerListModelsOptions,
-  CodexAppServerModel,
-  CodexAppServerModelListResult,
-} from "./src/app-server/models.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
+import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 
+// `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
+// New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
@@ -26,9 +26,6 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "runtime-llm-complete",
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
-
-/** Public model-listing types exposed for Codex app-server catalog callers. */
-export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
 type CodexAppServerAgentHarness = AgentHarness & {
   compactAfterContextEngine?(
@@ -56,7 +53,9 @@ export function createCodexAppServerAgentHarness(options: {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
   resolveConfig?: () => OpenClawConfig | undefined;
+  runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
+  sessionCatalogControl?: CodexSessionCatalogControl;
 }): AgentHarness {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
@@ -65,15 +64,36 @@ export function createCodexAppServerAgentHarness(options: {
       id.trim().toLowerCase(),
     ),
   );
+  const sessionCatalogControl = options.sessionCatalogControl;
+  const sessionRuntime = options.runtime;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
+    autoSelection: { providerIds: [...providerIds] },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
-      sourceVisibleReplies: "message_tool",
+      visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    ...(sessionCatalogControl && sessionRuntime
+      ? {
+          sessionFork: {
+            upstreamKinds: ["codex-app-server"] as const,
+            fork: async (params) => {
+              const { forkCodexUpstreamSession } =
+                await import("./src/app-server/upstream-session-fork.js");
+              return await forkCodexUpstreamSession(params, {
+                bindingStore: options.bindingStore,
+                control: sessionCatalogControl,
+                harnessRuntimeId,
+                resolveConfig: options.resolveConfig,
+                runtime: sessionRuntime,
+              });
+            },
+          },
+        }
+      : {}),
     authBinding: {
       fingerprint: async (params) => {
         const { fingerprintCodexAppServerAuthBinding } =
@@ -87,6 +107,17 @@ export function createCodexAppServerAgentHarness(options: {
           await import("./src/app-server/runtime-artifact.js");
         return validateCodexAppServerRuntimeArtifact(binding);
       },
+    },
+    fetchUsageSnapshot: async (ctx) => {
+      const { fetchCodexAppServerUsageSnapshot } = await import("./src/app-server/usage.js");
+      return await fetchCodexAppServerUsageSnapshot(ctx, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
+    loadMcpToolCatalog: async (params) => {
+      const { loadCodexEffectiveMcpCatalog } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
@@ -154,6 +185,39 @@ export function createCodexAppServerAgentHarness(options: {
         nativeHookRelay: { enabled: true },
       });
     },
+    runIsolatedCompletion: async (params) => {
+      // Codex app-server always exposes update_plan. Pure inference therefore
+      // uses the already-prepared OpenAI/ChatGPT transport and credential
+      // directly, without entering a Codex thread or re-resolving the route.
+      const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
+      const signal = params.abortSignal
+        ? AbortSignal.any([params.abortSignal, timeoutSignal])
+        : timeoutSignal;
+      const assistant = await completeWithPreparedSimpleCompletionModel({
+        model: params.model,
+        auth: params.auth,
+        cfg: params.config,
+        context: {
+          systemPrompt: params.systemPrompt,
+          messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
+          tools: [],
+        },
+        options: {
+          maxTokens: params.streamParams?.maxTokens,
+          temperature: params.streamParams?.temperature,
+          reasoning: params.thinkLevel,
+          signal,
+        },
+      });
+      return { assistant };
+    },
+    finalizeSettledTurn: async (params) => {
+      const { runCodexSettledTurnFinalization } =
+        await import("./src/app-server/settled-turn-finalizer.js");
+      return runCodexSettledTurnFinalization(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
@@ -186,18 +250,22 @@ export function createCodexAppServerAgentHarness(options: {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         });
-        let retired = await options.bindingStore.retireSessionGeneration(identity);
-        if (retired === "conflict") {
+        const resetGeneration =
+          params.reason === "deleted"
+            ? options.bindingStore.retireSessionGeneration.bind(options.bindingStore)
+            : options.bindingStore.resetSessionGeneration.bind(options.bindingStore);
+        let reset = await resetGeneration(identity);
+        if (reset === "conflict") {
           const reclaimed = await reclaimCurrentCodexSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
             config: options.resolveConfig?.(),
           });
           if (reclaimed) {
-            retired = await options.bindingStore.retireSessionGeneration(identity);
+            reset = await resetGeneration(identity);
           }
         }
-        if (retired === "conflict") {
+        if (reset === "conflict") {
           throw new Error(
             `Codex binding generation changed before session ${params.sessionId} could reset`,
           );

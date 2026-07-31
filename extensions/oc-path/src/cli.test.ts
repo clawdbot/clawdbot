@@ -1,30 +1,57 @@
 /**
  * Smoke tests for the `openclaw path` CLI handlers.
  *
- * Tests invoke each subcommand handler directly with a capturing
- * a derived runtime interface — no commander wiring, no child process spawn.
- * Assertions inspect captured stdout/stderr and the exit code the
- * handler set on the runtime.
+ * Tests invoke each subcommand through the retained Commander registration.
+ * Assertions inspect captured process output and the resulting exit code.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  formatUnifiedDiff,
-  pathEmitCommand,
-  pathFindCommand,
-  pathResolveCommand,
-  pathSetCommand,
-  pathValidateCommand,
-} from "./cli.js";
+import { Command, CommanderError } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOcPathCli } from "../cli-registration.js";
+import { registerPathCli } from "./cli.js";
 
-type CliRuntime = Parameters<typeof pathResolveCommand>[2];
+const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
+type RegisterCli = Parameters<typeof registerOcPathCli>[0]["registerCli"];
+type CliRegistrar = Parameters<RegisterCli>[0];
+type CliRegistrationOptions = Parameters<RegisterCli>[1];
 
-interface TestRuntime extends CliRuntime {
+function resolvePathMachineOutput() {
+  let resolver:
+    | ((params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean)
+    | undefined;
+  registerOcPathCli({
+    registerCli(_registrar: CliRegistrar, options?: CliRegistrationOptions) {
+      const descriptor = options?.descriptors?.[0];
+      resolver = descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
+    },
+  } as unknown as Parameters<typeof registerOcPathCli>[0]);
+  if (!resolver) {
+    throw new Error("oc-path CLI descriptor is missing its machine-output resolver");
+  }
+  return resolver;
+}
+
+const isPathMachineOutput = resolvePathMachineOutput();
+
+type PathCommandOptions = {
+  readonly json?: boolean;
+  readonly human?: boolean;
+  readonly valueJson?: boolean;
+  readonly cwd?: string;
+  readonly file?: string;
+  readonly dryRun?: boolean;
+  readonly diff?: boolean;
+};
+
+interface TestRuntime {
   readonly stdout: string[];
   readonly stderr: string[];
   exitCode: number;
+  error(value: string): void;
+  writeStdout(value: string): void;
+  exit(code: number): void;
 }
 
 function createTestRuntime(): TestRuntime {
@@ -47,10 +74,138 @@ function createTestRuntime(): TestRuntime {
   return runtime;
 }
 
-const stdoutText = (rt: TestRuntime): string => rt.stdout.join("\n");
-const stderrText = (rt: TestRuntime): string => rt.stderr.join("\n");
+const stdoutText = (rt: TestRuntime): string => rt.stdout.join("");
+const stderrText = (rt: TestRuntime): string => rt.stderr.join("");
+
+function optionArgs(options: PathCommandOptions): string[] {
+  const args: string[] = [];
+  if (options.json === true) {
+    args.push("--json");
+  }
+  if (options.human === true) {
+    args.push("--human");
+  }
+  if (options.valueJson === true) {
+    args.push("--value-json");
+  }
+  if (options.cwd !== undefined) {
+    args.push("--cwd", options.cwd);
+  }
+  if (options.file !== undefined) {
+    args.push("--file", options.file);
+  }
+  if (options.dryRun === true) {
+    args.push("--dry-run");
+  }
+  if (options.diff === true) {
+    args.push("--diff");
+  }
+  return args;
+}
+
+async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    runtime.writeStdout(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+    runtime.error(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
+  const program = new Command();
+  program.exitOverride();
+  program.configureOutput({
+    writeOut: (value) => runtime.writeStdout(value),
+    writeErr: (value) => runtime.error(value),
+  });
+  registerPathCli(program);
+  try {
+    await program.parseAsync(["node", "openclaw", "path", ...args]);
+    runtime.exitCode = process.exitCode ?? 0;
+  } catch (error) {
+    if (!(error instanceof CommanderError)) {
+      throw error;
+    }
+    runtime.exitCode = error.exitCode;
+  } finally {
+    stdoutWrite.mockRestore();
+    stderrWrite.mockRestore();
+    process.exitCode = previousExitCode;
+  }
+}
+
+async function pathResolveCommand(
+  path: string | undefined,
+  options: PathCommandOptions,
+  runtime: TestRuntime,
+): Promise<void> {
+  await invokePathCli(
+    ["resolve", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
+    runtime,
+  );
+}
+
+async function pathSetCommand(
+  path: string | undefined,
+  value: string | undefined,
+  options: PathCommandOptions,
+  runtime: TestRuntime,
+): Promise<void> {
+  await invokePathCli(
+    [
+      "set",
+      ...(path === undefined ? [] : [path]),
+      ...(value === undefined ? [] : [value]),
+      ...optionArgs(options),
+    ],
+    runtime,
+  );
+}
+
+async function pathFindCommand(
+  path: string | undefined,
+  options: PathCommandOptions,
+  runtime: TestRuntime,
+): Promise<void> {
+  await invokePathCli(
+    ["find", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
+    runtime,
+  );
+}
+
+async function pathValidateCommand(
+  path: string | undefined,
+  options: PathCommandOptions,
+  runtime: TestRuntime,
+): Promise<void> {
+  await invokePathCli(
+    ["validate", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
+    runtime,
+  );
+}
+
+async function pathEmitCommand(
+  file: string | undefined,
+  options: PathCommandOptions,
+  runtime: TestRuntime,
+): Promise<void> {
+  await invokePathCli(
+    ["emit", ...(file === undefined ? [] : [file]), ...optionArgs(options)],
+    runtime,
+  );
+}
 
 describe("openclaw path CLI", () => {
+  it("reports its TTY-aware machine-output mode to the CLI", () => {
+    const argv = ["node", "openclaw", "path", "validate", "oc://AGENTS.md"];
+    expect(isPathMachineOutput({ argv, stdoutIsTTY: false })).toBe(true);
+    expect(isPathMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
+    expect(isPathMachineOutput({ argv: [...argv, "--json"], stdoutIsTTY: true })).toBe(true);
+    expect(isPathMachineOutput({ argv: [...argv, "--human"], stdoutIsTTY: false })).toBe(false);
+  });
+
   let workspaceDir: string;
 
   beforeEach(() => {
@@ -62,9 +217,9 @@ describe("openclaw path CLI", () => {
   });
 
   describe("validate", () => {
-    it("CLI-V01 accepts a well-formed path with --json", () => {
+    it("CLI-V01 accepts a well-formed path with --json", async () => {
       const rt = createTestRuntime();
-      pathValidateCommand("oc://AGENTS.md/Tools/-1", { json: true }, rt);
+      await pathValidateCommand("oc://AGENTS.md/Tools/-1", { json: true }, rt);
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
       expect(out.valid).toBe(true);
@@ -72,19 +227,19 @@ describe("openclaw path CLI", () => {
       expect(out.structure.section).toBe("Tools");
     });
 
-    it("CLI-V02 rejects a malformed path with code 1", () => {
+    it("CLI-V02 rejects a malformed path with code 1", async () => {
       const rt = createTestRuntime();
-      pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
+      await pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
       expect(rt.exitCode).toBe(1);
       const out = JSON.parse(stdoutText(rt));
       expect(out.valid).toBe(false);
     });
 
-    it("CLI-V03 missing argument returns 2", () => {
+    it("CLI-V03 missing argument is rejected by Commander", async () => {
       const rt = createTestRuntime();
-      pathValidateCommand(undefined, { json: true }, rt);
-      expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("missing");
+      await pathValidateCommand(undefined, { json: true }, rt);
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toContain("missing required argument");
     });
   });
 
@@ -127,11 +282,26 @@ describe("openclaw path CLI", () => {
       expect(out.resolved).toBe(false);
     });
 
-    it("CLI-R03 missing argument returns 2", async () => {
+    it("CLI-R03 missing argument is rejected by Commander", async () => {
       const rt = createTestRuntime();
       await pathResolveCommand(undefined, { json: true }, rt);
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toContain("missing required argument");
+    });
+
+    it("rejects oversized multibyte JSONC with the typed diagnostic", async () => {
+      const filePath = join(workspaceDir, "oversized.json");
+      const content = `"${"界".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
+      writeFileSync(filePath, content, "utf-8");
+      const rt = createTestRuntime();
+
+      await pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt);
+
       expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("missing");
+      expect(stdoutText(rt)).toBe("");
+      expect(JSON.parse(stderrText(rt))).toMatchObject({
+        error: { code: "OC_JSONC_INPUT_TOO_LARGE" },
+      });
     });
   });
 
@@ -208,17 +378,6 @@ describe("openclaw path CLI", () => {
       expect(out).toContain('-  "version": "1.0",');
       expect(out).toContain('+  "version": "2.0",');
       expect(readFileSync(filePath, "utf-8")).toBe(before);
-    });
-
-    it("CLI-S05b --dry-run --diff shows final newline-only byte changes", () => {
-      const out = formatUnifiedDiff(
-        "## Boundaries\n\n- timeout: 5\n",
-        "## Boundaries\n\n- timeout: 5",
-        "AGENTS.md",
-      );
-      expect(out).toContain("--- AGENTS.md");
-      expect(out).toContain("@@ -1,4 +1,3 @@");
-      expect(out).toContain("\n-\n");
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
@@ -341,11 +500,11 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("gateway.jsonc");
     });
 
-    it("CLI-S04 missing args returns 2", async () => {
+    it("CLI-S04 missing args are rejected by Commander", async () => {
       const rt = createTestRuntime();
       await pathSetCommand(undefined, undefined, { json: true }, rt);
-      expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("requires");
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toContain("missing required argument");
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {

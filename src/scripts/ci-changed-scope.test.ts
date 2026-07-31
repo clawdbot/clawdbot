@@ -13,7 +13,6 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
-  shouldRunTsLoc,
   writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
@@ -104,6 +103,7 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
       "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreens.kt",
       "apps/ios/Sources/RootTabs.swift",
       "apps/macos/Sources/OpenClaw/Settings.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
@@ -119,13 +119,6 @@ describe("detectChangedScope", () => {
 
     expect(shouldRunNativeI18n(["src/config/defaults.ts"])).toBe(false);
     expect(shouldRunNativeI18n(["scripts/install.sh"])).toBe(false);
-  });
-
-  it("routes production TypeScript to the LOC ratchet independent of native lanes", () => {
-    expect(shouldRunTsLoc(["apps/android/scripts/build-release-artifacts.ts"])).toBe(true);
-    expect(shouldRunTsLoc(["apps/macos/Sources/Foo.swift"])).toBe(false);
-    expect(shouldRunTsLoc(["src/state/openclaw-state-schema.generated.ts"])).toBe(false);
-    expect(shouldRunTsLoc(["src/runtime.test.ts"])).toBe(false);
   });
 
   it("fails safe when no paths are provided", () => {
@@ -271,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({
@@ -372,7 +365,7 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("keeps native platform lanes scoped when the CI workflow changes", () => {
+  it("runs CI-owned platform lanes when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -382,7 +375,7 @@ describe("detectChangedScope", () => {
       runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
-      runUiTests: false,
+      runUiTests: true,
     });
   });
 
@@ -1016,7 +1009,6 @@ describe("detectChangedScope", () => {
       undefined,
       undefined,
       false,
-      false,
       changedPaths,
     );
 
@@ -1055,9 +1047,10 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
-      run_ts_loc: "false",
+      strict_native_i18n: "false",
       changed_paths_json: "[]",
     });
   });

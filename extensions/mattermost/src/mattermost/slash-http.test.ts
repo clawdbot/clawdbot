@@ -27,10 +27,7 @@ import {
   type MattermostRegisteredCommand,
   type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
-import {
-  createSlashCommandHttpHandler,
-  resetMattermostSlashCommandValidationCacheForTests,
-} from "./slash-http.js";
+import { createSlashCommandHttpHandler } from "./slash-http.js";
 
 function createRequest(params: {
   method?: string;
@@ -88,6 +85,9 @@ const accountFixture: ResolvedMattermostAccount = {
   streamingMode: "partial",
   config: {},
 };
+
+let slashTestSequence = 0;
+let slashTestAccountId = "";
 
 function createRegisteredCommand(params?: {
   token?: string;
@@ -168,7 +168,7 @@ async function validateMattermostSlashCommandToken(params: {
 }): Promise<boolean> {
   clientMocks.createMattermostClient.mockReturnValue(params.client);
   const handler = createSlashCommandHttpHandler({
-    account: { ...accountFixture, accountId: params.accountId },
+    account: { ...accountFixture, accountId: `${slashTestAccountId}:${params.accountId}` },
     cfg: {} as OpenClawConfig,
     runtime: {} as RuntimeEnv,
     registeredCommands: [params.registeredCommand],
@@ -198,7 +198,8 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
 
 describe("slash-http", () => {
   beforeEach(() => {
-    resetMattermostSlashCommandValidationCacheForTests();
+    slashTestAccountId = `slash-test-${++slashTestSequence}`;
+    accountFixture.accountId = slashTestAccountId;
     clientMocks.createMattermostClient.mockReset();
     clientMocks.fetchMattermostChannel.mockClear();
   });
@@ -798,8 +799,13 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const message = firstLogMessage(log);
+    const message = log.mock.calls
+      .map(([entry]) => (typeof entry === "string" ? entry : ""))
+      .find((entry) => entry.includes("using team list fallback"));
+    expect(message).toBeTruthy();
+    if (!message) {
+      throw new Error("expected sanitized Mattermost command lookup fallback log");
+    }
     expect(message).toBe(
       `mattermost: slash command lookup by id returned deleted command ${"i".repeat(199)} for /oc_status; using team list fallback`,
     );
@@ -808,7 +814,7 @@ describe("slash-http", () => {
   it("rejects current commands with a mismatched method or callback URL", async () => {
     const registeredCommand = createRegisteredCommand();
 
-    for (const command of [
+    for (const [index, command] of [
       {
         id: "cmd-1",
         token: "valid-token",
@@ -829,13 +835,12 @@ describe("slash-http", () => {
         auto_complete: true,
         delete_at: 0,
       },
-    ]) {
-      resetMattermostSlashCommandValidationCacheForTests();
+    ].entries()) {
       const client = createCommandLookupClient({ command });
 
       await expect(
         validateMattermostSlashCommandToken({
-          accountId: "default",
+          accountId: `default-${index}`,
           client,
           registeredCommand,
           payload: {
@@ -923,8 +928,13 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const message = firstLogMessage(log);
+    const message = log.mock.calls
+      .map(([entry]) => (typeof entry === "string" ? entry : ""))
+      .find((entry) => entry.includes("command lookup by id failed"));
+    expect(message).toBeTruthy();
+    if (!message) {
+      throw new Error("expected sanitized Mattermost command lookup failure log");
+    }
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("/oc_status");
     expect(message).toContain("primary token=[redacted]");

@@ -35,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   child.stdout.end();
   child.stderr.end();
   child.removeAllListeners();
@@ -118,4 +119,80 @@ describe("spawnSignalDaemon", () => {
       expect(error).toHaveBeenCalledWith(`signal-cli: ${line}`);
     },
   );
+
+  it("waits for exit after SIGTERM before resolving stop", async () => {
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+
+    let resolved = false;
+    const stopPromise = handle.stop().then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(resolved).toBe(false);
+
+    child.emit("exit", 0, null);
+    await stopPromise;
+    expect(resolved).toBe(true);
+  });
+
+  it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
+    vi.useFakeTimers();
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+
+    const stopPromise = handle.stop();
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+
+    await vi.runOnlyPendingTimersAsync();
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+
+    child.emit("exit", null, "SIGKILL");
+    await stopPromise;
+  });
+
+  it("reuses the in-flight stop promise across repeated calls", async () => {
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+
+    const firstStop = handle.stop();
+    const secondStop = handle.stop();
+
+    expect(firstStop).toBe(secondStop);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.emit("exit", 0, null);
+    await Promise.all([firstStop, secondStop]);
+  });
+
+  it("does not treat a post-spawn signaling error as process exit", async () => {
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+    let resolved = false;
+    const stopPromise = handle.stop().then(() => {
+      resolved = true;
+    });
+
+    child.emit("error", new Error("kill EPERM"));
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    child.emit("exit", 0, null);
+    await stopPromise;
+    expect(resolved).toBe(true);
+  });
 });

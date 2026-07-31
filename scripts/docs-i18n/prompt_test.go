@@ -46,6 +46,7 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number",
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
 				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
+				"Preserve link-label association: translate each Markdown link label in place",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
 				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
 				"Translate the same words normally when the source clearly uses them as ordinary prose instead of a name",
@@ -59,6 +60,17 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				t.Fatalf("unexpected formatting artifact in %s prompt:\n%s", target, prompt)
 			}
 		})
+	}
+}
+
+func TestProtectedProductNameRuleCoversValidatedNames(t *testing.T) {
+	t.Parallel()
+
+	rule := protectedProductNameRule()
+	for _, name := range append(append([]string{}, alwaysProtectedProductNames...), contextualProtectedProductNames...) {
+		if !strings.Contains(rule, name) {
+			t.Errorf("protected product name %q missing from prompt rule", name)
+		}
 	}
 }
 

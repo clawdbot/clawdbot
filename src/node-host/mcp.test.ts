@@ -2,6 +2,7 @@
 
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { startNodeHostMcpManager } from "./mcp.js";
@@ -17,7 +18,7 @@ function tool(name: string, description?: string): Tool {
 function createClient(params?: {
   connectError?: Error;
   tools?: Tool[];
-  call?: (options?: { timeout?: number }) => Promise<CallToolResult>;
+  call?: (options?: { timeout?: number; signal?: AbortSignal }) => Promise<CallToolResult>;
 }) {
   return {
     onclose: undefined as (() => void) | undefined,
@@ -31,7 +32,7 @@ function createClient(params?: {
       async (
         _input: unknown,
         _schema?: undefined,
-        options?: { timeout?: number },
+        options?: { timeout?: number; signal?: AbortSignal },
       ): Promise<CallToolResult> =>
         params?.call ? await params.call(options) : { content: [{ type: "text", text: "ok" }] },
     ),
@@ -206,6 +207,44 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
+  it("cancels an in-flight MCP tool when its node invocation is aborted", async () => {
+    const controller = new AbortController();
+    const client = createClient({
+      tools: [tool("slow")],
+      call: async (options) =>
+        await new Promise<CallToolResult>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = options.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("node invocation canceled"));
+            },
+            { once: true },
+          );
+        }),
+    });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
+    );
+
+    const pending = manager.callMcpTool({
+      server: "docs",
+      tool: "slow",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
+    expect(client.callTool).toHaveBeenCalledWith({ name: "slow", arguments: {} }, undefined, {
+      timeout: 120_000,
+      signal: controller.signal,
+    });
+
+    controller.abort(new Error("node invocation canceled"));
+
+    await expect(pending).rejects.toMatchObject({ code: "MCP_TOOL_ERROR" });
+    await manager.close();
+  });
+
   it("returns structured timeout, unknown-server, and dead-client errors", async () => {
     const client = createClient({
       tools: [tool("slow")],
@@ -237,6 +276,20 @@ describe("node host MCP manager", () => {
     client.onclose?.();
     await expect(manager.callMcpTool({ server: "docs", tool: "slow" })).rejects.toMatchObject({
       code: "MCP_SERVER_UNAVAILABLE",
+    });
+    await manager.close();
+  });
+
+  it("clamps oversized configured and requested MCP tool timeouts", async () => {
+    const client = createClient({ tools: [tool("search")] });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs", requestTimeoutMs: 1e306 } },
+      { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
+    );
+
+    await manager.callMcpTool({ server: "docs", tool: "search", timeoutMs: 1e306 });
+    expect(client.callTool).toHaveBeenCalledWith({ name: "search", arguments: {} }, undefined, {
+      timeout: MAX_TIMER_TIMEOUT_MS,
     });
     await manager.close();
   });

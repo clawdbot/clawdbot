@@ -87,6 +87,7 @@ function createFixture() {
     streamStrategy: "provider",
   };
   const transcriptPolicy = { repairToolUseResultPairing: true };
+  const getUserTranscriptContexts = vi.fn(() => []);
 
   mocks.prepareSessionManager.mockImplementation(async (input) => {
     order.push("manager");
@@ -96,6 +97,10 @@ function createFixture() {
       preparedUserTurnMessage: { role: "user", content: "hello" },
       sessionManager,
       transcriptPolicy,
+      userMessageBoundary: {
+        getUserTranscriptContexts,
+        preparedUserTurnMessage: { role: "user", content: "hello" },
+      },
     };
   });
   mocks.prepareAgentSession.mockImplementation(async (input) => {
@@ -150,7 +155,7 @@ function createFixture() {
   };
   const input = {
     attempt: {
-      model: { api: "openai-responses" },
+      model: { api: "openai-responses", contextWindow: 128_000 },
       modelId: "gpt-5",
       provider: "openai",
       runId: "run-1",
@@ -198,6 +203,7 @@ function createFixture() {
     cacheTrace,
     contextGuards,
     externalAbortController,
+    getUserTranscriptContexts,
     input,
     lifecycle,
     order,
@@ -256,6 +262,12 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       promptCache: undefined,
       systemPromptText: "runtime prompt",
     });
+    expect(mocks.prepareSessionBoundary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        getUserTranscriptContexts: fixture.getUserTranscriptContexts,
+        preparedUserTurnMessage: { role: "user", content: "hello" },
+      }),
+    );
     expect(fixture.externalAbortController.setActiveSessionAbort).toHaveBeenCalledWith(
       fixture.abortActiveSession,
     );

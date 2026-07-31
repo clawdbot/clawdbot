@@ -1,7 +1,7 @@
 /** Shared doctor-only SQLite compaction mechanics. */
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
@@ -17,12 +17,11 @@ type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
-  quickCheck: "ok";
   reclaimedBytes: number;
 };
 
 type DoctorSqliteCompactOptions = {
-  afterMutation?: () => void;
+  afterSuccess?: () => void;
   busyTimeoutMs?: number;
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
@@ -38,9 +37,7 @@ type DoctorSqliteCompactOptions = {
 export function compactDoctorSqliteFile(
   options: DoctorSqliteCompactOptions,
 ): DoctorSqliteCompactResult {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(options.sqlitePath);
-  let mutationStarted = false;
+  const database = openNodeSqliteDatabase(options.sqlitePath);
   let operationError: unknown;
   let result: DoctorSqliteCompactResult | undefined;
   try {
@@ -51,12 +48,11 @@ export function compactDoctorSqliteFile(
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
     assertSqliteIntegrity(database, options.sqlitePath);
-    mutationStarted = true;
     checkpointTruncate(database, options.sqlitePath);
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database, options.sqlitePath);
-    const { quickCheck, integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -64,7 +60,6 @@ export function compactDoctorSqliteFile(
       after,
       before,
       integrityCheck,
-      quickCheck,
       reclaimedBytes: Math.max(0, beforeBytes - afterBytes),
     };
   } catch (error) {
@@ -75,9 +70,9 @@ export function compactDoctorSqliteFile(
   } catch (error) {
     operationError ??= error;
   }
-  if (mutationStarted) {
+  if (operationError === undefined && result) {
     try {
-      options.afterMutation?.();
+      options.afterSuccess?.();
     } catch (error) {
       operationError ??= error;
     }

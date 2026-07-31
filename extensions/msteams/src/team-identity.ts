@@ -46,6 +46,3 @@ export async function resolveTeamGroupId(params: {
   cacheTeamGroupId(params.conversationTeamId, groupId);
   return groupId;
 }
-
-// Exported for testing only.
-export { teamGroupIdCache as _teamGroupIdCacheForTest };

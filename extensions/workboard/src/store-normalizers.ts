@@ -1,30 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_CARD_ARTIFACTS,
-  MAX_CARD_ATTACHMENTS,
-  MAX_CARD_ATTEMPTS,
-  MAX_CARD_COMMENTS,
-  MAX_CARD_DIAGNOSTICS,
-  MAX_CARD_EVENTS,
-  MAX_CARD_LINKS,
-  MAX_CARD_METADATA_BYTES,
-  MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
-  MAX_CARD_WORKER_LOGS,
-} from "./store-constants.js";
-import type {
-  WorkboardAttachmentInput,
-  WorkboardBoardInput,
-  WorkboardNotificationSubscribeInput,
-  WorkboardProofInput,
-} from "./store-inputs.js";
-import {
+  isValidWorkboardBoardId,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EVENT_KINDS,
-  WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_LINK_TYPES,
@@ -47,7 +27,6 @@ import {
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
-  type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
   type WorkboardExecutionStatus,
   type WorkboardLink,
@@ -66,7 +45,27 @@ import {
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_CARD_ARTIFACTS,
+  MAX_CARD_ATTACHMENTS,
+  MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
+  MAX_CARD_DIAGNOSTICS,
+  MAX_CARD_EVENTS,
+  MAX_CARD_LINKS,
+  MAX_CARD_METADATA_BYTES,
+  MAX_CARD_NOTIFICATIONS,
+  MAX_CARD_PROOF,
+  MAX_CARD_WORKER_LOGS,
+} from "./store-constants.js";
+import type {
+  WorkboardAttachmentInput,
+  WorkboardBoardInput,
+  WorkboardNotificationSubscribeInput,
+  WorkboardProofInput,
+} from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeOptionalString(value: unknown): string | undefined {
@@ -79,10 +78,8 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
     return undefined;
   }
   const boardId = raw.toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(boardId)) {
-    throw new Error(
-      "board id must start with a letter or number and use letters, numbers, dots, dashes, or underscores.",
-    );
+  if (!isValidWorkboardBoardId(boardId)) {
+    throw new Error("board id must match [a-z0-9][a-z0-9._-]{0,79}.");
   }
   return boardId;
 }
@@ -487,19 +484,6 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-function normalizeExecutionEngine(
-  value: unknown,
-  fallback: WorkboardExecutionEngine,
-): WorkboardExecutionEngine {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_ENGINES.includes(value as WorkboardExecutionEngine)
-  ) {
-    return value as WorkboardExecutionEngine;
-  }
-  return fallback;
-}
-
 function normalizeExecutionMode(
   value: unknown,
   fallback: WorkboardExecutionMode,
@@ -631,16 +615,14 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
+  const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
   return {
     id,
     status: normalizeAttemptStatus(record.status, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
-    ...(typeof record.engine === "string" &&
-    WORKBOARD_EXECUTION_ENGINES.includes(record.engine as WorkboardExecutionEngine)
-      ? { engine: record.engine as WorkboardExecutionEngine }
-      : {}),
+    ...(engine ? { engine } : {}),
     ...(typeof record.mode === "string" &&
     WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
       ? { mode: record.mode as WorkboardExecutionMode }
@@ -1001,13 +983,51 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   };
 }
 
+function completionProofConflicts(existing: WorkboardProof, completion: WorkboardProof): boolean {
+  return (["label", "command", "url", "note"] as const).some(
+    (field) => completion[field] !== undefined && completion[field] !== existing[field],
+  );
+}
+
+export function appendCompletionProof(
+  existing: readonly WorkboardProof[] | undefined,
+  proof: WorkboardProof,
+  proofId?: string,
+): WorkboardProof[] {
+  const entries = [...(existing ?? [])];
+  if (!proofId) {
+    return [...entries, proof].slice(-MAX_CARD_PROOF);
+  }
+  const index = entries.findIndex((entry) => entry.id === proofId);
+  const pending = index >= 0 ? entries[index] : undefined;
+  if (!pending) {
+    throw new Error(`proof not found: ${proofId}`);
+  }
+  if (proof.status === "unknown") {
+    throw new Error("completion proof status must be passed, failed, or skipped.");
+  }
+  if (completionProofConflicts(pending, proof)) {
+    throw new Error(`completion proof does not match pending proof: ${proofId}`);
+  }
+  if (pending.status !== "unknown") {
+    if (pending.status !== proof.status) {
+      throw new Error(`completion proof status does not match existing proof: ${proofId}`);
+    }
+    return entries.slice(-MAX_CARD_PROOF);
+  }
+  // A proof id is the durable correlation boundary between a separately recorded check and its
+  // completion. Preserve the original evidence identity and timestamp while resolving its status.
+  entries[index] = { ...pending, status: proof.status };
+  return entries.slice(-MAX_CARD_PROOF);
+}
+
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
-  options: { allowDependencyLinks?: boolean } = {},
+  options: { allowDependencyLinks?: boolean; preserveProofId?: string } = {},
 ): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return trimMetadataToBudget(fallback);
+    return trimMetadataToBudget(fallback, options);
   }
   const record = value as Record<string, unknown>;
   const stale =
@@ -1035,7 +1055,7 @@ export function normalizeMetadata(
             ];
           })()
         : links.slice(-MAX_CARD_LINKS);
-  return trimMetadataToBudget({
+  const normalized = {
     attempts: Array.isArray(record.attempts)
       ? record.attempts
           .map(normalizeAttempt)
@@ -1120,7 +1140,8 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
-  });
+  };
+  return trimMetadataToBudget(normalized, options);
 }
 
 export function normalizeExecution(value: unknown): WorkboardExecution | undefined {
@@ -1129,24 +1150,27 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   }
   const record = value as Record<string, unknown>;
   const now = Date.now();
-  const model = normalizeOptionalString(record.model);
-  const id = normalizeOptionalString(record.id) ?? randomUUID();
-  if (!model) {
-    return undefined;
-  }
-  const startedAt = normalizeTimestamp(record.startedAt, now);
-  const updatedAt = normalizeTimestamp(record.updatedAt, startedAt);
+  // Preserve historical labels as written; old hardcoded "codex" rows cannot be inferred safely.
+  const engine = normalizeBoundedString(record.engine, undefined, 160, "execution engine");
+  const model = normalizeBoundedString(record.model, undefined, 160, "execution model");
+  const normalizedId = normalizeOptionalString(record.id);
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
+  if (!normalizedId && !engine && !model && !sessionKey && !runId) {
+    return undefined;
+  }
+  const id = normalizedId ?? randomUUID();
+  const startedAt = normalizeTimestamp(record.startedAt, now);
+  const updatedAt = normalizeTimestamp(record.updatedAt, startedAt);
   return {
     id,
     kind: "agent-session",
-    engine: normalizeExecutionEngine(record.engine, "codex"),
     mode: normalizeExecutionMode(record.mode, "autonomous"),
     status: normalizeExecutionStatus(record.status, "idle"),
-    model,
     startedAt,
     updatedAt,
+    ...(engine ? { engine } : {}),
+    ...(model ? { model } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
   };
@@ -1168,6 +1192,12 @@ export function syncExecutionSessionKey(
 
 function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
   const next = { ...execution };
+  if (next.engine === undefined) {
+    delete next.engine;
+  }
+  if (next.model === undefined) {
+    delete next.model;
+  }
   if (next.sessionKey === undefined) {
     delete next.sessionKey;
   }
@@ -1269,6 +1299,21 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
+function dropFirstProofExcept(
+  items: readonly WorkboardProof[] | undefined,
+  preserveProofId: string | undefined,
+): WorkboardProof[] | undefined {
+  if (!items?.length) {
+    return undefined;
+  }
+  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
+  if (index < 0) {
+    return items.slice();
+  }
+  const next = items.filter((_, itemIndex) => itemIndex !== index);
+  return next.length ? next : undefined;
+}
+
 function dropFirstNonDependencyLink(
   items: readonly WorkboardLink[] | undefined,
 ): WorkboardLink[] | undefined {
@@ -1298,7 +1343,10 @@ export function appendLinkPreservingDependencies(
   return next.filter((_, index) => index !== dropIndex);
 }
 
-export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMetadata {
+export function trimMetadataToBudget(
+  metadata: WorkboardMetadata,
+  options: { preserveProofId?: string } = {},
+): WorkboardMetadata {
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
@@ -1311,8 +1359,13 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
         ...next,
         notifications: dropFirst(next.notifications),
       });
-    } else if (next.proof?.length) {
-      next = removeUndefinedMetadataFields({ ...next, proof: dropFirst(next.proof) });
+    } else if (
+      next.proof?.some((proof) => !options.preserveProofId || proof.id !== options.preserveProofId)
+    ) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
+      });
     } else if (next.artifacts?.length) {
       next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
     } else if (next.attachments?.length) {
@@ -1331,10 +1384,16 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
       }
     } else if (next.comments?.length) {
       next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
+    } else if (options.preserveProofId) {
+      throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
     }
     if (metadataByteSize(next) >= currentSize) {
+      if (options.preserveProofId) {
+        throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
+      }
       break;
     }
   }
   return next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

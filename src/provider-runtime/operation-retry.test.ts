@@ -75,6 +75,26 @@ describe("executeProviderOperationWithRetry", () => {
   });
 
   it.each([
+    [429, Object.assign(new Error("Too Many Requests"), { status: 429 })],
+    ["HTTP 429", new Error("HTTP 429 Too Many Requests")],
+  ])("retries %s rate limit errors", async (_label, error) => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue("ok");
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
     ["HTTP 400", Object.assign(new Error("Bad Request"), { status: 400 })],
     ["ENOENT", new Error("ENOENT: no such file or directory")],
   ])("does not retry %s failures", async (_label, error) => {
@@ -91,6 +111,26 @@ describe("executeProviderOperationWithRetry", () => {
       }),
     ).rejects.toThrow();
     expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start another attempt after caller cancellation", async () => {
+    const controller = new AbortController();
+    const operation = vi.fn(async () => {
+      controller.abort(new Error("caller cancelled provider read"));
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        signal: controller.signal,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).rejects.toThrow("caller cancelled provider read");
+
+    expect(operation).toHaveBeenCalledOnce();
   });
 
   it("does not retry create operations by default", async () => {

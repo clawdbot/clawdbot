@@ -1,62 +1,93 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalPtyHandle } from "../../process/terminal-pty.js";
 import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
-
-type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
+import {
+  baseOpenRequest as baseRequest,
+  type FakeTerminalPty,
+  makeFakePty,
+} from "./session-manager.test-helpers.js";
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
-/** A controllable fake PTY that records writes and lets tests drive data/exit. */
-function makeFakePty() {
-  let dataListener: ((chunk: string) => void) | undefined;
-  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-  const handle: TerminalPtyHandle & {
-    writes: string[];
-    resizes: Array<[number, number]>;
-    killed: boolean;
-    emitData: (chunk: string) => void;
-    emitExit: (code: number, signal?: number) => void;
-  } = {
-    pid: 4242,
-    writes: [],
-    resizes: [],
-    killed: false,
-    write: (data) => handle.writes.push(data),
-    resize: (cols, rows) => handle.resizes.push([cols, rows]),
-    pause: () => {},
-    resume: () => {},
-    onData: (listener) => {
-      dataListener = listener;
-    },
-    onExit: (listener) => {
-      exitListener = listener;
-    },
-    kill: () => {
-      handle.killed = true;
-    },
-    emitData: (chunk) => dataListener?.(chunk),
-    emitExit: (code, signal) => exitListener?.({ exitCode: code, signal }),
-  };
-  return handle;
-}
-
-function baseRequest(overrides?: Partial<TerminalOpenRequest>): TerminalOpenRequest {
-  return {
-    connId: "conn-1",
-    agentId: "main",
-    cwd: "/work",
-    shell: "/bin/zsh",
-    args: ["-l"],
-    cols: 80,
-    rows: 24,
-    env: { TERM: "xterm-256color" },
-    ...overrides,
-  };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 describe("TerminalSessionManager", () => {
+  it("kills a backend that finishes after its open request is cancelled", async () => {
+    const spawned = deferred<FakeTerminalPty>();
+    const controller = new AbortController();
+    const first = makeFakePty();
+    const second = makeFakePty();
+    let spawnCount = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      maxSessions: 1,
+      spawn: () => (spawnCount++ === 0 ? spawned.promise : Promise.resolve(second)),
+    });
+    const opening = manager.open(baseRequest({ signal: controller.signal }));
+
+    controller.abort(new Error("terminal open timed out"));
+    const next = await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-2" } }));
+    expect(next.ok).toBe(true);
+    spawned.resolve(first);
+
+    await expect(opening).resolves.toEqual({
+      ok: false,
+      code: "closed",
+      message: "terminal open timed out",
+    });
+    expect(first.killed).toBe(true);
+    expect(manager.size).toBe(1);
+    if (next.ok) {
+      expect(manager.close("conn-2", next.sessionId)).toBe(true);
+    }
+    expect(second.killed).toBe(true);
+    expect(manager.size).toBe(0);
+  });
+
+  it("bounds cancelled backend operations until they settle", async () => {
+    const firstSpawn = deferred<FakeTerminalPty>();
+    const secondSpawn = deferred<FakeTerminalPty>();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let spawnCount = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      maxSessions: 1,
+      spawn: () => (spawnCount++ === 0 ? firstSpawn.promise : secondSpawn.promise),
+    });
+
+    const firstOpening = manager.open(baseRequest({ signal: firstController.signal }));
+    firstController.abort(new Error("first cancelled"));
+    const secondOpening = manager.open(
+      baseRequest({ owner: { kind: "conn", connId: "conn-2" }, signal: secondController.signal }),
+    );
+    secondController.abort(new Error("second cancelled"));
+
+    await expect(
+      manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-3" } })),
+    ).resolves.toEqual({
+      ok: false,
+      code: "limit",
+      message: "terminal spawn limit reached (2)",
+    });
+
+    const first = makeFakePty();
+    const second = makeFakePty();
+    firstSpawn.resolve(first);
+    secondSpawn.resolve(second);
+    await expect(firstOpening).resolves.toMatchObject({ ok: false, code: "closed" });
+    await expect(secondOpening).resolves.toMatchObject({ ok: false, code: "closed" });
+    expect(first.killed).toBe(true);
+    expect(second.killed).toBe(true);
+  });
+
   it("runs relay backends through the same stream, input, resize, and close lifecycle", async () => {
     let onData: ((data: string) => void) | undefined;
     let onExit:
@@ -68,6 +99,8 @@ describe("TerminalSessionManager", () => {
     const backend: TerminalBackend = {
       write,
       resize,
+      pause: vi.fn(),
+      resume: vi.fn(),
       kill,
       onData: (callback) => {
         onData = callback;
@@ -84,9 +117,10 @@ describe("TerminalSessionManager", () => {
     }
 
     onData?.("relay output");
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
     expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: opened.sessionId,
-      seq: 0,
+      seq: "relay output".length,
       data: "relay output",
     });
     expect(manager.write("conn-1", opened.sessionId, "input")).toBe(true);
@@ -108,6 +142,8 @@ describe("TerminalSessionManager", () => {
       resize: () => {
         throw new Error("dead PTY");
       },
+      pause: vi.fn(),
+      resume: vi.fn(),
       kill,
       onData: vi.fn(),
       onExit: vi.fn(),
@@ -137,6 +173,8 @@ describe("TerminalSessionManager", () => {
     const backend: TerminalBackend = {
       write: vi.fn(),
       resize: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
       kill: vi.fn(),
       onData: vi.fn(),
       onExit: (callback) => {
@@ -175,15 +213,114 @@ describe("TerminalSessionManager", () => {
 
     fake.emitData("hello");
     fake.emitData("world");
-    expect(emit).toHaveBeenNthCalledWith(1, "conn-1", TERMINAL_EVENT_DATA, {
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: outcome.sessionId,
-      seq: 0,
-      data: "hello",
+      seq: 10,
+      data: "helloworld",
     });
-    expect(emit).toHaveBeenNthCalledWith(2, "conn-1", TERMINAL_EVENT_DATA, {
+  });
+
+  it("coalesces thousands of PTY chunks into a bounded number of data frames", async () => {
+    vi.useFakeTimers();
+    try {
+      const emit = vi.fn();
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+      const outcome = await manager.open(baseRequest());
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+
+      const chunk = "12345678";
+      for (let index = 0; index < 10_000; index += 1) {
+        fake.emitData(chunk);
+      }
+      await vi.advanceTimersByTimeAsync(4);
+
+      const frames = emit.mock.calls.filter(([, event]) => event === TERMINAL_EVENT_DATA);
+      expect(frames.length).toBeLessThan(10);
+      expect(frames.map((call) => (call[2] as { seq: number }).seq)).toEqual([65_536, 80_000]);
+      expect(
+        frames.every(
+          (call) => Buffer.byteLength((call[2] as { data: string }).data, "utf8") <= 64 * 1024,
+        ),
+      ).toBe(true);
+      expect(frames.map((call) => (call[2] as { data: string }).data).join("")).toBe(
+        chunk.repeat(10_000),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes small output immediately after terminal input", async () => {
+    const emit = vi.fn();
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+
+    expect(manager.write("conn-1", outcome.sessionId, "x")).toBe(true);
+    fake.emitData("x");
+
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
       sessionId: outcome.sessionId,
       seq: 1,
-      data: "world",
+      data: "x",
+    });
+  });
+
+  it("pauses local PTY reads above the socket watermark and reasserts resume below it", async () => {
+    vi.useFakeTimers();
+    try {
+      let bufferedAmount = Number.MAX_SAFE_INTEGER;
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        getBufferedAmount: () => bufferedAmount,
+        spawn: async () => fake,
+      });
+      const outcome = await manager.open(baseRequest());
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+
+      for (let index = 0; index < 2_000; index += 1) {
+        fake.emitData("chunk");
+      }
+      expect(fake.pauseCalls).toBe(1);
+      expect(fake.deliveredChunks).toBe(1);
+      expect(manager.snapshot(outcome.sessionId)).toBe("chunk");
+
+      bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fake.resumeCalls).toBeGreaterThanOrEqual(1);
+      fake.emitData("resumed");
+      expect(fake.deliveredChunks).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts streamed output in UTF-16 code units", async () => {
+    const emit = vi.fn();
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+
+    fake.emitData("😀");
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce());
+
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_DATA, {
+      sessionId: outcome.sessionId,
+      seq: 2,
+      data: "😀",
     });
   });
 
@@ -210,6 +347,25 @@ describe("TerminalSessionManager", () => {
     }
     expect(manager.write("conn-2", outcome.sessionId, "rm -rf /\n")).toBe(false);
     expect(fake.writes).toEqual([]);
+  });
+
+  it("stages uploads only through the owning session host", async () => {
+    const fake = makeFakePty();
+    const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
+    const outcome = await manager.open(baseRequest({ stageUpload }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
+
+    await expect(manager.upload("conn-2", outcome.sessionId, file)).resolves.toBeUndefined();
+    expect(stageUpload).not.toHaveBeenCalled();
+    await expect(manager.upload("conn-1", outcome.sessionId, file)).resolves.toEqual({
+      path: "/tmp/node/report.pdf",
+      size: 4,
+    });
+    expect(stageUpload).toHaveBeenCalledWith(file);
   });
 
   it("emits an exit event and drops the session when the process exits", async () => {
@@ -275,7 +431,11 @@ describe("TerminalSessionManager", () => {
     const live = await manager.open(baseRequest({ agentId: "locked" }));
     expect(live.ok).toBe(true);
     const pending = manager.open(
-      baseRequest({ agentId: "locked", connId: "conn-2", cwd: "/pending" }),
+      baseRequest({
+        agentId: "locked",
+        owner: { kind: "conn", connId: "conn-2" },
+        cwd: "/pending",
+      }),
     );
 
     manager.closeDisallowedAgents((agentId) => agentId !== "locked");
@@ -303,7 +463,7 @@ describe("TerminalSessionManager", () => {
       spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
     });
     await manager.open(baseRequest());
-    await manager.open(baseRequest({ connId: "conn-2" }));
+    await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-2" } }));
     emit.mockClear();
 
     manager.disposeAll();
@@ -343,7 +503,7 @@ describe("TerminalSessionManager", () => {
         return fake;
       },
     });
-    const openPromise = manager.open(baseRequest({ connId: "conn-x" }));
+    const openPromise = manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-x" } }));
     // Connection drops while the shell is still spawning.
     manager.handleDisconnect("conn-x");
     release?.();
@@ -392,6 +552,179 @@ describe("TerminalSessionManager", () => {
       expect(outcome.code).toBe("spawn_failed");
       expect(outcome.message).toContain("node-pty missing");
     }
+  });
+});
+
+describe("TerminalSessionManager agent ownership", () => {
+  const agentOwner = { kind: "agent", agentSessionKey: "agent:main:main" } as const;
+
+  it("continues live offsets after output buffered before the first viewer", async () => {
+    vi.useFakeTimers();
+    try {
+      const emit = vi.fn();
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+
+      fake.emitData("before");
+      await vi.advanceTimersByTimeAsync(4);
+      const attached = manager.attach("viewer-1", outcome.sessionId);
+      expect(attached).toMatchObject({ buffer: "before", seq: 6 });
+
+      fake.emitData("after");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(emit).toHaveBeenCalledWith("viewer-1", TERMINAL_EVENT_DATA, {
+        sessionId: outcome.sessionId,
+        seq: 11,
+        data: "after",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an agent-owned session alive across viewer disconnect and closes by agent", async () => {
+    vi.useFakeTimers();
+    try {
+      const emit = vi.fn();
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+
+      expect(manager.attach("viewer-1", outcome.sessionId)?.sessionId).toBe(outcome.sessionId);
+      expect(manager.write("viewer-1", outcome.sessionId, "human\n")).toBe(true);
+      expect(manager.resize("viewer-1", outcome.sessionId, 120, 40)).toBe(true);
+      expect(fake.writes).toEqual(["human\n"]);
+      expect(fake.resizes).toEqual([[120, 40]]);
+
+      fake.emitData("visible");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(emit).toHaveBeenCalledWith("viewer-1", TERMINAL_EVENT_DATA, {
+        sessionId: outcome.sessionId,
+        seq: 7,
+        data: "visible",
+      });
+
+      manager.handleDisconnect("viewer-1");
+      emit.mockClear();
+      fake.emitData("buffered");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(manager.size).toBe(1);
+      expect(fake.killed).toBe(false);
+      expect(emit).not.toHaveBeenCalled();
+      expect(manager.snapshotAgent("agent:main:main", outcome.sessionId)).toBe("visiblebuffered");
+
+      expect(manager.closeAgent("agent:main:main", outcome.sessionId)).toBe(true);
+      expect(fake.killed).toBe(true);
+      expect(manager.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a co-attached viewer upload into an agent-owned session", async () => {
+    const emit = vi.fn();
+    const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
+    const manager = new TerminalSessionManager({ emit, spawn: async () => makeFakePty() });
+    const outcome = await manager.open(baseRequest({ owner: agentOwner, stageUpload }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
+
+    // A connection that never attached as a viewer cannot upload.
+    await expect(manager.upload("stranger", outcome.sessionId, file)).resolves.toBeUndefined();
+    expect(stageUpload).not.toHaveBeenCalled();
+
+    expect(manager.attach("viewer-1", outcome.sessionId)?.sessionId).toBe(outcome.sessionId);
+    await expect(manager.upload("viewer-1", outcome.sessionId, file)).resolves.toEqual({
+      path: "/tmp/node/report.pdf",
+      size: 4,
+    });
+    expect(stageUpload).toHaveBeenCalledWith(file);
+  });
+
+  it("co-attaches viewers without take-over and cleans each viewer independently", async () => {
+    vi.useFakeTimers();
+    try {
+      const emit = vi.fn();
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
+      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+
+      expect(manager.attach("viewer-1", outcome.sessionId)).toBeDefined();
+      expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
+      expect(emit).not.toHaveBeenCalledWith(
+        "viewer-1",
+        TERMINAL_EVENT_EXIT,
+        expect.objectContaining({ reason: "detached" }),
+      );
+
+      fake.emitData("both");
+      await vi.advanceTimersByTimeAsync(4);
+      const dataRecipients = emit.mock.calls
+        .filter(([, event]) => event === TERMINAL_EVENT_DATA)
+        .map(([connId]) => connId)
+        .toSorted((a, b) => String(a).localeCompare(String(b)));
+      expect(dataRecipients).toEqual(["viewer-1", "viewer-2"]);
+
+      manager.handleDisconnect("viewer-1");
+      emit.mockClear();
+      fake.emitData("one");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(emit).toHaveBeenCalledWith(
+        "viewer-2",
+        TERMINAL_EVENT_DATA,
+        expect.objectContaining({ data: "one" }),
+      );
+      expect(emit).not.toHaveBeenCalledWith("viewer-1", TERMINAL_EVENT_DATA, expect.anything());
+
+      // Browser close removes the view; agent lifecycle ownership remains.
+      expect(manager.close("viewer-2", outcome.sessionId)).toBe(true);
+      expect(manager.size).toBe(1);
+      expect(fake.killed).toBe(false);
+      expect(manager.list()).toEqual([
+        expect.objectContaining({
+          sessionId: outcome.sessionId,
+          attached: false,
+          owner: "agent:agent:main:main",
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes a pressured PTY immediately when its last viewer disconnects", async () => {
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      getBufferedAmount: () => Number.MAX_SAFE_INTEGER,
+      spawn: async () => fake,
+    });
+    const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    manager.attach("viewer-1", outcome.sessionId);
+
+    fake.emitData("pressure");
+    expect(fake.paused).toBe(true);
+    expect(fake.pauseCalls).toBe(1);
+
+    manager.handleDisconnect("viewer-1");
+    expect(fake.paused).toBe(false);
+    expect(fake.resumeCalls).toBeGreaterThanOrEqual(1);
+    expect(manager.size).toBe(1);
   });
 });
 
@@ -506,15 +839,17 @@ describe("TerminalSessionManager detach/reattach", () => {
 
       const attached = manager.attach("conn-2", sessionId);
       expect(attached?.buffer).toBe("before away ");
+      expect(attached?.seq).toBe(12);
       expect(attached?.agentId).toBe("main");
       // The reaper is cancelled: the session survives past the grace deadline.
       vi.advanceTimersByTime(120_000);
       expect(fake.killed).toBe(false);
 
       fake.emitData("live");
+      await vi.advanceTimersByTimeAsync(4);
       expect(emit).toHaveBeenCalledWith("conn-2", TERMINAL_EVENT_DATA, {
         sessionId,
-        seq: 1,
+        seq: 16,
         data: "live",
       });
       expect(manager.write("conn-2", sessionId, "ls\n")).toBe(true);
@@ -525,27 +860,35 @@ describe("TerminalSessionManager detach/reattach", () => {
   });
 
   it("keeps data sequence numbers monotonic across repeated detach and attach", async () => {
-    const { manager, fake, emit, sessionId } = await openDetachable();
-    fake.emitData("first");
-    manager.handleDisconnect("conn-1");
-    fake.emitData("detached");
-    manager.attach("conn-2", sessionId);
-    fake.emitData("second");
-    manager.handleDisconnect("conn-2");
-    manager.attach("conn-3", sessionId);
-    fake.emitData("third");
+    vi.useFakeTimers();
+    try {
+      const { manager, fake, emit, sessionId } = await openDetachable();
+      fake.emitData("first");
+      await vi.advanceTimersByTimeAsync(4);
+      manager.handleDisconnect("conn-1");
+      fake.emitData("detached");
+      manager.attach("conn-2", sessionId);
+      fake.emitData("second");
+      await vi.advanceTimersByTimeAsync(4);
+      manager.handleDisconnect("conn-2");
+      manager.attach("conn-3", sessionId);
+      fake.emitData("third");
+      await vi.advanceTimersByTimeAsync(4);
 
-    const dataEvents = emit.mock.calls
-      .filter(([, event]) => event === TERMINAL_EVENT_DATA)
-      .map(([connId, , payload]) => {
-        const data = payload as { sessionId: string; seq: number; data: string };
-        return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
-      });
-    expect(dataEvents).toEqual([
-      { connId: "conn-1", sessionId, seq: 0, data: "first" },
-      { connId: "conn-2", sessionId, seq: 1, data: "second" },
-      { connId: "conn-3", sessionId, seq: 2, data: "third" },
-    ]);
+      const dataEvents = emit.mock.calls
+        .filter(([, event]) => event === TERMINAL_EVENT_DATA)
+        .map(([connId, , payload]) => {
+          const data = payload as { sessionId: string; seq: number; data: string };
+          return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
+        });
+      expect(dataEvents).toEqual([
+        { connId: "conn-1", sessionId, seq: 5, data: "first" },
+        { connId: "conn-2", sessionId, seq: 19, data: "second" },
+        { connId: "conn-3", sessionId, seq: 24, data: "third" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("attach takes over a live session and notifies the previous owner", async () => {
@@ -561,7 +904,7 @@ describe("TerminalSessionManager detach/reattach", () => {
     });
     emit.mockClear();
     fake.emitData("output");
-    expect(emit).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledTimes(1));
     expect(expectDefined(emit.mock.calls[0], "emit.mock.calls[0] test invariant")[0]).toBe(
       "conn-2",
     );
@@ -613,8 +956,8 @@ describe("TerminalSessionManager detach/reattach", () => {
         detachGraceMs: 60_000,
         maxDetachedSessions: 1,
       });
-      await manager.open(baseRequest({ connId: "conn-1" }));
-      await manager.open(baseRequest({ connId: "conn-2" }));
+      await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-1" } }));
+      await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-2" } }));
       manager.handleDisconnect("conn-1");
       vi.advanceTimersByTime(1);
       manager.handleDisconnect("conn-2");
@@ -636,9 +979,9 @@ describe("TerminalSessionManager detach/reattach", () => {
         spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
         detachGraceMs: 60_000,
       });
-      const first = await manager.open(baseRequest({ connId: "conn-1" }));
+      const first = await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-1" } }));
       vi.advanceTimersByTime(5);
-      const second = await manager.open(baseRequest({ connId: "conn-2" }));
+      const second = await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-2" } }));
       if (!first.ok || !second.ok) {
         throw new Error("expected opens");
       }

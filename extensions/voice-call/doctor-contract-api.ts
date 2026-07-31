@@ -25,6 +25,7 @@ import {
   RAW_CALL_RECORD_CHUNK_BYTES,
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
+import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
 import type { CallRecord } from "./src/types.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
@@ -126,7 +127,7 @@ function resolveVoiceCallStorePath(params: {
   if (configuredStore) {
     return resolveUserPath(configuredStore, params.env);
   }
-  return path.join(resolveHome(params.env), ".openclaw", "voice-calls");
+  return resolveDefaultVoiceCallStoreDir(params.env);
 }
 
 function resolveVoiceCallStateDatabaseEnv(
@@ -139,9 +140,19 @@ function resolveVoiceCallStateDatabaseEnv(
 }
 
 function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
-  return migration.kind === "agent-databases-composite-primary-key"
-    ? "agent database registry primary key -> agent_id,path"
-    : "audit event ledger -> versioned message lifecycle schema";
+  switch (migration.kind) {
+    case "agent-databases-composite-primary-key":
+      return "agent database registry primary key -> agent_id,path";
+    case "audit-events-v2":
+      return "audit event ledger -> versioned message lifecycle schema";
+    case "operator-approvals-system-agent":
+      return "operator approvals -> OpenClaw system changes";
+    case "session-watch-cursor-provenance-v4":
+      return "session watch cursors -> provenance column";
+    case "strict-tables-v3":
+      return "tables -> SQLite STRICT typing";
+  }
+  return migration.kind satisfies never;
 }
 
 /** Return true when a path exists and is a file. */
@@ -333,9 +344,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           return { changes, warnings };
         }
         changes.push(
-          ...schemaMigrations.map(
-            (migration) =>
-              `Migrated Voice Call SQLite ${describeVoiceCallSchemaMigration(migration)}`,
+          ...repaired.changes.map((change) =>
+            change
+              .replace(/^Migrated shared state /, "Migrated Voice Call SQLite ")
+              .replaceAll("→", "->"),
           ),
         );
       }

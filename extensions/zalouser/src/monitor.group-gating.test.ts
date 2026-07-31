@@ -5,7 +5,12 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { __testing as testing, monitorZalouserProvider } from "./monitor.js";
+import {
+  createRawZalouserMessageFromNormalized,
+  waitForZalouserIngressVerdict,
+  withZalouserIngressTestQueue,
+} from "./ingress.test-support.js";
+import { monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
   sendMessageZalouserMock,
@@ -110,23 +115,33 @@ function installRuntime(params: {
       return params.commandAuthorized ?? false;
     },
   );
-  const resolveAgentRoute = vi.fn((input: { peer?: { kind?: string; id?: string } }) => {
-    const peerKind = input.peer?.kind === "direct" ? "direct" : "group";
-    const peerId = input.peer?.id ?? "1";
-    return {
-      agentId: "main",
-      sessionKey:
-        peerKind === "direct" ? "agent:main:main" : `agent:main:zalouser:${peerKind}:${peerId}`,
-      accountId: "default",
-      mainSessionKey: "agent:main:main",
-    };
-  });
-  const readAllowFromStore = vi.fn(async () => []);
-  const readSessionUpdatedAt = vi.fn(
-    (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
+  const resolveAgentRoute = vi.fn(
+    (input: { dmScope?: string; peer?: { kind?: string; id?: string } }) => {
+      const peerKind = input.peer?.kind === "direct" ? "direct" : "group";
+      const peerId = input.peer?.id ?? "1";
+      return {
+        agentId: "main",
+        sessionKey:
+          peerKind === "direct" && input.dmScope === "main"
+            ? "agent:main:main"
+            : `agent:main:zalouser:${peerKind}:${peerId}`,
+        accountId: "default",
+        mainSessionKey: "agent:main:main",
+      };
+    },
   );
-  type ResolvedTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0];
-  const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
+  const readAllowFromStore = vi.fn(async () => []);
+  type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
+  const recordInboundSession = vi.fn(async (_params: unknown) => {});
+  const dispatch = vi.fn(async (plan: TurnPlan) => {
+    const turn = {
+      ...plan,
+      agentId: plan.route.agentId,
+      routeSessionKey: plan.route.sessionKey,
+      storePath: "/tmp",
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+    };
     await turn.recordInboundSession({
       storePath: turn.storePath,
       sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
@@ -194,31 +209,6 @@ function installRuntime(params: {
         ...paramsLocal.extra,
       }) as Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>>,
   );
-  const buildAgentSessionKey = vi.fn(
-    (input: {
-      agentId: string;
-      channel: string;
-      accountId?: string;
-      peer?: { kind?: string; id?: string };
-      dmScope?: string;
-    }) => {
-      const peerKind = input.peer?.kind === "direct" ? "direct" : "group";
-      const peerId = input.peer?.id ?? "1";
-      if (peerKind === "direct") {
-        if (input.dmScope === "per-account-channel-peer") {
-          return `agent:${input.agentId}:${input.channel}:${input.accountId ?? "default"}:direct:${peerId}`;
-        }
-        if (input.dmScope === "per-peer") {
-          return `agent:${input.agentId}:direct:${peerId}`;
-        }
-        if (input.dmScope === "main" || !input.dmScope) {
-          return "agent:main:main";
-        }
-      }
-      return `agent:${input.agentId}:${input.channel}:${peerKind}:${peerId}`;
-    },
-  );
-
   setZalouserRuntime({
     logging: {
       shouldLogVerbose: () => false,
@@ -258,13 +248,11 @@ function installRuntime(params: {
         }),
       },
       routing: {
-        buildAgentSessionKey,
         resolveAgentRoute,
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp"),
-        readSessionUpdatedAt,
-        recordInboundSession: vi.fn(async () => {}),
+        recordInboundSession,
       },
       reply: {
         resolveEnvelopeFormatOptions: vi.fn(() => undefined),
@@ -273,8 +261,7 @@ function installRuntime(params: {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       inbound: {
-        dispatchReply:
-          dispatchAssembled as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
+        dispatch,
         buildContext:
           buildContext as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
@@ -293,8 +280,6 @@ function installRuntime(params: {
     resolveAgentRoute,
     resolveCommandAuthorizedFromAuthorizers,
     readAllowFromStore,
-    readSessionUpdatedAt,
-    buildAgentSessionKey,
   };
 }
 
@@ -305,12 +290,59 @@ function installGroupCommandAuthRuntime() {
   });
 }
 
+async function processMessageThroughMonitor(params: {
+  message?: ZaloInboundMessage;
+  messages?: ZaloInboundMessage[];
+  account: ResolvedZalouserAccount;
+  config: OpenClawConfig;
+  runtime: ReturnType<typeof createZalouserRuntimeEnv>;
+  historyState?: { historyLimit?: number };
+  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+}): Promise<void> {
+  const messages = params.messages ?? (params.message ? [params.message] : []);
+  const account = params.historyState?.historyLimit
+    ? {
+        ...params.account,
+        config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
+      }
+    : params.account;
+  await withZalouserIngressTestQueue(async (ingressQueue) => {
+    const abortController = new AbortController();
+    let resolveProcessed: (() => void) | undefined;
+    const processed = new Promise<void>((resolve) => {
+      resolveProcessed = resolve;
+    });
+    startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+      for (const message of messages) {
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        if (!message.msgId) {
+          throw new Error("Zalouser monitor test message requires msgId");
+        }
+        await waitForZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+      }
+      resolveProcessed?.();
+      return { stop: vi.fn() };
+    });
+    const run = monitorZalouserProvider({
+      account,
+      config: params.config,
+      runtime: params.runtime,
+      abortSignal: abortController.signal,
+      statusSink: params.statusSink,
+      ingressQueue,
+    });
+    await processed;
+    abortController.abort();
+    await run;
+  });
+}
+
 async function processGroupControlCommand(params: {
   account: ResolvedZalouserAccount;
   content?: string;
   commandContent?: string;
 }) {
-  await testing.processMessage({
+  await processMessageThroughMonitor({
     message: createGroupMessage({
       content: params.content ?? "/new",
       commandContent: params.commandContent ?? "/new",
@@ -382,7 +414,7 @@ describe("zalouser monitor group mention gating", () => {
       >;
     };
   }) {
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: params.message,
       account: params.account ?? createAccount(),
       config: createConfig(),
@@ -408,14 +440,17 @@ describe("zalouser monitor group mention gating", () => {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
     abortController.abort();
-    await monitorZalouserProvider({
-      account: {
-        ...createAccount(),
-        config: accountConfig,
-      },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-      abortSignal: abortController.signal,
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      await monitorZalouserProvider({
+        account: {
+          ...createAccount(),
+          config: accountConfig,
+        },
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+        abortSignal: abortController.signal,
+        ingressQueue,
+      });
     });
   }
 
@@ -437,19 +472,10 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.CommandAuthorized).toBe(params.expectedCommandAuthorized);
   }
 
-  async function processOpenDmMessage(params?: {
-    message?: Partial<ZaloInboundMessage>;
-    readSessionUpdatedAt?: (input?: {
-      storePath: string;
-      sessionKey: string;
-    }) => number | undefined;
-  }) {
+  async function processOpenDmMessage(params?: { message?: Partial<ZaloInboundMessage> }) {
     const runtime = installRuntime({
       commandAuthorized: false,
     });
-    if (params?.readSessionUpdatedAt) {
-      runtime.readSessionUpdatedAt.mockImplementation(params.readSessionUpdatedAt);
-    }
     const account = createAccount();
     await processMessageWithDefaults({
       message: createDmMessage(params?.message),
@@ -531,7 +557,7 @@ describe("zalouser monitor group mention gating", () => {
     };
     const account = resolveZalouserAccountSync({ cfg, accountId: "default" });
 
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -591,7 +617,7 @@ describe("zalouser monitor group mention gating", () => {
       replyPayload: { text: replyText },
     });
 
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createDmMessage({
         content: "hello",
       }),
@@ -620,7 +646,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createDmMessage({ senderId: "321" }),
       account: {
         ...createAccount(),
@@ -673,7 +699,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -702,7 +728,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -736,7 +762,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -822,19 +848,13 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("routes DM messages with direct peer kind", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute, buildAgentSessionKey } =
+    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
       await processOpenDmMessage();
 
     const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
       peer?: unknown;
     };
     expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
-    const sessionKeyInput = mockCallArg(buildAgentSessionKey, "build agent session key") as {
-      dmScope?: string;
-      peer?: unknown;
-    };
-    expect(sessionKeyInput?.peer).toEqual({ kind: "direct", id: "321" });
-    expect(sessionKeyInput?.dmScope).toBe("per-channel-peer");
     const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
   });
@@ -854,22 +874,12 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
   });
 
-  it("reuses the legacy DM session key when only the old group-shaped session exists", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = await processOpenDmMessage({
-      readSessionUpdatedAt: (input?: { storePath: string; sessionKey: string }) =>
-        input?.sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
-    });
-
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
-    expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:group:321");
-  });
-
   it("skips pairing store read for open DM control commands", async () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
     const account = createAccount();
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createDmMessage({ content: "/new", commandContent: "/new" }),
       account: {
         ...account,
@@ -890,7 +900,7 @@ describe("zalouser monitor group mention gating", () => {
       commandAuthorized: false,
     });
     const account = createAccount();
-    await testing.processMessage({
+    await processMessageThroughMonitor({
       message: createDmMessage({ content: "hello there" }),
       account: {
         ...account,
@@ -910,42 +920,36 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    const historyState = {
-      historyLimit: 5,
-      groupHistories: new Map<
-        string,
-        Array<{ sender: string; body: string; timestamp?: number; messageId?: string }>
-      >(),
-    };
     const account = createAccount();
     const config = createConfig();
-    await testing.processMessage({
-      message: createGroupMessage({
-        content: "first unmentioned line",
-        msgId: "history-1",
-        timestampMs: 1700000000000,
-        hasAnyMention: false,
-        wasExplicitlyMentioned: false,
-      }),
+    await processMessageThroughMonitor({
+      messages: [
+        createGroupMessage({
+          content: "first unmentioned line",
+          msgId: "history-1",
+          timestampMs: 1700000000000,
+          hasAnyMention: false,
+          wasExplicitlyMentioned: false,
+        }),
+        createGroupMessage({
+          content: "second line @bot",
+          msgId: "history-2",
+          hasAnyMention: true,
+          wasExplicitlyMentioned: true,
+        }),
+        createGroupMessage({
+          content: "third line @bot",
+          msgId: "history-3",
+          hasAnyMention: true,
+          wasExplicitlyMentioned: true,
+        }),
+      ],
       account,
       config,
       runtime: createRuntimeEnv(),
-      historyState,
+      historyState: { historyLimit: 5 },
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-
-    await testing.processMessage({
-      message: createGroupMessage({
-        content: "second line @bot",
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-      }),
-      account,
-      config,
-      runtime: createRuntimeEnv(),
-      historyState,
-    });
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     const firstDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(firstDispatch?.ctx?.InboundHistory).toEqual([
       {
@@ -957,17 +961,6 @@ describe("zalouser monitor group mention gating", () => {
     ]);
     expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");
 
-    await testing.processMessage({
-      message: createGroupMessage({
-        content: "third line @bot",
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-      }),
-      account,
-      config,
-      runtime: createRuntimeEnv(),
-      historyState,
-    });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     const secondDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher, 1);
     expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);

@@ -191,6 +191,23 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(true);
   });
 
+  it("returns mentionedBot=true for a content_v2 native markdown at", () => {
+    const event = makePostEvent({
+      content: [[{ tag: "text", text: "legacy fallback" }]],
+      content_v2: [
+        [
+          {
+            tag: "md",
+            text: `<at user_id="${BOT_OPEN_ID}">OpenClaw</at> /status`,
+          },
+        ],
+      ],
+    });
+
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
   it("returns mentionedBot=false for post message with no at", () => {
     const event = makePostEvent({
       content: [[{ tag: "text", text: "hello" }]],

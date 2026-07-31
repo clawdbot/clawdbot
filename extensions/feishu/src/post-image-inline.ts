@@ -1,9 +1,10 @@
-// Feishu plugin module: single source for the content_v2 inline-image boundary.
-// Extraction (which ![alt](image_key) refs are real) and replacement must agree on
-// the same code-block boundary, else a key gets downloaded but its ref never
-// rewritten (or vice versa). Keep both here so they can never drift.
+// Feishu plugin module: single source for content_v2 inline extension parsing.
+// Image extraction/replacement and native mention extraction share the same
+// code-region boundary so literals never affect downloads or mention gating.
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+
+const MARKDOWN_MENTION_RE = /<at\s+user_id\s*=\s*"([^"]+)"\s*>[^<]*<\/at\s*>/giu;
 
 type MarkdownImageReference = {
   start: number;
@@ -85,6 +86,23 @@ export function extractMarkdownImageKeys(text: string): string[] {
     }
   }
   return [...keys];
+}
+
+/** Native content_v2 mention ids outside fenced and inline code, in first-seen order. */
+export function extractMarkdownMentionIds(text: string): string[] {
+  const codeRegions = findCodeRegions(text);
+  const ids = new Set<string>();
+  for (const match of text.matchAll(MARKDOWN_MENTION_RE)) {
+    const start = match.index ?? -1;
+    if (start < 0 || isEscapedMarkdownMarker(text, start) || isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    const id = normalizeFeishuExternalKey(match[1]);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return [...ids];
 }
 
 /**

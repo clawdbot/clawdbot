@@ -6,7 +6,9 @@ import type {
   SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CodexAppServerRpcError } from "./app-server/client.js";
 import type {
+  CodexThread,
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
   CodexTurn,
@@ -19,11 +21,26 @@ import {
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
+// codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
+// with exactly this message prefix (read_thread_view "thread not loaded"). The code
+// alone is generic (other store validation reuses it), so both must match; a harness
+// message rename degrades to the old silent gap instead of unlinking live threads.
+const CODEX_APP_SERVER_INVALID_REQUEST_CODE = -32600;
+const CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX = "thread not loaded:";
+
+function isCodexThreadGoneError(error: unknown): boolean {
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.code === CODEX_APP_SERVER_INVALID_REQUEST_CODE &&
+    error.message.startsWith(CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX)
+  );
+}
 
 type CodexUpstreamControl = {
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexUpstreamControl) => Promise<T>): Promise<T>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
 };
 
 type CodexUpstreamMarker = {
@@ -55,14 +72,17 @@ function upstreamConnectionFingerprint(probe: SessionUpstreamProbe): string | un
     : undefined;
 }
 
-export function classifyCodexUpstreamTurns(params: {
+function classifyCodexUpstreamTurns(params: {
   probe: SessionUpstreamProbe;
   turns: CodexTurn[];
   now?: number;
 }): SessionUpstreamActivity | undefined {
   const marker = readMarker(params.probe);
+  if (!marker) {
+    return undefined;
+  }
   const newest = params.turns[0];
-  if (!marker || !newest?.id) {
+  if (!newest?.id) {
     return undefined;
   }
   const markerIndex =
@@ -103,6 +123,7 @@ export function classifyCodexUpstreamTurns(params: {
   }
   const activityId = `${newest.id}:${newestUserMessageCount}`;
   return {
+    kind: "activity",
     sessionKey: params.probe.sessionKey,
     humanTurns,
     nextMarker: { turnId: newest.id, userMessageCount: newestUserMessageCount },
@@ -128,7 +149,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
   return contentTexts?.length ? contentTexts : [(typed.text ?? "").trim().replace(/\s+/g, " ")];
 }
 
-export async function checkCodexUpstreamActivity(
+async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
   resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
@@ -146,18 +167,34 @@ export async function checkCodexUpstreamActivity(
         continue;
       }
       try {
+        const threadId = await resolveThreadId(probe);
         const page = await pinned.listTurnPage({
-          threadId: await resolveThreadId(probe),
+          threadId,
           limit: CODEX_UPSTREAM_TURN_LIMIT,
           sortDirection: "desc",
           itemsView: "full",
         });
+        const marker = readMarker(probe);
+        if (page.data.length === 0 && marker) {
+          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
+          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
+          // empty a live thread too. thread/read is the existence oracle: it still succeeds
+          // after rollback and rejects "thread not loaded" only once the rollout is gone.
+          try {
+            await pinned.readThread(threadId, false);
+          } catch (error) {
+            if (isCodexThreadGoneError(error)) {
+              activities.push({ kind: "missing", sessionKey: probe.sessionKey });
+            }
+          }
+          continue;
+        }
         const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
         if (activity) {
           activities.push(activity);
         }
       } catch {
-        // Stale links must not suppress healthy sessions in the same provider batch.
+        // One transient probe failure must not suppress healthy sessions in the same batch.
       }
     }
     return activities;

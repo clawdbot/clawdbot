@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
+import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
   type AuthProfileStore,
   isProfileInCooldown,
@@ -583,6 +584,9 @@ export function createEmbeddedRunAuthController(params: {
         params.attemptedThinking.clear();
         return true;
       } catch (err) {
+        if (err instanceof SecretSurfaceUnavailableError) {
+          throw err;
+        }
         if (candidate && candidate === params.lockedProfileId) {
           throw err;
         }
@@ -631,7 +635,7 @@ export function createEmbeddedRunAuthController(params: {
         throwAuthProfileFailover({ allInCooldown: true });
       }
     } catch (err) {
-      if (err instanceof FailoverError) {
+      if (err instanceof FailoverError || err instanceof SecretSurfaceUnavailableError) {
         throw err;
       }
       if (params.profileCandidates[params.getProfileIndex()] === params.lockedProfileId) {

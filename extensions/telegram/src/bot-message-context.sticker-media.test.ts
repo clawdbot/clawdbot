@@ -20,7 +20,6 @@ const inboundBodyMock = vi.hoisted(() =>
       wasMentioned: false,
       effectiveWasMentioned: false,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: true,
     shouldBypassMention: false,
@@ -62,6 +61,7 @@ describe("buildTelegramMessageContext sticker media", () => {
         {
           path: stickerPath,
           contentType: "image/webp",
+          kind: "sticker",
           stickerMetadata: {
             emoji: "🔥",
             setName: "NewSet",
@@ -73,12 +73,9 @@ describe("buildTelegramMessageContext sticker media", () => {
       ],
     });
 
-    expect(ctx?.ctxPayload.MediaPath).toBe(stickerPath);
-    expect(ctx?.ctxPayload.MediaUrl).toBe(stickerPath);
-    expect(ctx?.ctxPayload.MediaType).toBe("image/webp");
-    expect(ctx?.ctxPayload.MediaPaths).toEqual([stickerPath]);
-    expect(ctx?.ctxPayload.MediaUrls).toEqual([stickerPath]);
-    expect(ctx?.ctxPayload.MediaTypes).toEqual(["image/webp"]);
+    expect(ctx?.ctxPayload.media).toEqual([
+      expect.objectContaining({ path: stickerPath, contentType: "image/webp" }),
+    ]);
     expect(ctx?.ctxPayload.StickerMediaIncluded).toBe(true);
     expect(ctx?.ctxPayload.SkipStickerMediaUnderstanding).toBe(true);
     expect(ctx?.ctxPayload.Sticker).toMatchObject({

@@ -1265,3 +1265,4 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       await runWikiObsidianDailyCli({ config, json: opts.json });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

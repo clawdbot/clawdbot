@@ -272,4 +272,75 @@ describe("WizardSession", () => {
     }
     await session.answer(plainStep.id, "alice");
   });
+
+  test("bridges confirm, progress updates, and notes in order", async () => {
+    let markInitialUpdateQueued!: () => void;
+    const initialUpdateQueued = new Promise<void>((resolve) => {
+      markInitialUpdateQueued = resolve;
+    });
+    let releaseHalfway!: () => void;
+    const halfway = new Promise<void>((resolve) => {
+      releaseHalfway = resolve;
+    });
+    let releaseDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    const session = new WizardSession(async (prompter) => {
+      await prompter.confirm({ message: "Download model?", initialValue: false });
+      const progress = prompter.progress("Starting download");
+      progress.update("Downloading model... 10%");
+      markInitialUpdateQueued();
+      await halfway;
+      progress.update("Downloading model... 50%");
+      await done;
+      progress.stop("Model downloaded");
+      await prompter.note("Ready to use", "Prepared");
+    });
+
+    const confirm = await session.next();
+    expect(confirm.step).toMatchObject({
+      type: "confirm",
+      message: "Download model?",
+      initialValue: false,
+    });
+    if (!confirm.step) {
+      throw new Error("expected confirm step");
+    }
+    await session.answer(confirm.step.id, true);
+    await initialUpdateQueued;
+
+    expect(await session.next()).toMatchObject({
+      step: {
+        type: "progress",
+        message: "Starting download",
+        executor: "gateway",
+      },
+    });
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 10%" },
+    });
+
+    const halfwayStep = session.next();
+    releaseHalfway();
+    expect(await halfwayStep).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 50%" },
+    });
+
+    const doneStep = session.next();
+    releaseDone();
+    const completedProgress = await doneStep;
+    expect(completedProgress).toMatchObject({
+      step: { type: "progress", message: "Model downloaded" },
+    });
+    if (!completedProgress.step) {
+      throw new Error("expected completed progress step");
+    }
+    await expect(session.answer(completedProgress.step.id, undefined)).resolves.toBeUndefined();
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "note", title: "Prepared", message: "Ready to use" },
+    });
+  });
 });

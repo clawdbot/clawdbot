@@ -96,6 +96,11 @@ export class GatewayPlugin extends Plugin {
   private outboundLimiter = new GatewaySendLimiter(
     (payload) => this.sendSerializedGatewayEvent(payload),
     (error) => this.emitter.emit("error", error),
+    (warning) =>
+      this.emitter.emit(
+        "warning",
+        `Gateway outbound queue overflow policy=${warning.policy} droppedEvents=${warning.droppedEvents} queuedEvents=${warning.queuedEvents} maxQueuedEvents=${warning.maxQueuedEvents}`,
+      ),
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
@@ -414,7 +419,12 @@ export class GatewayPlugin extends Plugin {
     }
     this.voiceStateCache.apply(payload);
     dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
-    const data = mapGatewayDispatchData(this.client, payload.t, payload.d);
+    // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
+    // maps structures only after the queue claim; other events retain eager mapping.
+    const data =
+      payload.t === GatewayDispatchEvents.MessageCreate
+        ? payload.d
+        : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
     if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
       await this.client.handleInteraction(payload.d);

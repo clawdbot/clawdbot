@@ -90,7 +90,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let authProfileUsageTesting: typeof import("./auth-profiles/usage.js").testing;
+let authProfileUsageTesting: typeof import("./auth-profiles/usage.test-support.js").testing;
 let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
@@ -101,7 +101,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ testing: authProfileUsageTesting } = await import("./auth-profiles/usage.js"));
+  ({ testing: authProfileUsageTesting } = await import("./auth-profiles/usage.test-support.js"));
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
     await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
@@ -148,26 +148,8 @@ afterEach(() => {
   resetLoggerFn();
 });
 
-const makeConfig = (opts?: {
-  fallbacks?: string[];
-  apiKey?: string;
-  overloadedBackoffMs?: number;
-  overloadedProfileRotations?: number;
-}): OpenClawConfig =>
+const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
   ({
-    auth:
-      opts?.overloadedBackoffMs != null || opts?.overloadedProfileRotations != null
-        ? {
-            cooldowns: {
-              ...(opts?.overloadedBackoffMs != null
-                ? { overloadedBackoffMs: opts.overloadedBackoffMs }
-                : {}),
-              ...(opts?.overloadedProfileRotations != null
-                ? { overloadedProfileRotations: opts.overloadedProfileRotations }
-                : {}),
-            },
-          }
-        : undefined,
     agents: {
       defaults: {
         model: {
@@ -370,7 +352,7 @@ const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
   runEmbeddedAttemptMock
     .mockResolvedValueOnce(
       makeAttempt({
-        promptError: new Error(errorMessage),
+        terminal: { kind: "failed", source: "prompt", error: new Error(errorMessage) },
       }),
     )
     .mockResolvedValueOnce(
@@ -771,7 +753,11 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         )
         .mockResolvedValueOnce(
           makeAttempt({
-            promptError: new Error("supported values are: low, medium"),
+            terminal: {
+              kind: "failed",
+              source: "prompt",
+              error: new Error("supported values are: low, medium"),
+            },
           }),
         )
         .mockResolvedValueOnce(
@@ -993,19 +979,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("uses configured overload backoff before rotating profiles", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
-      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      sessionKey: "agent:test:overloaded-configured-backoff",
-      runId: "run:overloaded-configured-backoff",
-      config: makeConfig({ overloadedBackoffMs: 321 }),
-    });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
-    expect(computeBackoffMock).not.toHaveBeenCalled();
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
-  });
-
   it("rotates on timeout without cooling down the timed-out profile", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "request ended without sending any chunks",
@@ -1034,9 +1007,12 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
-          aborted: true,
-          timedOut: true,
-          timedOutDuringCompaction: true,
+          terminal: {
+            kind: "timeout",
+            phase: "compaction",
+            source: "runtime",
+            aborted: true,
+          },
           assistantTexts: ["partial"],
           lastAssistant: buildAssistant({
             stopReason: "stop",
@@ -1074,8 +1050,11 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
-          promptError: new Error("rate limit exceeded"),
-          promptErrorSource: "compaction",
+          terminal: {
+            kind: "failed",
+            source: "compaction",
+            error: new Error("rate limit exceeded"),
+          },
           assistantTexts: ["partial"],
           lastAssistant: buildAssistant({
             stopReason: "stop",
@@ -1622,3 +1601,4 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -86,12 +86,13 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
     const { input, lock, state } = createInput([
       { pluginId: "policy", hookName: "before_agent_run", handler, source: "test" },
     ]);
+    input.modelPrompt = "[media attached: /tmp/a.png (image/png)]\ninspect this";
 
     await expect(runEmbeddedAttemptBeforeAgentRun(input)).resolves.toBeUndefined();
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
-        prompt: "model prompt",
+        prompt: "[media attached: /tmp/a.png (image/png)]\ninspect this",
         systemPrompt: "system prompt",
         channelId: undefined,
         accountId: "account-1",

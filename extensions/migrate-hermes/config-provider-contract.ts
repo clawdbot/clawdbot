@@ -46,6 +46,8 @@ const HERMES_SPECIAL_BASE_URL_ENV_VARS: Record<string, readonly string[]> = {
   "openai-api": ["OPENAI_BASE_URL"],
   "xai-oauth": ["HERMES_XAI_BASE_URL", "XAI_BASE_URL"],
   "qwen-oauth": ["HERMES_QWEN_BASE_URL"],
+  "qwen-cli": ["HERMES_QWEN_BASE_URL"],
+  "qwen-portal": ["HERMES_QWEN_BASE_URL"],
   "minimax-cn": ["MINIMAX_CN_BASE_URL"],
   "alibaba-coding-plan": ["ALIBABA_CODING_PLAN_BASE_URL"],
 };

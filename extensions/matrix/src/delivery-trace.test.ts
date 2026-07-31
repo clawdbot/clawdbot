@@ -161,7 +161,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
     }
   };
 
-  // The scripted steps stand in for the model run: dispatchReplyFromConfig
+  // The scripted steps stand in for the model run: dispatchInboundMessage
   // stays pending until the script's final/cancel step settles it, so the
   // handler's post-dispatch flow (including the finally-block draft abandon
   // path) runs exactly where the real run would settle.
@@ -188,7 +188,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
         markRunComplete: () => {},
       };
     },
-    dispatchReplyFromConfig: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
+    dispatchInboundMessage: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
       capturedReplyOptions = args?.replyOptions;
       notifyCaptured();
       const result = await runGate;

@@ -1,8 +1,10 @@
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
+import { redactClaimToken } from "./card-redaction.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
+  listWorkboardCards,
   readId,
   respondError,
 } from "./gateway-helpers.js";
@@ -13,24 +15,9 @@ import {
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
 import { WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
-
-function redactClaimToken(card: WorkboardCard): WorkboardCard {
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return card;
-  }
-  return {
-    ...card,
-    metadata: {
-      ...card.metadata,
-      claim: { ...claim, token: "[redacted]" },
-    },
-  };
-}
 
 function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagnostics"]>>) {
   return {
@@ -58,10 +45,7 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, {
-          cards: (await store.list({ boardId: requestParams.boardId })).map(redactClaimToken),
-          statuses: WORKBOARD_STATUSES,
-        });
+        respond(true, await listWorkboardCards(store, requestParams.boardId, redactClaimToken));
       } catch (error) {
         respondError(respond, error);
       }

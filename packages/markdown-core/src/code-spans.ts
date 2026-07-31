@@ -19,13 +19,6 @@ type InlineCodeSpansResult = {
   state: InlineCodeState;
 };
 
-type BacktickRun = {
-  start: number;
-  end: number;
-  length: number;
-  escaped: boolean;
-};
-
 type CodeSpanIndex = {
   /** Inline-code state to carry into the next streamed chunk. */
   inlineState: InlineCodeState;
@@ -57,74 +50,6 @@ export function buildCodeSpanIndex(
     isInside: (index: number) =>
       isInsideFenceSpan(index, fenceSpans) || isInsideInlineSpan(index, inlineSpans),
   };
-}
-
-/** Parses complete fenced and inline code spans using matching backtick delimiters. */
-export function parseCodeSpans(text: string): Array<[number, number]> {
-  const fenceSpans = scanFenceSpans(text).spans;
-  const inlineSpans = parseCompleteInlineCodeSpans(text, fenceSpans);
-  return [
-    ...fenceSpans.map((span): [number, number] => [span.start, span.end]),
-    ...inlineSpans,
-  ].toSorted((left, right) => left[0] - right[0]);
-}
-
-function parseCompleteInlineCodeSpans(
-  text: string,
-  fenceSpans: FenceSpan[],
-): Array<[number, number]> {
-  const runs: BacktickRun[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const fence = findFenceSpanAtInclusive(fenceSpans, index);
-    if (fence) {
-      index = fence.end;
-      continue;
-    }
-    if (text[index] !== "`") {
-      index += 1;
-      continue;
-    }
-    const start = index;
-    while (text[index] === "`") {
-      index += 1;
-    }
-    let precedingBackslashes = 0;
-    for (let cursor = start - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-      precedingBackslashes += 1;
-    }
-    runs.push({
-      start,
-      end: index,
-      length: index - start,
-      escaped: precedingBackslashes % 2 === 1,
-    });
-  }
-
-  const spans: Array<[number, number]> = [];
-  let openerIndex = 0;
-  while (openerIndex < runs.length) {
-    const opener = runs[openerIndex];
-    if (!opener) {
-      break;
-    }
-    if (opener.escaped) {
-      openerIndex += 1;
-      continue;
-    }
-    let closerIndex = openerIndex + 1;
-    while (closerIndex < runs.length && runs[closerIndex]?.length !== opener.length) {
-      closerIndex += 1;
-    }
-    const closer = runs[closerIndex];
-    if (!closer) {
-      openerIndex += 1;
-      continue;
-    }
-    spans.push([opener.start, closer.end]);
-    openerIndex = closerIndex + 1;
-  }
-  return spans;
 }
 
 function parseInlineCodeSpans(

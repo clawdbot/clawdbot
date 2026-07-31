@@ -7,6 +7,7 @@ import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
   OpenClawPluginNodeHostCommandIo,
 } from "../plugins/types.js";
+import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 /**
@@ -74,6 +75,26 @@ export function listRegisteredNodeHostCapsAndCommands(
   };
 }
 
+/** Watch plugin-owned availability inputs that can change during this process. */
+export function watchRegisteredNodeHostCommandAvailability(
+  context: OpenClawPluginNodeHostCommandAvailabilityContext,
+  onChange: () => void,
+): () => void {
+  const registry = getActivePluginRegistry();
+  const cleanups: Array<() => void> = [];
+  for (const entry of registry?.nodeHostCommands ?? []) {
+    const cleanup = entry.command.watchAvailability?.(context, onChange);
+    if (cleanup) {
+      cleanups.push(cleanup);
+    }
+  }
+  return () => {
+    for (const cleanup of cleanups.splice(0)) {
+      cleanup();
+    }
+  };
+}
+
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -121,6 +142,7 @@ export async function invokeRegisteredNodeHostCommand(
   command: string,
   paramsJSON?: string | null,
   io?: OpenClawPluginNodeHostCommandIo,
+  context?: OpenClawPluginNodeHostCommandContext,
 ): Promise<string | null> {
   const registry = getActivePluginRegistry();
   const match = (registry?.nodeHostCommands ?? []).find(
@@ -133,9 +155,13 @@ export async function invokeRegisteredNodeHostCommand(
     if (!io) {
       throw new Error(`node command requires duplex transport: ${command}`);
     }
-    return await match.command.handle(paramsJSON, io);
+    return context
+      ? await match.command.handle(paramsJSON, io, context)
+      : await match.command.handle(paramsJSON, io);
   }
-  return await match.command.handle(paramsJSON);
+  return context
+    ? await match.command.handle(paramsJSON, undefined, context)
+    : await match.command.handle(paramsJSON);
 }
 
 export function isRegisteredNodeHostCommandDuplex(command: string): boolean {

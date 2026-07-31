@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
+  inspectPortUsage: vi.fn(async () => null),
+  resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -15,7 +17,12 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../daemon/diagnostics.js", () => ({
   readLastGatewayErrorLine: async () => null,
 }));
-vi.mock("../../infra/ports.js", () => ({ inspectPortUsage: async () => null }));
+vi.mock("../../gateway/net.js", () => ({
+  resolveGatewayBindHost: mocks.resolveGatewayBindHost,
+  resolveGatewayRequiredListenHosts: (bindHost: string) =>
+    bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
+}));
+vi.mock("../../infra/ports.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
 vi.mock("../../infra/restart-sentinel.js", () => ({ readRestartSentinel: async () => null }));
 vi.mock("../../plugins/status.js", () => ({ buildPluginCompatibilityNotices: () => [] }));
 vi.mock("../../skills/discovery/status.js", () => ({ buildWorkspaceSkillStatus: () => null }));
@@ -39,7 +46,7 @@ import { buildStatusAllReportData } from "./report-data.js";
 
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockClear();
+    vi.clearAllMocks();
   });
 
   it("keeps local config diagnosis non-observing", async () => {
@@ -69,5 +76,9 @@ describe("buildStatusAllReportData", () => {
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+    expect(mocks.resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
+    expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789, {
+      probeHosts: ["127.0.0.1"],
+    });
   });
 });

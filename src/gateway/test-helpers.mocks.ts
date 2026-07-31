@@ -2,50 +2,19 @@
 // Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
-import {
-  getTestPluginRegistry,
-  resetTestPluginRegistry,
-  setTestPluginRegistry,
-} from "./test-helpers.plugin-registry.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
   cronIsolatedRun,
-  dispatchInboundMessageMock,
   embeddedRunMock,
   type GetReplyFromConfigFn,
-  getReplyFromConfig,
   getGatewayTestHoistedState,
-  mockGetReplyFromConfigOnce,
   agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
   testTailnetIPv4,
   testTailscaleWhois,
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
-
-export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
-export {
-  agentCommand,
-  cronIsolatedRun,
-  dispatchInboundMessageMock,
-  embeddedRunMock,
-  getReplyFromConfig,
-  mockGetReplyFromConfigOnce,
-  agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
-  testTailnetIPv4,
-  testTailscaleWhois,
-};
 
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
@@ -54,13 +23,26 @@ function createEmbeddedRunMockExports() {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedAgentRunEnd: async (sessionId: string) => {
+    waitForEmbeddedAgentRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
+      if (timeoutMs === null) {
+        embeddedRunMock.endWaitCalls.push(sessionId);
+        return await new Promise<boolean>((resolve) => {
+          embeddedRunMock.endWaiters.set(sessionId, resolve);
+        });
+      }
       embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+      const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
+      if (ended) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      }
+      return ended;
     },
   };
 }
@@ -91,6 +73,20 @@ function createDispatchInboundMessageMockExports(
             typeof actual.dispatchInboundMessage
           >)
         : actual.dispatchInboundMessage(...args);
+    },
+    dispatchInboundMessageWithProjectedDispatcher: (
+      ...args: Parameters<typeof actual.dispatchInboundMessageWithProjectedDispatcher>
+    ) => {
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
+      if (!impl) {
+        return actual.dispatchInboundMessageWithProjectedDispatcher(...args);
+      }
+      const [params] = args;
+      const { dispatcherOptions, ...dispatchParams } = params;
+      return gatewayTestHoisted.dispatchInboundMessage({
+        ...dispatchParams,
+        dispatcher: createReplyDispatcher(dispatcherOptions),
+      }) as ReturnType<typeof actual.dispatchInboundMessageWithProjectedDispatcher>;
     },
   };
 }
@@ -190,23 +186,6 @@ vi.mock("../infra/tailscale.js", async () => {
   };
 });
 
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
-  return {
-    ...actual,
-    saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
-      const delay = sessionStoreSaveDelayMs.value;
-      if (delay > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delay);
-        });
-      }
-      return actual.saveSessionStore(storePath, store as never);
-    }),
-  };
-});
-
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const { createGatewayConfigModuleMock } = await import("./test-helpers.config-runtime.js");
@@ -262,14 +241,15 @@ vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
 });
 
-vi.mock("../commands/health.js", () => ({
-  getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+vi.mock("./health/collector.js", () => ({
+  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
 }));
-vi.mock("../commands/status.js", () => ({
+vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromGatewayIngress: agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../agents/btw.js", () => ({

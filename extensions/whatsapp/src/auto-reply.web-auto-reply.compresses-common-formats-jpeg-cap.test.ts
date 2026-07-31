@@ -10,7 +10,7 @@ import {
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundCallbackMessage, WebInboundMessageInput } from "./inbound.js";
+import type { WebInboundCallbackMessage } from "./inbound.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
@@ -45,7 +45,7 @@ describe("web auto-reply", () => {
     const sendMedia = params.sendMedia ?? spies.sendMedia;
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
-    let capturedOnMessage: ((msg: WebInboundMessageInput) => Promise<void>) | undefined;
+    let capturedOnMessage: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
       return createMockWebListener();

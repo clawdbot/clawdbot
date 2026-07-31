@@ -1,11 +1,12 @@
 import type {
+  WorkboardBoardSummary,
   WorkboardCard,
   WorkboardDiagnostic,
-  WorkboardOrchestrationSettings,
-  WorkboardStatus,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+
+export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -87,6 +88,8 @@ export type WorkboardClaimInput = {
 export type WorkboardClaimOptions = {
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
   expectedAuthority?: {
+    boardId: string;
+    status: WorkboardCard["status"];
     agentId?: string;
     workspace?: WorkboardWorkspace;
     workspaceAccess?: WorkboardWorkspaceAccess;
@@ -109,6 +112,7 @@ export type WorkboardCompleteInput = {
   token?: unknown;
   summary?: unknown;
   proof?: unknown;
+  proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
@@ -129,21 +133,6 @@ export type WorkboardListOptions = {
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
-};
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
-  total: number;
-  active: number;
-  archived: number;
-  byStatus: Partial<Record<WorkboardStatus, number>>;
-  updatedAt?: number;
-  archivedAt?: number;
 };
 export type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;

@@ -475,8 +475,8 @@ export async function cleanupLegacyPluginDependencyState(params: {
   return { changes, warnings };
 }
 
-export const testing = {
-  collectLegacyPluginDependencyTargets,
-  detectLegacyPluginDependencyStateIssues,
-  legacyPluginDependencyStateIssueToHealthFinding,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.pluginDependencyCleanupTestApi")
+  ] = { collectLegacyPluginDependencyTargets };
+}

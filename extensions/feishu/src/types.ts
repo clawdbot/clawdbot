@@ -41,6 +41,7 @@ export type FeishuMessageContext = {
   senderId: string;
   senderOpenId: string;
   senderName?: string;
+  senderType: "user" | "bot";
   chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;
@@ -86,10 +87,10 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
-  /** Source image_key/file_key; content_v2 inline replacement aligns key->path so partial download failures do not misalign. */
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
+  /** Original image_key, used to align content_v2 references with downloaded local paths. */
   sourceKey?: string;
 };
 
@@ -102,8 +103,6 @@ export type FeishuToolsConfig = {
   scopes?: boolean;
   /** Bitable/Base operations (default: true). */
   bitable?: boolean;
-  /** @deprecated Use bitable. */
-  base?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

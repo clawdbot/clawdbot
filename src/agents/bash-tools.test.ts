@@ -21,11 +21,11 @@ import {
   getFinishedSession,
   markBackgrounded,
   markExited,
-  resetProcessRegistryForTests,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -239,7 +239,7 @@ vi.mock("../process/supervisor/index.js", () => {
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const POLL_INTERVAL_MS = isWin ? 15 : 2;
@@ -1086,12 +1086,12 @@ describe("exec backgrounded onUpdate suppression", () => {
       const abortController = new AbortController();
       const onUpdateSpy = vi.fn(() => abortController.abort());
       // Run a command that produces output over time.
-      const command = joinCommands([
-        shellEcho("before-abort"),
-        shortDelayCmd,
-        shellEcho("after-abort"),
-      ]);
-      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
+      const beforeAbort = shellEcho("before-abort");
+      const afterAbort = shellEcho("after-abort");
+      const command = joinCommands([beforeAbort, shortDelayCmd, afterAbort]);
+      await expect(
+        execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy),
+      ).rejects.toMatchObject({ name: "AbortError" });
       expect(onUpdateSpy).toHaveBeenCalledTimes(1);
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();

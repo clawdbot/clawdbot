@@ -1,22 +1,27 @@
 // Discord plugin module implements shared interactive behavior.
 import {
-  reduceInteractiveReply,
+  reduceLegacyInteractiveReply,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
-  InteractiveReply,
+  LegacyInteractiveReply,
   MessagePresentation,
   MessagePresentationButton,
   MessagePresentationOption,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
+import {
+  buildDiscordActivityCustomId,
+  isValidDiscordActivityWidgetId,
+} from "./component-custom-id.js";
 import type {
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
   DiscordComponentMessageSpec,
 } from "./components.types.js";
+import { buildDiscordQuestionCustomId } from "./question-custom-id.js";
 
 function resolveDiscordInteractiveButtonStyle(
   style?: InteractiveButtonStyle,
@@ -61,6 +66,7 @@ const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
 function buildDiscordButtonComponent(
   button: MessagePresentationButton,
+  optionIndex: number,
 ): DiscordComponentButtonSpec | undefined {
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
@@ -77,6 +83,36 @@ function buildDiscordButtonComponent(
       internalCustomId,
       ...(button.disabled === true ? { disabled: true } : {}),
     };
+  }
+  if (action.type === "question") {
+    const internalCustomId = buildDiscordQuestionCustomId({
+      questionId: action.questionId,
+      optionIndex,
+    });
+    return internalCustomId
+      ? {
+          label: button.label,
+          style: resolveDiscordInteractiveButtonStyle(button.style),
+          internalCustomId,
+          ...(button.disabled === true ? { disabled: true } : {}),
+        }
+      : undefined;
+  }
+  if (
+    action.type === "web-app" &&
+    action.widgetId &&
+    isValidDiscordActivityWidgetId(action.widgetId)
+  ) {
+    return {
+      label: button.label,
+      style: resolveDiscordInteractiveButtonStyle(button.style),
+      internalCustomId: buildDiscordActivityCustomId(action.widgetId),
+      ...(button.disabled === true ? { disabled: true } : {}),
+      ...(button.reusable === true ? { reusable: true } : {}),
+    };
+  }
+  if (action.type === "web-app" && !action.url) {
+    return undefined;
   }
   const component: DiscordComponentButtonSpec = {
     label: button.label,
@@ -106,8 +142,9 @@ function appendDiscordButtonBlocks(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   buttons: readonly MessagePresentationButton[],
 ): void {
+  // Index is position in the question's options; core emits one buttons block in option order.
   const components = buttons
-    .map((button) => buildDiscordButtonComponent(button))
+    .map((button, optionIndex) => buildDiscordButtonComponent(button, optionIndex))
     .filter((button): button is DiscordComponentButtonSpec => Boolean(button));
   for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
     blocks.push({
@@ -121,9 +158,9 @@ function appendDiscordButtonBlocks(
  * @deprecated Use buildDiscordPresentationComponents with MessagePresentation.
  */
 export function buildDiscordInteractiveComponents(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceInteractiveReply(
+  const blocks = reduceLegacyInteractiveReply(
     interactive,
     [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
     (state, block) => {

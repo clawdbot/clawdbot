@@ -45,13 +45,16 @@ on:
       OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
         description: Optional OpenAI API key used by maturity scorecard agent steps
         required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
       # Mixed-trigger workflows must declare referenced secrets for actionlint. Reusable calls
       # remain artifact-only because exact caller and job workflow identities gate every use.
       CLAWSWEEPER_APP_PRIVATE_KEY:
         description: Optional contents-write App key used only by canonical direct dispatches
-        required: false
-      MANTIS_GITHUB_APP_ID:
-        description: Optional pull-request-write App id used only by canonical direct dispatches
         required: false
       MANTIS_GITHUB_APP_PRIVATE_KEY:
         description: Optional pull-request-write App key used only by canonical direct dispatches
@@ -151,7 +154,7 @@ jobs:
           fi
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -172,6 +175,7 @@ jobs:
           selected_revision="$(git rev-parse HEAD)"
           expected_sha="${EXPECTED_SHA,,}"
           branch_candidate="${INPUT_REF#refs/heads/}"
+          floating_default_branch=false
           trusted_reason=""
 
           if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -184,6 +188,12 @@ jobs:
           fi
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]; then
+            # A direct main dispatch may wait while checkout fetches full history. Freeze the
+            # latest fetched main here so later reusable jobs never receive a moving branch.
+            floating_default_branch=true
+            selected_revision="$(git rev-parse refs/remotes/origin/main)"
+          fi
 
           if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
@@ -229,6 +239,9 @@ jobs:
             fi
             git fetch --no-tags origin "+refs/heads/${publication_base}:refs/remotes/origin/${publication_base}"
             publication_ref="refs/remotes/origin/${publication_base}"
+            if [[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]; then
+              selected_revision="$(git rev-parse "$publication_ref")"
+            fi
             if ! git merge-base --is-ancestor "$selected_revision" "$publication_ref"; then
               echo "Ref '${INPUT_REF}' is not an ancestor of pull request base '${publication_base}'." >&2
               echo "Historical divergent refs remain available through artifact-only workflow calls." >&2
@@ -273,7 +286,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -292,7 +305,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   generate_qa_evidence:
@@ -305,11 +318,13 @@ jobs:
         inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ inputs.ref }}
+      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   publish:
     name: Publish maturity docs PR
@@ -329,7 +344,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 0
@@ -453,7 +468,7 @@ jobs:
           fi
 
       - name: Run Codex maturity scorecard agent
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
           MATURITY_SCORES_PATH: qa/maturity-scores.yaml
@@ -585,7 +600,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -593,7 +608,7 @@ jobs:
           submodules: false
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: selected
@@ -682,7 +697,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ needs.validate_selected_ref.outputs.publication_base }}
           head-branch: ${{ needs.validate_selected_ref.outputs.publication_head }}

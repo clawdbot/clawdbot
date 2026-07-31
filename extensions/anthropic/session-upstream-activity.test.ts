@@ -2,16 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
-import { afterAll, describe, expect, it } from "vitest";
-import {
-  MAX_CLAUDE_UPSTREAM_SCAN_BYTES,
-  checkClaudeSessionUpstreamActivity,
-  checkClaudeUpstreamActivity,
-  link,
-  linkContinued,
-} from "./session-upstream-activity.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { checkClaudeUpstreamActivity, linkContinued } from "./session-upstream-activity.js";
 
 const tempDirs: string[] = [];
+const CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
+
+async function checkActivity(probe: SessionUpstreamProbe) {
+  return (await checkClaudeUpstreamActivity([probe]))[0];
+}
 
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -35,6 +34,10 @@ function row(params: {
 
 afterAll(async () => {
   await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("Claude upstream activity", () => {
@@ -90,9 +93,10 @@ describe("Claude upstream activity", () => {
       ownRecentUserTexts: [],
     };
 
-    const activity = await checkClaudeSessionUpstreamActivity(probe);
+    const activity = await checkActivity(probe);
 
     expect(activity).toEqual({
+      kind: "activity",
       sessionKey: probe.sessionKey,
       occurredAt: Date.parse("2026-07-13T10:05:00.000Z"),
       humanTurns: 1,
@@ -106,7 +110,7 @@ describe("Claude upstream activity", () => {
     const filePath = path.join(dir, "thread-2.jsonl");
     await fs.writeFile(filePath, "{}\n");
     await expect(
-      checkClaudeSessionUpstreamActivity({
+      checkActivity({
         sessionKey: "agent:main:adopted:claude-static",
         agentId: "main",
         threadId: "thread-2",
@@ -132,7 +136,7 @@ describe("Claude upstream activity", () => {
     );
 
     await expect(
-      checkClaudeSessionUpstreamActivity({
+      checkActivity({
         sessionKey: "agent:main:adopted:claude-provenance",
         agentId: "main",
         threadId: "thread-provenance",
@@ -143,10 +147,52 @@ describe("Claude upstream activity", () => {
         ownRecentUserTexts: ["same prompt"],
       }),
     ).resolves.toEqual({
+      kind: "activity",
       sessionKey: "agent:main:adopted:claude-provenance",
       humanTurns: 0,
       nextMarker: { offset: (await fs.stat(filePath)).size },
     });
+  });
+
+  it("returns missing for an absent local transcript", async () => {
+    const filePath = path.join(
+      await makeTempDir("openclaw-claude-upstream-missing-"),
+      "gone.jsonl",
+    );
+
+    await expect(
+      checkActivity({
+        sessionKey: "agent:main:adopted:claude-missing",
+        agentId: "main",
+        threadId: "thread-missing",
+        hostId: "gateway:local",
+        upstreamKind: "claude-cli",
+        upstreamRef: { filePath },
+        marker: { offset: 3 },
+        ownRecentUserTexts: [],
+      }),
+    ).resolves.toEqual({
+      kind: "missing",
+      sessionKey: "agent:main:adopted:claude-missing",
+    });
+  });
+
+  it("swallows non-missing local transcript errors", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    vi.spyOn(fs, "open").mockRejectedValueOnce(error);
+
+    await expect(
+      checkActivity({
+        sessionKey: "agent:main:adopted:claude-permission",
+        agentId: "main",
+        threadId: "thread-permission",
+        hostId: "gateway:local",
+        upstreamKind: "claude-cli",
+        upstreamRef: { filePath: "/unreadable/thread.jsonl" },
+        marker: { offset: 3 },
+        ownRecentUserTexts: [],
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("isolates a missing transcript from healthy probes", async () => {
@@ -176,13 +222,22 @@ describe("Claude upstream activity", () => {
         { ...baseProbe, sessionKey: "stale", upstreamRef: { filePath: `${filePath}.missing` } },
         baseProbe,
       ]),
-    ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy", humanTurns: 1 })]);
+    ).resolves.toEqual([
+      { kind: "missing", sessionKey: "stale" },
+      expect.objectContaining({ kind: "activity", sessionKey: "healthy", humanTurns: 1 }),
+    ]);
   });
 
   it("keeps continuation successful when baseline enumeration fails", async () => {
     await expect(
-      link("session-key", "gateway:local", "thread-1", async () => {
-        throw new Error("catalog unavailable");
+      linkContinued({
+        sessionKey: "session-key",
+        hostId: "gateway:local",
+        threadId: "thread-1",
+        listLocalSessions: async () => {
+          throw new Error("catalog unavailable");
+        },
+        readRemote: async () => [],
       }),
     ).resolves.toEqual({ sessionKey: "session-key" });
   });
@@ -212,6 +267,7 @@ describe("Claude upstream activity", () => {
       ]),
     ).resolves.toEqual([
       {
+        kind: "activity",
         sessionKey: "remote",
         occurredAt: Date.parse("2026-07-13T10:07:00.000Z"),
         humanTurns: 1,
@@ -226,7 +282,7 @@ describe("Claude upstream activity", () => {
     const filePath = path.join(dir, "thread-chunks.jsonl");
     const firstRow = `${row({
       type: "assistant",
-      content: "x".repeat(MAX_CLAUDE_UPSTREAM_SCAN_BYTES - 200),
+      content: "x".repeat(CLAUDE_UPSTREAM_SCAN_BYTES - 200),
       timestamp: "2026-07-13T10:08:00.000Z",
     })}\n`;
     const userRow = `${row({
@@ -251,16 +307,19 @@ describe("Claude upstream activity", () => {
       ownRecentUserTexts: [],
     };
 
-    const first = await checkClaudeSessionUpstreamActivity(baseProbe);
+    const first = await checkActivity(baseProbe);
     expect(first).toEqual({
+      kind: "activity",
       sessionKey: baseProbe.sessionKey,
       humanTurns: 0,
       nextMarker: { offset: Buffer.byteLength(firstRow) },
     });
-    await expect(
-      checkClaudeSessionUpstreamActivity({ ...baseProbe, marker: first?.nextMarker ?? null }),
-    ).resolves.toEqual(
+    if (first?.kind !== "activity") {
+      throw new Error("expected activity marker");
+    }
+    await expect(checkActivity({ ...baseProbe, marker: first.nextMarker })).resolves.toEqual(
       expect.objectContaining({
+        kind: "activity",
         humanTurns: 1,
         nextMarker: { offset: Buffer.byteLength(firstRow + userRow + finalRow) },
       }),
@@ -290,13 +349,16 @@ describe("Claude upstream activity", () => {
       ownRecentUserTexts: [],
     };
 
-    const offsetResult = await checkClaudeSessionUpstreamActivity(baseProbe);
-    const sizeResult = await checkClaudeSessionUpstreamActivity({
+    const offsetResult = await checkActivity(baseProbe);
+    const sizeResult = await checkActivity({
       ...baseProbe,
       marker: { size: Buffer.byteLength(baseline) },
     });
     expect(sizeResult).toEqual(offsetResult);
-    expect(offsetResult?.nextMarker).toEqual({ offset: (await fs.stat(filePath)).size });
+    expect(offsetResult?.kind).toBe("activity");
+    if (offsetResult?.kind === "activity") {
+      expect(offsetResult.nextMarker).toEqual({ offset: (await fs.stat(filePath)).size });
+    }
   });
   it("declines a remote link when the newest history item lacks a UUID", async () => {
     const readRemote = async () => [{ type: "userMessage", text: "hi" }] as never;

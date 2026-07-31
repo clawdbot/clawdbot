@@ -78,6 +78,30 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("keeps channel allowlist senders authorized without owner status", () => {
+    const cfg = {
+      channels: { telegram: { allowFrom: ["200482621"] } },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      From: "telegram:200482621",
+      SenderId: "200482621",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   it("senderIsOwner is false when ownerAllowFrom is configured and sender does not match", () => {
     const cfg = {
       channels: { discord: {} },
@@ -147,7 +171,7 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.senderIsOwner).toBe(true);
   });
 
-  it("senderIsOwner is true when ownerAllowFrom is wildcard (*)", () => {
+  it("ignores ownerAllowFrom wildcards", () => {
     const cfg = {
       channels: { discord: {} },
       commands: { ownerAllowFrom: ["*"] },
@@ -166,7 +190,9 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
       commandAuthorized: true,
     });
 
-    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   it("senderIsOwner is true for internal operator.admin sessions", () => {

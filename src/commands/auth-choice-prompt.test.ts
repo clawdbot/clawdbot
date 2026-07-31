@@ -207,10 +207,10 @@ describe("promptAuthChoiceGrouped", () => {
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
     const featuredOrder = new Map([
       ["openai", 0],
-      ["anthropic", 1],
+      ["openrouter", 1],
       ["xai", 2],
       ["google", 3],
-      ["openrouter", 4],
+      ["anthropic", 4],
     ]);
     compareAuthChoiceGroups.mockImplementation((a, b) => {
       const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
@@ -292,10 +292,10 @@ describe("promptAuthChoiceGrouped", () => {
 
     expect(providerOptions.map((option) => option.value)).toEqual([
       "openai",
-      "anthropic",
+      "openrouter",
       "xai",
       "google",
-      "openrouter",
+      "anthropic",
       "__more",
       "skip",
     ]);
@@ -314,5 +314,81 @@ describe("promptAuthChoiceGrouped", () => {
       "__back",
     ]);
     expect(result).toBe("minimax-cn-api");
+  });
+
+  it("features caller-supplied groups first and excludes them from More", async () => {
+    buildAuthChoiceGroups.mockReturnValue({
+      groups: [
+        openAIGroup(),
+        authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
+        authChoiceGroup("minimax", "MiniMax", [["minimax-api", "MiniMax API key"]]),
+      ],
+      skipOption: { value: "skip", label: "Skip for now" },
+    });
+    const providerPrompts: Array<Array<{ value: unknown; label: string }>> = [];
+    const prompter = createPromptHarness(async (params) => {
+      if (params.message !== "Model/auth provider") {
+        throw new Error(`unexpected prompt ${params.message}`);
+      }
+      providerPrompts.push(params.options);
+      return providerPrompts.length === 1 ? "__more" : "minimax";
+    });
+
+    const result = await promptAuthChoiceGrouped({
+      prompter,
+      store: EMPTY_STORE,
+      includeSkip: true,
+      additionalGroups: [
+        {
+          ...authChoiceGroup("detected-ai", "Detected AI", [["candidate:codex-cli", "Codex CLI"]]),
+          hint: "Codex CLI",
+        },
+        authChoiceGroup("recommended-ai", "Recommended AI", [
+          ["candidate:openai-api-key", "OpenAI API key"],
+        ]),
+      ],
+    });
+
+    expect(providerPrompts[0]?.map((option) => option.value)).toEqual([
+      "detected-ai",
+      "recommended-ai",
+      "anthropic",
+      "openai",
+      "__more",
+      "skip",
+    ]);
+    expect(providerPrompts[0]?.[0]).toMatchObject({
+      value: "detected-ai",
+      hint: "Codex CLI",
+    });
+    expect(providerPrompts[1]?.map((option) => option.value)).toEqual(["minimax", "__back"]);
+    expect(result).toBe("minimax-api");
+  });
+
+  it("uses a caller-supplied method prompt when provided", async () => {
+    buildAuthChoiceGroups.mockReturnValue({ groups: [], skipOption: undefined });
+    const messages: string[] = [];
+    const prompter = createPromptHarness(async (params) => {
+      messages.push(params.message);
+      return params.message === "Model/auth provider" ? "detected-ai" : "candidate:codex-cli";
+    });
+
+    const result = await promptAuthChoiceGrouped({
+      prompter,
+      store: EMPTY_STORE,
+      includeSkip: false,
+      additionalGroups: [
+        {
+          ...authChoiceGroup("detected-ai", "Detected on this machine", [
+            ["candidate:codex-cli", "Codex CLI"],
+            ["candidate:claude-cli", "Claude Code"],
+          ]),
+          methodMessage: "Use which detected AI?",
+        },
+      ],
+    });
+
+    expect(messages).toEqual(["Model/auth provider", "Use which detected AI?"]);
+    expect(result).toBe("candidate:codex-cli");
   });
 });

@@ -14,6 +14,7 @@ import {
 import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
+  toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import {
@@ -28,8 +29,6 @@ import {
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-const aggregateToolResultPressureWarnings = new Set<string>();
 
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
@@ -85,7 +84,8 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
   messages: AgentMessage[];
-  preparedUserTurnTimestamp?: number;
+  preparedUserTurnMessage?: AgentMessage;
+  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -95,6 +95,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): EmbeddedAttemptPromptContext {
   const { attempt } = input;
+  const preparedUserTurnTimestamp = (
+    input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
+  )?.timestamp;
   let sessionMessages = filterHeartbeatTranscriptArtifacts(
     input.messages,
     input.prompt.heartbeatSummary?.ackMaxChars,
@@ -107,8 +110,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
     contextWindowTokens: contextTokenBudget,
@@ -136,10 +137,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
       `sessionKey=${sessionLogKey}`;
     if (aggregatePressureEngaged) {
-      if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
-        aggregateToolResultPressureWarnings.add(sessionLogKey);
+      if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
         log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+          `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
         );
       }
     } else {
@@ -147,14 +147,19 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     }
   }
 
+  const hasNonEmptyTranscriptPrompt = Boolean(input.prompt.effectiveTranscriptPrompt?.trim());
+  // A non-empty transcript prompt is a persistence substitution. Keep the
+  // assembled model prompt authoritative even when no hook added context.
+  const shouldUseExplicitModelPrompt =
+    input.prompt.hasPromptBuildContext || hasNonEmptyTranscriptPrompt;
   const promptSubmission = resolveRuntimeContextPromptParts({
     effectivePrompt: input.prompt.promptForRuntimeContextSplit,
     transcriptPrompt: input.prompt.transcriptPromptForRuntimeSplit,
-    modelPrompt: input.prompt.hasPromptBuildContext
+    modelPrompt: shouldUseExplicitModelPrompt
       ? input.prompt.promptForModelBeforeRuntimeContextSplit
       : undefined,
     modelPromptBuildContext:
-      input.prompt.hasPromptBuildContext && input.prompt.effectiveTranscriptPrompt !== undefined
+      shouldUseExplicitModelPrompt && input.prompt.effectiveTranscriptPrompt !== undefined
         ? {
             promptBeforeHooks: input.prompt.promptBeforePromptBuildHooks,
             transcriptPromptBeforeTransforms: input.prompt.effectiveTranscriptPrompt,
@@ -187,9 +192,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       })
     : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
   const currentUserTimestampOverride =
-    !input.isRawModelRun && typeof input.preparedUserTurnTimestamp === "number"
+    !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
-          timestamp: input.preparedUserTurnTimestamp,
+          timestamp: preparedUserTurnTimestamp,
           text: promptForSession,
           ...(promptForModel !== promptForSession ? { alternateText: promptForModel } : {}),
         }
@@ -208,7 +213,11 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
+    : [
+        currentInboundContextText,
+        promptSubmission.runtimeContext?.trim(),
+        input.heartbeatOutcomeContext?.trim(),
+      ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =
@@ -221,8 +230,8 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-    ...(typeof input.preparedUserTurnTimestamp === "number"
-      ? { currentUserTimestamp: input.preparedUserTurnTimestamp }
+    ...(typeof preparedUserTurnTimestamp === "number"
+      ? { currentUserTimestamp: preparedUserTurnTimestamp }
       : {}),
   });
   if (input.systemPromptReport) {
@@ -241,8 +250,13 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-    ...(typeof input.preparedUserTurnTimestamp === "number"
-      ? { currentUserTimestamp: input.preparedUserTurnTimestamp }
+    ...(typeof preparedUserTurnTimestamp === "number"
+      ? { currentUserTimestamp: preparedUserTurnTimestamp }
+      : {}),
+    // Admission must count the same persisted sender block that provider
+    // conversion projects after the active user turn is written.
+    ...(!input.isRawModelRun && input.preparedUserTurnMessage
+      ? { currentUserTranscriptMessage: input.preparedUserTurnMessage }
       : {}),
   });
 

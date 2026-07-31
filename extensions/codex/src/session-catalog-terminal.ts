@@ -1,7 +1,7 @@
 // Codex catalog terminal ownership: validated resume commands and terminal plans.
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
+  resolveNodeHostExecutable,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -30,9 +30,17 @@ import type {
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 
 export function resolveLocalCodexTerminalExecutable(
-  pathEnv = process.env.PATH ?? "",
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveExecutableFromPathEnv("codex", pathEnv);
+  return resolveLocalCodexTerminalResolution(env)?.executable;
+}
+
+function resolveLocalCodexTerminalResolution(env: NodeJS.ProcessEnv = process.env) {
+  return resolveNodeHostExecutable("codex", {
+    env,
+    pathEnv: env.PATH ?? env.Path ?? "",
+    strategy: "fallback",
+  });
 }
 
 export function codexNodeTerminalCapability(node: {
@@ -50,27 +58,42 @@ export async function requireCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
 ): Promise<CodexSessionCatalogSession> {
+  // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
+  // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
+  const cached = await findCatalogEligibleThread(control, threadId, false);
+  if (cached) {
+    return cached;
+  }
+  const refreshed = await findCatalogEligibleThread(control, threadId, true);
+  if (refreshed) {
+    return refreshed;
+  }
+  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
+}
+
+async function findCatalogEligibleThread(
+  control: CodexSessionCatalogControl,
+  threadId: string,
+  forceRefresh: boolean,
+): Promise<CodexSessionCatalogSession | undefined> {
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
     const page = await control.listPage({
       limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
+      ...(forceRefresh ? { forceRefresh: true } : {}),
     });
     const candidate = page.sessions.find((session) => session.threadId === threadId);
     if (candidate) {
-      if (candidate.source === "cli" || candidate.source === "vscode") {
+      if (isInteractiveThreadSource(candidate.source)) {
         return candidate;
       }
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
+      throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
-      throw new CatalogParamsError(
-        "Codex session is not a non-archived interactive CLI or VS Code session",
-      );
+      return undefined;
     }
     if (seenCursors.has(nextCursor)) {
       throw new CatalogParamsError("Codex session eligibility could not be verified");
@@ -89,7 +112,14 @@ export function createCodexTerminalNodeHostCommand(
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
-    isAvailable: ({ env }) => Boolean(resolveExecutableFromPathEnv("codex", env.PATH ?? "")),
+    isAvailable: ({ env }) =>
+      Boolean(
+        resolveNodeHostExecutable("codex", {
+          env,
+          pathEnv: env.PATH ?? env.Path ?? "",
+          strategy: "direct",
+        }),
+      ),
     handle: async (paramsJSON, io) => {
       if (!io) {
         throw new Error("Codex terminal command requires duplex transport");
@@ -104,14 +134,18 @@ export function createCodexTerminalNodeHostCommand(
         return value;
       });
       const record = await requireCatalogEligibleThread(control, resume.threadId);
-      const file = resolveExecutableFromPathEnv("codex", process.env.PATH ?? "");
-      if (!file) {
+      const resolution = resolveNodeHostExecutable("codex", {
+        env: process.env,
+        pathEnv: process.env.PATH ?? process.env.Path ?? "",
+        strategy: "direct",
+      });
+      if (!resolution) {
         throw new Error("Codex CLI is unavailable");
       }
       return JSON.stringify(
         await runNodePtyCommand(
           {
-            file,
+            file: resolution.executable,
             args: ["resume", resume.threadId],
             cwd: record.cwd,
             cols: resume.cols,
@@ -141,6 +175,7 @@ async function resolveNodeCatalogEligibleThread(params: {
         ...(cursor ? { cursor } : {}),
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = params.parseCatalogPage(unwrapNodeInvokePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
@@ -157,9 +192,7 @@ async function resolveNodeCatalogEligibleThread(params: {
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
-  throw new CatalogParamsError(
-    "Codex session is not a non-archived interactive CLI or VS Code session",
-  );
+  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
 }
 
 export async function openCodexCatalogTerminal(params: {
@@ -172,16 +205,17 @@ export async function openCodexCatalogTerminal(params: {
   const title = `codex resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const record = await requireCatalogEligibleThread(params.control, params.threadId);
-    const executable = resolveLocalCodexTerminalExecutable();
+    const resolution = resolveLocalCodexTerminalResolution();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.
-    if (!executable) {
+    if (!resolution) {
       throw new CatalogParamsError("Codex CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "resume", params.threadId],
+      argv: [resolution.executable, "resume", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

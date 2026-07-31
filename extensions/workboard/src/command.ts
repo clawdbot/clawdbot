@@ -1,3 +1,8 @@
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 // Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
@@ -7,7 +12,6 @@ import {
   type WorkboardWorktreeRuntime,
 } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard, type WorkboardStatus } from "./types.js";
 import {
   canonicalizeWorkboardWorkspaceAccess,
   resolveAgentWorkboardWorkspaceRuntime,
@@ -92,7 +96,7 @@ function requireWriteAccess(params: {
   };
 }
 
-export async function handleWorkboardCommand(params: {
+async function handleWorkboardCommand(params: {
   api: WorkboardCommandApi;
   store: WorkboardStore;
   args?: string;

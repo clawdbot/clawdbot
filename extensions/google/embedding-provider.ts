@@ -41,7 +41,6 @@ export type GeminiEmbeddingClient = {
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
-  "text-embedding-004": 2048,
   "gemini-embedding-001": 2048,
   "gemini-embedding-2-preview": 8192,
 };
@@ -50,7 +49,7 @@ type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType
 
 // --- gemini-embedding-2-preview support ---
 
-export const GEMINI_EMBEDDING_2_MODELS = new Set([
+const GEMINI_EMBEDDING_2_MODELS = new Set([
   "gemini-embedding-2-preview",
   // Add the GA model name here once released.
 ]);
@@ -113,7 +112,7 @@ function readGeminiBatchEmbeddings(
 }
 
 /** Builds the text-only Gemini embedding request shape used across direct and batch APIs. */
-export function buildGeminiTextEmbeddingRequest(params: {
+function buildGeminiTextEmbeddingRequest(params: {
   text: string;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
@@ -158,7 +157,7 @@ export function buildGeminiEmbeddingRequest(params: {
  * Returns true if the given model name is a gemini-embedding-2 variant that
  * supports `outputDimensionality` and extended task types.
  */
-export function isGeminiEmbedding2Model(model: string): boolean {
+function isGeminiEmbedding2Model(model: string): boolean {
   return GEMINI_EMBEDDING_2_MODELS.has(model);
 }
 
@@ -166,10 +165,7 @@ export function isGeminiEmbedding2Model(model: string): boolean {
  * Validate and return the `outputDimensionality` for gemini-embedding-2 models.
  * Returns `undefined` for older models (they don't support the param).
  */
-export function resolveGeminiOutputDimensionality(
-  model: string,
-  requested?: number,
-): number | undefined {
+function resolveGeminiOutputDimensionality(model: string, requested?: number): number | undefined {
   if (!isGeminiEmbedding2Model(model)) {
     return undefined;
   }
@@ -187,7 +183,7 @@ export function resolveGeminiOutputDimensionality(
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   const trimmed = resolveMemorySecretInputString({
     value: remoteApiKey,
-    path: "agents.*.memorySearch.remote.apiKey",
+    path: "memory.search.remote.apiKey",
   });
   if (!trimmed) {
     return undefined;
@@ -198,7 +194,7 @@ function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   return trimmed;
 }
 
-export function normalizeGeminiModel(model: string): string {
+function normalizeGeminiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_GEMINI_EMBEDDING_MODEL;

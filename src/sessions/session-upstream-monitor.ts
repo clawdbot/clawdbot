@@ -1,7 +1,7 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -9,8 +9,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { recordSessionHumanDirectMessage } from "./session-state-events.js";
 import {
+  recordSessionHumanDirectMessage,
+  recordSessionStateEvent,
+} from "./session-state-events.js";
+import {
+  deleteSessionUpstreamLink,
   listWatchedSessionUpstreamLinks,
   readSessionUpstreamLink,
   updateSessionUpstreamLinkMarker,
@@ -19,13 +23,14 @@ import {
 const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
 const SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS = 15_000;
 const SESSION_UPSTREAM_OWN_USER_TEXT_LIMIT = 10;
+const SESSION_UPSTREAM_MISSING_THRESHOLD = 3;
 
 const log = createSubsystemLogger("sessions/upstream-monitor");
 
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
-  loadEntry?: typeof loadSessionEntry;
+  loadEntry?: typeof loadSessionEntryReadOnly;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {
     entry: SessionEntry;
@@ -33,7 +38,12 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   }) => Promise<string[]>;
 };
 
-export type SessionUpstreamMonitor = { stop: () => void };
+type SessionUpstreamMonitor = { stop: () => void };
+
+type SessionUpstreamMissingCounter = {
+  count: number;
+  linkUpdatedAt: number;
+};
 
 function currentProviders(): SessionCatalogProvider[] {
   return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
@@ -67,6 +77,16 @@ function upstreamSourceKey(probe: {
     .slice(0, 16);
 }
 
+function upstreamMonitorLinkKey(probe: {
+  sessionKey: string;
+  agentId: string;
+  hostId: string;
+  threadId: string;
+  upstreamRef: unknown;
+}): string {
+  return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
+}
+
 async function loadOwnRecentUserTexts(
   probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">,
   entry: SessionEntry,
@@ -95,7 +115,7 @@ async function probeProvenanceUnchanged(
   probe: SessionUpstreamProbe,
   options: SessionUpstreamMonitorOptions,
 ): Promise<boolean> {
-  const entry = (options.loadEntry ?? loadSessionEntry)({
+  const entry = (options.loadEntry ?? loadSessionEntryReadOnly)({
     sessionKey: probe.sessionKey,
     agentId: probe.agentId,
     clone: false,
@@ -111,11 +131,21 @@ async function probeProvenanceUnchanged(
   );
 }
 
-export async function runSessionUpstreamMonitorTick(
+async function runSessionUpstreamMonitorTick(
   options: SessionUpstreamMonitorOptions = {},
+  missingCounts: Map<string, SessionUpstreamMissingCounter> = new Map(),
 ): Promise<void> {
   const dbOptions = databaseOptions(options);
   const linksByCatalog = listWatchedSessionUpstreamLinks(dbOptions);
+  const watchedLinkKeys = new Set(
+    [...linksByCatalog.values()].flatMap((links) => links.map(upstreamMonitorLinkKey)),
+  );
+  // Monitor-owned counters must follow the watched-link lifecycle or churn would leak keys.
+  for (const key of missingCounts.keys()) {
+    if (!watchedLinkKeys.has(key)) {
+      missingCounts.delete(key);
+    }
+  }
   const providers = options.providers ?? currentProviders();
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
@@ -136,7 +166,7 @@ export async function runSessionUpstreamMonitorTick(
       } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
       // One corrupt session store must not reject the whole tick; skip that link only.
       try {
-        const entry = (options.loadEntry ?? loadSessionEntry)({
+        const entry = (options.loadEntry ?? loadSessionEntryReadOnly)({
           sessionKey: probe.sessionKey,
           agentId: probe.agentId,
           clone: false,
@@ -166,10 +196,77 @@ export async function runSessionUpstreamMonitorTick(
       links.map((link) => [link.sessionKey, link.updatedAt]),
     );
     try {
-      const activities = await provider.checkUpstreamActivity(probes);
-      for (const activity of activities) {
-        const probe = probeBySessionKey.get(activity.sessionKey);
-        if (!probe || !Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
+      const outcomes = await provider.checkUpstreamActivity(probes);
+      const missingSessionKeys = new Set(
+        outcomes
+          .filter((outcome) => outcome.kind === "missing")
+          .map((outcome) => outcome.sessionKey),
+      );
+      for (const probe of probes) {
+        if (!missingSessionKeys.has(probe.sessionKey)) {
+          missingCounts.delete(upstreamMonitorLinkKey(probe));
+        }
+      }
+      for (const outcome of outcomes) {
+        const probe = probeBySessionKey.get(outcome.sessionKey);
+        if (!probe) {
+          continue;
+        }
+        const missingCountKey = upstreamMonitorLinkKey(probe);
+        if (outcome.kind === "missing") {
+          const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(outcome.sessionKey);
+          if (expectedUpdatedAt === undefined) {
+            missingCounts.delete(missingCountKey);
+            continue;
+          }
+          const previous = missingCounts.get(missingCountKey);
+          const missingCount = Math.min(
+            SESSION_UPSTREAM_MISSING_THRESHOLD,
+            (previous?.linkUpdatedAt === expectedUpdatedAt ? previous.count : 0) + 1,
+          );
+          missingCounts.set(missingCountKey, {
+            count: missingCount,
+            linkUpdatedAt: expectedUpdatedAt,
+          });
+          if (missingCount < SESSION_UPSTREAM_MISSING_THRESHOLD) {
+            continue;
+          }
+          const currentLink = readSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
+          if (
+            !currentLink ||
+            currentLink.updatedAt !== expectedUpdatedAt ||
+            upstreamSourceKey(currentLink) !== upstreamSourceKey(probe)
+          ) {
+            missingCounts.delete(missingCountKey);
+            continue;
+          }
+          const sourceKey = upstreamSourceKey(probe);
+          const recorded = recordSessionStateEvent(
+            {
+              sessionKey: probe.sessionKey,
+              agentId: probe.agentId,
+              kind: "upstream_missing",
+              actorType: "system",
+              dedupeKey: `upstream-missing:${probe.sessionKey}:${sourceKey}:${currentLink.updatedAt}`,
+              summary: `upstream missing via ${catalogId}`,
+              payload: { channel: catalogId },
+            },
+            { ...dbOptions, now: (options.now ?? Date.now)() },
+          );
+          if (!recorded) {
+            missingCounts.set(missingCountKey, {
+              count: SESSION_UPSTREAM_MISSING_THRESHOLD - 1,
+              linkUpdatedAt: expectedUpdatedAt,
+            });
+            continue;
+          }
+          deleteSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
+          missingCounts.delete(missingCountKey);
+          continue;
+        }
+        missingCounts.delete(missingCountKey);
+        const activity = outcome;
+        if (!Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
           continue;
         }
         try {
@@ -250,12 +347,13 @@ export function startSessionUpstreamMonitor(
 ): SessionUpstreamMonitor {
   let stopped = false;
   let running = false;
+  const missingCounts = new Map<string, SessionUpstreamMissingCounter>();
   const run = () => {
     if (stopped || running) {
       return;
     }
     running = true;
-    void runSessionUpstreamMonitorTick(options)
+    void runSessionUpstreamMonitorTick(options, missingCounts)
       .catch((error: unknown) => {
         log.warn(`upstream monitor tick failed: ${String(error)}`);
       })
@@ -275,4 +373,10 @@ export function startSessionUpstreamMonitor(
       clearInterval(interval);
     },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.sessionUpstreamMonitorTestApi")
+  ] = { runSessionUpstreamMonitorTick };
 }

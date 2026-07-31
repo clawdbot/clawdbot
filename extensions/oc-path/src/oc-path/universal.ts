@@ -104,7 +104,7 @@ interface InsertionInfo {
   readonly marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number };
 }
 
-export function detectInsertion(path: OcPath): InsertionInfo | null {
+function detectInsertion(path: OcPath): InsertionInfo | null {
   const segments: Array<{ slot: "section" | "item" | "field"; value: string }> = [];
   if (path.section !== undefined) {
     segments.push({ slot: "section", value: path.section });
@@ -890,3 +890,4 @@ function slugifyHeading(s: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

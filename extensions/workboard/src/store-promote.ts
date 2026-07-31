@@ -1,12 +1,25 @@
 import { randomUUID } from "node:crypto";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS } from "./store-constants.js";
 import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inputs.js";
 import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js";
-import type { WorkboardCard } from "./types.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
+  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
+    return await this.enqueueMutation(async () => {
+      const promoted: WorkboardCard[] = [];
+      for (const card of await this.list()) {
+        const next = await this.promoteDependencyReady(card.id, now);
+        if (next.status !== card.status) {
+          promoted.push(next);
+        }
+      }
+      return { cards: promoted, count: promoted.length };
+    });
+  }
+
   async move(
     id: string,
     status: unknown,

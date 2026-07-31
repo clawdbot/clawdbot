@@ -1175,3 +1175,4 @@ describe("codex doctor contract", () => {
     expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe("on-failure");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

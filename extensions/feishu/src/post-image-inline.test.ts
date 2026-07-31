@@ -1,6 +1,10 @@
 // Feishu tests cover content_v2 image inline-replacement behavior.
 import { describe, expect, it } from "vitest";
-import { extractMarkdownImageKeys, inlineReplacePostImages } from "./post-image-inline.js";
+import {
+  extractMarkdownImageKeys,
+  extractMarkdownMentionIds,
+  inlineReplacePostImages,
+} from "./post-image-inline.js";
 
 describe("inlineReplacePostImages", () => {
   it("rewrites only the URL when alt text contains the same (key) substring", () => {
@@ -101,5 +105,20 @@ describe("extractMarkdownImageKeys", () => {
         String.raw`![before \] after](img_escaped_alt) ![outer [inner]](img_nested)`,
       ),
     ).toEqual(["img_escaped_alt", "img_nested"]);
+  });
+});
+
+describe("extractMarkdownMentionIds", () => {
+  it("extracts native mentions outside code and skips escaped or incomplete tags", () => {
+    const text = [
+      '<at user_id="ou_real">OpenClaw</at>',
+      '`<at user_id="ou_inline">Inline</at>`',
+      '```md\n<at user_id="ou_fenced">Fenced</at>\n```',
+      String.raw`\<at user_id="ou_escaped">Escaped</at>`,
+      '<at user_id="ou_incomplete">Incomplete',
+      '<at user_id="ou_real">OpenClaw again</at>',
+    ].join("\n");
+
+    expect(extractMarkdownMentionIds(text)).toStrictEqual(["ou_real"]);
   });
 });

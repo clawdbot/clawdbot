@@ -65,13 +65,62 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
-  it("fails loudly when the Cloudflare docs search API fails", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 503 }));
+  it("cancels non-OK docs search response bodies and fails loudly", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unavailable"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    fetchMock.mockResolvedValueOnce(response);
     const runtime = makeRuntime();
 
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
+    expect(cancelled).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports malformed docs search JSON with CLI context", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("{bad json", {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["bad-json"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"results":[{"title":"Plugin allow'),
+      0xff,
+      ...new TextEncoder().encode('list","link":"https://docs.openclaw.ai/plugins/allowlist"}]}'),
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      new Response(body, { headers: { "Content-Type": "application/json" } }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["plugin"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

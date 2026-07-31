@@ -1,29 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // Memory Core tests cover manager cache plugin behavior.
-import {
-  closeManagedCacheEntries,
-  getOrCreateManagedCacheEntry,
-  resolveSingletonManagedCache,
-} from "./manager-cache.js";
+import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
 
 type ManagedCache<T> = ReturnType<typeof resolveSingletonManagedCache<T>>;
-
-function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 type TestEntry = {
   id: string;
@@ -45,14 +24,12 @@ describe("manager cache", () => {
   const cachesForCleanup: ManagedCache<TestEntry>[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      cachesForCleanup.splice(0).map((cache) =>
-        closeManagedCacheEntries({
-          cache: cache.cache,
-          pending: cache.pending,
-        }),
-      ),
-    );
+    for (const cache of cachesForCleanup.splice(0)) {
+      await Promise.allSettled(cache.pending.values());
+      await Promise.allSettled(Array.from(cache.cache.values(), (entry) => entry.close()));
+      cache.cache.clear();
+      cache.pending.clear();
+    }
   });
 
   it("repairs an invalid singleton cache shape", async () => {
@@ -99,45 +76,6 @@ describe("manager cache", () => {
     expect(results).toHaveLength(12);
     expect(new Set(results).size).toBe(1);
     expect(createCalls).toBe(1);
-  });
-
-  it("waits for pending creation before global teardown closes cached entries", async () => {
-    const cache = createTestCache();
-    const first = createEntry("first");
-    const second = createEntry("second");
-    cachesForCleanup.push(cache);
-    const gate = createDeferred();
-
-    const pendingFirst = getOrCreateManagedCacheEntry({
-      cache: cache.cache,
-      pending: cache.pending,
-      key: "same",
-      create: async () => {
-        await gate.promise;
-        return first;
-      },
-    });
-
-    const teardown = closeManagedCacheEntries({
-      cache: cache.cache,
-      pending: cache.pending,
-    });
-    gate.resolve();
-
-    await teardown;
-    expect(first.close).toHaveBeenCalledTimes(1);
-
-    const resolvedFirst = await pendingFirst;
-    const resolvedSecond = await getOrCreateManagedCacheEntry({
-      cache: cache.cache,
-      pending: cache.pending,
-      key: "same",
-      create: async () => second,
-    });
-
-    expect(resolvedFirst).toBe(first);
-    expect(resolvedSecond).toBe(second);
-    expect(resolvedSecond).not.toBe(resolvedFirst);
   });
 
   it("bypasses identity caching for status-only callers", async () => {

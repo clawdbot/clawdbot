@@ -28,6 +28,7 @@ export const SUPPORTED_POLICY_SECTIONS = [
   "mcp",
   "models",
   "network",
+  "routing",
   "sandbox",
   "scopes",
   "secrets",

@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 // Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { readBoundedResponseBytes } from "../bounded-response-text.mjs";
 
 const [portFile, ...packageArgs] = process.argv.slice(2);
 function normalizeUpstreamRegistry(raw) {
@@ -25,6 +27,11 @@ function normalizeUpstreamRegistry(raw) {
 }
 
 const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
+// Match other E2E package-download budgets while keeping public-registry hops
+// inside the install deadline and decoded bodies inside a fixed memory budget.
+const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
+const UPSTREAM_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const UPSTREAM_TARBALL_MAX_BYTES = 512 * 1024 * 1024;
 
 if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
   console.error(
@@ -139,8 +146,20 @@ async function proxyUpstream(rawRequestUrl, response) {
   }
   try {
     const upstreamUrl = resolveUpstreamRequestUrl(rawRequestUrl);
-    const upstreamResponse = await fetch(upstreamUrl, { redirect: "manual" });
-    const body = Buffer.from(await upstreamResponse.arrayBuffer());
+    const upstreamResponse = await fetch(upstreamUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    });
+    const requestUrl = new URL(rawRequestUrl || "/", "http://127.0.0.1");
+    if (requestUrl.pathname.includes("/-/")) {
+      await streamUpstreamTarball(upstreamResponse, response);
+      return true;
+    }
+    const body = await readBoundedResponseBytes(
+      upstreamResponse,
+      "npm registry upstream",
+      UPSTREAM_RESPONSE_MAX_BYTES,
+    );
     // Fetch decodes compressed bodies but preserves upstream length metadata.
     // Emit the decoded size so npm clients do not truncate proxied responses.
     const headers = { "content-length": String(body.length) };
@@ -153,10 +172,48 @@ async function proxyUpstream(rawRequestUrl, response) {
     response.writeHead(upstreamResponse.status, headers);
     response.end(body);
   } catch (error) {
+    if (response.headersSent) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+      return true;
+    }
     response.writeHead(502, { "content-type": "text/plain" });
     response.end(`upstream registry request failed: ${String(error)}`);
   }
   return true;
+}
+
+async function streamUpstreamTarball(upstreamResponse, response) {
+  const declaredLength = Number(upstreamResponse.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > UPSTREAM_TARBALL_MAX_BYTES) {
+    throw new Error(`npm registry upstream tarball exceeded ${UPSTREAM_TARBALL_MAX_BYTES} bytes`);
+  }
+  const headers = {};
+  for (const name of ["content-type", "location"]) {
+    const value = upstreamResponse.headers.get(name);
+    if (value) {
+      headers[name] = value;
+    }
+  }
+  response.writeHead(upstreamResponse.status, headers);
+  if (!upstreamResponse.body) {
+    response.end();
+    return;
+  }
+  let streamedBytes = 0;
+  for await (const chunk of upstreamResponse.body) {
+    const bytes = Buffer.from(chunk);
+    streamedBytes += bytes.length;
+    if (streamedBytes > UPSTREAM_TARBALL_MAX_BYTES) {
+      response.destroy(
+        new Error(`npm registry upstream tarball exceeded ${UPSTREAM_TARBALL_MAX_BYTES} bytes`),
+      );
+      return;
+    }
+    if (!response.write(bytes)) {
+      await once(response, "drain");
+    }
+  }
+  response.end();
 }
 
 async function handleRequest(request, response) {

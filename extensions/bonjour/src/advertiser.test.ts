@@ -54,10 +54,10 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
-  delete process.env.VITEST;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("VITEST", undefined);
+  vi.stubEnv("NODE_ENV", "development");
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
-  process.env.OPENCLAW_MDNS_HOSTNAME = hostname;
+  vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", hostname);
 }
 
 function mockCiaoService(params?: {
@@ -134,18 +134,7 @@ describe("gateway bonjour advertiser", () => {
     txt?: unknown;
   };
 
-  const prevEnv = { ...process.env };
-
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
-    }
-
     createService.mockClear();
     getResponder.mockReset();
     shutdown.mockClear();
@@ -155,6 +144,7 @@ describe("gateway bonjour advertiser", () => {
     logger.warn.mockClear();
     logger.debug.mockClear();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -235,7 +225,7 @@ describe("gateway bonjour advertiser", () => {
 
   it("honors truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
     enableAdvertiserUnitMode();
-    process.env.OPENCLAW_DISABLE_BONJOUR = "true";
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "true");
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -261,8 +251,8 @@ describe("gateway bonjour advertiser", () => {
 
   it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
     enableAdvertiserUnitMode();
-    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
-    process.env.FLY_APP_NAME = "openclaw-clawcks-test";
+    vi.stubEnv("FLY_MACHINE_ID", "3d8d5459a03038");
+    vi.stubEnv("FLY_APP_NAME", "openclaw-clawcks-test");
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
@@ -277,7 +267,7 @@ describe("gateway bonjour advertiser", () => {
 
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
-    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
     vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -317,31 +307,6 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-    const processOn = vi.spyOn(process, "on");
-
-    const started = await startGatewayBonjourAdvertiser(
-      {
-        gatewayPort: 18789,
-        sshPort: 2222,
-      },
-      { logger },
-    );
-
-    const unhandledRejectionRegistration = processOn.mock.calls.find(
-      ([event]) => event === "unhandledRejection",
-    );
-    expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
-    expect(processOn.mock.calls.map(([event]) => event)).not.toContain("uncaughtException");
-
-    await started.stop();
-  });
-
   it("cleans up ciao process handlers after shutdown", async () => {
     enableAdvertiserUnitMode();
 
@@ -376,7 +341,7 @@ describe("gateway bonjour advertiser", () => {
     expect(order).toEqual(["shutdown", "cleanup-exception", "cleanup-rejection"]);
   });
 
-  it("logs ciao handler classifications at the bonjour caller", async () => {
+  it("handles ciao netmask assertions at the bonjour caller", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -388,19 +353,11 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
     const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
-    expect(handler).toBeTypeOf("function");
     expect(exceptionHandler).toBeTypeOf("function");
 
-    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expectWarnContaining("suppressing ciao cancellation");
-
-    logger.warn.mockClear();
     expect(
       exceptionHandler?.(
         Object.assign(
@@ -413,57 +370,15 @@ describe("gateway bonjour advertiser", () => {
     ).toBe(true);
     expectWarnContaining("suppressing ciao netmask assertion");
 
-    logger.warn.mockClear();
-    expect(
-      handler?.(
-        new Error(
-          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
-        ),
-      ),
-    ).toBe(true);
-    expectWarnContaining("suppressing ciao self-probe race");
-
     await started.stop();
   });
 
-  it("recovers when ciao cancellation escapes the advertiser", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
-    expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(createService).toHaveBeenCalledTimes(2);
-    });
-
-    expectWarnContaining("suppressing ciao cancellation");
-    expectWarnContaining("restarting advertiser");
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(advertise).toHaveBeenCalledTimes(2);
-
-    await started.stop();
-  });
-
-  it("logs advertise failures and retries via watchdog", async () => {
+  it("logs advertise failures without starting a competing retry loop", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("boom")) // initial advertise fails
-      .mockResolvedValue(undefined); // watchdog retry succeeds
+    const advertise = vi.fn().mockRejectedValue(new Error("boom"));
     mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
 
     const started = await startAdvertiser({
@@ -478,16 +393,14 @@ describe("gateway bonjour advertiser", () => {
     await Promise.resolve();
     expectWarnContaining("advertise failed");
 
-    // watchdog first retries, then recreates the advertiser after the service
-    // stays unhealthy across multiple 5s ticks.
-    await vi.advanceTimersByTimeAsync(25_000);
-    expect(advertise).toHaveBeenCalledTimes(3);
-    expect(createService).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(advertise).toHaveBeenCalledTimes(1);
+    expect(createService).toHaveBeenCalledTimes(1);
 
     await started.stop();
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(advertise).toHaveBeenCalledTimes(3);
+    expect(advertise).toHaveBeenCalledTimes(1);
   });
 
   it("handles advertise throwing synchronously", async () => {
@@ -601,132 +514,13 @@ describe("gateway bonjour advertiser", () => {
     }
   });
 
-  it("recreates the advertiser when ciao gets stuck announcing", async () => {
+  it("never overlaps ciao lifecycle states or conflict handling with another advertise call", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();
 
-    const stateRef = { value: "announcing" };
-    const events: string[] = [];
-    const cleanupException = vi.fn();
-    const cleanupRejection = vi.fn();
-    let advertiseCount = 0;
-    const destroy = vi.fn().mockImplementation(async () => {
-      events.push("destroy");
-    });
-    const advertise = vi.fn().mockImplementation(() => {
-      advertiseCount += 1;
-      events.push(`advertise:${advertiseCount}`);
-      if (advertiseCount === 1) {
-        stateRef.value = "announcing";
-        return new Promise<void>(() => {});
-      }
-      stateRef.value = "announced";
-      return Promise.resolve();
-    });
-    mockCiaoService({ advertise, destroy, stateRef });
-    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
-    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    expect(createService).toHaveBeenCalledTimes(1);
-    expect(advertise).toHaveBeenCalledTimes(1);
-    expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
-    expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(25_000);
-
-    expectWarnContaining("restarting advertiser");
-    expect(createService).toHaveBeenCalledTimes(2);
-    expect(advertise).toHaveBeenCalledTimes(2);
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(shutdown).not.toHaveBeenCalled();
-    expect(cleanupException).not.toHaveBeenCalled();
-    expect(cleanupRejection).not.toHaveBeenCalled();
-    expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
-
-    await started.stop();
-    expect(destroy).toHaveBeenCalledTimes(2);
-    expect(shutdown).toHaveBeenCalledTimes(1);
-    expect(cleanupException).toHaveBeenCalledTimes(1);
-    expect(cleanupRejection).toHaveBeenCalledTimes(1);
-  });
-
-  it("treats probing-to-announcing churn as one unhealthy window", async () => {
-    enableAdvertiserUnitMode();
-    vi.useFakeTimers();
-
-    const stateRef = { value: "probing" };
+    const stateRef = { value: "unannounced" };
     const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy, stateRef });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    expect(createService).toHaveBeenCalledTimes(1);
-    expect(advertise).toHaveBeenCalledTimes(1);
-
-    setTimeout(() => {
-      stateRef.value = "announcing";
-    }, 10_000);
-
-    await vi.advanceTimersByTimeAsync(25_000);
-
-    expectWarnContaining("service stuck in announcing");
-    expect(createService).toHaveBeenCalledTimes(2);
-    expect(advertise).toHaveBeenCalledTimes(2);
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(shutdown).not.toHaveBeenCalled();
-
-    await started.stop();
-    expect(shutdown).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not re-advertise while ciao is still probing", async () => {
-    enableAdvertiserUnitMode();
-    vi.useFakeTimers();
-
-    const stateRef = { value: "probing" };
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy, stateRef });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    expect(advertise).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    expect(advertise).toHaveBeenCalledTimes(1);
-    expect(createService).toHaveBeenCalledTimes(1);
-    expect(warnMessages().join("\n")).not.toContain(
-      "watchdog detected non-announced service; attempting re-advertise",
-    );
-
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expectWarnContaining("service stuck in probing");
-    expect(createService).toHaveBeenCalledTimes(2);
-
-    await started.stop();
-  });
-
-  it("defers probing recovery while a name conflict is still settling", async () => {
-    enableAdvertiserUnitMode();
-    vi.useFakeTimers();
-
-    const stateRef = { value: "probing" };
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn(() => new Promise<void>(() => {}));
     const listenerMap = new Map<string, (value: unknown) => void>();
     mockCiaoService({ advertise, destroy, stateRef, listenerMap });
 
@@ -735,101 +529,58 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    listenerMap.get("name-change")?.("test-host (OpenClaw) (2)");
-
-    await vi.advanceTimersByTimeAsync(15_000);
-
     expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    for (const state of ["probing", "announcing", "unannounced", "probed", "announced"]) {
+      stateRef.value = state;
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    listenerMap.get("name-change")?.("test-host (OpenClaw) (2)");
+    listenerMap.get("hostname-change")?.("test-host-(2)");
     expectWarnContaining('name conflict resolved; newName="test-host (OpenClaw) (2)"');
-
-    await vi.advanceTimersByTimeAsync(20_000);
-
-    expectWarnContaining("service stuck in probing");
-    expect(createService).toHaveBeenCalledTimes(2);
-
-    await started.stop();
-  });
-
-  it("disables bonjour for the process after repeated stuck advertiser restarts", async () => {
-    enableAdvertiserUnitMode();
-    vi.useFakeTimers();
-
-    const stateRef = { value: "announcing" };
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn(() => new Promise<void>(() => {}));
-    mockCiaoService({ advertise, destroy, stateRef });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    await vi.advanceTimersByTimeAsync(55_000);
-
-    expectWarnContaining("disabling advertiser after 1 stuck-state restart");
-    expect(createService).toHaveBeenCalledTimes(2);
-    expect(advertise).toHaveBeenCalledTimes(2);
-    expect(destroy).toHaveBeenCalledTimes(2);
-    expect(shutdown).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(createService).toHaveBeenCalledTimes(2);
-    expect(advertise).toHaveBeenCalledTimes(2);
+    expectWarnContaining('hostname conflict resolved; newHostname="test-host-(2)"');
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(warnMessages().join("\n")).not.toMatch(
+      /watchdog|restarting advertiser|disabling advertiser/,
+    );
 
     await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
-  it("disables bonjour when the advertiser flaps within a sliding window", async () => {
+  it("makes advertiser shutdown idempotent", async () => {
     enableAdvertiserUnitMode();
-    vi.useFakeTimers();
 
-    const stateRef = { value: "announced" };
     const destroy = vi.fn().mockResolvedValue(undefined);
     const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy, stateRef });
+    const cleanupException = vi.fn();
+    const cleanupRejection = vi.fn();
+    mockCiaoService({ advertise, destroy });
+    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
+    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
     });
 
-    for (let cycle = 0; cycle < 12; cycle += 1) {
-      stateRef.value = "announced";
-      await vi.advanceTimersByTimeAsync(5_000);
-      stateRef.value = "probing";
-      await vi.advanceTimersByTimeAsync(25_000);
-      if (
-        logger.warn.mock.calls.some(
-          (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
-        )
-      ) {
-        break;
-      }
-    }
+    await Promise.all([started.stop(), started.stop()]);
 
-    const disableLog = logger.warn.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
-    );
-    if (!disableLog) {
-      throw new Error("expected advertiser disable warning after repeated restarts");
-    }
-    expect(String(disableLog[0])).toMatch(/restarts within \d+ minutes/);
-
-    const advertiseCallsAtDisable = advertise.mock.calls.length;
-    const createServiceCallsAtDisable = createService.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    expect(advertise).toHaveBeenCalledTimes(advertiseCallsAtDisable);
-    expect(createService).toHaveBeenCalledTimes(createServiceCallsAtDisable);
-
-    await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(cleanupException).toHaveBeenCalledTimes(1);
+    expect(cleanupRejection).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes hostnames with domains for service names", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
 
     vi.spyOn(os, "hostname").mockReturnValue("Mac.localdomain");
 
@@ -853,9 +604,9 @@ describe("gateway bonjour advertiser", () => {
 
   it("falls back to openclaw when system hostname is invalid for DNS", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -949,9 +700,9 @@ describe("gateway bonjour advertiser", () => {
 
   it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
     // Allow advertiser to run in unit tests.
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("Lobster");
 
     const destroy = vi.fn().mockResolvedValue(undefined);

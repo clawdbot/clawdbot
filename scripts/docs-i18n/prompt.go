@@ -51,8 +51,46 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 		prettyLanguageLabel(tgtLang),
 		documentationQualityRules,
 		localePromptRules(tgtLang),
+		protectedProductNameRule(),
 		buildGlossaryPrompt(glossary),
 	))
+}
+
+var alwaysProtectedProductNames = []string{
+	"OpenClaw", "Raspberry Pi", "WhatsApp", "Telegram", "Discord", "iMessage", "Slack", "Microsoft Teams", "Google Chat", "Signal",
+}
+
+var contextualProtectedProductNames = []string{
+	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+}
+
+func protectedProductNameRule() string {
+	contextualDisplay := []string{
+		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+	}
+	return fmt.Sprintf(
+		"- Keep product names in English: %s. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: %s. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.",
+		strings.Join(alwaysProtectedProductNames, ", "),
+		strings.Join(contextualDisplay, ", "),
+	)
+}
+
+func isAlwaysProtectedProductName(value string) bool {
+	for _, name := range alwaysProtectedProductNames {
+		if value == name {
+			return true
+		}
+	}
+	return false
+}
+
+func contextualProtectedProductName(value string) (string, bool) {
+	for _, name := range contextualProtectedProductNames {
+		if value == name {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 var localeRules = map[string]string{
@@ -137,6 +175,7 @@ Rules:
 - Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
 - Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
+- Preserve link-label association: translate each Markdown link label in place. Never move link markup to a different word or entity, and never replace a protected product-name label with a neighboring product name.
 - Do not remove, reorder, merge, summarize, or duplicate content.
 - Use fluent, idiomatic technical language in the target language with a neutral documentation tone; avoid slang and jokes.
 %s
@@ -145,7 +184,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.
+%s
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s

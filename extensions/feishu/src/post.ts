@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { extractMarkdownImageKeys } from "./post-image-inline.js";
+import { extractMarkdownImageKeys, extractMarkdownMentionIds } from "./post-image-inline.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
 const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
@@ -271,14 +271,14 @@ function renderPostParagraphs(
         mentionedOpenIds,
         options.renderMediaPlaceholders,
       );
-      // content_v2 md elements: collect non-code-block image_key from the native
-      // markdown text (content-path tag:img is already collected by renderElement;
-      // md inline images need this separate scan).
+      // content_v2 md elements keep native image and mention extensions inline.
+      // Scan both outside code regions; content-path tags are already handled above.
       if (options.useV2 && isRecord(element)) {
         const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
         if (tag === "md" || tag === "lark_md") {
           const mdText = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
           imageKeys.push(...extractMarkdownImageKeys(mdText));
+          mentionedOpenIds.push(...extractMarkdownMentionIds(mdText));
         }
       }
     }

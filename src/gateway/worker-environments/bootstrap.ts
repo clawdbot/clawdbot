@@ -447,14 +447,14 @@ case "$install" in
     fi
     npm_prefix=$staging/.npm-prefix
     npm_pack_json=$staging/npm-pack.json
-    OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
+    npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
     package_archive=$staging/$package_archive
     if ! node -e '${VERIFY_NPM_PACKAGE_JS}' "$package_archive" "$package_integrity"; then
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
+    npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
     package_dir=$npm_prefix/lib/node_modules/openclaw
     if [ ! -f "$package_dir/openclaw.mjs" ]; then
       printf '%s\n' 'npm did not install the OpenClaw package root' >&2
@@ -482,7 +482,7 @@ if [ "$install" = bundle ]; then
     printf '%s\n' '${NPM_MISSING_MARKER}' >&2
     exit ${NPM_MISSING_EXIT_CODE}
   fi
-  OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
+  npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
 fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
@@ -783,3 +783,4 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

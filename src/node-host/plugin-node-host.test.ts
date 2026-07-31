@@ -5,6 +5,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
 const availabilityContext = { config: {}, env: {} };
@@ -161,6 +162,36 @@ describe("plugin node-host registry", () => {
     });
   });
 
+  it("owns plugin availability watcher cleanup", () => {
+    let notify: (() => void) | undefined;
+    const cleanup = vi.fn();
+    const onChange = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          watchAvailability: (_context, callback) => {
+            notify = callback;
+            return cleanup;
+          },
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, onChange);
+    notify?.();
+    expect(onChange).toHaveBeenCalledOnce();
+    stop();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("dispatches plugin-declared node-host commands", async () => {
     const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
     const registry = createEmptyPluginRegistry();
@@ -178,11 +209,15 @@ describe("plugin node-host registry", () => {
     ];
     setActivePluginRegistry(registry);
 
-    await expect(invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}')).resolves.toBe(
-      '{"ok":true}',
-    );
+    const context = {
+      sendNodeEvent: vi.fn(async () => undefined),
+      sessionKey: "agent:main:canvas",
+    };
+    await expect(
+      invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
+    ).resolves.toBe('{"ok":true}');
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}');
+    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, context);
   });
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {

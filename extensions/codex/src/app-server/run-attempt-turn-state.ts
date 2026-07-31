@@ -45,6 +45,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
     terminalTurnNotificationQueued: false,
+    // App-server collapses user interrupts and replacements to "interrupted";
+    // this marker remains the user-interrupt hint until Codex exposes abortReason.
+    sawCodexInterruptMarker: false,
     timedOut: false,
     turnCompletionIdleTimedOut: false,
     turnWatchTimeoutKind: undefined as CodexAttemptTurnWatchTimeoutKind | undefined,
@@ -81,7 +84,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
   const turnAssistantCompletionIdleTimeoutMs = resolveCodexTurnAssistantCompletionIdleTimeoutMs(
-    options.turnAssistantCompletionIdleTimeoutMs,
+    options.turnAssistantCompletionIdleTimeoutMs ?? appServer.turnAssistantCompletionIdleTimeoutMs,
   );
   const postToolRawAssistantCompletionIdleTimeoutMs =
     resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(

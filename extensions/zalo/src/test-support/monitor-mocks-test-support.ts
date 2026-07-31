@@ -1,13 +1,20 @@
 // Zalo plugin module implements monitor mocks test support behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
@@ -22,8 +29,9 @@ const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
-const loadedMonitorModules = new Set<MonitorModule>();
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
+let lifecycleStateDir: string | undefined;
+let previousLifecycleStateDir: string | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -92,7 +100,6 @@ async function importMonitorModule(params: {
   const module = (await import(
     `${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`
   )) as MonitorModule;
-  loadedMonitorModules.add(module);
   return module;
 }
 
@@ -107,20 +114,47 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
-  vi.clearAllMocks();
-  (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
-  for (const module of loadedMonitorModules) {
-    module.testing.clearHostedMediaRouteRefsForTest();
+  closeOpenClawStateDatabaseForTest();
+  if (lifecycleStateDir) {
+    await fs.rm(lifecycleStateDir, { recursive: true, force: true });
+    lifecycleStateDir = undefined;
   }
+  if (previousLifecycleStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousLifecycleStateDir;
+    previousLifecycleStateDir = undefined;
+  }
+  vi.clearAllMocks();
+  (await importCachedWebhookModule()).zaloWebhookRuntime.clearZaloWebhookSecurityStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
+}
+
+async function installLifecycleWebhookIngressState(): Promise<void> {
+  const runtime = getZaloRuntimeMock() as PluginRuntime;
+  const createdDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-lifecycle-"),
+  );
+  const stateDir = await fs.realpath(createdDir);
+  previousLifecycleStateDir = process.env.OPENCLAW_STATE_DIR;
+  lifecycleStateDir = stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  runtime.state.openChannelIngressQueue = (<T>(options: { accountId?: string }) =>
+    createChannelIngressQueueForTests<T>({
+      channelId: "zalo",
+      accountId: options.accountId ?? "default",
+      stateDir,
+    })) as PluginRuntime["state"]["openChannelIngressQueue"];
 }
 
 export function setLifecycleRuntimeCore(
   channel: NonNullable<NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["channel"]>,
+  state?: NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["state"],
 ) {
   getZaloRuntimeMock.mockReturnValue(
     createPluginRuntimeMock({
       channel,
+      ...(state ? { state } : {}),
     }),
   );
 }
@@ -139,7 +173,6 @@ export async function loadCachedLifecycleMonitorModule(cacheKey: string): Promis
     (async () => {
       installLifecycleModuleMocks();
       const module = (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
-      loadedMonitorModules.add(module);
       return module;
     })();
   cachedMonitorModules.set(key, cached);
@@ -154,6 +187,7 @@ export async function startWebhookLifecycleMonitor(params: {
   webhookSecret?: string;
   cacheKey?: string;
 }) {
+  await installLifecycleWebhookIngressState();
   const registry = createEmptyPluginRegistry();
   setActivePluginRegistry(registry);
   const abort = new AbortController();

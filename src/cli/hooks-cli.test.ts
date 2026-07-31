@@ -1,9 +1,26 @@
 // Hooks CLI tests cover hook command registration and output behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { Command } from "commander";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import {
+  formatHookInfo,
+  formatHooksCheck,
+  formatHooksList,
+  registerHooksCli,
+} from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
+
+const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
+const runPluginUpdateCommandMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./plugins-install-command.js", () => ({
+  runPluginInstallCommand: runPluginInstallCommandMock,
+}));
+
+vi.mock("./plugins-update-command.js", () => ({
+  runPluginUpdateCommand: runPluginUpdateCommandMock,
+}));
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/workspace",
@@ -32,6 +49,11 @@ const report: HookStatusReport = {
     },
   ],
 };
+
+beforeEach(() => {
+  runPluginInstallCommandMock.mockReset();
+  runPluginUpdateCommandMock.mockReset();
+});
 
 function createPluginManagedHookReport(): HookStatusReport {
   return {
@@ -63,6 +85,20 @@ function createPluginManagedHookReport(): HookStatusReport {
   };
 }
 
+function createEventlessHookReport(): HookStatusReport {
+  return {
+    ...report,
+    hooks: [
+      {
+        ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+        events: [],
+        loadable: false,
+        blockedReason: "no events defined",
+      },
+    ],
+  };
+}
+
 describe("hooks cli formatting", () => {
   it("labels hooks list output", () => {
     const output = formatHooksList(report, {});
@@ -73,6 +109,33 @@ describe("hooks cli formatting", () => {
   it("labels hooks status output", () => {
     const output = formatHooksCheck(report, {});
     expect(output).toContain("Hooks Status");
+  });
+
+  it("classifies eventless hooks as not ready in human check output", () => {
+    const output = formatHooksCheck(createEventlessHookReport(), {});
+
+    expect(output).toContain("Ready: 0");
+    expect(output).toContain("Not ready: 1");
+    expect(output).toContain("session-memory - no events defined");
+  });
+
+  it("classifies eventless hooks as not eligible in JSON check output", () => {
+    const output = JSON.parse(formatHooksCheck(createEventlessHookReport(), { json: true }));
+
+    expect(output).toMatchObject({
+      total: 1,
+      eligible: 0,
+      notEligible: 1,
+      hooks: {
+        eligible: [],
+        notEligible: [
+          {
+            name: "session-memory",
+            blockedReason: "no events defined",
+          },
+        ],
+      },
+    });
   });
 
   it("labels plugin-managed hooks with plugin id", () => {
@@ -106,5 +169,21 @@ describe("hooks cli formatting", () => {
     const output = formatHookInfo(pluginReport, "plugin-hook", {});
     expect(output).toContain("voice-call");
     expect(output).toContain("Managed by plugin");
+  });
+
+  it("forwards --force through the deprecated install alias", async () => {
+    runPluginInstallCommandMock.mockResolvedValueOnce(undefined);
+    const program = new Command().exitOverride();
+    registerHooksCli(program);
+
+    await program.parseAsync(["hooks", "install", "npm:demo-hooks", "--force"], {
+      from: "user",
+    });
+
+    expect(runPluginInstallCommandMock).toHaveBeenCalledWith({
+      raw: "npm:demo-hooks",
+      opts: expect.objectContaining({ force: true }),
+      invalidateRuntimeCache: false,
+    });
   });
 });

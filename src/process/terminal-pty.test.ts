@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   signalProcessTree: vi.fn(),
@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./kill-tree.js", () => ({ signalProcessTree: mocks.signalProcessTree }));
 vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
 
-const { resolveTerminalPtyInvocation, spawnTerminalPty } = await import("./terminal-pty.js");
+const { spawnTerminalPty } = await import("./terminal-pty.js");
 
 function fakePty(pid = 4321) {
   return {
@@ -42,10 +42,16 @@ describe("terminal PTY teardown", () => {
     mocks.spawn.mockReset();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
     const { handle, pty } = await spawnFakePty();
     handle.kill(signal);
-    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
+    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL", {
+      detached: true,
+    });
     expect(pty.kill).not.toHaveBeenCalled();
   });
 
@@ -63,35 +69,140 @@ describe("terminal PTY teardown", () => {
 });
 
 describe("terminal PTY invocation", () => {
-  it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", (extension) => {
-    expect(
-      resolveTerminalPtyInvocation({
-        file: `C:\\Program Files\\Codex\\codex${extension}`,
-        args: ["resume", "thread title"],
-        platform: "win32",
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-      }),
-    ).toEqual({
-      file: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        `""C:\\Program Files\\Codex\\codex${extension}" resume "thread title""`,
-      ],
-    });
+  const nonInteractiveEnvironments: Array<Record<string, string>> = [
+    {},
+    { TERM: "" },
+    { TERM: "dumb" },
+    { TERM: "DUMB" },
+    { TERM: " dumb " },
+  ];
+
+  beforeEach(() => {
+    mocks.spawn.mockReset();
   });
 
-  it("keeps executables and non-Windows commands direct", () => {
-    expect(
-      resolveTerminalPtyInvocation({
-        file: "C:\\tools\\codex.exe",
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(nonInteractiveEnvironments)(
+    "upgrades non-interactive TERM for a real PTY: %o",
+    async (env) => {
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: "/usr/bin/codex",
         args: ["resume", "thread"],
-        platform: "win32",
+        env,
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/codex",
+        ["resume", "thread"],
+        expect.objectContaining({
+          name: "xterm-256color",
+          env: expect.objectContaining({ TERM: "xterm-256color" }),
+        }),
+      );
+    },
+  );
+
+  it("preserves an interactive TERM", async () => {
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "/usr/bin/codex",
+      args: [],
+      env: { TERM: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "/usr/bin/codex",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: expect.objectContaining({ TERM: "screen-256color" }),
       }),
-    ).toEqual({ file: "C:\\tools\\codex.exe", args: ["resume", "thread"] });
-    expect(
-      resolveTerminalPtyInvocation({ file: "/tmp/codex.cmd", args: [], platform: "linux" }),
-    ).toEqual({ file: "/tmp/codex.cmd", args: [] });
+    );
+  });
+
+  it("canonicalizes a case-insensitive Windows TERM key", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "powershell.exe",
+      args: [],
+      env: { Term: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "powershell.exe",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: { TERM: "screen-256color" },
+      }),
+    );
+  });
+
+  it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: `C:\\Program Files\\Codex\\codex${extension}`,
+      args: ["resume", "thread title"],
+      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", `""C:\\Program Files\\Codex\\codex${extension}" resume "thread title""`],
+      expect.objectContaining({ cols: 80, rows: 24 }),
+    );
+  });
+
+  it("keeps executables and non-Windows commands direct", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+    await spawnTerminalPty({
+      file: "C:\\tools\\codex.exe",
+      args: ["resume", "thread"],
+      env: {},
+      cols: 80,
+      rows: 24,
+    });
+
+    platform.mockReturnValue("linux");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+    await spawnTerminalPty({
+      file: "/tmp/codex.cmd",
+      args: [],
+      env: {},
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "C:\\tools\\codex.exe",
+      ["resume", "thread"],
+      expect.objectContaining({ cols: 80, rows: 24 }),
+    );
+    expect(mocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/codex.cmd",
+      [],
+      expect.objectContaining({ cols: 80, rows: 24 }),
+    );
   });
 });

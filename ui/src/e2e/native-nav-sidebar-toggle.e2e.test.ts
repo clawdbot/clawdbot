@@ -9,7 +9,9 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -39,7 +41,12 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     context = undefined;
   });
 
-  async function openPage(options: { nativeNav?: boolean; webChrome?: boolean; width?: number }) {
+  async function openPage(options: {
+    nativeNav?: boolean;
+    scenario?: ControlUiMockGatewayScenario;
+    webChrome?: boolean;
+    width?: number;
+  }) {
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -99,29 +106,31 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         }
       });
     }
-    await installMockGateway(page);
+    const gateway = await installMockGateway(page, options.scenario);
     const response = await page.goto(server.baseUrl);
     expect(response?.status()).toBe(200);
     // The brand row only becomes visible on desktop widths; drawer widths keep
     // the sidebar hidden, so wait for DOM attachment instead of visibility.
     await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+    if (options.scenario) {
+      await gateway.waitForRequest("sessions.list");
+    }
     return page;
   }
 
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
-    const collapse = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => collapse.isVisible()).toBe(true);
-    await collapse.click();
-
-    const expand = page.locator(".shell-nav-expand");
-    await expect.poll(() => expand.isVisible()).toBe(true);
-    await expand.click();
-    await expect.poll(() => collapse.isVisible()).toBe(true);
+    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => toggle.isVisible()).toBe(true);
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
   });
 
-  it("hides both web toggles when the native titlebar toggle is present", async () => {
+  it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
     const page = await openPage({ nativeNav: true });
 
     await expect
@@ -150,10 +159,15 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
+    // Expanded native-nav hosts keep the cluster's search (no native search
+    // control exists while the rail is open) but hide the duplicate nav toggle.
+    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+      .toBe(false);
 
-    // Collapse through the native titlebar path; the floating expand control
-    // must stay hidden (the titlebar button is the only expand affordance).
+    // Collapse through the native titlebar path; the whole web chrome cluster
+    // hides (native titlebar provides search and new-thread while collapsed).
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });
@@ -169,7 +183,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         ),
       )
       .toBe(true);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
     // With the in-page expand control hidden, collapse anchors keyboard focus
     // on the content column instead of stranding it on the body.
     await expect
@@ -191,19 +205,23 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     const page = await openPage({ webChrome: true });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
+    const search = toolbar.getByRole("button", { name: "Open command palette" });
+    const newThread = toolbar.getByRole("button", { name: "New thread" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
+    await expect.poll(() => search.isVisible()).toBe(true);
+    await expect.poll(() => newThread.count()).toBe(0);
 
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
-    await toolbar.getByRole("button", { name: "Open command palette" }).click();
+    await expect.poll(() => newThread.isVisible()).toBe(true);
+    await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
 
@@ -226,7 +244,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(false);
 
-    await toolbar.getByRole("button", { name: "New session" }).click();
+    await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
     await expect
@@ -252,7 +270,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
@@ -280,17 +298,140 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
+  it("moves drawer and search controls into the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    const header = page.locator(".chat-pane__header").first();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--merged-chat-chrome");
+    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
+      .toBe(true);
   });
 
-  it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true, width: 900 });
-    // The web toolbar hides below the drawer breakpoint, so the hamburger is
-    // the only remaining sidebar toggle there.
+  it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
+    const page = await openPage({
+      nativeNav: false,
+      scenario: {
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+      },
+      width: 900,
+    });
+    const navigation = page.locator(".shell-nav");
+    const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
+    const dialog = page.getByRole("dialog", { name: "Navigation" });
+    const trigger = page.locator(".chat-pane__nav-toggle").first();
+
+    await expect.poll(() => navigation.getAttribute("inert")).toBe("");
+    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
+      .toBe(false);
+
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--nav-drawer-open");
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await expect
+      .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
+
+    for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
+      await page.keyboard.press(key);
+      await expect
+        .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+    }
+
+    expect(
+      await page.locator("#control-ui-main").evaluate((element) => {
+        element.focus();
+        return element === document.activeElement;
+      }),
+    ).toBe(false);
+
+    const row = navigation.locator(".sidebar-recent-session").first();
+    await row.hover();
+    await row.getByRole("button", { name: "Open thread menu" }).click();
+    const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
+    await expect.poll(() => sessionMenu.isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => sessionMenu.count()).toBe(0);
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--nav-drawer-open");
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => trigger.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+
+    await trigger.click();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await page.mouse.click(899, 450);
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await expect
+      .poll(() => trigger.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => drawer.count()).toBe(0);
+  });
+
+  it("keeps the sidebar rail beside a half-width native link browser", async () => {
+    const page = await openPage({ webChrome: true, width: 620 });
+    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-resizer").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
+
+    await page.setViewportSize({ width: 560, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+  });
+
+  it("uses the drawer below the native minimum main-pane width", async () => {
+    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    // The native traffic-light cluster ends around x=78. Keep the brand aligned
+    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    await expect
+      .poll(() =>
+        page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
+      )
+      .toBe(92);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

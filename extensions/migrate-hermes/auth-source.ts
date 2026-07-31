@@ -21,7 +21,9 @@ export type HermesCodexAuthCandidate = {
 const HERMES_REAUTH_PROVIDER_MAPPINGS = [
   { sourceProvider: "anthropic", targetProvider: "anthropic" },
   { sourceProvider: "nous", targetProvider: "nous" },
-  { sourceProvider: "qwen-oauth", targetProvider: "qwen-oauth" },
+  { sourceProvider: "qwen-oauth", targetProvider: "qwen" },
+  { sourceProvider: "qwen-cli", targetProvider: "qwen" },
+  { sourceProvider: "qwen-portal", targetProvider: "qwen" },
   { sourceProvider: "minimax-oauth", targetProvider: "minimax-portal" },
   { sourceProvider: "xai-oauth", targetProvider: "xai" },
 ] as const;
@@ -155,7 +157,7 @@ async function readHermesOAuthProviderIds(authPath: string | undefined): Promise
 export async function buildReauthenticationItems(source: HermesSource): Promise<MigrationItem[]> {
   const profileProviders = await readHermesOAuthProviderIds(source.authPath);
   const globalProviders = await readHermesOAuthProviderIds(source.globalAuthPath);
-  return HERMES_REAUTH_PROVIDER_MAPPINGS.flatMap(({ sourceProvider, targetProvider }) => {
+  const items = HERMES_REAUTH_PROVIDER_MAPPINGS.flatMap(({ sourceProvider, targetProvider }) => {
     const sourcePath = profileProviders.has(sourceProvider)
       ? source.authPath
       : globalProviders.has(sourceProvider)
@@ -169,8 +171,12 @@ export async function buildReauthenticationItems(source: HermesSource): Promise<
         id: `manual:auth-reauthenticate:${targetProvider}`,
         source: sourcePath,
         message: `Hermes ${sourceProvider} credentials cannot be reused safely by OpenClaw.`,
-        recommendation: `Authenticate ${targetProvider} in OpenClaw after migration.`,
+        recommendation:
+          targetProvider === "qwen"
+            ? "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key."
+            : `Authenticate ${targetProvider} in OpenClaw after migration.`,
       }),
     ];
   });
+  return [...new Map(items.map((item) => [item.id, item])).values()];
 }

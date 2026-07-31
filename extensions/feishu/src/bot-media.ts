@@ -1,6 +1,6 @@
 // Feishu inbound media resolution keeps transport downloads and agent-facing text aligned.
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveFeishuMediaFailurePresentation, resolveFeishuMediaList } from "./bot-content.js";
+import { resolveFeishuMediaList } from "./bot-content.js";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 import { inlineReplacePostImages } from "./post-image-inline.js";
 import type { FeishuMediaInfo } from "./types.js";
@@ -20,7 +20,7 @@ function createPostImageInliner(
   }
   const pathByKey = new Map<string, string>();
   for (const media of mediaList) {
-    if (media.sourceKey) {
+    if (media.sourceKey && media.path) {
       pathByKey.set(media.sourceKey, media.path);
     }
   }
@@ -37,7 +37,7 @@ export async function resolveFeishuInboundMedia(params: {
   log?: (message: string) => void;
   accountId?: string;
 }): Promise<FeishuInboundMediaResult> {
-  const mediaResolution = await resolveFeishuMediaList({
+  const mediaList = await resolveFeishuMediaList({
     cfg: params.cfg,
     messageId: params.messageId,
     messageType: params.messageType,
@@ -46,23 +46,15 @@ export async function resolveFeishuInboundMedia(params: {
     log: params.log,
     accountId: params.accountId,
   });
-  const inlinePostImages = createPostImageInliner(params.messageType, mediaResolution.media);
+  const inlinePostImages = createPostImageInliner(params.messageType, mediaList);
   const content = inlinePostImages?.(params.content) ?? params.content;
-  const failurePresentation = resolveFeishuMediaFailurePresentation(
-    params.rawContent,
-    params.messageType,
-  );
-  const failureBody =
-    inlinePostImages?.(failurePresentation.unavailableBody ?? content) ??
-    failurePresentation.unavailableBody ??
-    content;
+  const unavailableCount = mediaList.filter((media) => !media.path).length;
   const mediaFailureContent =
-    mediaResolution.unavailableCount > 0
+    unavailableCount > 0
       ? formatInboundMediaUnavailableText({
-          body: failureBody,
-          mediaPlaceholder: failurePresentation.mediaPlaceholder,
-          notice: `[feishu ${mediaResolution.unavailableCount > 1 ? `${mediaResolution.unavailableCount} attachments` : "attachment"} unavailable]`,
+          body: content,
+          notice: `[feishu ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
         })
       : content;
-  return { content, mediaFailureContent, mediaList: mediaResolution.media };
+  return { content, mediaFailureContent, mediaList };
 }

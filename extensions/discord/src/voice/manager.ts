@@ -34,7 +34,7 @@ import {
 } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
-import { resolveDiscordVoiceOwnerAccess } from "./owner-access.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import {
   DiscordRealtimeVoiceSession,
@@ -265,6 +265,7 @@ export class DiscordVoiceManager {
     string,
     { message: string; skipLogged: boolean }
   >();
+  private readonly admissionAllowFrom?: string[];
   private readonly ownerAllowFrom?: string[];
   private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -292,9 +293,10 @@ export class DiscordVoiceManager {
   ) {
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
-    const ownerAccess = resolveDiscordVoiceOwnerAccess(params);
-    this.ownerAllowFrom = ownerAccess.ownerAllowFrom;
-    this.ownerAllowAll = ownerAccess.ownerAllowAll;
+    const voiceAccess = resolveDiscordVoiceAccess(params);
+    this.admissionAllowFrom = voiceAccess.admissionAllowFrom;
+    this.ownerAllowFrom = voiceAccess.ownerAllowFrom;
+    this.ownerAllowAll = voiceAccess.ownerAllowAll;
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -667,7 +669,7 @@ export class DiscordVoiceManager {
     }
     const { route, voiceRoute, agentSessionMode, agentSessionTarget } = routeInfo;
     logger.info(
-      `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.voice ?? "provider-default"}`,
+      `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.speakerVoice ?? voiceConfig?.realtime?.speakerVoiceId ?? "provider-default"}`,
     );
 
     const player = voiceSdk.createAudioPlayer();
@@ -880,6 +882,7 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       entry,
+      getHumanParticipantCount: () => this.membership.countHumanParticipants(entry, this.botUserId),
       mode: voiceMode,
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.runDiscordRealtimeAgentTurn({ context, entry, message, toolsAllow, userId }),
@@ -1707,8 +1710,7 @@ export class DiscordVoiceManager {
       userId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      admissionAllowFrom: this.admissionAllowFrom,
       botUserId: this.botUserId,
       speakerContext: this.speakerContext,
     });
@@ -1738,8 +1740,7 @@ export class DiscordVoiceManager {
       runtime: this.params.runtime,
       context,
       toolsAllow,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      admissionAllowFrom: this.admissionAllowFrom,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1770,8 +1771,7 @@ export class DiscordVoiceManager {
       ...params,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      admissionAllowFrom: this.admissionAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
       resolveIngressContext: () =>
@@ -1904,3 +1904,4 @@ export {
   DiscordVoiceResumedListener,
   DiscordVoiceStateUpdateListener,
 } from "./listeners.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

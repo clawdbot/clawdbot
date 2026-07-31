@@ -1,39 +1,21 @@
+import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 import type { TerminalConnection } from "./terminal-connection.ts";
 
 const MAX_PENDING_INPUT_CHARS = 8 * 1024;
 const TERMINAL_INPUT_DECODER = new TextDecoder();
 
-/** Preserves a valid startup prefix: after one drop, all later chunks stay dropped. */
-export class StartupInputBuffer {
-  private chunks: string[] = [];
-  private charCount = 0;
-  private overflowed = false;
-
-  push(data: string): void {
-    if (this.overflowed) {
-      return;
-    }
-    if (this.charCount + data.length > MAX_PENDING_INPUT_CHARS) {
-      this.overflowed = true;
-      return;
-    }
-    this.chunks.push(data);
-    this.charCount += data.length;
-  }
-
-  drain(): string[] {
-    const chunks = this.chunks;
-    this.chunks = [];
-    this.charCount = 0;
-    return chunks;
-  }
-}
+export type StartupInputBuffer = BoundedBuffer<string>;
 
 export function createTerminalStartupInput(
   connection: Pick<TerminalConnection, "input" | "resize">,
   getSessionId: () => string | undefined,
 ) {
-  const buffer = new StartupInputBuffer();
+  // Preserve a valid startup prefix: after one drop, all later chunks stay dropped.
+  const buffer = new BoundedBuffer<string>(
+    MAX_PENDING_INPUT_CHARS,
+    { mode: "latch" },
+    (data) => data.length,
+  );
   return {
     buffer,
     onData: (bytes: Uint8Array) => {

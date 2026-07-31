@@ -11,8 +11,23 @@ enum KeychainStore {
         GenericPasswordKeychainStore.saveString(value, service: service, account: account)
     }
 
+    static func saveStringResult(
+        _ value: String,
+        service: String,
+        account: String) -> Result<Void, GenericPasswordKeychainStore.MutationError>
+    {
+        GenericPasswordKeychainStore.saveStringResult(value, service: service, account: account)
+    }
+
     static func delete(service: String, account: String) -> Bool {
         GenericPasswordKeychainStore.delete(service: service, account: account)
+    }
+
+    static func deleteResult(
+        service: String,
+        account: String) -> Result<Void, GenericPasswordKeychainStore.MutationError>
+    {
+        GenericPasswordKeychainStore.deleteResult(service: service, account: account)
     }
 
     static func deleteAll(service: String) -> Bool {

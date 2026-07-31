@@ -1,10 +1,10 @@
+import type { AgentMessage } from "@openclaw/agent-core";
 /**
  * Tool call id normalization and extraction helpers.
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
 import { sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
@@ -35,7 +35,7 @@ type ReplaySafeToolCallBlock = {
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
+function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") {
       return "defaultid";

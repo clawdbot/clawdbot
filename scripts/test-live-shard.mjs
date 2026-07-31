@@ -29,8 +29,13 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  [
+    "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
+    ["OPENCLAW_LIVE_GPT_LIVE"],
+  ],
+  ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
-  ["src/crestodian/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL"]],
+  ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
   ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", ["OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"]],
@@ -267,12 +272,12 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
       return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
+        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
       );
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/crestodian/")) &&
+          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );

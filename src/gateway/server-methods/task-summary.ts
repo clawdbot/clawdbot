@@ -5,10 +5,13 @@ import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js"
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
   formatTaskStatusTitle,
+  sanitizeTaskPromptText,
   sanitizeTaskStatusText,
 } from "../../tasks/task-status.js";
 
 type TaskLedgerStatus = TaskSummary["status"];
+
+const TASK_PROMPT_MAX_CHARS = 4_000;
 
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
@@ -25,7 +28,7 @@ export type TaskEventPayload =
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
 
-export function taskUpdatedAt(task: TaskRecord): number {
+function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
@@ -40,11 +43,14 @@ function sanitizeOptionalTaskText(
   return sanitized || undefined;
 }
 
-export function mapTaskSummary(task: TaskRecord): TaskSummary {
+export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolean }): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
   const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
+  const prompt = opts?.includePrompt
+    ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
+    : undefined;
   const toolUseCount =
     typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
       ? Math.max(0, task.toolUseCount)
@@ -73,5 +79,6 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(prompt ? { prompt } : {}),
   };
 }

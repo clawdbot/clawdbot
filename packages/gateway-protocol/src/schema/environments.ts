@@ -65,9 +65,16 @@ export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
 /** Empty request payload for listing known environments. */
 export const EnvironmentsListParamsSchema = closedObject({});
 
+/** Configured worker target exposed without provider settings or credentials. */
+const WorkerEnvironmentProfileSummarySchema = closedObject({
+  id: NonEmptyString,
+  providerId: NonEmptyString,
+});
+
 /** List response containing all gateway-visible environment summaries. */
 export const EnvironmentsListResultSchema = closedObject({
   environments: Type.Array(EnvironmentSummarySchema),
+  profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
 });
 
 /** Status lookup request for one environment id. */
@@ -86,7 +93,10 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
 
 /** Destroys one durable worker environment by its gateway-owned id. */
-export const EnvironmentsDestroyParamsSchema = closedObject({ environmentId: NonEmptyString });
+export const EnvironmentsDestroyParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  force: Type.Optional(Type.Boolean()),
+});
 
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();

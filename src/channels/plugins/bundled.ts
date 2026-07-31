@@ -329,7 +329,6 @@ function loadGeneratedBundledChannelModule(params: {
     return loadChannelPluginModule({
       modulePath,
       rootDir: boundaryRoot,
-      boundaryRootDir: boundaryRoot,
     });
   } catch (error) {
     const canRetryWithCachedLoader =
@@ -957,3 +956,4 @@ export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime):
   }
   setter(runtime);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { listContextEngineIds } from "../context-engine/registry.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import { withEnv } from "../test-utils/env.js";
 import { getCompactionProvider } from "./compaction-provider.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -33,7 +33,10 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { listMemoryPromptSupplements } from "./memory-state.test-fixtures.js";
+import {
+  listMemoryPromptPreparations,
+  listMemoryPromptSupplements,
+} from "./memory-state.test-fixtures.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -572,7 +575,7 @@ describe("loadOpenClawPlugins", () => {
             pluginId: "context-engine-malformed",
             message: "context engine registration missing id",
           });
-          expect(listContextEngineIds()).not.toContain("broken-context");
+          expect(getContextEngineRegistration("broken-context")).toBeUndefined();
         },
       },
       {
@@ -617,6 +620,21 @@ describe("loadOpenClawPlugins", () => {
             message: "memory prompt supplement registration missing builder",
           });
           expect(listMemoryPromptSupplements()).toStrictEqual([]);
+        },
+      },
+      {
+        label: "rejects malformed memory prompt preparation registration",
+        pluginId: "memory-prompt-preparation-malformed",
+        body: `module.exports = { id: "memory-prompt-preparation-malformed", register(api) {
+    api.registerMemoryPromptPreparation({ id: "broken-memory-prompt" });
+  } };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "memory-prompt-preparation-malformed",
+            message: "memory prompt preparation registration missing prepare function",
+          });
+          expect(listMemoryPromptPreparations()).toStrictEqual([]);
         },
       },
       {
@@ -1636,3 +1654,4 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
