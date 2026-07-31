@@ -76,6 +76,29 @@ function stripAuthorizationHeader(
   };
 }
 
+function stripEndpointCredentials(
+  provider: ModelProviderConfig | undefined,
+): ModelProviderConfig | undefined {
+  return provider
+    ? {
+        ...provider,
+        apiKey: undefined,
+        headers: undefined,
+      }
+    : undefined;
+}
+
+function hasEndpointChanged(provider: ModelProviderConfig | undefined, baseUrl: string): boolean {
+  if (!provider) {
+    return false;
+  }
+  const configuredBaseUrl = provider.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN;
+  return (
+    resolveLlamaServerEndpoint(configuredBaseUrl).inferenceBaseUrl !==
+    resolveLlamaServerEndpoint(baseUrl).inferenceBaseUrl
+  );
+}
+
 function removeLlamaServerAuthProfileConfig(config: OpenClawConfig): OpenClawConfig {
   const profiles = Object.fromEntries(
     Object.entries(config.auth?.profiles ?? {}).filter(([id]) => id !== PROFILE_ID),
@@ -132,11 +155,15 @@ function buildSetupResult(params: {
   credentialInput?: SecretInput;
   useApiKey?: boolean;
   clearStoredProfile?: boolean;
+  clearEndpointCredentials?: boolean;
 }): ProviderAuthResult {
   const configuredProvider = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
-  const existingProvider = params.useApiKey
-    ? stripAuthorizationHeader(configuredProvider)
+  const endpointSafeProvider = params.clearEndpointCredentials
+    ? stripEndpointCredentials(configuredProvider)
     : configuredProvider;
+  const existingProvider = params.useApiKey
+    ? stripAuthorizationHeader(endpointSafeProvider)
+    : endpointSafeProvider;
   return {
     profiles: params.credentialInput
       ? [
@@ -178,21 +205,25 @@ async function discoverForSetup(params: {
   env?: NodeJS.ProcessEnv;
   apiKey?: string;
   signal?: AbortSignal;
+  reuseStoredAuth?: boolean;
 }): Promise<LlamaServerDiscoveryResult> {
+  const reuseStoredAuth = params.reuseStoredAuth !== false;
   const providerConfig = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
-  const headers = await resolveLlamaServerProviderHeaders({
-    config: params.config,
-    env: params.env,
-    headers: providerConfig?.headers,
-  });
+  const headers = reuseStoredAuth
+    ? await resolveLlamaServerProviderHeaders({
+        config: params.config,
+        env: params.env,
+        headers: providerConfig?.headers,
+      })
+    : undefined;
   const resolvedApiKey =
     params.apiKey ??
-    (hasLlamaServerAuthorizationHeader(headers)
-      ? undefined
-      : await resolveLlamaServerRuntimeApiKey({
+    (reuseStoredAuth && !hasLlamaServerAuthorizationHeader(headers)
+      ? await resolveLlamaServerRuntimeApiKey({
           config: params.config,
           agentDir: params.agentDir,
-        }));
+        })
+      : undefined);
   return await discoverLlamaServer({
     baseUrl: params.baseUrl,
     apiKey: resolvedApiKey,
@@ -270,9 +301,12 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
+  const endpointChanged = hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
 
   let credentialInput: SecretInput | undefined;
-  let apiKey = ctx.env?.[LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR]?.trim();
+  let apiKey = endpointChanged
+    ? undefined
+    : ctx.env?.[LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR]?.trim();
   const usesApiKey =
     Boolean(apiKey) ||
     (await ctx.prompter.confirm({
@@ -303,6 +337,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     env: ctx.env,
     apiKey,
     signal: ctx.signal,
+    reuseStoredAuth: !endpointChanged,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -324,6 +359,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     credentialInput,
     useApiKey: Boolean(apiKey),
     clearStoredProfile: !credentialInput,
+    clearEndpointCredentials: endpointChanged,
   });
 }
 
@@ -333,9 +369,14 @@ async function validateNonInteractiveDiscovery(
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
   resolvedApiKey: Awaited<ReturnType<typeof ctx.resolveApiKey>>;
+  endpointChanged: boolean;
 } | null> {
+  const configuredProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
   const baseUrl =
-    normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ?? LLAMA_SERVER_DEFAULT_ORIGIN;
+    normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ??
+    configuredProvider?.baseUrl ??
+    LLAMA_SERVER_DEFAULT_ORIGIN;
+  const endpointChanged = hasEndpointChanged(configuredProvider, baseUrl);
   const providerApiKey = normalizeOptionalSecretInput(ctx.opts.llamaServerApiKey);
   const customApiKey = normalizeOptionalSecretInput(ctx.opts.customApiKey);
   const resolvedApiKey = await ctx.resolveApiKey({
@@ -346,13 +387,18 @@ async function validateNonInteractiveDiscovery(
     envVarName: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
     required: false,
   });
-  const headers = await resolveLlamaServerProviderHeaders({
-    config: ctx.config,
-    env: process.env,
-    headers: ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers,
-  });
-  const selectedApiKey =
-    hasLlamaServerAuthorizationHeader(headers) && resolvedApiKey?.source !== "flag"
+  const headers = endpointChanged
+    ? undefined
+    : await resolveLlamaServerProviderHeaders({
+        config: ctx.config,
+        env: process.env,
+        headers: configuredProvider?.headers,
+      });
+  const selectedApiKey = endpointChanged
+    ? resolvedApiKey?.source === "flag"
+      ? resolvedApiKey
+      : null
+    : hasLlamaServerAuthorizationHeader(headers) && resolvedApiKey?.source !== "flag"
       ? null
       : resolvedApiKey;
   const discovery = await discoverLlamaServer({
@@ -378,7 +424,7 @@ async function validateNonInteractiveDiscovery(
     ctx.runtime.exit(1);
     return null;
   }
-  return { discovery, modelId, resolvedApiKey: selectedApiKey };
+  return { discovery, modelId, resolvedApiKey: selectedApiKey, endpointChanged };
 }
 
 export async function validateLlamaServerNonInteractive(
@@ -396,9 +442,12 @@ export async function configureLlamaServerNonInteractive(
     return null;
   }
   const configuredProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
-  const existingProvider = validated.resolvedApiKey
-    ? stripAuthorizationHeader(configuredProvider)
+  const endpointSafeProvider = validated.endpointChanged
+    ? stripEndpointCredentials(configuredProvider)
     : configuredProvider;
+  const existingProvider = validated.resolvedApiKey
+    ? stripAuthorizationHeader(endpointSafeProvider)
+    : endpointSafeProvider;
   const providerConfig = buildLlamaServerProviderConfig({
     configured: {
       ...existingProvider,

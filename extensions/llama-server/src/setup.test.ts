@@ -200,6 +200,47 @@ describe("llama-server setup", () => {
     });
   });
 
+  it("does not send stored credentials to a replacement endpoint", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    runtimeApiKeyMock.mockResolvedValue("stored-profile-key");
+    const prompter = {
+      text: vi.fn(async () => "http://replacement.example:8080"),
+      confirm: vi.fn(async () => false),
+    };
+    const result = await runLlamaServerSetup({
+      config: {
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              apiKey: "stored-provider-key",
+              headers: { Authorization: "Bearer stored-header-key", "X-Tenant": "one" },
+              models: [],
+            },
+          },
+        },
+      },
+      env: { LLAMA_SERVER_API_KEY: "ambient-key" },
+      prompter,
+      runtime: runtime(),
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as unknown as ProviderAuthContext);
+
+    expect(runtimeApiKeyMock).not.toHaveBeenCalled();
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://replacement.example:8080/v1",
+        apiKey: undefined,
+        headers: undefined,
+      }),
+    );
+    const provider = result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.headers).toBeUndefined();
+  });
+
   it("returns an API-key profile when the operator enables auth", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     const prompter = {
@@ -278,6 +319,37 @@ describe("llama-server setup", () => {
       agentDir: undefined,
     });
     expect(configured?.auth).toEqual({ profiles: {}, order: undefined });
+  });
+
+  it("does not reuse ambient or configured credentials for a replacement endpoint non-interactively", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const ctx = nonInteractiveContext({ customBaseUrl: "http://replacement.example:8080/v1" });
+    ctx.config = {
+      models: {
+        providers: {
+          "llama-server": {
+            baseUrl: "http://localhost:8080/v1",
+            apiKey: "stored-provider-key",
+            headers: { Authorization: "Bearer stored-header-key" },
+            models: [],
+          },
+        },
+      },
+    };
+    ctx.resolveApiKey = vi.fn(async () => ({ key: "ambient-key", source: "env" as const }));
+
+    const configured = await configureLlamaServerNonInteractive(ctx);
+
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://replacement.example:8080/v1",
+        apiKey: undefined,
+        headers: undefined,
+      }),
+    );
+    const provider = configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.headers).toBeUndefined();
   });
 
   it("removes stale Authorization when non-interactive setup selects an API key", async () => {

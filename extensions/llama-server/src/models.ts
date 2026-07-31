@@ -97,6 +97,17 @@ function resolveMaxTokens(props: LlamaServerPropsWire | undefined, contextWindow
   return Math.min(advertised ?? SELF_HOSTED_DEFAULT_MAX_TOKENS, contextWindow);
 }
 
+function resolveInput(
+  row: LlamaServerModelWire,
+  props: LlamaServerPropsWire | undefined,
+): Array<"text" | "image"> {
+  const advertised = row.architecture?.input_modalities;
+  const supportsImage =
+    (Array.isArray(advertised) && advertised.includes("image")) ||
+    props?.modalities?.vision === true;
+  return supportsImage ? ["text", "image"] : ["text"];
+}
+
 function buildCompat(
   props: LlamaServerPropsWire | undefined,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
@@ -136,7 +147,7 @@ export function mapLlamaServerModel(
       id,
       name: id,
       reasoning: false,
-      input: ["text"],
+      input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
       contextTokens: contextWindow,

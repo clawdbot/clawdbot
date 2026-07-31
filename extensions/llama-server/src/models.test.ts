@@ -54,6 +54,22 @@ describe("llama-server model mapping", () => {
     });
   });
 
+  it("preserves image input advertised by router rows or runtime properties", () => {
+    expect(
+      mapLlamaServerModel({
+        id: "router-vision",
+        object: "model",
+        architecture: { input_modalities: ["text", "image"] },
+      })?.config.input,
+    ).toEqual(["text", "image"]);
+    expect(
+      mapLlamaServerModel(
+        { id: "server-vision", object: "model" },
+        { modalities: { vision: true } },
+      )?.config.input,
+    ).toEqual(["text", "image"]);
+  });
+
   it("defaults unknown capabilities conservatively", () => {
     expect(mapLlamaServerModel({ id: "model", object: "model" })?.config.compat).toMatchObject({
       supportsTools: false,
