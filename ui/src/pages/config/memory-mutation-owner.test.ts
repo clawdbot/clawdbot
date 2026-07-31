@@ -107,6 +107,48 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
+  it("keeps both sibling restart notices when earlier process discovery finishes last", async () => {
+    const firstProcess = createMemoryTestDeferred<{ processInstanceId: string }>();
+    const { element } = createMemoryPage({
+      configObject: {},
+      catalog: [
+        createMemoryTestAddon("active-memory", true),
+        createMemoryTestAddon("memory-wiki", false),
+      ],
+      processInfo: (call) =>
+        call === 0 ? firstProcess.promise : Promise.resolve({ processInstanceId: "process-a" }),
+      setEnabled: (pluginId, enabled) =>
+        Promise.resolve({
+          restartRequired: true,
+          plugin: createMemoryTestAddon(pluginId, enabled),
+        }),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      toggleAddon(element, "Memory wiki", true);
+
+      await waitForFast(() =>
+        expect(element.textContent).toContain(
+          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+        ),
+      );
+      firstProcess.resolve({ processInstanceId: "process-a" });
+
+      await waitForFast(() => {
+        expect(element.textContent).toContain(
+          "Disabled active-memory. A Gateway restart is required to apply the change.",
+        );
+        expect(element.textContent).toContain(
+          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+        );
+      });
+    } finally {
+      element.remove();
+    }
+  });
+
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
     const { element, request, setPhase } = createMemoryPage({

@@ -13,6 +13,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
   MEMORY_BACKEND_ANCHOR_ID,
@@ -35,6 +36,31 @@ export type MemoryEngineOption = {
  * cannot render as a definite "Disabled"; only a successful read decides.
  */
 export type MemoryPluginState = "enabled" | "disabled" | "loading" | "unknown";
+
+export type MemoryCatalogState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
+
+export function resolveMemoryPluginState(
+  catalog: MemoryCatalogState,
+  entry: PluginCatalogItem | undefined,
+): MemoryPluginState {
+  if (catalog.kind !== "ready") {
+    return catalog.kind === "loading" ? "loading" : "unknown";
+  }
+  return !entry?.installed || entry.state === "not-installed" || entry.state === "error"
+    ? "unknown"
+    : entry.enabled
+      ? "enabled"
+      : "disabled";
+}
+
+export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: string | null) {
+  return catalog.kind === "ready" && pluginId
+    ? catalog.plugins.find((plugin) => plugin.id === pluginId)
+    : undefined;
+}
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
 export type MemoryAddonRow = {

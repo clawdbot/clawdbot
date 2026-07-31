@@ -63,6 +63,7 @@ export function createMemoryPage(params: {
   agents?: Array<{ id: string; name?: string }>;
   memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
   processInstanceIds?: Array<string | undefined>;
+  processInfo?: (call: number) => Promise<{ processInstanceId?: string }>;
   scopes?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
@@ -71,7 +72,10 @@ export function createMemoryPage(params: {
   let systemInfoCalls = 0;
   const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
     if (method === "plugins.list") {
-      const result = params.listCatalog
+      const result: Promise<{
+        plugins: readonly PluginCatalogItem[];
+        mutationAllowed?: boolean;
+      }> = params.listCatalog
         ? params.listCatalog(listCalls++)
         : Promise.resolve({ plugins: params.catalog ?? [] });
       return result.then((catalog) => ({
@@ -90,6 +94,9 @@ export function createMemoryPage(params: {
           });
     }
     if (method === "system.info") {
+      if (params.processInfo) {
+        return params.processInfo(systemInfoCalls++);
+      }
       const ids = params.processInstanceIds ?? [];
       return Promise.resolve({
         processInstanceId: ids[Math.min(systemInfoCalls++, ids.length - 1)],
@@ -111,7 +118,9 @@ export function createMemoryPage(params: {
       phase: "connected",
       hello: {
         auth: { role: "operator", scopes: params.scopes },
-        features: { methods: params.processInstanceIds ? ["system.info"] : [] },
+        features: {
+          methods: params.processInstanceIds || params.processInfo ? ["system.info"] : [],
+        },
       },
     },
     subscribe: (notify: () => void) => {

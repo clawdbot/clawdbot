@@ -46,7 +46,10 @@ import {
 } from "./memory-schema.ts";
 import {
   renderMemory,
+  findMemoryCatalogPlugin as findMemoryPlugin,
+  resolveMemoryPluginState as pluginState,
   type MemoryAddonRow,
+  type MemoryCatalogState as MemoryCatalog,
   type MemoryEngineOutcome,
   type MemoryEngineOption,
   type MemoryPluginState,
@@ -71,11 +74,6 @@ type CatalogConnection = {
   connected: boolean;
 };
 
-type MemoryCatalog =
-  | { kind: "loading" }
-  | { kind: "unavailable" }
-  | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
-
 type MemoryAddonNotice = {
   message: string;
   processInstanceId: string | null;
@@ -92,26 +90,6 @@ type MemoryPageProps = {
 
 function isMemoryEngine(plugin: PluginCatalogItem): boolean {
   return plugin.installed && plugin.kind?.includes("memory") === true;
-}
-
-function pluginState(
-  catalog: MemoryCatalog,
-  entry: PluginCatalogItem | undefined,
-): MemoryPluginState {
-  if (catalog.kind !== "ready") {
-    return catalog.kind === "loading" ? "loading" : "unknown";
-  }
-  return !entry?.installed || entry.state === "not-installed" || entry.state === "error"
-    ? "unknown"
-    : entry.enabled
-      ? "enabled"
-      : "disabled";
-}
-
-function findMemoryPlugin(catalog: MemoryCatalog, pluginId: string | null) {
-  return catalog.kind === "ready" && pluginId
-    ? catalog.plugins.find((plugin) => plugin.id === pluginId)
-    : undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -426,11 +404,14 @@ class MemorySettingsPage extends OpenClawLightDomElement {
             : plugin.name,
         available: true,
       }))
-      .toSorted(
-        (left, right) =>
-          Number(right.id === DEFAULT_MEMORY_ENGINE_ID) -
-            Number(left.id === DEFAULT_MEMORY_ENGINE_ID) || left.label.localeCompare(right.label),
-      );
+      .toSorted((left, right) => {
+        const leftIsDefault = left.id === DEFAULT_MEMORY_ENGINE_ID;
+        const rightIsDefault = right.id === DEFAULT_MEMORY_ENGINE_ID;
+        if (leftIsDefault !== rightIsDefault) {
+          return leftIsDefault ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      });
     const selected = selectedEngineId(resolveMemoryEngineSelection(this.configObject));
     if (selected && !options.some((option) => option.id === selected)) {
       const unavailable = {
@@ -449,7 +430,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private engineState(selection: MemoryEngineSelection): MemoryPluginState {
-    return pluginState(this.catalog, findMemoryPlugin(this.catalog, selectedEngineId(selection)));
+    const engineId = selectedEngineId(selection);
+    return engineId === null
+      ? "unknown"
+      : pluginState(this.catalog, findMemoryPlugin(this.catalog, engineId));
   }
 
   private addonRows(): MemoryAddonRow[] {
@@ -502,15 +486,15 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       const notice = [
         result.restartRequired ? t(key, { name: result.plugin.name }) : null,
         ...warnings,
-        mutation.refreshError
+        mutation.refreshError && this.connection === connection
           ? t("pluginsPage.configRefreshFailed", { error: mutation.refreshError })
           : null,
       ]
         .filter(Boolean)
         .join(" ");
+      const processInstanceId = notice ? await processInstanceIdPromise : null;
       const notices = new Map(this.addonNotices);
       if (notice) {
-        const processInstanceId = await processInstanceIdPromise;
         notices.set(pluginId, { message: notice, processInstanceId });
       } else {
         notices.delete(pluginId);
