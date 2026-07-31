@@ -204,6 +204,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   };
 
   Object.defineProperty(transport, NODE_OUTPUT_GENERATION_CAPABILITY, {
+    get() {
+      return outputGenerationSupported;
+    },
     set(value) {
       outputGenerationSupported = value === true;
     },
