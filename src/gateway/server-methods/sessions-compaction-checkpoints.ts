@@ -24,7 +24,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { interruptSessionRunIfActive } from "./sessions-messaging.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveSessionWorkerPlacementMutationError,
   respondSessionWorkerPlacementMutationError,
@@ -38,7 +37,7 @@ const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
 
 export const sessionCheckpointHandlers: GatewayRequestHandlers = {
-  "sessions.compaction.branch": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.compaction.branch": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -52,9 +51,6 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const p = params;
     const key = requireSessionKey(p.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "branch", client, isWebchatConnect, respond })) {
       return;
     }
     const checkpointId =
@@ -182,9 +178,6 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const p = params;
     const key = requireSessionKey(p.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "restore", client, isWebchatConnect, respond })) {
       return;
     }
     const checkpointId =

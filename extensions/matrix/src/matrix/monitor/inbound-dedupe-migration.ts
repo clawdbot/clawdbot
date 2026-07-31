@@ -14,11 +14,16 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import {
   createPersistentDedupeImportEntry,
   type PersistentDedupeEntry,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "../../record-shared.js";
 import { normalizeMatrixStorageMetadata } from "../client/storage.js";
 import {
@@ -29,10 +34,12 @@ import {
 } from "./inbound-dedupe.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
-const LEGACY_SQLITE_MAX_ENTRIES = 20_000;
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
-const LEGACY_MARKERS_MAX_ENTRIES = 1_000;
 const LEGACY_JSON_VERSION = 1;
+const MATRIX_PLUGIN_ID = "matrix";
+const MIGRATION_COMPLETION_NAMESPACE = "inbound-dedupe-migration-state";
+const MIGRATION_COMPLETION_KEY = "sqlite-json-to-claimable-v1";
+const STATE_DATABASE_RELATIVE_PATH = path.join("state", "openclaw.sqlite");
 const STORAGE_META_FILENAME = "storage-meta.json";
 
 export const MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
@@ -49,18 +56,96 @@ export type LegacyInboundDedupeMarker = {
   ts: number;
 };
 
-export async function collectMatrixInboundDedupeSources(stateDir: string): Promise<{
+type MatrixInboundDedupeSourceRoots = {
   sqliteRoots: string[];
   jsonRoots: string[];
-}> {
+};
+
+type MatrixInboundDedupeSourceCensus =
+  | ({ status: "complete" } & MatrixInboundDedupeSourceRoots)
+  | ({ status: "incomplete"; warnings: string[] } & MatrixInboundDedupeSourceRoots);
+
+type LegacySqliteRow = {
+  namespace: string;
+  entry_key: string;
+  value_json: string;
+  expires_at: number | bigint | null;
+};
+
+type MatrixInboundDedupeMigrationCompletion = {
+  version: 1;
+  completedAt: number;
+};
+
+function openMatrixInboundDedupeMigrationCompletionStore(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+) {
+  return context.openPluginStateKeyedStore<MatrixInboundDedupeMigrationCompletion>({
+    namespace: MIGRATION_COMPLETION_NAMESPACE,
+    maxEntries: 4,
+    overflowPolicy: "reject-new",
+    env,
+  });
+}
+
+export async function hasCompletedMatrixInboundDedupeMigration(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const marker = await openMatrixInboundDedupeMigrationCompletionStore(context, env).lookup(
+    MIGRATION_COMPLETION_KEY,
+  );
+  return (
+    isRecord(marker) &&
+    marker.version === 1 &&
+    typeof marker.completedAt === "number" &&
+    Number.isFinite(marker.completedAt) &&
+    marker.completedAt >= 0
+  );
+}
+
+export async function recordMatrixInboundDedupeMigrationCompletion(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  await openMatrixInboundDedupeMigrationCompletionStore(context, env).register(
+    MIGRATION_COMPLETION_KEY,
+    { version: 1, completedAt: Date.now() },
+  );
+}
+
+/**
+ * Reserves the durable completion row before any legacy source is changed.
+ * The invalid timestamp keeps detection active after an interrupted run, while
+ * updating this same key after retirement remains possible at plugin capacity.
+ */
+export async function reserveMatrixInboundDedupeMigrationCompletion(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  await openMatrixInboundDedupeMigrationCompletionStore(context, env).register(
+    MIGRATION_COMPLETION_KEY,
+    { version: 1, completedAt: -1 },
+  );
+}
+
+export async function collectMatrixInboundDedupeSources(
+  stateDir: string,
+): Promise<MatrixInboundDedupeSourceCensus> {
   const matrixRoot = path.join(stateDir, "matrix");
   const sqliteRoots = new Set<string>();
   const jsonRoots = new Set<string>();
-  async function visit(dir: string): Promise<void> {
+  const warnings: string[] = [];
+  async function visit(dir: string, allowMissing = false): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      if (allowMissing && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      warnings.push(`Failed scanning Matrix inbound dedupe sources under ${dir}: ${String(err)}`);
       return;
     }
     for (const entry of entries) {
@@ -79,29 +164,44 @@ export async function collectMatrixInboundDedupeSources(stateDir: string): Promi
       }
     }
   }
-  await visit(matrixRoot);
+  await visit(matrixRoot, true);
   const matrixRootResolved = path.resolve(matrixRoot);
   const isAccountRoot = (root: string) => path.resolve(root) !== matrixRootResolved;
-  return {
+  const roots = {
     sqliteRoots: [...sqliteRoots].filter(isAccountRoot).toSorted(),
     jsonRoots: [...jsonRoots].filter(isAccountRoot).toSorted(),
   };
+  return warnings.length === 0
+    ? { status: "complete", ...roots }
+    : { status: "incomplete", ...roots, warnings };
 }
 
-function openLegacySqliteStore(io: MatrixInboundDedupeMigrationIo, storageRootDir: string) {
-  return io.context.openPluginStateKeyedStore<unknown>({
-    namespace: LEGACY_SQLITE_NAMESPACE,
-    maxEntries: LEGACY_SQLITE_MAX_ENTRIES,
-    env: { ...io.env, OPENCLAW_STATE_DIR: storageRootDir },
-  });
+function selectLegacySqliteRows(db: DatabaseSync): LegacySqliteRow[] {
+  const table = db
+    .prepare(
+      `SELECT 1 AS present
+       FROM sqlite_master
+       WHERE type = 'table' AND name = 'plugin_state_entries'`,
+    )
+    .get();
+  if (!table) {
+    return [];
+  }
+  return db
+    .prepare(
+      `SELECT namespace, entry_key, value_json, expires_at
+       FROM plugin_state_entries
+       WHERE plugin_id = ? AND namespace IN (?, ?)
+       ORDER BY namespace ASC, created_at ASC, entry_key ASC`,
+    )
+    .all(MATRIX_PLUGIN_ID, LEGACY_SQLITE_NAMESPACE, LEGACY_MARKERS_NAMESPACE) as LegacySqliteRow[];
 }
 
-function openLegacyMarkersStore(io: MatrixInboundDedupeMigrationIo, storageRootDir: string) {
-  return io.context.openPluginStateKeyedStore<unknown>({
-    namespace: LEGACY_MARKERS_NAMESPACE,
-    maxEntries: LEGACY_MARKERS_MAX_ENTRIES,
-    env: { ...io.env, OPENCLAW_STATE_DIR: storageRootDir },
-  });
+function isLegacySqliteRowExpired(row: LegacySqliteRow, now: number): boolean {
+  if (typeof row.expires_at === "bigint") {
+    return row.expires_at <= BigInt(now);
+  }
+  return row.expires_at !== null && row.expires_at <= now;
 }
 
 function normalizeLegacyTimestamp(raw: unknown): number | null {
@@ -140,30 +240,92 @@ function parseLegacySqliteRow(row: {
   return { accountId, roomId, eventId, ts };
 }
 
-/** Reads one storage root's legacy SQLite dedupe rows; throws on store errors. */
+/**
+ * Reads one storage root's legacy SQLite dedupe rows without opening it through
+ * the current state runtime. Historical per-account databases can predate the
+ * current core schema, and detection must not upgrade them merely to inspect
+ * these retired plugin-state namespaces.
+ */
 export async function readLegacyInboundDedupeSqliteSource(
-  io: MatrixInboundDedupeMigrationIo,
   storageRootDir: string,
 ): Promise<{ markers: LegacyInboundDedupeMarker[]; legacyRowCount: number }> {
-  const rows = await openLegacySqliteStore(io, storageRootDir).entries();
-  const markerRows = await openLegacyMarkersStore(io, storageRootDir).entries();
-  const markers: LegacyInboundDedupeMarker[] = [];
-  for (const row of rows) {
-    const marker = parseLegacySqliteRow(row);
-    if (marker) {
-      markers.push(marker);
+  const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
+  const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    const rows = selectLegacySqliteRows(db);
+    const markers: LegacyInboundDedupeMarker[] = [];
+    const now = Date.now();
+    for (const row of rows) {
+      // The keyed-store reader filtered expired rows before decoding them. We
+      // still count that residue so doctor can retire it, but it has no replay
+      // value and malformed expired JSON must not block the whole root.
+      if (isLegacySqliteRowExpired(row, now)) {
+        continue;
+      }
+      // The keyed-store reader parsed every value, including import-marker
+      // values. Keep that fail-closed behavior so corrupt sources are not
+      // retired unread.
+      const value = JSON.parse(row.value_json) as unknown;
+      if (row.namespace !== LEGACY_SQLITE_NAMESPACE) {
+        continue;
+      }
+      const marker = parseLegacySqliteRow({ key: row.entry_key, value });
+      if (marker) {
+        markers.push(marker);
+      }
     }
+    return { markers, legacyRowCount: rows.length };
+  } finally {
+    db.close();
   }
-  return { markers, legacyRowCount: rows.length + markerRows.length };
 }
 
-/** Clears one storage root's retired legacy dedupe namespaces after import. */
-export async function retireLegacyInboundDedupeSqliteRows(
-  io: MatrixInboundDedupeMigrationIo,
-  storageRootDir: string,
-): Promise<void> {
-  await openLegacySqliteStore(io, storageRootDir).clear();
-  await openLegacyMarkersStore(io, storageRootDir).clear();
+/** Deletes only the two retired Matrix namespaces after a successful import. */
+export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string): Promise<void> {
+  const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
+  const db = openNodeSqliteDatabase(databasePath);
+  try {
+    // Plan outside the write transaction, then re-read after BEGIN IMMEDIATE
+    // before deleting. The predicates intentionally cannot touch other Matrix
+    // namespaces or another plugin's rows.
+    if (selectLegacySqliteRows(db).length === 0) {
+      return;
+    }
+    runSqliteImmediateTransactionSync(db, () => {
+      if (selectLegacySqliteRows(db).length === 0) {
+        return;
+      }
+      db.prepare(
+        `DELETE FROM plugin_state_entries
+         WHERE plugin_id = ? AND namespace IN (?, ?)`,
+      ).run(MATRIX_PLUGIN_ID, LEGACY_SQLITE_NAMESPACE, LEGACY_MARKERS_NAMESPACE);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function verifyMatrixInboundDedupeSourcesRetired(stateDir: string): Promise<string[]> {
+  const warnings: string[] = [];
+  const remaining = await collectMatrixInboundDedupeSources(stateDir);
+  if (remaining.status === "incomplete") {
+    warnings.push(...remaining.warnings);
+  }
+  for (const storageRootDir of remaining.sqliteRoots) {
+    try {
+      if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
+        warnings.push(`Matrix inbound dedupe rows remain after retirement for ${storageRootDir}`);
+      }
+    } catch (err) {
+      warnings.push(
+        `Failed verifying retired Matrix inbound dedupe rows for ${storageRootDir}: ${String(err)}`,
+      );
+    }
+  }
+  for (const storageRootDir of remaining.jsonRoots) {
+    warnings.push(`Matrix inbound dedupe JSON remains after retirement for ${storageRootDir}`);
+  }
+  return warnings;
 }
 
 async function resolveJsonRootAccountId(storageRootDir: string): Promise<string> {
@@ -233,10 +395,10 @@ export async function readLegacyInboundDedupeJsonSource(
 
 /**
  * Imports the globally newest legacy markers into the claimable-dedupe store.
- * Never exceeds capacity: eviction is by row creation time, so letting fresh
- * imports overflow the namespace would evict the newer rows the runtime
- * committed since the upgrade. Throws on store errors so the caller keeps the
- * legacy sources for the next doctor attempt.
+ * Never exceeds capacity, never replaces a post-upgrade destination row, and
+ * preserves source timestamps because eviction is ordered by row creation
+ * time. Throws on import or verification errors so the caller keeps the legacy
+ * sources for the next doctor attempt.
  */
 export async function importNewestInboundDedupeMarkers(params: {
   io: MatrixInboundDedupeMigrationIo;
@@ -265,30 +427,55 @@ export async function importNewestInboundDedupeMarkers(params: {
     defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
     env: params.io.env,
   });
-  let capacity = Math.max(0, stateMaxEntries - (await store.entries()).length);
-  let imported = 0;
-  for (const marker of markers) {
-    if (capacity <= 0) {
-      break;
-    }
+  const existingEntries = await store.entries();
+  const existingKeys = new Set(existingEntries.map((entry) => entry.key));
+  const missingEntries = markers.flatMap((marker) => {
     const remainingTtlMs = MATRIX_INBOUND_DEDUPE_TTL_MS - (now - marker.ts);
     if (remainingTtlMs <= 0) {
-      continue;
+      return [];
     }
     const entry = createPersistentDedupeImportEntry({
       key: marker.key,
       seenAt: marker.ts,
       ttlMs: Math.max(1, Math.floor(remainingTtlMs)),
     });
-    // Rows committed after the upgrade are newer than any legacy marker, so
-    // registerIfAbsent keeps them and only fills the missing keys.
-    const registered = await store.registerIfAbsent(entry.key, entry.value, {
-      ttlMs: entry.ttlMs ?? MATRIX_INBOUND_DEDUPE_TTL_MS,
-    });
-    if (registered) {
-      imported += 1;
-      capacity -= 1;
+    return existingKeys.has(entry.key) ? [] : [{ marker, entry }];
+  });
+  const namespaceCapacity = Math.max(0, stateMaxEntries - existingEntries.length);
+  const pluginCapacity =
+    missingEntries.length > 0 ? params.io.context.getPluginStateCapacity?.() : undefined;
+  if (missingEntries.length > 0 && !pluginCapacity) {
+    throw new Error("plugin-wide Matrix inbound dedupe import capacity is unavailable");
+  }
+  const pluginRemainingCapacity = pluginCapacity
+    ? Math.max(0, pluginCapacity.maxEntries - pluginCapacity.liveEntries)
+    : namespaceCapacity;
+  const capacity = Math.min(namespaceCapacity, pluginRemainingCapacity);
+  const selectedEntries = missingEntries.slice(0, capacity);
+  if (selectedEntries.length > 0) {
+    const importEntries = params.io.context.importPluginStateEntries;
+    if (!importEntries) {
+      throw new Error("retention-aware Matrix inbound dedupe import is unavailable");
+    }
+    importEntries(
+      {
+        namespace: resolveMatrixInboundDedupeStateNamespace(),
+        maxEntries: stateMaxEntries,
+        defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+        env: params.io.env,
+      },
+      selectedEntries.map(({ marker, entry }) => ({
+        key: entry.key,
+        value: entry.value,
+        createdAt: marker.ts,
+        ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
+      })),
+    );
+    const importedKeys = new Set((await store.entries()).map((entry) => entry.key));
+    const missingKey = selectedEntries.find(({ entry }) => !importedKeys.has(entry.key))?.entry.key;
+    if (missingKey) {
+      throw new Error(`retention-aware Matrix inbound dedupe import did not persist ${missingKey}`);
     }
   }
-  return { imported, total: markers.length };
+  return { imported: selectedEntries.length, total: markers.length };
 }

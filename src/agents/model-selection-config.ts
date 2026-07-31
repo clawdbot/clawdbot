@@ -3,7 +3,7 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeModelSelection, resolveConfiguredModelRef } from "./model-selection-shared.js";
 
 export function resolveDefaultModelForAgent(

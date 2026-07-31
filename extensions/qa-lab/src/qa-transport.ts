@@ -360,6 +360,9 @@ export function createQaStateBackedTransportAdapter(
       : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.cleanupAfterGatewayStop
+      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
+      : {}),
   });
   return adapter;
 }

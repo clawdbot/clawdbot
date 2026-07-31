@@ -1,6 +1,7 @@
 // Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
@@ -76,18 +77,33 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
+export function buildMissingScopeForbiddenBody(
+  missingScope: string | undefined,
+  requiredScopes?: readonly string[],
+) {
+  const details =
+    typeof missingScope === "string" && missingScope.length > 0
+      ? buildMissingScopeErrorDetails({
+          missingScope,
+          requiredScopes: requiredScopes ?? [missingScope],
+        })
+      : undefined;
   return {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
+      ...(details ? { details } : {}),
     },
   };
 }
 
-export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
+export function sendMissingScopeForbidden(
+  res: ServerResponse,
+  missingScope: string | undefined,
+  requiredScopes?: readonly string[],
+) {
+  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
 }
 
 export async function readJsonBodyOrError(
@@ -126,9 +142,11 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+export const SSE_CONTENT_TYPE = "text/event-stream; charset=utf-8";
+
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Content-Type", SSE_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();

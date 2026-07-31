@@ -31,6 +31,15 @@ Companion plugins such as `memory-wiki` can run alongside `memory-lancedb`,
 but only one plugin owns the active memory slot at a time.
 </Note>
 
+<Note>
+LanceDB's `memory_recall` does not receive the protected private transcript
+authorization used by `memory.search.rememberAcrossConversations`. Use LanceDB's
+`autoRecall` or its `memory_recall` tool through
+[advanced Active Memory](/concepts/active-memory#lancedb-memory).
+`openclaw doctor` reports when Remember across conversations is unavailable
+with the current memory provider.
+</Note>
+
 ## Quick start
 
 ```json5
@@ -208,8 +217,8 @@ and caps at 3 captured memories per agent turn.
 
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
-mutating rows. An agent with `memorySearch.enabled: false` (in `agents.list[]`
-or via `agents.defaults`) also gets none of the `memory_recall`, `memory_store`,
+mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
+entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 

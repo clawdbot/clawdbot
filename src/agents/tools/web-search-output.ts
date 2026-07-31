@@ -8,6 +8,7 @@
  * spoof the trust marker and transport-specific extras never reach the model.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { wrapWebContent } from "../../security/external-content.js";
@@ -156,13 +157,42 @@ function normalizeCitations(value: unknown): Array<{ url: string; title?: string
   });
 }
 
+// Provider output is untrusted third-party data (bundled or, worse, external
+// plugin code). Snapshot it into plain JSON before reading any field so exotic
+// values a real HTTP payload never has — bigint, circular refs, throwing
+// getters, Proxy traps — cannot crash the agent turn or vary between reads. A
+// payload that will not serialize degrades to a safe provider error rather than
+// throwing out of the boundary.
+function snapshotProviderResult(result: Record<string, unknown>): Record<string, unknown> | null {
+  try {
+    // Serialize-then-parse, not structuredClone: we specifically want non-JSON
+    // values (bigint, circular refs, functions, symbols) to flatten or throw
+    // here rather than survive and break a later serialization. structuredClone
+    // preserves them, so it would only move the crash downstream.
+    const serialized = JSON.stringify(result ?? {});
+    const cloned: unknown = JSON.parse(serialized);
+    return isRecord(cloned) ? cloned : {};
+  } catch {
+    return null;
+  }
+}
+
 /** Normalizes every bundled or external provider payload at the core tool boundary. */
 export function normalizeWebSearchOutput(params: {
   result: Record<string, unknown>;
   provider: string;
   query: string;
 }): WebSearchOutput {
-  const { result, provider } = params;
+  const { provider } = params;
+  const result = snapshotProviderResult(params.result);
+  if (!result) {
+    return {
+      kind: "error",
+      provider,
+      error: "provider_error",
+      message: wrapProse("web_search provider returned a value that could not be normalized."),
+    };
+  }
   const tookMs = readFiniteNumber(result.tookMs);
   const cached = result.cached === true ? true : undefined;
   // The model's own request query is authoritative; provider echoes are
@@ -182,7 +212,7 @@ export function normalizeWebSearchOutput(params: {
     const rawError =
       typeof result.error === "string"
         ? result.error
-        : (JSON.stringify(result.error)?.slice(0, 2_000) ?? "provider_error");
+        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {

@@ -73,6 +73,7 @@ function createGatewayContext(
       channels: {
         clickclack: {
           baseUrl: "https://clickclack.example",
+          apiBaseUrl: "http://127.0.0.1:8484",
           token: "test-token",
           workspace: "main",
           reconnectMs: 1,
@@ -158,6 +159,23 @@ describe("ClickClack gateway", () => {
         },
       },
     ]);
+  });
+
+  it("uses the private API base for REST and realtime startup", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    expect(mocks.createClickClackClient).toHaveBeenCalledWith({
+      baseUrl: "http://127.0.0.1:8484",
+      token: "test-token",
+    });
+
+    abort.abort();
+    await run;
   });
 
   it.each([
@@ -455,6 +473,11 @@ describe("ClickClack gateway", () => {
     mocks.resolveClickClackInboundAccess.mockResolvedValue({
       shouldDispatch: false,
       commandAuthorized: false,
+      mentionFacts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: false,
+      },
     });
     const abort = new AbortController();
     const ctx = createGatewayContext(abort.signal);
@@ -467,7 +490,18 @@ describe("ClickClack gateway", () => {
     await waitForGatewayState(() =>
       expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1),
     );
+    expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: expect.objectContaining({
+          botHandle: "bot",
+          botUserId: "bot-user",
+        }),
+      }),
+    );
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+    expect(ctx.log?.info).toHaveBeenCalledWith(
+      expect.stringContaining("skipped ClickClack message before agent dispatch"),
+    );
     abort.abort();
     await run;
   });
@@ -485,7 +519,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
-      baseUrl: "https://clickclack.example",
+      baseUrl: "http://127.0.0.1:8484",
       token: "test-token",
       correlationId: "fakeco.case_1",
     });

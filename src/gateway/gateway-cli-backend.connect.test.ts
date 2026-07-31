@@ -22,7 +22,7 @@ const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-
 
 async function createTempDeviceIdentity() {
   const tempRoot = await tempDirs.make("device");
-  return loadOrCreateDeviceIdentity(path.join(tempRoot, "device.json"));
+  return loadOrCreateDeviceIdentity({ path: path.join(tempRoot, "device.sqlite") });
 }
 
 async function startMinimalGatewayServer(params: { token: string }) {

@@ -8,7 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { sleep } from "./lib/sleep.mjs";
-import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
+import { createRunNodePathClassifier, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -60,7 +60,7 @@ const isDirectoryLikeWatchedPath = (repoPath, watchPaths) => {
   });
 };
 
-const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
+const isIgnoredWatchPath = (filePath, cwd, watchPaths, pathClassifier, stats) => {
   const repoPath = resolveRepoPath(filePath, cwd);
   if (hasIgnoredPathSegment(repoPath)) {
     return true;
@@ -70,7 +70,7 @@ const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
       return false;
     }
   }
-  return !isRestartRelevantRunNodePath(repoPath);
+  return !pathClassifier.isRestartRelevantRunNodePath(repoPath);
 };
 
 const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
@@ -253,6 +253,10 @@ const releaseWatchLock = (lockHandle) => {
  *   sleep?: (ms: number) => Promise<void>;
  *   signalProcess?: (pid: number, signal: string | number) => void;
  *   lockDisabled?: boolean;
+ *   pathClassifier?: {
+ *     refreshGeneratedPluginAssetPaths: () => void;
+ *     isRestartRelevantRunNodePath: (repoPath: unknown) => boolean;
+ *   };
  *   createWatcher?: (
  *     watchPaths: string[],
  *     options: { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
@@ -264,10 +268,11 @@ const releaseWatchLock = (lockHandle) => {
  * Runs the watch loop and restarts the child process on relevant changes.
  */
 export async function runWatchMain(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
   const deps = {
     spawn: params.spawn ?? spawn,
     process: params.process ?? process,
-    cwd: params.cwd ?? process.cwd(),
+    cwd,
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
     fs: params.fs ?? fs,
@@ -275,6 +280,7 @@ export async function runWatchMain(params = {}) {
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
     lockDisabled: params.lockDisabled === true,
+    pathClassifier: params.pathClassifier ?? createRunNodePathClassifier({ rootDir: cwd }),
     createWatcher: params.createWatcher,
     loadChokidar: params.loadChokidar ?? loadChokidar,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
@@ -379,6 +385,16 @@ export async function runWatchMain(params = {}) {
     };
 
     const startRunner = () => {
+      try {
+        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
+      } catch (error) {
+        logWatcher(
+          `Failed to refresh generated asset paths: ${error?.message ?? "unknown error"}`,
+          deps,
+        );
+        settle(1);
+        return;
+      }
       watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
@@ -556,7 +572,10 @@ export async function runWatchMain(params = {}) {
     };
 
     const requestRestart = (changedPath) => {
-      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
+      if (
+        shuttingDown ||
+        isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier)
+      ) {
         return;
       }
       if (!watchProcess) {
@@ -604,7 +623,7 @@ export async function runWatchMain(params = {}) {
       watcher = createWatcher(deps.watchPaths, {
         ignoreInitial: true,
         ignored: (watchPath, stats) =>
-          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
+          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, deps.pathClassifier, stats),
       });
       watcher.on("add", requestRestart);
       watcher.on("change", requestRestart);

@@ -40,6 +40,15 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 describe("minimal npm extended-stable workflow", () => {
+  it("bounds every git fetch operation", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+  });
+
   it("adds extended-stable without adding policy or verifier contracts", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();
@@ -129,7 +138,7 @@ describe("minimal npm extended-stable workflow", () => {
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({
       OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
-        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+        "${{ steps.core_package_tarballs.outputs.dir }}",
     });
     expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
     expect(plugins.env).toMatchObject({
@@ -147,19 +156,33 @@ describe("minimal npm extended-stable workflow", () => {
   it("restores same-SHA preflight build outputs and keeps validation steps running", () => {
     const parsed = workflow();
     const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const stepNames = preflight?.steps?.map((candidate) => candidate.name) ?? [];
 
+    const cleanup = step(preflight, "Clean preflight build outputs before cache restore");
     const restore = step(preflight, "Restore preflight build outputs");
+    expect(stepNames.indexOf(cleanup.name)).toBeLessThan(stepNames.indexOf(restore.name));
+    expect(cleanup.run).toContain("rm -rf -- dist dist-runtime packages/*/dist");
+    expect(cleanup.run).toContain("-path '*/src/host/*'");
+    expect(cleanup.run).toContain("-name '.bundle.hash'");
+    expect(cleanup.run).toContain("-name '*.bundle.js'");
     expect(restore.uses).toContain("actions/cache/restore@");
+    expect(restore.with?.path).toContain("dist/");
+    expect(restore.with?.path).toContain("dist-runtime/");
+    expect(restore.with?.path).toContain("packages/*/dist/");
+    expect(restore.with?.path).toContain("extensions/*/src/host/**/.bundle.hash");
+    expect(restore.with?.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(restore.with?.key).toBe(
       "${{ runner.os }}-npm-preflight-dist-v1-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}",
     );
 
     // Only the build producers skip on a cache hit; every validation step
     // still runs against the restored artifacts.
-    expect(step(preflight, "Build").if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(step(preflight, "Build Control UI").if).toBe(
-      "steps.dist_build_cache.outputs.cache-hit != 'true'",
-    );
+    const build = step(preflight, "Build");
+    const buildControlUi = step(preflight, "Build Control UI");
+    expect(build.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(build.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+    expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
     expect(step(preflight, "Verify release contents").if).toBeUndefined();
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
@@ -246,6 +269,23 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       "find preflight-tarball -type f -name '*.tgz'",
+    );
+  });
+
+  it("publishes gateway packages in manifest order before the root package", () => {
+    const parsed = workflow();
+    const preflightPack = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Pack publishable core packages",
+    );
+    const publish = step(parsed.jobs?.publish_openclaw_npm, "Publish");
+    expect(preflightPack.env?.CORE_PACKAGE_DIRS).toBe(
+      "packages/ai packages/gateway-protocol packages/gateway-client",
+    );
+    expect(readFileSync(workflowPath, "utf8")).toContain('packageName: "@openclaw/gateway-client"');
+    expect(publish.run).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
+    expect(publish.run).toContain(
+      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

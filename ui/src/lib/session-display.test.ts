@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   resolveChannelSessionInfo,
@@ -6,6 +7,18 @@ import {
 } from "./session-display.ts";
 
 describe("resolveSessionDisplayName", () => {
+  it("uses the same friendly main-thread name for every agent", () => {
+    for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
+      expect(resolveSessionDisplayName(key)).toBe("Main Thread");
+    }
+
+    expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
+      "Research desk",
+    );
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New thread");
+    expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
+  });
+
   it("prefers label, then displayName", () => {
     expect(
       resolveSessionDisplayName("agent:main:telegram:direct:42", {
@@ -25,10 +38,16 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
   });
 
+  it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
+    expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
+      "Telegram · …67890",
+    );
+  });
+
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
     expect(
       resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
-    ).toBe("New session");
+    ).toBe("New thread");
   });
 
   it("names unnamed work sessions after their checkout", () => {
@@ -74,6 +93,43 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("model-run-…5c6d");
     expect(resolveSessionDisplayName("agent:main:node-fleet-4de003fbff138fcb9239c9378b2e")).toBe(
       "node-fleet-…8b2e",
+    );
+  });
+
+  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+    const key = "agent:main:subagent:worker";
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
+      "Subagent: Research sources",
+    );
+    expect(
+      resolveSessionDisplayName(
+        key,
+        { label: "Subagent: Research sources" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
+      "Subagent:",
+    );
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:daily",
+        { label: "Daily" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Automation: Daily");
+  });
+
+  it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron: daily-report" }),
+    ).toBe("Automation: daily-report");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron Job: nightly" })).toBe(
+      "Automation: nightly",
     );
   });
 });

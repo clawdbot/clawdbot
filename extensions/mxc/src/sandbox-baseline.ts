@@ -63,6 +63,10 @@ export const DEFAULT_SANDBOX_BASELINE: SandboxBaselinePolicy = {
   },
 };
 
+function firstNonBlankEnv(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => value?.trim());
+}
+
 export function resolveSandboxBaseline(
   input: SandboxBaselinePolicyInput = {},
 ): SandboxBaselinePolicy {
@@ -86,13 +90,13 @@ export function resolveSandboxBaseline(
 }
 
 export function resolveSandboxTempDir(env: BaselineTempEnv = {}): string {
-  return env.TEMP ?? env.TMP ?? "C:\\Windows\\Temp";
+  return firstNonBlankEnv(env.TEMP, env.TMP) ?? "C:\\Windows\\Temp";
 }
 
 export function resolveBaselineReadonlyPaths(env: BaselineReadonlyEnv): string[] {
-  const systemRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
-  const programFiles = env.ProgramFiles ?? env.ProgramW6432 ?? "C:\\Program Files";
-  const programFilesX86 = env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const systemRoot = firstNonBlankEnv(env.SystemRoot, env.WINDIR) ?? "C:\\Windows";
+  const programFiles = firstNonBlankEnv(env.ProgramFiles, env.ProgramW6432) ?? "C:\\Program Files";
+  const programFilesX86 = firstNonBlankEnv(env["ProgramFiles(x86)"]) ?? "C:\\Program Files (x86)";
   return dedupeStable([
     programFiles,
     programFilesX86,

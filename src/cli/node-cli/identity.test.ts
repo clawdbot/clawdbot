@@ -54,11 +54,11 @@ describe("runNodeIdentityShow", () => {
     runNodeIdentityShow({});
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(fs.existsSync(path.join(stateDir, "identity", "device.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("writes deviceId and raw public key JSON to stdout", () => {
-    const identity = loadOrCreateDeviceIdentity(path.join(stateDir, "identity", "device.json"));
+    const identity = loadOrCreateDeviceIdentity();
     runNodeIdentityShow({ json: true });
     expect(exitSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
@@ -75,7 +75,7 @@ describe("runNodeIdentityShow", () => {
   });
 
   it("prints human-readable lines without --json", () => {
-    const identity = loadOrCreateDeviceIdentity(path.join(stateDir, "identity", "device.json"));
+    const identity = loadOrCreateDeviceIdentity();
     runNodeIdentityShow({});
     expect(exitSpy).not.toHaveBeenCalled();
     const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");

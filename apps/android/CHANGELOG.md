@@ -2,13 +2,25 @@
 
 ## Unreleased
 
-Adds foreground, on-device Voice Wake with editable Gateway-synced wake words and automatic pause during other voice activity.
+## 2026.7.4 - 2026-07-30
 
-Fixes Android composer media leaking across Gateway, agent, and chat switches. Thanks @IWhatsskill.
+Adds inline audio/video playback and uploads, session dashboards, run telemetry, chat rewind/fork, a Settings repair assistant, and Wear instant Talk.
 
-Fixes malformed Android agent and profile initials when display names begin with emoji. Thanks @Leon-SK668.
+Improves the working claw, collapsible details, Skill Workshop flows, and generated images.
 
-Adds a Wear OS companion for agent and session selection, transcripts, text and voice replies, realtime Talk, Gateway controls, reply notifications, local appearance and speech settings, and a launch Tile. The watch proxies through the paired phone and stores no Gateway credentials. Thanks @sibbl and @IWhatsskill.
+Fixes reconnect/session state, Talk transcripts, manual gateway ports, large-text onboarding, reduced motion, and Wear pairing/reply reliability.
+
+Thanks @IWhatsskill, @NianJiuZst, @masatohoshino, @cygnostik, @licheer-zte, and @metaforismo.
+
+## 2026.7.3 - 2026-07-20
+
+Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, Gateway controls, notifications, settings, and a launch Tile.
+
+Adds foreground, on-device Voice Wake with editable Gateway-synced wake words, plus copy and save-as-PNG actions for rendered chat widgets.
+
+Fixes composer media leaking across chats and malformed agent or profile initials when display names begin with emoji.
+
+Thanks @sibbl, @IWhatsskill, and @Leon-SK668.
 
 ## 2026.7.2 - 2026-07-13
 

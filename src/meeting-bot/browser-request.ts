@@ -4,7 +4,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
   MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type { MeetingBrowserCandidateTab } from "./session-types.js";
 
 export function asMeetingBrowserTabs(result: unknown): MeetingBrowserCandidateTab[] {

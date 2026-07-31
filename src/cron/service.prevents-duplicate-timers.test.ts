@@ -1,4 +1,6 @@
 // Duplicate timer tests cover cron service guards against repeated timer arms.
+import { mkdir, symlink } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
@@ -6,6 +8,8 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "./service.test-harness.js";
+import { locked } from "./service/locked.js";
+import { createCronServiceState } from "./service/state.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
@@ -15,7 +19,11 @@ installCronTestHooks({
 });
 
 describe("CronService", () => {
-  it("avoids duplicate runs when two services share a store", async () => {
+  it.each([
+    { name: "the same store path", alias: "none" },
+    { name: "lexically different paths to the same store", alias: "lexical" },
+    { name: "a symlinked path to the same store", alias: "symlink" },
+  ] as const)("avoids duplicate runs when two services share $name", async ({ alias }) => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -41,8 +49,24 @@ describe("CronService", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
 
+    let aliasedStorePath = store.storePath;
+    if (alias === "lexical") {
+      aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
+    } else if (alias === "symlink") {
+      const symlinkedStoreDirectory = path.join(
+        path.dirname(path.dirname(store.storePath)),
+        "symlinked-cron",
+      );
+      await symlink(
+        path.dirname(store.storePath),
+        symlinkedStoreDirectory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      aliasedStorePath = path.join(symlinkedStoreDirectory, path.basename(store.storePath));
+    }
+
     const cronB = new CronService({
-      storePath: store.storePath,
+      storePath: aliasedStorePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -64,4 +88,70 @@ describe("CronService", () => {
     cronB.stop();
     await store.cleanup();
   });
+
+  it.each([
+    { name: "lexical", alias: "lexical" },
+    { name: "symlink", alias: "symlink" },
+    ...(process.platform === "win32"
+      ? []
+      : [{ name: "dangling file symlink", alias: "file-symlink" } as const]),
+  ] as const)(
+    "serializes concurrent operations for $name cron store aliases",
+    async ({ alias }) => {
+      const store = await makeStorePath();
+      let aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
+      if (alias === "symlink") {
+        const realStoreDirectory = path.dirname(store.storePath);
+        await mkdir(realStoreDirectory, { recursive: true });
+        const symlinkedStoreDirectory = path.join(
+          path.dirname(realStoreDirectory),
+          "symlinked-cron-lock",
+        );
+        await symlink(
+          realStoreDirectory,
+          symlinkedStoreDirectory,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        aliasedStorePath = path.join(symlinkedStoreDirectory, path.basename(store.storePath));
+      } else if (alias === "file-symlink") {
+        await mkdir(path.dirname(store.storePath), { recursive: true });
+        aliasedStorePath = path.join(path.dirname(store.storePath), "symlinked-jobs.json");
+        await symlink(path.basename(store.storePath), aliasedStorePath, "file");
+      }
+      const createState = (storePath: string) =>
+        createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: noopLogger,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+      const events: string[] = [];
+      let releaseFirst: (() => void) | undefined;
+      const firstReleased = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const first = locked(createState(store.storePath), async () => {
+        events.push("first-started");
+        await firstReleased;
+        events.push("first-finished");
+      });
+      const second = locked(createState(aliasedStorePath), async () => {
+        events.push("second-started");
+      });
+
+      try {
+        await vi.waitFor(() => {
+          expect(events).toEqual(["first-started"]);
+        });
+      } finally {
+        releaseFirst?.();
+        await Promise.all([first, second]);
+        await store.cleanup();
+      }
+
+      expect(events).toEqual(["first-started", "first-finished", "second-started"]);
+    },
+  );
 });

@@ -321,6 +321,22 @@ describe("plugin npm extended-stable workflow", () => {
     expect(pluginManifest.id).toBe("meta");
   });
 
+  it("bounds external git fetch and npm publish operations", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    const npmPublishLines = source
+      .split("\n")
+      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
+
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+    expect(npmPublishLines).toEqual([
+      '            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \\',
+    ]);
+  });
+
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {
     const parsed = workflow();
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");

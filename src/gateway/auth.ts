@@ -15,6 +15,7 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
@@ -28,6 +29,7 @@ export {
   resolveGatewayAuth,
   type ResolvedGatewayAuth,
 } from "./auth-resolve.js";
+export { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
 
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
@@ -147,38 +149,6 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
   });
-}
-
-/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
-/** Return true when forwarded headers make loopback direct-local auth unsafe. */
-export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  const headers = req.headers ?? {};
-
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
-}
-
-/** Return whether a request is a clean loopback request without forwarded identity headers. */
-export function isLocalDirectRequest(
-  req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
-): boolean {
-  if (!req) {
-    return false;
-  }
-  if (!hasForwardedRequestHeaders(req)) {
-    return isLoopbackAddress(req.socket?.remoteAddress);
-  }
-  return false;
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -396,13 +366,13 @@ function authorizeTrustedProxyBrowserOrigin(params: {
   });
 }
 
-function authorizeTokenAuth(params: {
+async function authorizeTokenAuth(params: {
   authToken?: string;
   connectToken?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
-}): GatewayAuthResult {
+}): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
   }
@@ -413,20 +383,20 @@ function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     return { ok: false, reason: "token_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
   return { ok: true, method: "token" };
 }
 
-function authorizePasswordAuth(params: {
+async function authorizePasswordAuth(params: {
   authPassword?: string;
   connectPassword?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
-}): GatewayAuthResult {
+}): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
   }
@@ -435,7 +405,7 @@ function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     return { ok: false, reason: "password_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -529,7 +499,7 @@ async function authorizeGatewayConnectCore(
       if (rateLimitResult) {
         return rateLimitResult;
       }
-      return authorizePasswordAuth({
+      return await authorizePasswordAuth({
         authPassword: auth.password,
         connectPassword: connectAuth.password,
         limiter,
@@ -579,7 +549,7 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "token") {
-    return authorizeTokenAuth({
+    return await authorizeTokenAuth({
       authToken: auth.token,
       connectToken: connectAuth?.token,
       limiter,
@@ -589,7 +559,7 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "password") {
-    return authorizePasswordAuth({
+    return await authorizePasswordAuth({
       authPassword: auth.password,
       connectPassword: connectAuth?.password,
       limiter,
@@ -598,7 +568,7 @@ async function authorizeGatewayConnectCore(
     });
   }
 
-  limiter?.recordFailure(ip, rateLimitScope);
+  await limiter?.recordFailureAndDelay(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
 

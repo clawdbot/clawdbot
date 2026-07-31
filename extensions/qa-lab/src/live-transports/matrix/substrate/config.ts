@@ -39,6 +39,9 @@ type MatrixQaToolConfigOverrides = {
 type MatrixQaAudioConfigOverrides = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
 >;
+type MatrixQaMediaModelsOverrides = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["models"]
+>;
 type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
@@ -58,10 +61,6 @@ type MatrixQaThreadBindingsConfigOverrides = {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
 };
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
@@ -97,6 +96,7 @@ export type MatrixQaConfigOverrides = {
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
   audio?: MatrixQaAudioConfigOverrides;
+  mediaModels?: MatrixQaMediaModelsOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
@@ -437,21 +437,16 @@ function buildMatrixQaChannelAccountConfig(params: {
   );
   // Matrix accepts only the nested streaming shape; harness overrides keep
   // their scalar/boolean vocabulary and normalize here before config write.
-  const streamingSlots = {
-    ...(params.overrides?.streaming !== undefined
-      ? { mode: resolveMatrixQaStreamingMode(params.overrides.streaming) }
-      : {}),
-    ...(isMatrixQaStreamingConfig(params.overrides?.streaming) &&
-    params.overrides.streaming.preview?.toolProgress !== undefined
-      ? { preview: { toolProgress: params.overrides.streaming.preview.toolProgress } }
-      : {}),
-    ...(params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {}),
-    ...(params.overrides?.blockStreaming !== undefined
-      ? { block: { enabled: params.snapshot.blockStreaming } }
-      : {}),
+  // Scenario config is applied with config.patch, which recursively merges objects.
+  // Write every slot so a prior streaming scenario cannot leak into the next one.
+  const streamingConfig = {
+    streaming: {
+      block: { enabled: params.snapshot.blockStreaming },
+      chunkMode: params.snapshot.chunkMode ?? "length",
+      mode: params.snapshot.streaming,
+      preview: { toolProgress: params.snapshot.streamingPreviewToolProgress },
+    },
   };
-  const streamingConfig =
-    Object.keys(streamingSlots).length > 0 ? { streaming: streamingSlots } : {};
   const startupVerificationConfig =
     params.snapshot.startupVerification !== undefined
       ? { startupVerification: params.snapshot.startupVerification }
@@ -601,7 +596,7 @@ export function buildMatrixQaConfig(
       : {};
 
   const toolsConfig =
-    params.overrides?.toolProfile || params.overrides?.audio
+    params.overrides?.toolProfile || params.overrides?.audio || params.overrides?.mediaModels
       ? {
           ...baseCfg.tools,
           ...(params.overrides?.toolProfile
@@ -609,14 +604,19 @@ export function buildMatrixQaConfig(
                 profile: params.overrides.toolProfile,
               }
             : {}),
-          ...(params.overrides?.audio
+          ...(params.overrides?.audio || params.overrides?.mediaModels
             ? {
                 media: {
                   ...baseCfg.tools?.media,
-                  audio: {
-                    ...baseCfg.tools?.media?.audio,
-                    ...params.overrides.audio,
-                  },
+                  ...(params.overrides.mediaModels ? { models: params.overrides.mediaModels } : {}),
+                  ...(params.overrides.audio
+                    ? {
+                        audio: {
+                          ...baseCfg.tools?.media?.audio,
+                          ...params.overrides.audio,
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),

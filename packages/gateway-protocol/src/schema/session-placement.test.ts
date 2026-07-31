@@ -4,9 +4,7 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
-  validateSessionsDispatchResult,
   validateSessionsReclaimParams,
-  validateSessionsReclaimResult,
 } from "../index.js";
 
 const placementStates = [
@@ -205,8 +203,22 @@ describe("session dispatch protocol schemas", () => {
         state: "reclaimed",
         ...basePlacement,
         ...workerOwnedFields,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       }),
     ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        state: "reclaimed",
+        ...basePlacement,
+        workspaceResultConflict: {
+          paths: [],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("requires recovery evidence for failed placement", () => {
@@ -225,53 +237,6 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only active worker ownership in successful dispatch results", () => {
-    const active = {
-      state: "active" as const,
-      ...basePlacement,
-      ...workerOwnedFields,
-    };
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: active,
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: {
-          state: "failed",
-          ...basePlacement,
-          recoveryError: "worker admission failed",
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts only reclaimed ownership in successful reclaim results", () => {
-    expect(
-      validateSessionsReclaimResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: { state: "reclaimed", ...basePlacement, ...workerOwnedFields },
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsReclaimResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: { state: "active", ...basePlacement, ...workerOwnedFields },
-      }),
-    ).toBe(false);
-  });
-
   it("rejects unknown placement fields", () => {
     expect(
       Value.Check(SessionPlacementSchema, {
@@ -279,6 +244,16 @@ describe("session dispatch protocol schemas", () => {
         ...basePlacement,
         ...workerOwnedFields,
         unexpected: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects extra fields in dispatch params", () => {
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        extra: true,
       }),
     ).toBe(false);
   });

@@ -863,7 +863,7 @@ describe("buildMcpToolSchema", () => {
       },
     });
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "codex_threads_constrained_literals.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "codex_threads_constrained_literals.action", keeping the first variant',
     ]);
   });
 
@@ -930,9 +930,51 @@ describe("buildMcpToolSchema", () => {
     }
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
     ]);
+  });
+
+  it("does not warn for structurally identical union property schemas", () => {
+    const tool = makeMockTool({
+      name: "lark_doc_read",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                type: "string",
+                description: "Lark document token",
+                minLength: 1,
+              },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                minLength: 1,
+                description: "Lark document token",
+                type: "string",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        doc_token: {
+          type: "string",
+          description: "Lark document token",
+          minLength: 1,
+        },
+      },
+    });
+    expect(logWarnMock).not.toHaveBeenCalled();
   });
 
   it("warns per tool for the same conflicting field name across different tools", () => {
@@ -956,8 +998,8 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([messageTool, calendarTool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
     ]);
   });
 
@@ -976,12 +1018,57 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([tool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
+      'mcp-loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
     ]);
   });
 });
 
 describe("mcp loopback server", () => {
+  it("keeps equal schemas quiet and dedupes genuine conflicts across HTTP cache misses", async () => {
+    mockScopedTools([
+      makeMockTool({
+        name: "lark_doc_read",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                doc_token: { type: "string", description: "Lark document token" },
+                action: { type: "string" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                doc_token: { description: "Lark document token", type: "string" },
+                action: { type: "number" },
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    for (let index = 0; index < 3; index += 1) {
+      const payload = await readOkMcpPayload(
+        await sendLoopbackToolsList({
+          token: runtime.ownerToken,
+          headers: {
+            ...MAIN_SESSION_HEADER,
+            "x-openclaw-current-message-id": `message-${index}`,
+          },
+        }),
+      );
+      expectMcpToolNames(payload, ["lark_doc_read"]);
+    }
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp-loopback: conflicting schema definitions for "lark_doc_read.action", keeping the first variant',
+    ]);
+  });
+
   it("rejects reserved harness contexts before tool resolution", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const response = await sendLoopbackToolsList({
@@ -2745,6 +2832,44 @@ describe("mcp loopback server", () => {
     expect(callId).toMatch(/^mcp-/);
     expect(params).toEqual({ body: "hello" });
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("resolves legacy cron tools/call names to the renamed automations tool", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "SCHEDULED" }],
+    }));
+    const tool = makeMockTool({ name: "automations", description: "manage schedules", execute });
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "SCHEDULED", false);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects legacy cron calls when the automations tool is not exposed", async () => {
+    const tool = makeMessageTool();
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "Tool not available: cron", true);
   });
 
   it("preserves request-disconnect evidence without classifying a tool failure", async () => {

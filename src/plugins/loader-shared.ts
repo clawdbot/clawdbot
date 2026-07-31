@@ -25,6 +25,7 @@ import { clearEmbeddingProviders } from "./embedding-providers.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
+import { clearLegacyPluginInternalHooks } from "./legacy-internal-hook-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -35,6 +36,7 @@ import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artif
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -171,9 +173,14 @@ export function clearActivatedPluginRuntimeState(): void {
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
   clearPluginInteractiveHandlers();
+  // Legacy api.registerHook callbacks are process-global compatibility state.
+  // Retire them with the active registry so disabled or removed plugins cannot
+  // keep running.
+  clearLegacyPluginInternalHooks();
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+  clearSessionDiscussionProvider();
 }
 
 class PluginLoadFailureError extends Error {
@@ -240,15 +247,19 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
+  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
   return !(
     "required" in schema ||
     "dependentRequired" in schema ||
+    "dependentSchemas" in schema ||
     "dependencies" in schema ||
     "minProperties" in schema ||
     "allOf" in schema ||
     "anyOf" in schema ||
     "oneOf" in schema ||
-    "not" in schema
+    "not" in schema ||
+    "patternProperties" in schema ||
+    hasConditional
   );
 }
 
@@ -290,7 +301,9 @@ export function createManifestPluginRecord(params: {
     id: manifestRecord.id,
     name: manifestRecord.name ?? manifestRecord.id,
     description: manifestRecord.description,
+    packageVersion: manifestRecord.packageVersion,
     version: manifestRecord.version,
+    builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
     packageName: manifestRecord.packageName,
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,
@@ -308,6 +321,8 @@ export function createManifestPluginRecord(params: {
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
+    dashboard: manifestRecord.dashboard,
+    mcpServers: manifestRecord.mcpServers,
   });
 }
 

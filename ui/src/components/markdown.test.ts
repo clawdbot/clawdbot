@@ -1,10 +1,8 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  handleMarkdownCodeBlockCopy,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-} from "./markdown.ts";
+import { i18n } from "../i18n/index.ts";
+import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -357,7 +355,7 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
-    it("escapes details/summary injection in task items", () => {
+    it("keeps details escaped when they are inline inside a task item", () => {
       const html = toSanitizedMarkdownHtml("- [ ] <details><summary>x</summary>y</details>");
       expect(html).toBe(
         '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> &lt;details&gt;&lt;summary&gt;x&lt;/summary&gt;y&lt;/details&gt;</li>\n</ul>\n',
@@ -397,6 +395,54 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe(
         '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
       );
+    });
+
+    it("keeps linked data images under their authored link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a > img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a > button")).toBeNull();
+    });
+
+    it("keeps data images inside rich Markdown links under the link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a button")).toBeNull();
+    });
+
+    it("tracks linked and standalone images across one inline token stream", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelectorAll("a img.markdown-inline-image")).toHaveLength(2);
+      expect(fragment.querySelectorAll("button.markdown-inline-image-button")).toHaveLength(1);
+    });
+
+    it("labels unlabeled inline data image buttons", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
+          interactiveImages: true,
+        }),
+      );
+
+      expect(
+        fragment.querySelector("button.markdown-inline-image-button")?.getAttribute("aria-label"),
+      ).toBe("Open image Image");
     });
 
     it("keeps inline data images while marking assistant-authored role alt text", () => {
@@ -531,6 +577,23 @@ PY
       expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
       expect(code?.textContent).toBe('{"ok": true}\n');
       expect(code?.innerHTML).toContain("hljs-");
+    });
+
+    it("localizes collapsed JSON line counts", async () => {
+      i18n.registerTranslation("pt-BR", {
+        chat: {
+          codeBlock: {
+            jsonLines: "JSON · {count} linhas",
+          },
+        },
+      });
+      await i18n.setLocale("pt-BR");
+      try {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml('```json\n{"ok": true}\n```'));
+        expect(fragment.querySelector("summary")?.textContent).toBe("JSON · 2 linhas");
+      } finally {
+        await i18n.setLocale("en");
+      }
     });
 
     it("auto-highlights unlabeled code blocks only when detection is confident", () => {
@@ -864,11 +927,11 @@ PY
     it("keeps app and resource routes instead of treating them as docs roots", () => {
       const html = withControlUiBasePath("/control", () =>
         toSanitizedMarkdownHtml(
-          "[channels](/channels) [automation](/automation) [workshop](/skills/workshop) [chat](/chat) [baseChat](/control/chat?session=abc) [baseSessions](/control/sessions) [health](/healthz) [pluginDynamic](/googlechat) [asset](/api/files/1) [baseApi](/control/api/files/1) [baseAvatar](/control/avatar/main) [plugin](/plugins/diffs/view/id/token) [basePlugin](/control/plugins/diffs/view/id/token) [artifact](/__openclaw__/canvas/documents/x/index.html) [baseArtifact](/control/__openclaw__/canvas/x)",
+          "[channels](/channels) [automation](/automation) [workshop](/skills/workshop) [chat](/chat) [baseChat](/control/chat/main) [baseSessions](/control/sessions) [health](/healthz) [pluginDynamic](/googlechat) [asset](/api/files/1) [baseApi](/control/api/files/1) [baseAvatar](/control/avatar/main) [plugin](/plugins/diffs/view/id/token) [basePlugin](/control/plugins/diffs/view/id/token) [artifact](/__openclaw__/canvas/documents/x/index.html) [baseArtifact](/control/__openclaw__/canvas/x)",
         ),
       );
       expect(html).toBe(
-        '<p><a href="/channels" rel="noreferrer noopener" target="_blank">channels</a> <a href="/automation" rel="noreferrer noopener" target="_blank">automation</a> <a href="/skills/workshop" rel="noreferrer noopener" target="_blank">workshop</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/control/chat?session=abc" rel="noreferrer noopener" target="_blank">baseChat</a> <a href="/control/sessions" rel="noreferrer noopener" target="_blank">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
+        '<p><a href="/channels" rel="noreferrer noopener" target="_blank">channels</a> <a href="/automation" rel="noreferrer noopener" target="_blank">automation</a> <a href="/skills/workshop" rel="noreferrer noopener" target="_blank">workshop</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/control/chat/main" rel="noreferrer noopener" target="_blank">baseChat</a> <a href="/control/sessions" rel="noreferrer noopener" target="_blank">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
       );
     });
   });
@@ -987,6 +1050,25 @@ describe("toStreamingMarkdownHtml", () => {
     expect(code?.textContent).toContain("… truncated");
     expect(code?.textContent).toContain(`showing first 140000`);
     expect(code?.textContent?.length).toBeLessThan(blockArt.length);
+  });
+
+  it("localizes the oversized markdown truncation notice", async () => {
+    i18n.registerTranslation("pt-BR", {
+      chat: {
+        markdown: {
+          truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
+      const fragment = htmlFragment(toStreamingMarkdownHtml(blockArt));
+      expect(fragment.textContent).toContain("… truncado");
+      expect(fragment.textContent).toContain("exibindo os primeiros 140000");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("renders completed block prefixes as markdown and closes the streaming tail", () => {

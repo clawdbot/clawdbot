@@ -176,8 +176,8 @@ function normalizeRestartTraceHandoff(
     return undefined;
   }
   return {
-    startedAt: record.startedAt,
-    lastAt: record.lastAt,
+    startedAt: Math.floor(record.startedAt),
+    lastAt: Math.floor(record.lastAt),
   };
 }
 

@@ -2,12 +2,12 @@ title: Active Memory pre-reply recall
 
 scenario:
   id: active-memory-preprompt-recall
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.active-memory-active-recall
     secondary:
-      - memory.recall
+      - session-memory.active-memory-recall
   objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
   plugins:
     - active-memory
@@ -18,6 +18,7 @@ scenario:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents:
               - qa
             allowedChatTypes:
@@ -38,19 +39,23 @@ scenario:
     - extensions/active-memory/index.ts
     - extensions/active-memory/doctor-contract-api.ts
     - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
     channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Mutates legacy Active Memory state and runs doctor while the Gateway is stopped, then restarts the Gateway.
     config:
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
-      memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
+      memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"
       memoryQuery: "QA movie night snack lemon pepper wings blue cheese"
       expectedNeedle: lemon pepper wings
       prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
       promptSnippet: "Silent snack recall check"
+      laneOneConversationId: qa-active-memory-lane-one
+      laneOnePrompt: "Apply the global memory guidance, then describe my usual QA movie night snack in one short sentence."
 
 flow:
   steps:
@@ -84,31 +89,37 @@ flow:
         - set: activeSessionKey
           value:
             expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-        - set: toggleStorePath
+        - set: doctorOutputPath
           value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
-        - call: fs.rm
+            expr: "path.join(env.gateway.tempRoot, 'active-memory-doctor-output.txt')"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
           args:
-            - ref: toggleStorePath
-            - force: true
-        - call: fs.mkdir
-          args:
-            - expr: "path.dirname(toggleStorePath)"
-            - recursive: true
-        - call: fs.writeFile
-          args:
-            - ref: toggleStorePath
-            - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
-            - utf8
-        - call: runQaCli
-          saveAs: doctorFixOutput
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const toggleStorePath = path.join(ctx.stateDir, "plugins", "active-memory", "session-toggles.json");
+                    await fs.rm(toggleStorePath, { force: true });
+                    await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
+                    await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
+                      timeoutMs: liveTurnTimeoutMs(env, 60000),
+                    });
+                    await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
           args:
             - ref: env
-            - - doctor
-              - --fix
-              - --yes
-            - timeoutMs:
-                expr: liveTurnTimeoutMs(env, 60000)
+            - 120000
+        - call: fs.readFile
+          saveAs: doctorFixOutput
+          args:
+            - ref: doctorOutputPath
+            - utf8
         - assert:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:
@@ -214,4 +225,63 @@ flow:
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
                   message: expected mock Active Memory memory_get request
+              - call: patchConfig
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      plugins:
+                        entries:
+                          active-memory:
+                            config:
+                              mode: "off"
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+                  - 60000
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 60000
+              - set: laneOneRequestCursor
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - set: laneOneStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.length"
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.laneOneConversationId
+                    kind: dm
+                  senderId:
+                    expr: config.laneOneConversationId
+                  senderName: Active Memory Lane One
+                  text:
+                    expr: config.laneOnePrompt
+              - call: waitForOutboundMessage
+                saveAs: laneOneOutbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === config.laneOneConversationId && candidate.conversation.kind === 'direct'"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - sinceIndex:
+                      ref: laneOneStartIndex
+              - call: waitForCondition
+                saveAs: laneOneRequests
+                args:
+                  - lambda:
+                      async: true
+                      expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${laneOneRequestCursor}`); return requests.some((request) => String(request.allInputText ?? '').includes(config.laneOnePrompt)) ? requests : undefined; })()"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - 100
+              - assert:
+                  expr: "laneOneRequests.some((request) => String(request.allInputText ?? '').includes(config.laneOnePrompt) && String(request.allInputText ?? '').includes('<active_memory_plugin>') && String(request.allInputText ?? '').includes(config.expectedNeedle))"
+                  message:
+                    expr: "`qa-channel lane-1 turn missed injected Active Memory context: ${JSON.stringify(laneOneRequests)}`"
+              - assert:
+                  expr: "laneOneRequests.every((request) => !String(request.allInputText ?? '').includes('You are a memory search agent.'))"
+                  message: mode=off lane-1 regression unexpectedly escalated to the recall sub-agent
       detailsExpr: activeOutbound.text

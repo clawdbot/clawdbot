@@ -18,9 +18,13 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { findCliMaxTurnsError, isFailoverError } from "../../agents/failover-error.js";
+import {
+  findCliMaxTurnsError,
+  findCliTimeoutError,
+  isFailoverError,
+} from "../../agents/failover-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -34,6 +38,9 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
+
+const RATE_LIMIT_RETRY_MESSAGE =
+  "⚠️ The model request was rate-limited. Please try again in a few minutes.";
 
 /** Builds a human-friendly rate-limit message, including a known cooldown. */
 export function buildRateLimitCooldownMessage(err: unknown): string {
@@ -53,7 +60,7 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
       const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
-    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+    return RATE_LIMIT_RETRY_MESSAGE;
   }
   const expiry = err.soonestCooldownExpiry;
   const now = Date.now();
@@ -64,7 +71,13 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
     }
     return `⚠️ Rate-limited — ready in ~${Math.ceil(secsLeft / 60)} min. Please try again shortly.`;
   }
-  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  const attemptedModels = new Set(
+    err.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
+  );
+  if (attemptedModels.size > 1 && isPureTransientRateLimitSummary(err)) {
+    return "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.";
+  }
+  return RATE_LIMIT_RETRY_MESSAGE;
 }
 
 export function resolveBillingFailureReplyText(err: unknown): string {
@@ -217,9 +230,14 @@ const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
+  /\bcodex session generation is no longer current\b/iu;
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
+    return "⚠️ This Codex session changed before your message could run. Please send it again.";
+  }
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
     return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
   }
@@ -251,20 +269,54 @@ export function buildPreflightCompactionFailureText(
   );
 }
 
-function buildCliBackendTimeoutFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
+function buildCliBackendTimeoutFailureText(input: {
+  message: string;
+  error?: unknown;
+  replayPrevented?: boolean;
+}): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(input.message);
+  const cliTimeoutError = findCliTimeoutError(input.error);
   const stall = normalizedMessage.match(CLI_BACKEND_NO_OUTPUT_STALL_RE);
   const overall = normalizedMessage.match(CLI_BACKEND_OVERALL_TIMEOUT_RE);
-  const seconds = (stall ?? overall)?.[1];
-  if (!seconds) {
+  const timeout = cliTimeoutError?.cliTimeout;
+  const seconds = timeout?.timeoutSeconds ?? Number((stall ?? overall)?.[1]);
+  if (!Number.isFinite(seconds)) {
     return null;
   }
   const routedModelRef = normalizedMessage.match(CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE)?.[1];
   const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
-  const modeLabel = stall ? "no-output stall" : "overall CLI turn budget";
+  const mode = timeout?.mode ?? (stall ? "no-output" : "overall");
+  let workStatus = "";
+  const stoppedWork: string[] = [];
+  if (timeout?.backgroundTaskCount) {
+    const noun = timeout.backgroundTaskCount === 1 ? "task" : "tasks";
+    stoppedWork.push(`${timeout.backgroundTaskCount} CLI background ${noun}`);
+  }
+  if (timeout?.activeToolCount) {
+    const noun = timeout.activeToolCount === 1 ? "call" : "calls";
+    stoppedWork.push(`${timeout.activeToolCount} active CLI tool ${noun}`);
+  }
+  if (stoppedWork.length > 0) {
+    workStatus = ` It also stopped ${stoppedWork.join(" and ")}; that work shares the parent CLI process. Effects may be partial; check before retrying.`;
+  } else if (timeout?.observedActivity) {
+    workStatus =
+      " The CLI had already begun work, so effects may be partial; check before retrying.";
+  }
+  if (input.replayPrevented) {
+    workStatus += " OpenClaw did not replay this turn automatically.";
+  }
+  if (mode === "no-output") {
+    const backendId = cliTimeoutError?.provider ?? "<id>";
+    return (
+      `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. ` +
+      `This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} ` +
+      "Check for an interactive prompt. " +
+      `The CLI backend ${backendId} produced no output before its watchdog expired.`
+    );
+  }
   return (
-    `⚠️ CLI subprocess${routingSuffix}: timed out after ${seconds}s (${modeLabel}). The gateway may still be healthy. Try \`/new\`, a lighter model, or raise ` +
-    "`agents.defaults.timeoutSeconds` and the watchdog `noOutputTimeoutMs` entries under `cliBackends.<your-runtime>`."
+    `⚠️ CLI turn${routingSuffix}: timed out after ${seconds}s (overall turn limit). The gateway is unaffected.${workStatus} ` +
+    "For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise `agents.defaults.timeoutSeconds`."
   );
 }
 
@@ -323,11 +375,7 @@ function supportsChannelCodexLogin(provider: string | null | undefined): boolean
     return false;
   }
   const normalizedProvider = provider.trim().toLowerCase().replace(/_/gu, "-");
-  return (
-    normalizedProvider === "openai" ||
-    normalizedProvider === "codex" ||
-    normalizedProvider === "openai-codex"
-  );
+  return normalizedProvider === "openai" || normalizedProvider === "codex";
 }
 
 export function buildExternalRunFailureReply(
@@ -336,6 +384,7 @@ export function buildExternalRunFailureReply(
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
     isHeartbeat?: boolean;
+    replayPrevented?: boolean;
   },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
@@ -378,6 +427,14 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
+  const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText({
+    message: normalizedMessage,
+    error,
+    replayPrevented: options?.replayPrevented,
+  });
+  if (cliBackendTimeoutFailure) {
+    return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
+  }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
@@ -391,10 +448,6 @@ export function buildExternalRunFailureReply(
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
-  }
-  const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
-  if (cliBackendTimeoutFailure) {
-    return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {

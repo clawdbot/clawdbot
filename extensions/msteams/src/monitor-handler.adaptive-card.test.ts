@@ -93,7 +93,7 @@ async function runMessageActivity(params: {
   deps?: MSTeamsMessageHandlerDeps;
 }) {
   const deps = params.deps ?? createDeps();
-  let messageHandler: ((context: unknown, next: () => Promise<void>) => Promise<void>) | undefined;
+  let messageHandler: Parameters<MSTeamsActivityHandler["onMessage"]>[0] | undefined;
   const handler: MSTeamsActivityHandler = {
     onMessage: (callback) => {
       messageHandler = callback;

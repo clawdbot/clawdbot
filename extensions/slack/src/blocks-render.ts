@@ -21,7 +21,7 @@ import {
   buildSlackDataTableBlock,
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
-  SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
+  SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 import {
   buildSlackDataVisualizationBlock,
@@ -212,7 +212,8 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
 export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackBlockRenderOptions {
   let buttonIndexOffset = 0;
   const dataTableCellCharacterCountOffset =
-    countSlackDataTableBlocksCellCharacters(blocks) ?? SLACK_DATA_TABLE_CELL_CHARACTERS_MAX + 1;
+    countSlackDataTableBlocksCellCharacters(blocks) ??
+    SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX + 1;
   let dataVisualizationCountOffset = 0;
   let selectIndexOffset = 0;
   for (const block of blocks ?? []) {
@@ -268,6 +269,7 @@ export function buildSlackInteractiveBlocks(
       return state;
     }
     if (block.type === "buttons") {
+      // Index is position in the question's options; core emits one buttons block in option order.
       const elements = block.buttons
         .flatMap((button, choiceIndex) => {
           const target = resolveSlackButtonTarget(button, choiceIndex);

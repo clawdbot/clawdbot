@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -54,30 +56,40 @@ const debouncerControl = vi.hoisted(() => ({
   },
 }));
 const createChannelInboundDebouncerMock = vi.hoisted(() =>
-  vi.fn((opts: { onFlush: (entries: unknown[]) => Promise<void> }) => ({
-    debouncer: {
-      enqueue: async (entry: unknown) => {
-        if (!debouncerControl.holdEntries) {
-          await opts.onFlush([entry]);
-          return;
-        }
-        debouncerControl.entries.push(entry);
-        debouncerControl.flush = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          await opts.onFlush(entries);
-        };
-        // Flush each collected entry as its own single-entry bucket, modeling
-        // the real non-debounced path (shouldDebounceTextInbound is mocked to
-        // false here) where every row dispatches individually.
-        debouncerControl.flushEach = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          for (const queued of entries) {
-            await opts.onFlush([queued]);
+  vi.fn(
+    (opts: {
+      onFlush: (
+        entries: unknown[],
+        createFlush: typeof createTestInboundDebounceFlush,
+      ) => { completion: Promise<void> };
+    }) => ({
+      debouncer: {
+        enqueue: async (entry: unknown) => {
+          if (!debouncerControl.holdEntries) {
+            await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+            return;
           }
-        };
+          debouncerControl.entries.push(entry);
+          debouncerControl.flush = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            await opts.onFlush(entries, createTestInboundDebounceFlush).completion;
+          };
+          // Flush each collected entry as its own single-entry bucket, modeling
+          // the real non-debounced path (shouldDebounceTextInbound is mocked to
+          // false here) where every row dispatches individually.
+          debouncerControl.flushEach = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            for (const queued of entries) {
+              await opts.onFlush([queued], createTestInboundDebounceFlush).completion;
+            }
+          };
+        },
+        flushKey: async () => {},
+        cancelKey: () => false,
+        drain: async () => {},
       },
-    },
-  })),
+    }),
+  ),
 );
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
@@ -139,6 +151,7 @@ async function runChannelInboundEventForLastRouteTest(params: RunChannelInboundE
 
 describe("iMessage monitor last-route updates", () => {
   const tempDirs: string[] = [];
+  const openClawStates: OpenClawTestState[] = [];
 
   beforeEach(() => {
     vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(
@@ -154,9 +167,10 @@ describe("iMessage monitor last-route updates", () => {
     expireCachedPrivateApiStatus();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -213,6 +227,12 @@ describe("iMessage monitor last-route updates", () => {
       };
       params.replyOptions?.onTypingController?.(typingController);
       await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      const onToolResult = params.replyOptions?.onToolResult;
+      expect(onToolResult).toBeTypeOf("function");
+      await onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
       typingController.markRunComplete();
       typingController.markDispatchIdle();
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -235,6 +255,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 7,
+              guid: "typing-keepalive-guid-7",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -261,7 +282,6 @@ describe("iMessage monitor last-route updates", () => {
       config: {
         channels: {
           imessage: {
-            coalesceSameSenderDms: true,
             dmPolicy: "allowlist",
             allowFrom: ["+15550001111"],
             sendReadReceipts: false,
@@ -300,6 +320,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(params.replyOptions?.onToolStart).toBeUndefined();
+      const onToolResult = params.replyOptions?.onToolResult;
+      expect(onToolResult).toBeTypeOf("function");
+      await onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
     });
 
@@ -320,6 +346,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 13,
+              guid: "typing-unsupported-guid-13",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -365,6 +392,7 @@ describe("iMessage monitor last-route updates", () => {
       expect.objectContaining({ typing: true }),
       expect.anything(),
     );
+    expect(client.request).not.toHaveBeenCalledWith("send", expect.anything(), expect.anything());
   });
 
   it("starts direct typing before dispatching the inbound turn", async () => {
@@ -401,6 +429,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 12,
+              guid: "typing-early-guid-12",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -501,6 +530,7 @@ describe("iMessage monitor last-route updates", () => {
             params: {
               message: {
                 id: 8,
+                guid: `typing-mode-${typingMode}-guid-8`,
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
@@ -533,7 +563,8 @@ describe("iMessage monitor last-route updates", () => {
             },
           },
           messages: { inbound: { debounceMs: 0 } },
-          session: { mainKey: "main", typingMode },
+          agents: { defaults: { typingMode } },
+          session: { mainKey: "main" },
         } as never,
         runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
       });
@@ -582,6 +613,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 9,
+              guid: "send-policy-guid-9",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -608,7 +640,6 @@ describe("iMessage monitor last-route updates", () => {
       config: {
         channels: {
           imessage: {
-            coalesceSameSenderDms: true,
             dmPolicy: "allowlist",
             allowFrom: ["+15550001111"],
             sendReadReceipts: false,
@@ -661,6 +692,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 11,
+              guid: "read-receipt-guid-11",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -725,7 +757,7 @@ describe("iMessage monitor last-route updates", () => {
     { label: "unset", imessagePatch: {}, expectedDisable: undefined },
   ] as const)(
     "passes iMessage block streaming config ($label) through to reply dispatch",
-    async ({ imessagePatch, expectedDisable }) => {
+    async ({ label, imessagePatch, expectedDisable }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -745,6 +777,7 @@ describe("iMessage monitor last-route updates", () => {
             params: {
               message: {
                 id: 10,
+                guid: `block-streaming-${label}-guid-10`,
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
@@ -804,7 +837,7 @@ describe("iMessage monitor last-route updates", () => {
     },
   ] as const)(
     "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
-    async ({ channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
+    async ({ label, channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -824,6 +857,7 @@ describe("iMessage monitor last-route updates", () => {
             params: {
               message: {
                 id: 11,
+                guid: `account-block-streaming-${label}-guid-11`,
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
@@ -885,7 +919,7 @@ describe("iMessage monitor last-route updates", () => {
     },
   ] as const)(
     "preserves channel-level nested block streaming when an account overrides $label",
-    async ({ accountStreaming }) => {
+    async ({ label, accountStreaming }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(false);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -905,6 +939,7 @@ describe("iMessage monitor last-route updates", () => {
             params: {
               message: {
                 id: 11,
+                guid: `account-streaming-${label}-guid-11`,
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
@@ -971,6 +1006,7 @@ describe("iMessage monitor last-route updates", () => {
           params: {
             message: {
               id: 1,
+              guid: "last-route-guid-1",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,
@@ -1008,9 +1044,19 @@ describe("iMessage monitor last-route updates", () => {
     expect(runtimeErrorMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-        lastChannel: "imessage",
-        lastTo: "imessage:+15550001111",
-        lastAccountId: "default",
+        delivery: {
+          kind: "external",
+          context: {
+            channel: "imessage",
+            to: "imessage:+15550001111",
+            accountId: "default",
+          },
+          route: {
+            channel: "imessage",
+            accountId: "default",
+            target: { to: "imessage:+15550001111" },
+          },
+        },
       });
     });
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
@@ -1177,7 +1223,7 @@ describe("iMessage monitor last-route updates", () => {
     );
   });
 
-  it("preserves enabled legacy catchup as the startup replay path", async () => {
+  it("routes legacy catchup through durable ingress and rejects a live GUID overlap", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-window-"));
     tempDirs.push(stateDir);
     const dbPath = path.join(stateDir, "chat.db");
@@ -1189,20 +1235,46 @@ describe("iMessage monitor last-route updates", () => {
     } finally {
       database.close();
     }
+    const createdAt = new Date().toISOString();
+    const historyMessage = {
+      id: 4995,
+      guid: "CATCHUP-LIVE-OVERLAP-GUID",
+      chat_id: 123,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "caught up exactly once",
+      is_group: false,
+      created_at: createdAt,
+    };
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {
       request: vi.fn(async (method: string) => {
         if (method === "watch.subscribe") {
           return { subscription: 1 };
         }
         if (method === "chats.list") {
-          return { chats: [] };
+          return { chats: [{ id: 123, last_message_at: createdAt }] };
+        }
+        if (method === "messages.history") {
+          return { messages: [historyMessage] };
         }
         throw new Error(`unexpected request ${method}`);
       }),
-      waitForClose: vi.fn(async () => {}),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: { message: { ...historyMessage, id: 5001 } },
+        });
+      }),
       stop: vi.fn(async () => {}),
     };
-    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
 
     await monitorIMessageProvider({
       config: {
@@ -1230,6 +1302,9 @@ describe("iMessage monitor last-route updates", () => {
       { limit: 200 },
       { timeoutMs: 30_000 },
     );
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
@@ -1468,7 +1543,7 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
   });
 
-  it("does not advance the recovery cursor past a failed replay row", async () => {
+  it("advances the recovery cursor after durable enqueue before dispatch", async () => {
     debouncerControl.holdEntries = true;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-failed-"));
     tempDirs.push(stateDir);
@@ -1487,9 +1562,6 @@ describe("iMessage monitor last-route updates", () => {
       database.close();
     }
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    dispatchReplyWithBufferedBlockDispatcherMock
-      .mockRejectedValueOnce(new Error("dispatch failed"))
-      .mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {
@@ -1540,16 +1612,12 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    await debouncerControl.flushEach?.();
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2);
-    });
     expect(
       loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
-    ).toBe(4994);
+    ).toBe(4996);
   });
 
-  it("advances the recovery cursor after lower pending replay rows complete", async () => {
+  it("keeps the durable recovery cursor independent of later dispatch order", async () => {
     debouncerControl.holdEntries = true;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-ordered-"));
     tempDirs.push(stateDir);
@@ -1613,20 +1681,18 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    debouncerControl.entries.reverse();
-    await debouncerControl.flushEach?.();
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2);
-    });
     expect(
       loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
     ).toBe(4996);
   });
 
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-anchor-repair-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    openClawStates.push(
+      await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-imsg-anchor-repair-",
+      }),
+    );
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {
@@ -1907,471 +1973,6 @@ describe("iMessage monitor last-route updates", () => {
         `[L3 proof #104136] runtime error: ${runtime.error.mock.calls.at(-1)?.[0]}`,
       ].join("\n"),
     );
-  });
-
-  it("merges a command row with the following URL balloon row", async () => {
-    // Apple's command+URL composition can arrive as a command row followed by a
-    // URL-preview balloon row. The opt-in coalescer keeps the pair as one agent
-    // turn and uses balloon metadata to avoid collapsing ordinary rows.
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        // Fresh dates relative to now so the stale-backlog age fence lets the
-        // live rows through to the debouncer.
-        for (const row of [
-          {
-            id: 91,
-            guid: "LIVE-GUID-91",
-            text: "summarize",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 92,
-            guid: "LIVE-GUID-92",
-            text: "https://example.com/article",
-            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    const debouncerOptions = createChannelInboundDebouncerMock.mock.calls.at(-1)?.[0] as
-      | { debounceMsOverride?: number }
-      | undefined;
-    expect(debouncerOptions?.debounceMsOverride).toBe(7000);
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    const mergedBody =
-      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.Body ?? "";
-    expect(mergedBody).toContain("summarize");
-    expect(mergedBody).toContain("https://example.com/article");
-  });
-
-  it("keeps ordinary buffered DMs separate after balloon metadata is observed", async () => {
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        for (const row of [
-          {
-            id: 101,
-            guid: "LIVE-GUID-101",
-            text: "handwriting",
-            balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-            created_at: new Date(Date.now() - 3000).toISOString(),
-          },
-          {
-            id: 102,
-            guid: "LIVE-GUID-102",
-            text: "first thought",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 103,
-            guid: "LIVE-GUID-103",
-            text: "second thought",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(3);
-    const bodies = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
-      (call) => call[0].ctx.Body ?? "",
-    );
-    expect(bodies.some((body) => body.includes("handwriting"))).toBe(true);
-    expect(bodies.some((body) => body.includes("first thought"))).toBe(true);
-    expect(bodies.some((body) => body.includes("second thought"))).toBe(true);
-  });
-
-  it("uses stale balloon rows as metadata support without dispatching them", async () => {
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        for (const row of [
-          {
-            id: 201,
-            guid: "STALE-BALLOON-GUID-201",
-            text: "old handwriting",
-            balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-            created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-          },
-          {
-            id: 202,
-            guid: "LIVE-GUID-202",
-            text: "first fresh thought",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 203,
-            guid: "LIVE-GUID-203",
-            text: "second fresh thought",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dbPath: path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`),
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2);
-    const bodies = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
-      (call) => call[0].ctx.Body ?? "",
-    );
-    expect(bodies.some((body) => body.includes("old handwriting"))).toBe(false);
-    expect(bodies.some((body) => body.includes("first fresh thought"))).toBe(true);
-    expect(bodies.some((body) => body.includes("second fresh thought"))).toBe(true);
-  });
-
-  it("does not merge unrelated buffered rows into a following URL split-send", async () => {
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        for (const row of [
-          {
-            id: 111,
-            guid: "LIVE-GUID-111",
-            text: "unrelated thought",
-            created_at: new Date(Date.now() - 3000).toISOString(),
-          },
-          {
-            id: 112,
-            guid: "LIVE-GUID-112",
-            text: "summarize",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 113,
-            guid: "LIVE-GUID-113",
-            text: "https://example.com/article",
-            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2);
-    const bodies = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
-      (call) => call[0].ctx.Body ?? "",
-    );
-    expect(bodies[0]).toContain("unrelated thought");
-    expect(bodies[0]).not.toContain("summarize");
-    expect(bodies[1]).toContain("summarize");
-    expect(bodies[1]).toContain("https://example.com/article");
-    expect(bodies[1]).not.toContain("unrelated thought");
-  });
-
-  it("does not merge unrelated buffered rows into an already-complete URL balloon message", async () => {
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        for (const row of [
-          {
-            id: 211,
-            guid: "LIVE-GUID-211",
-            text: "unrelated thought",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 212,
-            guid: "LIVE-GUID-212",
-            text: "summarize https://example.com/article",
-            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(2);
-    const bodies = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
-      (call) => call[0].ctx.Body ?? "",
-    );
-    expect(bodies[0]).toContain("unrelated thought");
-    expect(bodies[0]).not.toContain("summarize");
-    expect(bodies[1]).toContain("summarize");
-    expect(bodies[1]).toContain("https://example.com/article");
-    expect(bodies[1]).not.toContain("unrelated thought");
-  });
-
-  it("respects explicit iMessage inbound debounce timing", async () => {
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async () => client as never);
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        messages: { inbound: { byChannel: { imessage: 0 } } },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    const debouncerOptions = createChannelInboundDebouncerMock.mock.calls.at(-1)?.[0] as
-      | { debounceMsOverride?: number }
-      | undefined;
-    expect(debouncerOptions?.debounceMsOverride).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

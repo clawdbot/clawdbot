@@ -14,31 +14,29 @@ export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({
-      description:
-        "Working directory. Blank/whitespace values are invalid; omit to use the default cwd.",
+      description: "Working directory; omit for default. Blank/whitespace is invalid.",
     }),
   ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
+      description: "Milliseconds before backgrounding; default 10000.",
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
+      description: "Timeout in seconds; kills process on expiry.",
     }),
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
+      description: "Use PTY for TTY-required CLIs and coding agents.",
     }),
   ),
   elevated: Type.Optional(
     Type.Boolean({
-      description: "Run on the host with elevated permissions (if allowed)",
+      description: "Run on host with elevated permissions if allowed.",
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
@@ -46,14 +44,13 @@ export const execSchema = Type.Object({
   }),
   security: Type.Optional(
     Type.String({
-      description:
-        "Ignored for normal calls; exec security is set by tools.exec.security and host approvals.",
+      description: "Ignored per call; tools.exec.security and host approvals decide.",
     }),
   ),
   ask: Type.Optional(
     Type.String({
       description:
-        "Baseline ask comes from tools.exec.ask and host approvals; channel-origin calls ignore per-call ask when effective host ask is off.",
+        "Uses tools.exec.ask and host approvals; channel-origin calls cannot override host ask=off.",
     }),
   ),
   node: Type.Optional(

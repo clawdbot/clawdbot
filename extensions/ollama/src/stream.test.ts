@@ -1,4 +1,6 @@
 // Ollama tests cover stream plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,12 +8,12 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { estimateStringChars } from "./cjk-char-estimate.js";
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, createOllamaStreamFn, isOllamaCompatProvider } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -38,6 +40,22 @@ function makeOllamaResponse(params: {
 }
 
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
+
+describe("isOllamaCompatProvider", () => {
+  it.each([
+    ["http://localhost:11434", true],
+    ["http://127.0.0.1:11434", true],
+    ["http://127.0.0.2:11434", true],
+    ["http://127.255.255.254:11434", true],
+    ["http://[::1]:11434", true],
+    ["http://[::ffff:127.0.0.2]:11434", true],
+    ["http://128.0.0.1:11434", false],
+    ["http://10.0.0.1:11434", false],
+    ["http://127.0.0.1.evil.com:11434", false],
+  ] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
+    expect(isOllamaCompatProvider({ provider: "custom", baseUrl })).toBe(expected);
+  });
+});
 
 describe("buildAssistantMessage", () => {
   it("includes thinking block when response has thinking field", () => {
@@ -483,6 +501,155 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(yieldedBeforeDone).toBe(true);
   });
 
+  it("refreshes the guarded-fetch idle timeout for each streamed Ollama response", async () => {
+    const chunks = [
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant" as const, content: "Hello" },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant" as const, content: " world" },
+        done: false,
+      },
+      makeOllamaResponse({ content: "" }),
+    ];
+    const refreshTimeout = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(makeNdjsonBody(chunks), { status: 200 }),
+      release: vi.fn(async () => undefined),
+      refreshTimeout,
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      {},
+    );
+
+    const events: Array<{ type: string }> = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === "done")).toBe(true);
+    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+  });
+
+  it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+
+      let chunkIndex = 0;
+      let nextChunk: ReturnType<typeof setTimeout> | undefined;
+      const sendChunk = () => {
+        if (chunkIndex === 6) {
+          response.end(`${JSON.stringify(makeOllamaResponse({ content: "" }))}\n`);
+          return;
+        }
+        response.write(
+          `${JSON.stringify({
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:00Z",
+            message: { role: "assistant", content: String(chunkIndex) },
+            done: false,
+          })}\n`,
+        );
+        chunkIndex += 1;
+        nextChunk = setTimeout(sendChunk, 35);
+      };
+
+      response.once("close", () => {
+        if (nextChunk) {
+          clearTimeout(nextChunk);
+        }
+      });
+      sendChunk();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const stream = streamFn(
+        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { requestTimeoutMs: 120 } as never,
+      );
+
+      const events: Array<{ type: string }> = [];
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        events.push(event);
+      }
+
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(events.some((event) => event.type === "done")).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("still times out a real native Ollama stream that stops making progress", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.write(
+        `${JSON.stringify({
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: "partial" },
+          done: false,
+        })}\n`,
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const stream = streamFn(
+        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { requestTimeoutMs: 120 } as never,
+      );
+
+      const events: Array<{ type: string }> = [];
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        events.push(event);
+      }
+
+      expect(events.some((event) => event.type === "error")).toBe(true);
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("reports caller aborts during dense native stream processing as aborted", async () => {
     const chunks = [
       ...Array.from({ length: 65 }, (_value, index) => ({
@@ -528,23 +695,13 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
-  it("falls back to CJK-aware usage when the final chunk omits eval counts", async () => {
-    const cjkPrompt = "这是一个测试用的句子呢"; // 11 CJK characters
-    const cjkCompletion = "你好世界测试"; // 6 CJK characters
-    const naivePromptEstimate = Math.round((cjkPrompt.length + "[]".length) / 4);
-    const naiveCompletionEstimate = Math.round(cjkCompletion.length / 4);
-    const expectedInput = Math.max(
-      1,
-      Math.round((estimateStringChars(cjkPrompt) + estimateStringChars("[]")) / 4),
-    );
-    const expectedOutput = Math.max(1, Math.round(estimateStringChars(cjkCompletion) / 4));
-
+  it("uses CJK-aware fallback usage while preserving missing cache provenance", async () => {
     const events = await streamOllamaEvents(
       [
         {
           model: "qwen3.5",
           created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: cjkCompletion },
+          message: { role: "assistant", content: "你好世界测试" },
           done: false,
         },
         {
@@ -553,34 +710,39 @@ describe("createOllamaStreamFn thinking events", () => {
           message: { role: "assistant", content: "" },
           done: true,
           done_reason: "stop",
-          // Intentionally omit prompt_eval_count / eval_count so the stream
-          // uses the local char-estimate fallback (early/native stream end).
         },
       ],
       {},
-      { messages: [{ role: "user", content: cjkPrompt }] } as never,
+      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
     );
 
     const done = events.find((event) => event.type === "done") as {
-      message?: { usage?: { input?: number; output?: number } };
+      message?: {
+        usage?: {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          cacheTelemetry?: { state: string };
+        };
+      };
     };
-    const usage = done?.message?.usage;
-    expect(usage?.input).toBe(expectedInput);
-    expect(usage?.output).toBe(expectedOutput);
-    expect(usage?.input).toBeGreaterThan(naivePromptEstimate * 2);
-    expect(usage?.output).toBeGreaterThan(naiveCompletionEstimate * 2);
+    expect(done?.message?.usage).toMatchObject({
+      input: 12,
+      output: 6,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cacheTelemetry: { state: "unavailable" },
+    });
   });
 
-  it("keeps provider-reported eval counts authoritative over the CJK fallback", async () => {
-    const cjkPrompt = "这是一个测试用的句子呢";
-    const cjkCompletion = "你好世界测试";
-
+  it("keeps provider usage authoritative over the CJK fallback", async () => {
     const events = await streamOllamaEvents(
       [
         {
           model: "qwen3.5",
           created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: cjkCompletion },
+          message: { role: "assistant", content: "你好世界测试" },
           done: false,
         },
         {
@@ -594,27 +756,26 @@ describe("createOllamaStreamFn thinking events", () => {
         },
       ],
       {},
-      { messages: [{ role: "user", content: cjkPrompt }] } as never,
+      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
     );
 
     const done = events.find((event) => event.type === "done") as {
-      message?: { usage?: { input?: number; output?: number } };
+      message?: { usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } } };
     };
-    expect(done?.message?.usage).toMatchObject({ input: 77, output: 19 });
+    expect(done?.message?.usage).toMatchObject({
+      input: 77,
+      output: 19,
+      cacheTelemetry: { state: "unavailable" },
+    });
   });
 
-  it("matches the plain chars/4 heuristic for ASCII-only fallback usage", async () => {
-    const asciiPrompt = "The quick brown fox jumps over the lazy dog";
-    const asciiCompletion = "Hello world";
-    const expectedInput = Math.max(1, Math.round((asciiPrompt.length + "[]".length) / 4));
-    const expectedOutput = Math.max(1, Math.round(asciiCompletion.length / 4));
-
+  it("keeps the existing fallback estimate for ASCII-only usage", async () => {
     const events = await streamOllamaEvents(
       [
         {
           model: "qwen3.5",
           created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: asciiCompletion },
+          message: { role: "assistant", content: "Hello world" },
           done: false,
         },
         {
@@ -626,15 +787,14 @@ describe("createOllamaStreamFn thinking events", () => {
         },
       ],
       {},
-      { messages: [{ role: "user", content: asciiPrompt }] } as never,
+      {
+        messages: [{ role: "user", content: "The quick brown fox jumps over the lazy dog" }],
+      } as never,
     );
 
     const done = events.find((event) => event.type === "done") as {
       message?: { usage?: { input?: number; output?: number } };
     };
-    expect(done?.message?.usage).toMatchObject({
-      input: expectedInput,
-      output: expectedOutput,
-    });
+    expect(done?.message?.usage).toMatchObject({ input: 11, output: 3 });
   });
 });

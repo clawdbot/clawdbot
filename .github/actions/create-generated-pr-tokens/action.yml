@@ -8,12 +8,15 @@ inputs:
   contents-private-key:
     description: GitHub App private key with contents write access.
     required: true
-  pull-request-app-id:
-    description: GitHub App id with pull-request write access.
+  pull-request-client-id:
+    description: GitHub App client id with pull-request write access.
     required: true
   pull-request-private-key:
     description: GitHub App private key with pull-request write access.
     required: true
+  pull-request-contents-permission:
+    description: Optional contents permission for pull-request operations that require repository write access.
+    required: false
 
 outputs:
   contents-token:
@@ -40,8 +43,9 @@ runs:
       id: pull-request-token
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
-        app-id: ${{ inputs.pull-request-app-id }}
+        client-id: ${{ inputs.pull-request-client-id }}
         private-key: ${{ inputs.pull-request-private-key }}
         owner: ${{ github.repository_owner }}
         repositories: ${{ github.event.repository.name }}
+        permission-contents: ${{ inputs.pull-request-contents-permission }}
         permission-pull-requests: write

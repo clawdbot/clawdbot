@@ -923,47 +923,6 @@ describe("gateway tool defaults", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("fails remote approval calls when requester device identity is not persisted", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "ws://127.0.0.1:18789",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = null;
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails remote approval calls when requester device identity readback differs", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = {
-      ...mocks.deviceIdentity,
-      deviceId: "other-device",
-    };
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
   it("does not send the local approval runtime token to gatewayUrl overrides", async () => {
     // Approval runtime tokens are local IPC credentials, not bearer tokens for
     // user-supplied gateway URLs.

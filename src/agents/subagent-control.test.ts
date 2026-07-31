@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
+  buildControlledSubagentRunsReadContext,
   testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
@@ -33,6 +34,7 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -248,6 +250,35 @@ describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
     testing.setDepsForTest();
+  });
+
+  it("rejects follow-up messages for collector runs", async () => {
+    const result = await sendControlledSubagentMessage({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-collector",
+        childSessionKey: "agent:worker:subagent:collector",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "collect",
+        cleanup: "keep",
+        collect: true,
+        createdAt: Date.now(),
+      },
+      message: "change direction",
+    });
+
+    expect(result).toEqual({
+      status: "forbidden",
+      error: "Collector subagents cannot receive follow-up messages; use agents_wait.",
+    });
   });
 
   it("rejects runs controlled by another session", async () => {
@@ -1730,6 +1761,38 @@ describe("steerControlledSubagentRun", () => {
     testing.setDepsForTest();
   });
 
+  it("rejects steering collector runs", async () => {
+    const entry: SubagentRunRecord = {
+      runId: "run-collector",
+      childSessionKey: "agent:worker:subagent:collector",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "collect",
+      cleanup: "keep",
+      collect: true,
+      createdAt: Date.now(),
+    };
+    const result = await steerControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry,
+      message: "change direction",
+    });
+
+    expect(result).toEqual({
+      status: "forbidden",
+      runId: entry.runId,
+      sessionKey: entry.childSessionKey,
+      error: "Collector subagents cannot be steered; use agents_wait or cancel the task.",
+    });
+  });
+
   it("returns an error and clears the restart marker when run remap fails", async () => {
     addSubagentRunForTests({
       runId: "run-steer-old",
@@ -2171,5 +2234,56 @@ describe("listControlledSubagentRuns", () => {
       }
     },
   );
+
+  it("uses one stable snapshot for listing and descendant counts", () => {
+    const now = Date.now();
+    const rootSessionKey = "agent:main:main";
+    const parentSessionKey = "agent:main:subagent:status-parent";
+    addSubagentRunForTests({
+      runId: "run-status-parent",
+      childSessionKey: parentSessionKey,
+      controllerSessionKey: rootSessionKey,
+      requesterSessionKey: rootSessionKey,
+      requesterDisplayKey: rootSessionKey,
+      task: "status parent",
+      cleanup: "keep",
+      createdAt: now - 4_000,
+      startedAt: now - 3_500,
+      endedAt: now - 3_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-child-1",
+      childSessionKey: `${parentSessionKey}:subagent:child-1`,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "status child 1",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const context = buildControlledSubagentRunsReadContext(rootSessionKey);
+
+    addSubagentRunForTests({
+      runId: "run-status-child-2",
+      childSessionKey: `${parentSessionKey}:subagent:child-2`,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "status child 2",
+      cleanup: "keep",
+      createdAt: now - 1_000,
+      startedAt: now - 500,
+    });
+
+    expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
+    expect(context.countPendingDescendantRuns(parentSessionKey)).toBe(1);
+    expect(
+      buildControlledSubagentRunsReadContext(rootSessionKey).countPendingDescendantRuns(
+        parentSessionKey,
+      ),
+    ).toBe(2);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

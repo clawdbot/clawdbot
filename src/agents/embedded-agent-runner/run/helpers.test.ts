@@ -18,24 +18,22 @@ import {
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("preserves prompts verbatim for native model-owned harnesses", () => {
+  it("scrubs the refusal marker for Anthropic transport", () => {
     expect(
       resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: true,
         provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
+  });
+
+  it("keeps non-Anthropic prompts byte-for-byte", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        provider: "openai",
         prompt: refusalTrigger,
       }),
     ).toBe(refusalTrigger);
-  });
-
-  it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: false,
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).not.toContain(refusalTrigger);
   });
 });
 
@@ -273,6 +271,26 @@ describe("buildUsageAgentMetaFields", () => {
     });
 
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
+  it("does not label aggregate attempt usage as last-call usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 497_720,
+      output: 7_485,
+      cacheRead: 1_323_520,
+      total: 1_828_725,
+    });
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      lastRunPromptUsage: undefined,
+    });
+
+    expect(fields.usage?.input).toBe(497_720);
+    expect(fields.lastCallUsage).toBeUndefined();
     expect(fields.promptTokens).toBeUndefined();
   });
 });

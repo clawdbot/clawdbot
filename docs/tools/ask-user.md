@@ -19,7 +19,10 @@ runs do not receive it.
 
 You can answer from any supported conversation surface:
 
-- The web Control UI shows one unified question card.
+- The web Control UI docks a question panel directly above the composer. For
+  multi-question prompts, the panel shows one question at a time and advances
+  through a short stepper. After resolution, the panel closes and the chat
+  keeps only a compact answer summary.
 - Telegram, Discord, and Slack render native buttons for a single-choice,
   single-question prompt.
 - A plain-text reply works on any channel. Reply with a number, an option label,
@@ -28,9 +31,18 @@ You can answer from any supported conversation surface:
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+## Platform behavior
+
+Answers work on every supported conversation surface. The web Control UI uses a
+docked stepper that replaces the composer while expanded; collapsing it restores
+the full composer beneath a slim question bar. iOS, macOS, and Android show
+inline cards; multiple questions stay stacked as an intentional touch-friendly
+idiom. Every platform keeps the question-to-answer summary in the active chat
+timeline without timed eviction, and **Skip** is available everywhere.
+
 Prompts that cannot use native buttons, including multi-question and
-multi-select prompts, degrade to readable text. The Control UI keeps the full
-structured card.
+multi-select prompts, degrade to readable text on channels. The Control UI
+keeps the full structured stepper.
 
 ## Timeout and no answer
 
@@ -40,6 +52,11 @@ The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
+
+Gateway question records include the optional originating `runId`. Clients can
+use it to keep the prompt and its terminal answer summary with the correct agent
+turn, including after reconnecting and recovering the question with
+`question.list` or `question.get`.
 
 ## Tool schema
 
@@ -69,9 +86,7 @@ Example answered result:
   "status": "answered",
   "answers": {
     "answers": {
-      "deploy_target": {
-        "answers": ["Staging (Recommended)"]
-      }
+      "deploy_target": ["Staging (Recommended)"]
     }
   }
 }

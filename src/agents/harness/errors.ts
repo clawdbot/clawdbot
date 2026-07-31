@@ -19,3 +19,24 @@ export class MissingAgentHarnessError extends Error {
 export function isMissingAgentHarnessError(err: unknown): err is MissingAgentHarnessError {
   return err instanceof MissingAgentHarnessError;
 }
+
+/** A harness lost ownership of the session generation before the attempt could start. */
+export class AgentHarnessSessionSupersededError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentHarnessSessionSupersededError";
+  }
+}
+
+/** A model-independent harness preflight failed before an attempt could start. */
+export class AgentHarnessPreflightError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentHarnessPreflightError";
+  }
+}
+
+/** Returns whether fallback would only repeat the same harness preflight failure. */
+export function isAgentHarnessPreflightError(err: unknown): err is AgentHarnessPreflightError {
+  return err instanceof AgentHarnessPreflightError;
+}
