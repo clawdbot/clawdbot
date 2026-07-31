@@ -58,8 +58,26 @@ type CachedDiscovery = {
 };
 
 const discoveryCache = new Map<string, CachedDiscovery>();
+const LLAMA_SERVER_DISCOVERY_CACHE_MAX_ENTRIES = 100;
 const LLAMA_SERVER_ROUTER_PROPS_MAX_MODELS = 200;
 const LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY = 8;
+
+function cacheDiscovery(key: string, entry: CachedDiscovery, now: number): void {
+  for (const [cachedKey, cached] of discoveryCache) {
+    if (cached.expiresAt <= now) {
+      discoveryCache.delete(cachedKey);
+    }
+  }
+  discoveryCache.delete(key);
+  discoveryCache.set(key, entry);
+  while (discoveryCache.size > LLAMA_SERVER_DISCOVERY_CACHE_MAX_ENTRIES) {
+    const oldest = discoveryCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    discoveryCache.delete(oldest.value);
+  }
+}
 
 export function clearLlamaServerDiscoveryCacheForTests(): void {
   discoveryCache.clear();
@@ -184,8 +202,11 @@ export async function discoverLlamaServer(params: {
     ? 0
     : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
   const cached = discoveryCache.get(endpoint.origin);
-  if (cacheTtlMs > 0 && cached && cached.expiresAt > Date.now()) {
-    return cached.result;
+  if (cacheTtlMs > 0 && cached) {
+    if (cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+    discoveryCache.delete(endpoint.origin);
   }
 
   const timeoutMs = params.timeoutMs ?? LLAMA_SERVER_DISCOVERY_TIMEOUT_MS;
@@ -324,7 +345,7 @@ export async function discoverLlamaServer(params: {
   const fetchedAt = Date.now();
   const result = { kind: "success", endpoint, health, models, fetchedAt } as const;
   if (cacheTtlMs > 0) {
-    discoveryCache.set(endpoint.origin, { result, expiresAt: fetchedAt + cacheTtlMs });
+    cacheDiscovery(endpoint.origin, { result, expiresAt: fetchedAt + cacheTtlMs }, fetchedAt);
   }
   return result;
 }

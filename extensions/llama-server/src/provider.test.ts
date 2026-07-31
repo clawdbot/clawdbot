@@ -211,6 +211,34 @@ describe("llama-server provider catalog", () => {
     expect(resolveLlamaServerDynamicModel(secondCtx)?.name).toBe("second scope");
   });
 
+  it("bounds dynamic model snapshots by scope", async () => {
+    discoverMock.mockResolvedValue(success());
+    const contexts = Array.from(
+      { length: 101 },
+      (_, index) =>
+        ({
+          config: {},
+          provider: "llama-server",
+          modelId: "org/model:Q4",
+          modelRegistry: {},
+          agentRuntimeId: `runtime-${index}`,
+          providerConfig: {
+            baseUrl: "http://localhost:8080/v1",
+            api: "openai-completions",
+          },
+        }) as unknown as ProviderPrepareDynamicModelContext,
+    );
+
+    for (const ctx of contexts) {
+      await prepareLlamaServerDynamicModels(ctx);
+    }
+
+    expect(resolveLlamaServerDynamicModel(contexts[0]!)).toBeUndefined();
+    expect(resolveLlamaServerDynamicModel(contexts.at(-1)!)).toMatchObject({
+      id: "org/model:Q4",
+    });
+  });
+
   it("refreshes and resolves dynamic model ids containing slashes", async () => {
     discoverMock.mockResolvedValue(success());
     const ctx = {

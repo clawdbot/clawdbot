@@ -18,6 +18,19 @@ import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig, type LlamaServerDiscoveredModel } from "./models.js";
 
 const dynamicModels = new Map<string, ProviderRuntimeModel[]>();
+const LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES = 100;
+
+function cacheDynamicModels(key: string, models: ProviderRuntimeModel[]): void {
+  dynamicModels.delete(key);
+  dynamicModels.set(key, models);
+  while (dynamicModels.size > LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES) {
+    const oldest = dynamicModels.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    dynamicModels.delete(oldest.value);
+  }
+}
 
 function dynamicModelScopeKey(
   ctx: Pick<
@@ -169,7 +182,7 @@ export async function prepareLlamaServerDynamicModels(
     cacheTtlMs: 0,
   });
   const key = dynamicModelScopeKey(ctx);
-  dynamicModels.set(
+  cacheDynamicModels(
     key,
     discovery.kind === "success"
       ? discovery.models.map((model) => toRuntimeModel(model, ctx.providerConfig ?? {}))

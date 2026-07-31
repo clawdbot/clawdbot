@@ -310,4 +310,35 @@ describe("llama-server discovery", () => {
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });
+
+  it("bounds cached endpoint discovery", async () => {
+    const guard = vi.fn(async (params: Parameters<LlamaServerFetchGuard>[0]) => ({
+      response: params.url.endsWith("/health") ? json({ status: "ok" }) : json({ data: [] }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    })) as unknown as LlamaServerFetchGuard;
+
+    for (let index = 0; index <= 100; index += 1) {
+      await discoverLlamaServer({
+        baseUrl: `http://localhost:${10_000 + index}`,
+        apiKey: "custom-local",
+        fetchGuard: guard,
+      });
+    }
+    expect(guard).toHaveBeenCalledTimes(202);
+
+    await discoverLlamaServer({
+      baseUrl: "http://localhost:10100",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+    });
+    expect(guard).toHaveBeenCalledTimes(202);
+
+    await discoverLlamaServer({
+      baseUrl: "http://localhost:10000",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+    });
+    expect(guard).toHaveBeenCalledTimes(204);
+  });
 });
