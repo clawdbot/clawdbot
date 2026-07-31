@@ -54,6 +54,7 @@ function props(overrides: Partial<ClawLifecycleViewProps> = {}): ClawLifecycleVi
     lifecycleAvailable: true,
     mutationAvailable: true,
     busy: false,
+    applying: false,
     error: null,
     query: "finance",
     entries: [],

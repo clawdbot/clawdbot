@@ -468,6 +468,7 @@ class ClawsPage extends OpenClawLightDomElement {
                 lifecycleAvailable: this.lifecycleAvailable,
                 mutationAvailable: this.mutationAvailable,
                 busy: this.loading || this.operationBusy,
+                applying: this.operationBusy,
                 error: this.error,
                 query: this.query,
                 entries: this.entries,

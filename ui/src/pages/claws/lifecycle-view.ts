@@ -14,6 +14,7 @@ export type ClawLifecycleViewProps = {
   lifecycleAvailable: boolean;
   mutationAvailable: boolean;
   busy: boolean;
+  applying: boolean;
   error: string | null;
   query: string;
   entries: readonly ClawCatalogEntry[];
@@ -85,6 +86,7 @@ function renderCatalog(props: ClawLifecycleViewProps) {
                         type="button"
                         role="listitem"
                         aria-pressed=${entry.packageName === props.detail?.packageName}
+                        ?disabled=${props.busy}
                         @click=${() => props.onSelectCatalog(entry)}
                       >
                         <span>
@@ -244,6 +246,7 @@ function renderPlan(props: ClawLifecycleViewProps) {
             <input
               type="checkbox"
               .checked=${props.removeUnused}
+              ?disabled=${props.busy}
               @change=${(event: Event) =>
                 props.onRemoveUnusedChange((event.currentTarget as HTMLInputElement).checked)}
             />
@@ -255,6 +258,7 @@ function renderPlan(props: ClawLifecycleViewProps) {
             <input
               type="checkbox"
               .checked=${props.riskAcknowledged}
+              ?disabled=${props.busy}
               @change=${(event: Event) =>
                 props.onRiskAcknowledgedChange((event.currentTarget as HTMLInputElement).checked)}
             />
@@ -266,7 +270,7 @@ function renderPlan(props: ClawLifecycleViewProps) {
         : nothing}
       <div class="claws-lifecycle__actions">
         <button class="btn primary" type="button" ?disabled=${!canApply} @click=${props.onApply}>
-          ${props.busy ? t("clawsPage.actions.applying") : t("clawsPage.actions.apply")}
+          ${props.applying ? t("clawsPage.actions.applying") : t("clawsPage.actions.apply")}
         </button>
         <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCancelPlan}>
           ${t("common.cancel")}
