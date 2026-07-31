@@ -30,6 +30,7 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_TUI_PTY_LOG_PATH: logPath,
           OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
           OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "5000",
+          OPENCLAW_TUI_PTY_CTRL_C_EXIT_WINDOW_MS: "5000",
           TERM_PROGRAM: "Apple_Terminal",
           NO_COLOR: undefined,
         },

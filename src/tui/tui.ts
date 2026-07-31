@@ -102,6 +102,7 @@ const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
   submitBurstWindowMs?: number;
+  ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
   boundGateway?: {
@@ -1641,6 +1642,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       lastCtrlCAt,
       exitRequested,
       wasDisconnected,
+      exitWindowMs: opts.ctrlCExitWindowMs,
     });
     if (decision.action === "force-exit") {
       forceExit();

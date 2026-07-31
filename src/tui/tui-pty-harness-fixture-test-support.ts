@@ -36,6 +36,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const submitBurstWindowMs = Number(
         process.env.OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS ?? 0,
       );
+      const ctrlCExitWindowMs = Number(process.env.OPENCLAW_TUI_PTY_CTRL_C_EXIT_WINDOW_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
@@ -586,6 +587,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           historyLimit: 5,
           title: "openclaw tui pty fixture",
           submitBurstWindowMs: submitBurstWindowMs > 0 ? submitBurstWindowMs : undefined,
+          ctrlCExitWindowMs: ctrlCExitWindowMs > 0 ? ctrlCExitWindowMs : undefined,
           onSubmitBurstCaptured: (value) => record("submitBurstCaptured", { value }),
         });
       }
