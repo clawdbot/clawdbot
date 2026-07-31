@@ -67,12 +67,16 @@ export function toFeishuSendResult(
   response: FeishuMessageApiResponse,
   chatId: string,
   kind?: MessageReceiptPartKind,
+  errorPrefix = "Feishu send failed",
 ): {
   messageId: string;
   chatId: string;
   receipt: MessageReceipt;
 } {
-  const messageId = response.data?.message_id ?? "unknown";
+  const messageId = response.data?.message_id?.trim();
+  if (!messageId) {
+    throw new Error(`${errorPrefix}: no message_id returned`);
+  }
   return {
     messageId,
     chatId,
