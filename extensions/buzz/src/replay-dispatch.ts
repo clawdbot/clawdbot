@@ -82,7 +82,7 @@ export function createBuzzReplayDispatchQueue(params: {
       drain();
       return "accepted";
     }
-    if (pending.length - pendingHead >= BUZZ_REPLAY_DISPATCH_MAX_PENDING) {
+    if (availableCapacity() <= 0) {
       return "overflow";
     }
     pending.push(task);

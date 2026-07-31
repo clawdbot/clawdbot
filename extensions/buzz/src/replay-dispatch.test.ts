@@ -49,7 +49,7 @@ describe("Buzz replay dispatch capacity reservations", () => {
     expect(queue.enqueue(blockTask())).toBe("overflow");
   });
 
-  it("keeps reserved slots admissible after later live events queue up", async () => {
+  it("withholds reserved slots from later live events", async () => {
     const { queue, releases, blockTask } = createBlockedQueue();
     const pageSize = 100;
     for (
@@ -68,7 +68,7 @@ describe("Buzz replay dispatch capacity reservations", () => {
     expect(reservation).toBeDefined();
 
     for (let index = 0; index < pageSize; index += 1) {
-      expect(queue.enqueue(blockTask())).toBe("accepted");
+      expect(queue.enqueue(blockTask())).toBe("overflow");
     }
     const admissions = new Set<string>();
     for (let index = 0; index < pageSize; index += 1) {
@@ -123,6 +123,17 @@ describe("Buzz replay dispatch capacity reservations", () => {
     void queue.close();
 
     expect(await reservationPromise).toBeUndefined();
+    expect(await queue.reserveCapacity(1)).toBeUndefined();
+  });
+
+  it("rejects work from a held reservation after the queue closes", async () => {
+    const { queue, blockTask } = createBlockedQueue();
+    const reservation = await queue.reserveCapacity(2);
+
+    await queue.close();
+
+    expect(reservation?.enqueue(blockTask())).toBe("closed");
+    reservation?.release();
     expect(await queue.reserveCapacity(1)).toBeUndefined();
   });
 });
