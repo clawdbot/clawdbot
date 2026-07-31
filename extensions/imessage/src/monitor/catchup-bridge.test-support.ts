@@ -4,6 +4,7 @@ import { getIMessageRuntime } from "../runtime.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import {
+  advanceIMessageCatchupCursor,
   IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
   resolveCatchupConfig,
@@ -446,5 +447,287 @@ describe("runIMessageCatchup", () => {
 
     expect(summary.replayed).toBe(1);
     expect(dispatched).toEqual(["g-600"]);
+  });
+
+  it("recovers the oldest rows when one chat's backlog exceeds perRunLimit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:30:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-05-08T11:31:00Z");
+    const backlog = Array.from({ length: 100 }, (_, index) =>
+      makeRow({
+        id: index + 1,
+        guid: `g-${index + 1}`,
+        chat_id: 1,
+        created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
+      }),
+    );
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:59:00.000Z" }] };
+      }
+      if (method === "messages.history") {
+        const p = params as { limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        return {
+          messages: backlog
+            .filter((row) => Date.parse(String(row.created_at)) >= startMs)
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const runCatchup = async () =>
+      await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+      });
+
+    const first = await runCatchup();
+    expect(first.fullyCaughtUp).toBe(false);
+    expect(first.cursorAfter.lastSeenRowid).toBe(50);
+    expect(dispatched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+
+    const second = await runCatchup();
+    expect(second.fullyCaughtUp).toBe(true);
+    expect(second.cursorAfter.lastSeenRowid).toBe(100);
+    expect(dispatched).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+  });
+
+  it("keeps live cursor eligibility when a chat backlog exceeds the per-chat history budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const warnings: string[] = [];
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:30:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-05-08T11:31:00Z");
+    const backlog = Array.from({ length: 520 }, (_, index) =>
+      makeRow({
+        id: index + 1,
+        guid: `g-${index + 1}`,
+        chat_id: 1,
+        created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
+      }),
+    );
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:59:00.000Z" }] };
+      }
+      if (method === "messages.history") {
+        const p = params as { limit: number };
+        return {
+          messages: backlog
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 500, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+      runtime: { log: (msg) => warnings.push(msg) },
+    });
+
+    expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(true);
+    expect(warnings.filter((msg) => /cannot be recovered|unrecoverable/.test(msg))).toEqual([]);
+  });
+
+  it("delivers interleaved chats without claiming loss when one chat fills the history budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const warnings: string[] = [];
+    const config = resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 });
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:00:00Z"),
+      lastSeenRowid: 0,
+    });
+    const epochMs = Date.parse("2026-05-08T11:01:00Z");
+    const rowMs = (rowid: number) => epochMs + rowid * 1_000;
+    const db = [
+      ...Array.from({ length: 100 }, (_, index) => index + 1).map((rowid) =>
+        makeRow({
+          id: rowid,
+          guid: `g-${rowid}`,
+          chat_id: 2,
+          created_at: new Date(rowMs(rowid)).toISOString(),
+        }),
+      ),
+      ...Array.from({ length: 500 }, (_, index) => index + 101).map((rowid) =>
+        makeRow({
+          id: rowid,
+          guid: `g-${rowid}`,
+          chat_id: 1,
+          created_at: new Date(rowMs(rowid)).toISOString(),
+        }),
+      ),
+    ];
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return {
+          chats: [
+            { id: 1, last_message_at: new Date(rowMs(600)).toISOString() },
+            { id: 2, last_message_at: new Date(rowMs(100)).toISOString() },
+          ],
+        };
+      }
+      if (method === "messages.history") {
+        const p = params as { chat_id: number; limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        return {
+          messages: db
+            .filter(
+              (row) => row.chat_id === p.chat_id && Date.parse(String(row.created_at)) >= startMs,
+            )
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const runCatchup = async () =>
+      await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config,
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+        runtime: { log: (msg) => warnings.push(msg) },
+      });
+
+    const first = await runCatchup();
+    expect(dispatched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(first.cursorAfter.lastSeenRowid).toBe(50);
+
+    let last = first;
+    for (let pass = 0; pass < 20 && !last.fullyCaughtUp; pass++) {
+      last = await runCatchup();
+    }
+    expect(last.fullyCaughtUp).toBe(true);
+    expect(dispatched).toEqual(Array.from({ length: 600 }, (_, index) => index + 1));
+    expect(last.cursorAfter.lastSeenRowid).toBe(600);
+    expect(warnings.filter((msg) => /cannot be recovered|unrecoverable/.test(msg))).toEqual([]);
+  });
+
+  it("delivers the downtime backlog on the next startup after a full page and live traffic", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const warnings: string[] = [];
+    const config = resolveCatchupConfig({ enabled: true, perRunLimit: 500, maxAgeMinutes: 60 });
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-05-08T11:00:00Z"),
+      lastSeenRowid: 0,
+    });
+    const epochMs = Date.parse("2026-05-08T11:01:00Z");
+    const rowMs = (rowid: number) => epochMs + rowid * 1_000;
+    const db: Array<Record<string, unknown>> = [];
+    const addRows = (from: number, to: number, chatId: number) => {
+      for (let rowid = from; rowid <= to; rowid++) {
+        db.push(
+          makeRow({
+            id: rowid,
+            guid: `g-${rowid}`,
+            chat_id: chatId,
+            created_at: new Date(rowMs(rowid)).toISOString(),
+          }),
+        );
+      }
+    };
+    addRows(1, 500, 1);
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        const latest = new Map<number, number>();
+        for (const row of db) {
+          const chatId = row.chat_id as number;
+          const at = Date.parse(String(row.created_at));
+          latest.set(chatId, Math.max(latest.get(chatId) ?? at, at));
+        }
+        return {
+          chats: [...latest].map(([id, at]) => ({
+            id,
+            last_message_at: new Date(at).toISOString(),
+          })),
+        };
+      }
+      if (method === "messages.history") {
+        const p = params as { chat_id: number; limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        return {
+          messages: db
+            .filter(
+              (row) => row.chat_id === p.chat_id && Date.parse(String(row.created_at)) >= startMs,
+            )
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const runStartupCatchup = async () => {
+      const summary = await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config,
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+        runtime: { log: (msg) => warnings.push(msg) },
+      });
+      return { summary, liveCursorEnabled: summary.querySucceeded && summary.fullyCaughtUp };
+    };
+
+    const startup = await runStartupCatchup();
+    expect(dispatched).toEqual(Array.from({ length: 500 }, (_, index) => index + 1));
+    expect(warnings.filter((msg) => /cannot be recovered|unrecoverable/.test(msg))).toEqual([]);
+    expect(startup.liveCursorEnabled).toBe(true);
+
+    addRows(501, 1_200, 1);
+    for (let rowid = 501; rowid <= 1_200; rowid++) {
+      if (startup.liveCursorEnabled) {
+        await advanceIMessageCatchupCursor(
+          "default",
+          { lastSeenMs: rowMs(rowid), lastSeenRowid: rowid },
+          config,
+        );
+      }
+    }
+
+    addRows(1_201, 1_260, 2);
+    dispatched.length = 0;
+    const restart = await runStartupCatchup();
+    expect(dispatched).toEqual(Array.from({ length: 60 }, (_, index) => index + 1_201));
+    expect(restart.summary.cursorAfter.lastSeenRowid).toBe(1_260);
+    expect(restart.summary.fullyCaughtUp).toBe(true);
   });
 });
