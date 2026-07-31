@@ -129,6 +129,27 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
   });
 });
 
+describe("OpenClaw launchd label approvals", () => {
+  it.each([
+    [
+      "launchctl unload ~/Library/LaunchAgents/ai.open?law.gateway.plist",
+      ["launchctl", "unload", "~/Library/LaunchAgents/ai.open?law.gateway.plist"],
+    ],
+    [
+      "launchctl bootout gui/$UID/ai.open?law.work",
+      ["launchctl", "bootout", "gui/$UID/ai.open?law.work"],
+    ],
+  ] as Array<[string, string[]]>)("recognizes current launchd label glob: %s", (command, argv) => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        platform: "darwin",
+        segments: [{ raw: command, argv }],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("OpenClaw lifecycle runner parsing edges", () => {
   it("recognizes the Windows PowerShell shim", () => {
     const shim = String.raw`C:\Users\Alice\AppData\Roaming\npm\openclaw.ps1`;

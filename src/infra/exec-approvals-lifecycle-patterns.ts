@@ -167,6 +167,16 @@ export function negativePowerShellProcessNameSelectorExcludesAll(
   return false;
 }
 
+function matchesCurrentOpenClawLaunchdGlob(pattern: string): boolean {
+  const basename = pattern.split(/[/\\]/u).at(-1) ?? "";
+  const labelParts = basename.split(".");
+  return (
+    labelParts.length >= 3 &&
+    globPatternToRegExp(labelParts[0] ?? "").test("ai") &&
+    globPatternToRegExp(labelParts[1] ?? "").test("openclaw")
+  );
+}
+
 /** Return true when a system service/unit glob can select an OpenClaw unit. */
 export function matchesOpenClawUnitPattern(value: string | undefined): boolean {
   const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
@@ -174,14 +184,19 @@ export function matchesOpenClawUnitPattern(value: string | undefined): boolean {
     return true;
   }
   return (
-    /[*?[{]/u.test(pattern) &&
-    [
-      "openclaw-gateway.service",
-      "openclaw.service",
-      "com.openclaw.gateway",
-      "com.openclaw.gateway.plist",
-      "~/Library/LaunchAgents/com.openclaw.gateway.plist",
-      "/Users/alice/Library/LaunchAgents/com.openclaw.gateway.plist",
-    ].some((unit) => globPatternToRegExp(pattern).test(unit))
+    (/[*?[{]/u.test(pattern) &&
+      [
+        "openclaw-gateway.service",
+        "openclaw.service",
+        "ai.openclaw.gateway",
+        "ai.openclaw.gateway.plist",
+        "~/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        "/Users/alice/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        "com.openclaw.gateway",
+        "com.openclaw.gateway.plist",
+        "~/Library/LaunchAgents/com.openclaw.gateway.plist",
+        "/Users/alice/Library/LaunchAgents/com.openclaw.gateway.plist",
+      ].some((unit) => globPatternToRegExp(pattern).test(unit))) ||
+    matchesCurrentOpenClawLaunchdGlob(pattern)
   );
 }
