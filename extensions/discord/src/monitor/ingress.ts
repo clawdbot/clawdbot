@@ -140,8 +140,12 @@ export function createDiscordIngressMonitor(params: {
     },
     pollIntervalMs: DISCORD_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
-      // Discord previously pruned before every enqueue rather than on a timed cadence.
-      pruneIntervalMs: 0,
+      // Prune on the standard hourly cadence (CHANNEL_INGRESS_RETENTION_DEFAULTS).
+      // The old pruneIntervalMs: 0 — a legacy-behavior carryover from the durable
+      // ingress migration — ran a write transaction with unindexed sorts on the
+      // shared state DB ahead of EVERY inbound Discord message: pre-dispatch,
+      // pre-typing latency that grew with retained rows. Slack already prunes
+      // hourly; the replay-guard TTLs and caps below are unchanged in effect.
       completedMaxEntries: 5_000,
       failedMaxEntries: 5_000,
     },
