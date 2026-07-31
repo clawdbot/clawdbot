@@ -25,7 +25,9 @@ final class OnboardingAISetupModel {
             OnboardingController.shared.busyReason = if self.phase == .testing {
                 "OpenClaw is testing your AI connection."
             } else if self.activeAuthOption != nil {
-                "OpenClaw is completing provider sign-in."
+                self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else {
                 nil
             }
@@ -37,14 +39,19 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var detectedPrepareOptions: [PrepareOption]?
+    private(set) var prepareAvailable = false
     private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
+    private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
     private(set) var authBusy = false {
         didSet {
             if self.activeAuthOption != nil {
-                OnboardingController.shared.busyReason = "OpenClaw is completing provider sign-in."
+                OnboardingController.shared.busyReason = self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else if self.phase != .testing {
                 OnboardingController.shared.busyReason = nil
             }
@@ -76,6 +83,17 @@ final class OnboardingAISetupModel {
 
     var selectedManualProvider: ManualProvider? {
         self.manualProviders.first { $0.id == self.manualProviderID }
+    }
+
+    var prepareOptions: [PrepareOption] {
+        guard self.prepareAvailable else { return [] }
+        return Self.prepareOptions(
+            candidates: self.candidates,
+            advertisedOptions: self.detectedPrepareOptions)
+    }
+
+    var isPreparingModel: Bool {
+        self.providerWizardKind == .prepare
     }
 
     var connected: Bool {
@@ -164,6 +182,7 @@ final class OnboardingAISetupModel {
         let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
@@ -609,8 +628,11 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
+        self.detectedPrepareOptions = nil
+        self.prepareAvailable = false
         self.candidatePresentation = [:]
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authStep = nil
         self.authError = nil
         self.authBusy = false
@@ -653,15 +675,27 @@ extension OnboardingAISetupModel {
         await self.detectAndAutoConnect(context: context)
     }
 
-    private func scheduleDetection() {
+    private func scheduleDetection(
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil)
+    {
         guard let context = captureAttemptContext() else {
             self.failDetectionForMissingRoute()
             return
         }
-        Task { await self.detectAndAutoConnect(context: context) }
+        Task {
+            await self.detectAndAutoConnect(
+                context: context,
+                preparedChoiceID: preparedChoiceID,
+                preparedProviderLabel: preparedProviderLabel)
+        }
     }
 
-    private func detectAndAutoConnect(context: AttemptContext) async {
+    private func detectAndAutoConnect(
+        context: AttemptContext,
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil) async
+    {
         // Gateway awaits can yield to a route reset or cancellation. Revalidate
         // before every activation side effect so stale attempts cannot hand off.
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
@@ -681,12 +715,21 @@ extension OnboardingAISetupModel {
                   !Task.isCancelled
             else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
+            let prepareAvailable = await self.gateway.supportsServerMethod(
+                "openclaw.setup.prepare.start",
+                ifCurrentServerLease: lease) == true
+            guard await self.gateway.isCurrentServerLease(lease),
+                  self.isCurrentAttempt(context),
+                  !Task.isCancelled
+            else { return }
             self.serverLease = lease
+            self.prepareAvailable = prepareAvailable
             self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
                     (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
@@ -732,6 +775,24 @@ extension OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
+            if let preparedChoiceID {
+                // Detection kinds encode the provider-auth choice ID, while
+                // PrepareOption.brandId owns the model-ref namespace.
+                let preparedKind = "provider-auto:\(preparedChoiceID)"
+                if let prepared = candidates.first(where: {
+                    $0.kind == preparedKind && $0.credentials != false
+                }) {
+                    await self.activate(kind: prepared.kind, context: context)
+                } else {
+                    let label = preparedProviderLabel ?? preparedChoiceID
+                    self.detectError = Self.failure(
+                        label: label,
+                        status: "unavailable",
+                        error: "\(label) did not expose a usable local model. Review setup, then retry.")
+                    self.showManualEntry = !self.manualProviders.isEmpty
+                }
+                return
+            }
             if let first = autoCandidateAfter(kind: nil) {
                 // Candidate found: connect without asking. Switching later
                 // stays one click away while the test runs server-side.
@@ -1076,8 +1137,27 @@ extension OnboardingAISetupModel {
 
 extension OnboardingAISetupModel {
     func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false),
+            kind: .prepare)
+    }
+
+    private func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
         guard !self.isBusy, self.activeAuthOption == nil, let serverLease else { return }
         self.activeAuthOption = option
+        self.providerWizardKind = kind
         self.authStep = nil
         self.authError = nil
         self.authText = ""
@@ -1091,7 +1171,7 @@ extension OnboardingAISetupModel {
         Task {
             do {
                 let data = try await self.gateway.request(
-                    method: "openclaw.setup.auth.start",
+                    method: kind.startMethod,
                     params: [
                         "sessionId": AnyCodable(authSessionID),
                         "authChoice": AnyCodable(option.id),
@@ -1276,9 +1356,14 @@ extension OnboardingAISetupModel {
             return
         }
         if done || status == "done" {
-            self.providerAuthReconciliationPending = true
+            let preparedProvider = self.providerWizardKind == .prepare
+                ? self.activeAuthOption.map { (id: $0.id, label: $0.label) }
+                : nil
+            self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
-            self.scheduleDetection()
+            self.scheduleDetection(
+                preparedChoiceID: preparedProvider?.id,
+                preparedProviderLabel: preparedProvider?.label)
             return
         }
         self.authStep = step
@@ -1296,6 +1381,13 @@ extension OnboardingAISetupModel {
         self.authSelection = max(0, options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
         } ?? 0)
+        // Gateway-executed steps render progress and expose no input control, so
+        // no user action would ever ask for the next frame. Keep polling; the
+        // session long-polls until the next update or the terminal result, so a
+        // download reports live instead of freezing on its first frame.
+        if let step, wizardStepExecutor(step) == "gateway" {
+            self.advanceProviderAuth(stepID: nil, value: nil)
+        }
     }
 
     private func reconcileProviderAuthAfterUnknownOutcome(
@@ -1343,6 +1435,7 @@ extension OnboardingAISetupModel {
 
     private func clearProviderAuth() {
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authSessionID = nil
         self.authStep = nil
         self.authError = nil

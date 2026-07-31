@@ -52,7 +52,16 @@
       "docsPath": "/channels/raft",
       "docsLabel": "raft",
       "blurb": "Raft CLI wake bridge for human and agent collaboration.",
-      "order": 72
+      "order": 72,
+      "setup": {
+        "fields": [
+          {
+            "key": "profile",
+            "kind": "string",
+            "cli": { "flags": "--profile <profile>", "description": "Raft CLI profile" }
+          }
+        ]
+      }
     },
     "release": {
       "publishToClawHub": true,

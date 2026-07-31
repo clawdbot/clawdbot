@@ -14,6 +14,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import {
@@ -166,7 +170,7 @@ function registerStatusCodexHarness(): void {
 function saveStatusTestAuthProfile(params: {
   dir: string;
   profileId: string;
-  provider: "openai" | "openai-codex" | "anthropic";
+  provider: "openai" | "anthropic";
 }): void {
   saveStatusTestAuthProfiles({
     dir: params.dir,
@@ -176,7 +180,7 @@ function saveStatusTestAuthProfile(params: {
 
 function saveStatusTestAuthProfiles(params: {
   dir: string;
-  profiles: Array<{ profileId: string; provider: "openai" | "openai-codex" | "anthropic" }>;
+  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
 }): void {
   const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
@@ -186,7 +190,7 @@ function saveStatusTestAuthProfiles(params: {
       profiles: Object.fromEntries(
         params.profiles.map((profile) => [
           profile.profileId,
-          profile.provider === "openai" || profile.provider === "openai-codex"
+          profile.provider === "openai"
             ? {
                 type: "oauth",
                 provider: profile.provider,
@@ -235,7 +239,7 @@ afterEach(() => {
   });
 });
 
-function writeTranscriptUsageLog(params: {
+async function writeTranscriptUsageLog(params: {
   dir: string;
   agentId: string;
   sessionId: string;
@@ -247,26 +251,33 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
-  const logPath = path.join(
+  const storePath = path.join(
     params.dir,
     ".openclaw",
     "agents",
     params.agentId,
     "sessions",
-    `${params.sessionId}.jsonl`,
+    "sessions.json",
   );
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  fs.writeFileSync(
-    logPath,
-    JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        model: "claude-opus-4-5",
-        usage: params.usage,
-      },
-    }),
-    "utf-8",
+  const sessionKey = `agent:${params.agentId}:main`;
+  await replaceSessionEntry(
+    { agentId: params.agentId, sessionKey, storePath },
+    { sessionId: params.sessionId, updatedAt: Date.now() },
+  );
+  await persistSessionTranscriptTurn(
+    { agentId: params.agentId, sessionId: params.sessionId, sessionKey, storePath },
+    {
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-5",
+            usage: params.usage,
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    },
   );
 }
 
@@ -623,7 +634,7 @@ describe("buildStatusReply subagent summary", () => {
   it("uses transcript usage fallback in /status output", async () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
-      writeTranscriptUsageLog({
+      await writeTranscriptUsageLog({
         dir,
         agentId: "main",
         sessionId,
@@ -1218,72 +1229,6 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
-    registerStatusCodexHarness();
-    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 9 }],
-        },
-      ],
-    });
-
-    await withTempHome(
-      async (dir) => {
-        saveStatusTestAuthProfile({
-          dir,
-          profileId: "openai-codex:legacy",
-          provider: "openai-codex",
-        });
-
-        await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-          sessionEntry: {
-            sessionId: "sess-status-codex-legacy-profile",
-            updatedAt: 0,
-            authProfileOverride: "openai-codex:legacy",
-          },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
-          modelAuthOverride: "oauth",
-          activeModelAuthOverride: "oauth",
-        });
-
-        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai"),
-        );
-        expect(providerUsageCall?.[0]?.auth).toEqual([
-          {
-            ...expectedCodexRuntimeUsageAuth[0],
-            authProfileId: "openai-codex:legacy",
-          },
-        ]);
-      },
-      { skipSessionCleanup: true, skipHomeCleanup: true },
-    );
-  });
-
   it("loads Codex synthetic usage when no local OpenAI profile label exists", async () => {
     registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -1451,9 +1396,12 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -1514,9 +1462,12 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -2017,9 +1968,12 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

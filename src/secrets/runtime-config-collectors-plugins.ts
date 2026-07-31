@@ -51,6 +51,7 @@ export function collectPluginConfigAssignments(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.context.env,
   );
   const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
     .filter(([, origin]) => origin === "bundled")

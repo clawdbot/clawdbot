@@ -4,6 +4,7 @@ import { isErrno } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";
 
 const PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"];
+export const LOOPBACK_PORT_PROBE_HOSTS = ["127.0.0.1"] as const;
 
 /** Opens and closes a temporary listener to verify that a port can be bound. */
 export async function tryListenOnPort(params: {
@@ -48,10 +49,13 @@ async function probePortOnHost(port: number, host: string): Promise<PortUsageSta
   }
 }
 
-/** Checks all supported local address families without resolving listener diagnostics. */
-export async function probePortUsage(port: number): Promise<PortUsageStatus> {
+/** Checks selected local addresses without resolving listener diagnostics. */
+export async function probePortUsage(
+  port: number,
+  probeHosts: readonly string[] = PORT_PROBE_HOSTS,
+): Promise<PortUsageStatus> {
   let sawUnknown = false;
-  for (const host of PORT_PROBE_HOSTS) {
+  for (const host of probeHosts) {
     const result = await probePortOnHost(port, host);
     if (result === "busy") {
       return "busy";

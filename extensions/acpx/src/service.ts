@@ -312,7 +312,11 @@ async function reapOpenAcpxProcessLeases(params: {
     terminatedPids.push(...result.terminatedPids);
     await params.leaseStore.markState(
       lease.leaseId,
-      result.terminatedPids.length > 0 ? "closed" : "lost",
+      result.skippedReason === "process-list-unavailable"
+        ? "open"
+        : result.terminatedPids.length > 0
+          ? "closed"
+          : "lost",
     );
   }
   return { inspectedPids, terminatedPids };

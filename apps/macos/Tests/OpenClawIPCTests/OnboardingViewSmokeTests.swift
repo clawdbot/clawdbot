@@ -32,6 +32,15 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
+    @Test func `discovered gateway summary uses localized runtime strings`() {
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
+                "1 gateway found on your network — click to choose it.")
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
+                "2 gateways found on your network — click to choose one.")
+    }
+
     @Test func `onboarding view builds body`() {
         let state = AppState(preview: true)
         let view = OnboardingView(
@@ -71,6 +80,25 @@ struct OnboardingViewSmokeTests {
 
         #expect(short == 409)
         #expect(short < preferred)
+    }
+
+    @Test func `permissions page scrolls when the onboarding window is short`() throws {
+        let state = AppState(preview: true)
+        let view = OnboardingView(state: state)
+        let hosting = NSHostingView(rootView: view.permissionsPage())
+        let contentHeight = OnboardingView.contentHeight(
+            for: OnboardingView.minimumWindowHeight,
+            usesCompactHero: false)
+        hosting.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: OnboardingView.windowWidth,
+            height: contentHeight)
+        hosting.layoutSubtreeIfNeeded()
+
+        let scrollView = try #require(Self.firstDescendant(of: NSScrollView.self, in: hosting))
+        #expect(contentHeight == 303)
+        #expect(scrollView.documentView != nil)
     }
 
     @Test func `local page order includes memory import only while eligible`() {
@@ -588,5 +616,13 @@ struct OnboardingViewSmokeTests {
         #expect(Array(Capability.importanceOrdered.prefix(3))
             == [.appleScript, .accessibility, .screenRecording])
         #expect(Capability.importanceOrdered.last == Capability.location)
+    }
+
+    private static func firstDescendant<T: NSView>(of type: T.Type, in view: NSView) -> T? {
+        if let match = view as? T { return match }
+        for child in view.subviews {
+            if let match = self.firstDescendant(of: type, in: child) { return match }
+        }
+        return nil
     }
 }

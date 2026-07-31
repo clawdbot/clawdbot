@@ -264,7 +264,7 @@ export async function resolveSenderCommandAuthorization(
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,

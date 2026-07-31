@@ -288,6 +288,8 @@ export async function applyResetModelOverride(params: {
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  params.sessionCtx.commandText = cleanedBody;
+  params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 

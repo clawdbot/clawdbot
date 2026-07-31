@@ -66,7 +66,11 @@ export type AcpxProcessCleanupDeps = {
 type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
-  skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
+  skippedReason?:
+    | "missing-root"
+    | "not-openclaw-owned"
+    | "process-list-unavailable"
+    | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
@@ -343,7 +347,11 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   try {
     processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
   } catch {
-    processes = [];
+    return {
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    };
   }
 
   const listedTree = collectProcessTree(processes, rootPid);

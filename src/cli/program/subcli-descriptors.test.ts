@@ -1,5 +1,9 @@
 // SubCLI descriptor tests cover metadata for registered nested command groups.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const execFileAsync = promisify(execFile);
 
 async function importSubCliDescriptors() {
   vi.resetModules();
@@ -20,6 +24,22 @@ describe("sub-cli descriptors", () => {
       process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
     }
     vi.resetModules();
+  });
+
+  it("cold-imports without an ESM initialization cycle", async () => {
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          "await import('./src/cli/program/subcli-descriptors.ts')",
+        ],
+        { cwd: process.cwd(), timeout: 30_000 },
+      ),
+    ).resolves.toMatchObject({ stderr: "" });
   });
 
   it("keeps the exported descriptor list aligned with private QA visibility when disabled (#83927)", async () => {

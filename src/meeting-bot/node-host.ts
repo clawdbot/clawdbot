@@ -1,9 +1,15 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
 
 const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
+
+type NodeOutputWriteWaiter = {
+  output: ChildProcess;
+  release: () => void;
+};
 
 type NodeBridgeSession = {
   id: string;
@@ -23,6 +29,8 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
   closedAt?: string;
   clearCount: number;
+  outputGeneration: number;
+  outputWriteWaiters: Set<NodeOutputWriteWaiter>;
   stopPromise?: Promise<void>;
   retiredOutputStops: Set<Promise<void>>;
 };
@@ -45,6 +53,13 @@ export type MeetingNodeHostOptions = {
     openedStatus: string;
     openedNotes: string[];
   };
+};
+
+type MeetingConfiguredNodeHostOptions = Omit<MeetingNodeHostOptions, "assertAudioAvailable"> & {
+  meetingLabel: string;
+  outputMentionsAudioDevice(output: string): boolean;
+  sharePrerequisiteDeadline: boolean;
+  systemProfilerCommand: string;
 };
 
 function readStringArray(value: unknown): string[] | undefined {
@@ -73,6 +88,16 @@ function formatErrorMessage(error: unknown): string {
 
 function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readOutputGeneration(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  throw new Error("outputGeneration must be a non-negative integer");
 }
 
 function runCommandWithTimeout(argv: string[], timeoutMs: number) {
@@ -110,6 +135,14 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.waiters.wake();
   };
 
+  const releaseOutputWriteWaiters = (session: NodeBridgeSession, output?: ChildProcess): void => {
+    for (const waiter of session.outputWriteWaiters) {
+      if (!output || waiter.output === output) {
+        waiter.release();
+      }
+    }
+  };
+
   const retireOutputProcess = (session: NodeBridgeSession, outputProcess?: ChildProcess) => {
     const stopPromise = terminateMeetingBridgeProcess(outputProcess, {
       graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -129,6 +162,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.closed = true;
     session.closedAt = new Date().toISOString();
     wake(session);
+    releaseOutputWriteWaiters(session);
     session.stopPromise = Promise.all([
       terminateMeetingBridgeProcess(session.input, {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -176,6 +210,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       lastInputBytes: 0,
       lastOutputBytes: 0,
       clearCount: 0,
+      outputGeneration: 0,
+      outputWriteWaiters: new Set(),
       retiredOutputStops: new Set(),
     };
     const outputProcess = startOutputProcess(output);
@@ -227,7 +263,50 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     };
   };
 
-  const pushAudio = (params: Record<string, unknown>) => {
+  const staleOutputResult = (session: NodeBridgeSession) => ({
+    bridgeId: session.id,
+    ok: true,
+    stale: true,
+  });
+
+  const writeOutputChunk = (
+    session: NodeBridgeSession,
+    output: ChildProcess,
+    audio: Buffer,
+  ): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const stdin = output.stdin;
+      if (!stdin) {
+        reject(new Error("audio output stream is closed"));
+        return;
+      }
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        session.outputWriteWaiters.delete(waiter);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const waiter: NodeOutputWriteWaiter = { output, release: () => finish() };
+      session.outputWriteWaiters.add(waiter);
+      try {
+        stdin.write(audio, (error) => finish(error ?? undefined));
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+        return;
+      }
+      if (stdin.destroyed || stdin.writableEnded) {
+        finish(new Error("audio output stream is closed"));
+      }
+    });
+
+  const pushAudio = async (params: Record<string, unknown>) => {
     const bridgeId = readString(params.bridgeId);
     const base64 = readString(params.base64);
     if (!bridgeId || !base64) {
@@ -237,15 +316,36 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
-    const audio = Buffer.from(base64, "base64");
-    session.lastOutputAt = new Date().toISOString();
-    session.lastOutputBytes += audio.byteLength;
+    const requestedGeneration = readOutputGeneration(params.outputGeneration);
+    if (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration) {
+      return staleOutputResult(session);
+    }
+    const output = session.output;
+    if (!output?.stdin) {
+      throw new Error(`bridge is not open: ${bridgeId}`);
+    }
+    const audio = decodeMeetingAudioBase64(base64, "pushAudio");
     try {
-      session.output?.stdin?.write(audio);
+      await writeOutputChunk(session, output, audio);
     } catch {
+      if (
+        session.output !== output ||
+        (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration)
+      ) {
+        return staleOutputResult(session);
+      }
       void stopSession(session);
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
+    if (
+      session.closed ||
+      session.output !== output ||
+      (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration)
+    ) {
+      return staleOutputResult(session);
+    }
+    session.lastOutputAt = new Date().toISOString();
+    session.lastOutputBytes += audio.byteLength;
     return { bridgeId, ok: true };
   };
 
@@ -258,10 +358,20 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
+    const requestedGeneration = readOutputGeneration(params.outputGeneration);
+    if (requestedGeneration !== undefined && requestedGeneration <= session.outputGeneration) {
+      return staleOutputResult(session);
+    }
+    if (requestedGeneration === undefined && session.outputGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("outputGeneration exhausted");
+    }
+    const nextGeneration = requestedGeneration ?? session.outputGeneration + 1;
     const previousOutput = session.output;
     const outputProcess = startOutputProcess(session.outputCommand);
     session.output = outputProcess;
+    session.outputGeneration = nextGeneration;
     attachOutputProcessHandlers(session, outputProcess);
+    releaseOutputWriteWaiters(session, previousOutput);
     session.clearCount += 1;
     session.lastClearAt = new Date().toISOString();
     retireOutputProcess(session, previousOutput);
@@ -273,7 +383,10 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
     const mode = readString(params.mode);
     let bridgeId: string | undefined;
-    let audioBridge: { type: "external-command" | "node-command-pair" } | undefined;
+    let audioBridge:
+      | { type: "external-command" }
+      | { type: "node-command-pair"; outputGeneration: true }
+      | undefined;
     if (mode && options.talkBackModes.has(mode)) {
       options.assertAudioAvailable(Math.min(timeoutMs, 10_000));
       const healthCommand = readStringArray(params.audioBridgeHealthCommand);
@@ -311,7 +424,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           mode,
         });
         bridgeId = session.id;
-        audioBridge = { type: "node-command-pair" };
+        audioBridge = { type: "node-command-pair", outputGeneration: true };
       }
     }
 
@@ -484,7 +597,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           result = await pullAudio(params);
           break;
         case "pushAudio":
-          result = pushAudio(params);
+          result = await pushAudio(params);
           break;
         case "clearAudio":
           result = clearAudio(params);
@@ -497,5 +610,94 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       }
       return JSON.stringify(result);
     },
+  };
+}
+
+function readSetupCommand(params: Record<string, unknown>, name: string): string[] {
+  const value = params[name];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string")
+  ) {
+    throw new Error(`${name} must be a non-empty string array.`);
+  }
+  return value as string[];
+}
+
+export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHostOptions) {
+  const commandExists = (command: string, timeoutMs: number): boolean => {
+    const result = spawnSync("/bin/sh", ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command], {
+      encoding: "utf8",
+      timeout: timeoutMs,
+    });
+    return result.status === 0;
+  };
+  const assertAudioAvailable = (
+    timeoutMs: number,
+    commands: readonly (readonly string[])[] = [
+      options.defaultAudioInputCommand,
+      options.defaultAudioOutputCommand,
+    ],
+  ) => {
+    if (process.platform !== "darwin") {
+      throw new Error(`${options.meetingLabel} talk-back with BlackHole 2ch is macOS-only`);
+    }
+    const deadline = Date.now() + timeoutMs;
+    const commandTimeout = () =>
+      options.sharePrerequisiteDeadline ? Math.max(1, deadline - Date.now()) : timeoutMs;
+    const result = spawnSync(options.systemProfilerCommand, ["SPAudioDataType"], {
+      encoding: "utf8",
+      timeout: commandTimeout(),
+    });
+    const stderr =
+      result.stderr ??
+      (result.error
+        ? result.error instanceof Error
+          ? result.error.message
+          : String(result.error)
+        : "");
+    const output = `${result.stdout ?? ""}\n${stderr}`;
+    if (
+      (typeof result.status === "number" ? result.status : result.error ? 1 : 0) !== 0 ||
+      !options.outputMentionsAudioDevice(output)
+    ) {
+      throw new Error("BlackHole 2ch audio device not found on the node.");
+    }
+    for (const argv of commands) {
+      const command = argv[0];
+      if (
+        !command ||
+        (options.sharePrerequisiteDeadline && Date.now() >= deadline) ||
+        !commandExists(command, commandTimeout())
+      ) {
+        throw new Error(`Configured audio command not found on the node: ${command || "<empty>"}`);
+      }
+    }
+  };
+  const host = createMeetingNodeHost({ ...options, assertAudioAvailable });
+
+  return async (paramsJSON?: string | null): Promise<string> => {
+    if (paramsJSON) {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(paramsJSON) as unknown;
+      } catch {
+        throw new Error(`${options.displayName} node host received malformed params JSON.`);
+      }
+      const params = asRecord(raw);
+      if (params.action === "setup") {
+        const commands = [
+          readSetupCommand(params, "audioInputCommand"),
+          readSetupCommand(params, "audioOutputCommand"),
+        ];
+        if (params.bargeInInputCommand !== undefined) {
+          commands.push(readSetupCommand(params, "bargeInInputCommand"));
+        }
+        assertAudioAvailable(10_000, commands);
+        return JSON.stringify({ ok: true });
+      }
+    }
+    return await host.handleCommand(paramsJSON);
   };
 }

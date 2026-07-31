@@ -62,6 +62,7 @@ describe("Control UI Vite config", () => {
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
@@ -86,8 +87,42 @@ describe("Control UI Vite config", () => {
       builtAt: "2026-07-10T13:14:15.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
     });
+  });
+
+  it("records release packaging as an explicit artifact fact", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
+        readGitBranch: () => "release/2026.7.10",
+        readGitDirty: () => false,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toMatchObject({
+      version: "2026.7.10",
+      commit: "a".repeat(40),
+      branch: "release/2026.7.10",
+      dirty: false,
+      release: true,
+      buildId: "2026.7.10-release-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+    });
+  });
+
+  it("rejects malformed release-build identity", () => {
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "true" },
+        readGitCommit: () => null,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toThrow("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
   });
 
   it("uses checked-out Git instead of unverified GitHub workflow context", () => {
@@ -264,10 +299,22 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/json-schema"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/json-schema",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/json-schema.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/string-coerce"),
     )?.toEqual({
       find: "@openclaw/normalization-core/string-coerce",
       replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
+    });
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/phone-presentation"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/phone-presentation",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
     });
   });
 

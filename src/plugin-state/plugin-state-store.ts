@@ -69,6 +69,7 @@ type PluginStateImportEntry = {
   key: string;
   value: unknown;
   createdAt: number;
+  ttlMs?: number;
 };
 
 const namespaceOptionSignatures = new Map<string, StoreOptionSignature>();
@@ -555,7 +556,7 @@ export function registerPluginStateSyncSequencedJournalEntry(params: {
   });
 }
 
-/** Doctor-only import that preserves source age for retention ordering. */
+/** Doctor-only import that preserves source age and remaining retention. */
 export function importPluginStateEntriesForDoctor(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -575,7 +576,12 @@ export function importPluginStateEntriesForDoctor(
     if (!Number.isSafeInteger(entry.createdAt)) {
       throw invalidInput("plugin state import createdAt must be a safe integer", "register");
     }
-    const prepared = prepareRegisterParams(entry.key, entry.value, defaultTtlMs);
+    const prepared = prepareRegisterParams(
+      entry.key,
+      entry.value,
+      defaultTtlMs,
+      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+    );
     pluginStateRegister({
       pluginId,
       namespace,

@@ -144,7 +144,7 @@ function resolveExplicitCronSessionSegment(sessionKey: string | undefined): stri
 
 function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
-    const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
+    const cronStorePath = resolveCronJobsStorePath();
     const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
@@ -625,7 +625,7 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running cron jobs`,
+      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
   runtime.log(

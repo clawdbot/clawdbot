@@ -43,7 +43,6 @@ const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
-let buildPluginRegistrySnapshotReport: typeof import("./status.js").buildPluginRegistrySnapshotReport;
 let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
@@ -373,10 +372,11 @@ function expectBundleInspectState(
   params: {
     bundleCapabilities: readonly string[];
     shape: string;
+    mcpServers?: readonly { name: string; hasStdioTransport: boolean }[];
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toStrictEqual([]);
+  expect(inspect.mcpServers).toStrictEqual(params.mcpServers ?? []);
   expect(inspect.shape).toBe(params.shape);
 }
 
@@ -388,7 +388,6 @@ describe("plugin status reports", () => {
       buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
-      buildPluginRegistrySnapshotReport,
       buildPluginSnapshotReport,
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
@@ -476,39 +475,6 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("carries installed-index compatibility metadata into registry snapshot reports", () => {
-    loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
-      snapshot: createInstalledPluginIndexSnapshot([
-        {
-          pluginId: "provider-env-plugin",
-          manifestPath: "/tmp/provider-env-plugin/openclaw.plugin.json",
-          manifestHash: "manifest-hash",
-          rootDir: "/tmp/provider-env-plugin",
-          origin: "workspace",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: ["provider-auth-env-vars"],
-        },
-      ]),
-      source: "derived",
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
-      plugins: [{ id: "provider-env-plugin", name: "Provider Env Plugin" }],
-      diagnostics: [],
-    });
-
-    const report = buildPluginRegistrySnapshotReport({ config: {} });
-
-    expect(report.plugins[0]?.id).toBe("provider-env-plugin");
-    expect(report.plugins[0]?.compat).toEqual(["provider-auth-env-vars"]);
-  });
-
   it("uses a metadata snapshot load for snapshot reports", () => {
     buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
 
@@ -588,7 +554,7 @@ describe("plugin status reports", () => {
     expectPluginLoaderCall({ loadModules: true });
   });
 
-  it("preserves raw config activation context when compatibility notices build their own report", () => {
+  it("preserves raw config activation context for compatibility-derived reports", () => {
     expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
@@ -606,10 +572,6 @@ describe("plugin status reports", () => {
       enabledConfig,
       loadModules: false,
     });
-  });
-
-  it("preserves raw config activation context for compatibility-derived reports", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -1007,6 +969,7 @@ describe("plugin status reports", () => {
       expectedId: "claude-bundle",
       expectedBundleCapabilities: ["skills", "commands", "agents", "settings"],
       expectedShape: "non-capability",
+      expectedMcpServers: [],
     },
     {
       name: "returns empty bundleCapabilities and mcpServers for non-bundle plugins",
@@ -1019,17 +982,38 @@ describe("plugin status reports", () => {
       expectedId: "plain-plugin",
       expectedBundleCapabilities: [],
       expectedShape: "plain-capability",
+      expectedMcpServers: [],
     },
-  ])("$name", ({ plugin, expectedId, expectedBundleCapabilities, expectedShape }) => {
-    setSinglePluginLoadResult(plugin);
+    {
+      name: "reports MCP servers declared by native plugins",
+      plugin: createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        description: "A native plugin with an MCP App server",
+        rootDir: "/tmp/native-mcp",
+        mcpServers: {
+          app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+        },
+      }),
+      expectedId: "native-mcp",
+      expectedBundleCapabilities: [],
+      expectedShape: "non-capability",
+      expectedMcpServers: [{ name: "app", hasStdioTransport: true }],
+    },
+  ])(
+    "$name",
+    ({ plugin, expectedId, expectedBundleCapabilities, expectedShape, expectedMcpServers }) => {
+      setSinglePluginLoadResult(plugin);
 
-    const inspect = expectInspectReport(expectedId);
+      const inspect = expectInspectReport(expectedId);
 
-    expectBundleInspectState(inspect, {
-      bundleCapabilities: expectedBundleCapabilities,
-      shape: expectedShape,
-    });
-  });
+      expectBundleInspectState(inspect, {
+        bundleCapabilities: expectedBundleCapabilities,
+        shape: expectedShape,
+        mcpServers: expectedMcpServers,
+      });
+    },
+  );
 
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });

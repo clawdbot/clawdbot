@@ -616,8 +616,8 @@ describe("resolveBundledStaticCatalogModel", () => {
     }
   });
 
-  it("can include bundled runtime-discovery manifest catalog rows for configured fallbacks", () => {
-    setManifestPlugins([createMistralManifestPlugin({ discovery: "runtime" })]);
+  it("can include bundled refreshable manifest catalog rows for configured fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
 
     const model = resolveBundledStaticCatalogModel({
       provider: "mistral",
@@ -841,12 +841,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
     });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({
-      provider,
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-    });
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
   });
 
   it("does not load bundled provider static catalogs when owner policy blocks the plugin", async () => {

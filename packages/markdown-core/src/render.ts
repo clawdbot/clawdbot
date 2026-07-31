@@ -1,3 +1,5 @@
+import { applyConstructFallbacks } from "./construct-fallbacks.js";
+import type { FormatCapabilityProfile } from "./format-capabilities.js";
 import {
   copyMarkdownLinkSpan,
   isAutoLinkedMarkdownLink,
@@ -63,6 +65,7 @@ const STYLE_ORDER: MarkdownStyle[] = [
   "heading_6",
   "bold",
   "italic",
+  "underline",
   "strikethrough",
   "spoiler",
 ];
@@ -191,8 +194,13 @@ function sortAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotatio
 }
 
 /** Renders Markdown IR by nesting configured style markers and optional link markers. */
-export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
-  const text = ir.text ?? "";
+export function renderMarkdownWithMarkers(
+  ir: MarkdownIR,
+  options: RenderOptions,
+  profile?: FormatCapabilityProfile,
+): string {
+  const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
+  const text = projected.text ?? "";
   if (!text) {
     return "";
   }
@@ -200,7 +208,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   const styleMarkers = options.styleMarkers;
   const annotationMarkers = options.annotationMarkers ?? {};
   const annotated = sortAnnotationSpans(
-    (ir.annotations ?? []).filter((span) => Boolean(annotationMarkers[span.type])),
+    (projected.annotations ?? []).filter((span) => Boolean(annotationMarkers[span.type])),
   );
   const dominantAnnotations = annotated.filter(
     (span) => annotationMarkers[span.type]?.suppressNestedFormatting === true,
@@ -210,7 +218,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
   const styled = sortStyleSpans(
-    ir.styles
+    projected.styles
       .filter((span) => Boolean(styleMarkers[span.style]))
       .flatMap((span) => {
         if (STRUCTURAL_STYLES.has(span.style)) {
@@ -266,7 +274,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = ir.links.flatMap((span) =>
+    const links = projected.links.flatMap((span) =>
       subtractRanges(span, dominantAnnotationRanges)
         .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
         .map((piece) =>

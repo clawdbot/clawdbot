@@ -1,30 +1,10 @@
 // Browser tests cover profiles plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
-import {
-  allocateCdpPort,
-  allocateColor,
-  getUsedColors,
-  getUsedPorts,
-  isValidProfileName,
-} from "./profiles.js";
+import { allocateCdpPort, getUsedPorts, isValidProfileName } from "./profiles.js";
 
 const CDP_PORT_RANGE_START = 18800;
 const CDP_PORT_RANGE_END = 18899;
-const PROFILE_COLORS = [
-  "#FF4500",
-  "#0066CC",
-  "#00AA00",
-  "#9933FF",
-  "#FF6699",
-  "#00CCCC",
-  "#FF9900",
-  "#6666FF",
-  "#CC3366",
-  "#339966",
-];
-
 describe("profile name validation", () => {
   it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
     "accepts valid lowercase name: %s",
@@ -194,72 +174,5 @@ describe("port collision prevention", () => {
 
     // Resolved: first NEW profile gets 18801, avoiding collision
     expect(fixedAllocatedPort).toBe(CDP_PORT_RANGE_START + 1);
-  });
-});
-
-describe("color allocation", () => {
-  it("allocates next unused color from palette", () => {
-    const first = expectDefined(PROFILE_COLORS[0], "first browser profile color");
-    const second = expectDefined(PROFILE_COLORS[1], "second browser profile color");
-    const third = expectDefined(PROFILE_COLORS[2], "third browser profile color");
-    const fourth = expectDefined(PROFILE_COLORS[3], "fourth browser profile color");
-    const cases = [
-      { name: "none used", used: new Set<string>(), expected: first },
-      {
-        name: "first color used",
-        used: new Set([first.toUpperCase()]),
-        expected: second,
-      },
-      {
-        name: "multiple used colors",
-        used: new Set([first.toUpperCase(), second.toUpperCase(), third.toUpperCase()]),
-        expected: fourth,
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(allocateColor(testCase.used), testCase.name).toBe(testCase.expected);
-    }
-  });
-
-  it("handles case-insensitive color matching", () => {
-    const usedColors = new Set(["#ff4500"]); // lowercase
-    // Should still skip this color (case-insensitive)
-    // Note: allocateColor compares against uppercase, so lowercase won't match
-    // This tests the current behavior
-    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[0]); // returns first since lowercase doesn't match
-  });
-
-  it("cycles when all colors are used", () => {
-    const usedColors = new Set(PROFILE_COLORS.map((c) => c.toUpperCase()));
-    // Should cycle based on count
-    const result = allocateColor(usedColors);
-    expect(PROFILE_COLORS).toContain(result);
-  });
-
-  it("cycles based on count when palette exhausted", () => {
-    // Add all colors plus some extras
-    const usedColors = new Set([
-      ...PROFILE_COLORS.map((c) => c.toUpperCase()),
-      "#AAAAAA",
-      "#BBBBBB",
-    ]);
-    const result = allocateColor(usedColors);
-    // Index should be (10 + 2) % 10 = 2
-    expect(result).toBe(PROFILE_COLORS[2]);
-  });
-});
-
-describe("getUsedColors", () => {
-  it("returns empty set when no color profiles are configured", () => {
-    expect(getUsedColors(undefined)).toEqual(new Set());
-  });
-
-  it("extracts and uppercases colors from profile configs", () => {
-    const profiles = {
-      openclaw: { color: "#ff4500" },
-      work: { color: "#0066CC" },
-    };
-    const used = getUsedColors(profiles);
-    expect(used).toEqual(new Set(["#FF4500", "#0066CC"]));
   });
 });

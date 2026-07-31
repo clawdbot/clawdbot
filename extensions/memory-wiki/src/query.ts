@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
@@ -211,18 +212,15 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   const files = (
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
-        const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs
-          .readdir(dirPath, { withFileTypes: true, recursive: true })
-          .catch(() => []);
+        const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
         return entries
           .filter(
-            (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
+            (entry) =>
+              entry.kind === "file" &&
+              entry.relativePath.endsWith(".md") &&
+              path.basename(entry.relativePath) !== "index.md",
           )
-          .map((entry) => {
-            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-            return path.relative(rootDir, absPath).split(path.sep).join("/");
-          });
+          .map((entry) => entry.relativePath.split(path.sep).join("/"));
       }),
     )
   ).flat();
@@ -919,6 +917,38 @@ function shouldEnforceSessionVisibility(params: {
   );
 }
 
+function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
+  return (
+    page.sourceType === "memory-bridge" ||
+    page.sourceType === "memory-bridge-events" ||
+    page.bridgeAgentIds.length > 0
+  );
+}
+
+function createWikiPageVisibilityFilter(params: {
+  appConfig?: OpenClawConfig;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): (page: QueryableWikiPage) => boolean {
+  if (params.sandboxed !== true) {
+    return () => true;
+  }
+  const sessionKey = params.agentSessionKey?.trim();
+  const scopedAgentId = normalizeLowercaseStringOrEmpty(
+    params.agentId?.trim() ||
+      (params.appConfig && sessionKey
+        ? resolveSessionAgentId({ sessionKey, config: params.appConfig })
+        : undefined),
+  );
+  return (page) =>
+    !isBridgeCompiledPage(page) ||
+    (scopedAgentId.length > 0 &&
+      page.bridgeAgentIds.some(
+        (agentId) => normalizeLowercaseStringOrEmpty(agentId) === scopedAgentId,
+      ));
+}
+
 function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
   return config.search.corpus === "memory" || config.search.corpus === "all";
 }
@@ -1256,6 +1286,12 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
+        : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       ((identity.ownerAgentId &&
@@ -1272,21 +1308,26 @@ async function createSessionMemoryPathVisibilityChecker(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+      keys: resolvedKeys,
     });
+    if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      return Boolean(sameAgentLiveOwnerId && agentWideVisibility);
+    }
     if (!guard) {
-      return Boolean(scopedAgentId && keys.length > 0);
+      return Boolean(scopedAgentId);
     }
     return keys.some((key) => guard.check(key).allowed);
   };
@@ -1336,6 +1377,7 @@ async function searchWikiCorpus(params: {
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
+  canReadPage: (page: QueryableWikiPage) => boolean;
 }): Promise<WikiSearchResult[]> {
   const digest = await readQueryDigestBundle(params.config);
   const rootDir = params.config.vault.path;
@@ -1357,6 +1399,7 @@ async function searchWikiCorpus(params: {
   }
 
   const results = candidatePages
+    .filter(params.canReadPage)
     .map((page) => toWikiSearchResult(page, params.query, params.mode))
     .filter((page) => page.score > 0);
   if (candidatePaths.length === 0 || results.length >= params.maxResults) {
@@ -1366,7 +1409,9 @@ async function searchWikiCorpus(params: {
   const remainingPaths = (await listWikiMarkdownFiles(rootDir)).filter(
     (relativePath) => !seenPaths.has(relativePath),
   );
-  const remainingPages = await readQueryableWikiPagesByPaths(rootDir, remainingPaths);
+  const remainingPages = (await readQueryableWikiPagesByPaths(rootDir, remainingPaths)).filter(
+    params.canReadPage,
+  );
   return [
     ...results,
     ...remainingPages
@@ -1429,6 +1474,7 @@ export async function searchMemoryWiki(params: {
         query: params.query,
         maxResults,
         mode,
+        canReadPage: createWikiPageVisibilityFilter(params),
       })
     : [];
 
@@ -1494,16 +1540,17 @@ export async function getMemoryWikiPage(params: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
+    const canReadPage = createWikiPageVisibilityFilter(params);
     const digest = await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((
           await readQueryableWikiPagesByPaths(effectiveConfig.vault.path, [digestClaimPagePath])
-        )[0] ?? null)
+        ).find(canReadPage) ?? null)
       : null;
     const pages = digestLookupPage
       ? [digestLookupPage]
-      : await readQueryableWikiPages(effectiveConfig.vault.path);
+      : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
     const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
     if (page) {
       const parsed = parseWikiMarkdown(page.raw);

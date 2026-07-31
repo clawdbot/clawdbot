@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -21,6 +22,7 @@ import { resolveProviderInstallCatalogEntries } from "../plugins/provider-instal
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
@@ -37,6 +39,7 @@ import {
 } from "./onboard-custom-config.js";
 import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
+import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
@@ -64,6 +67,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     return rejectOption(
       runtime,
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
+  }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
     );
   }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
@@ -101,6 +114,27 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
   ) {
     return rejectOption(runtime, formatInvalidPortOption("--gateway-port"));
+  }
+  if (opts.gatewayTokenRefEnv !== undefined) {
+    const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
+    if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
+      return rejectOption(
+        runtime,
+        "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
+      );
+    }
+    if (opts.gatewayToken !== undefined) {
+      return rejectOption(
+        runtime,
+        "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
+      );
+    }
+    if (!process.env[gatewayTokenRefEnv]?.trim()) {
+      return rejectOption(
+        runtime,
+        `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard")}.`,
+      );
+    }
   }
   if (opts.nonInteractive && opts.mode === "remote" && !opts.remoteUrl?.trim()) {
     return rejectOption(
@@ -376,10 +410,11 @@ function validateResetNonInteractiveGateway(params: {
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
  * a public automation contract and guided setup does not honor them.
- * Boolean false and undefined mean "not passed" (Commander coerces unset
- * booleans to false); explicit `--no-install-daemon` arrives as `false` via
- * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated OpenClaw.
+ * Most false booleans mean "not passed" because the command layer normalizes
+ * them with Boolean(). False-valued explicit choices preserve undefined when
+ * omitted, so daemon, Tailscale-reset, and custom-model input overrides are
+ * special-cased. `--modern` never reaches this dispatch; the command layer
+ * routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -395,7 +430,11 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (opts.installDaemon !== undefined) {
+  if (
+    opts.installDaemon !== undefined ||
+    opts.tailscaleResetOnExit !== undefined ||
+    opts.customImageInput !== undefined
+  ) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
@@ -451,6 +490,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
@@ -470,6 +516,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     // Non-interactive setup can write credentials and daemon config without a
@@ -481,6 +534,14 @@ export async function setupWizardCommand(
         `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
+    runtime.exit(1);
+    return;
+  }
+
+  if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
+    // Reset is destructive, so prove the selected interactive surface can run
+    // before reading or moving any operator state.
+    runtime.error(t("wizard.guided.ttyRequired"));
     runtime.exit(1);
     return;
   }

@@ -202,7 +202,7 @@ describe("ollama setup", () => {
     });
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
-    expect(modelIds?.[0]).toBe("kimi-k2.5:cloud");
+    expect(modelIds?.[0]).toBe("minimax-m2.7");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
     expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
     expect(result.credential).toBe("test-ollama-key");
@@ -243,7 +243,6 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "gemma4",
-      "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
@@ -362,8 +361,43 @@ describe("ollama setup", () => {
     expect(events).toEqual(["select", "text"]);
   });
 
-  it("shows cloud-mode unreachable guidance when the host is down", async () => {
+  it("retries the configured host after showing unreachable guidance", async () => {
     const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
+    const reachableFetch = createOllamaFetchMock({ tags: ["qwen3:0.6b"] });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockImplementation(reachableFetch);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      [
+        "Ollama could not be reached at http://127.0.0.1:11434.",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+        "",
+        "Continue when it is running. OpenClaw will retry this address.",
+      ].join("\n"),
+      "Ollama",
+    );
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Retry this Ollama address now?",
+      initialValue: true,
+    });
+    expect(result.config.models?.providers?.ollama?.models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "qwen3:0.6b" })]),
+    );
+  });
+
+  it("reports the configured host when the retry is still unreachable", async () => {
+    const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
     const fetchMock = createOllamaFetchMock({ tagsError: new Error("down") });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -372,17 +406,9 @@ describe("ollama setup", () => {
         cfg: {},
         prompter,
       }),
-    ).rejects.toThrow("Ollama not reachable");
+    ).rejects.toThrow("Ollama is still not reachable at http://127.0.0.1:11434");
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      [
-        "Ollama could not be reached at http://127.0.0.1:11434.",
-        "Download it at https://ollama.com/download",
-        "",
-        "Start Ollama and re-run setup.",
-      ].join("\n"),
-      "Ollama",
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("cloud + local mode falls back to local models when ollama signin is missing", async () => {
@@ -428,15 +454,29 @@ describe("ollama setup", () => {
     const models = result.config.models?.providers?.ollama?.models;
     const modelIds = models?.map((m) => m.id);
 
-    expect(modelIds).toEqual([
-      "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
-      "glm-5.1:cloud",
-      "glm-5.2:cloud",
-    ]);
-    expect(models?.find((model) => model.id === "kimi-k2.5:cloud")?.input).toEqual([
-      "text",
-      "image",
+    expect(modelIds).toEqual(["minimax-m2.7", "glm-5.1", "glm-5.2"]);
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "minimax-m2.7",
+        contextWindow: 196_608,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.1",
+        contextWindow: 202_752,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "glm-5.2",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
     ]);
   });
 
@@ -458,10 +498,9 @@ describe("ollama setup", () => {
     const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual([
-      "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
-      "glm-5.1:cloud",
-      "glm-5.2:cloud",
+      "minimax-m2.7",
+      "glm-5.1",
+      "glm-5.2",
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
@@ -939,6 +978,7 @@ describe("ollama setup", () => {
       primary: "ollama/qwen2.5-coder:7b",
       fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
@@ -961,6 +1001,7 @@ describe("ollama setup", () => {
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
@@ -984,28 +1025,30 @@ describe("ollama setup", () => {
     ]);
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts cloud models in non-interactive mode without pulling", async () => {
-    const fetchMock = createOllamaFetchMock({ tags: [] });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+  it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(
+    "accepts cloud model %s in non-interactive mode without pulling",
+    async (modelId) => {
+      const fetchMock = createOllamaFetchMock({ tags: [] });
+      vi.stubGlobal("fetch", fetchMock);
+      const runtime = createRuntime();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "kimi-k2.5:cloud",
-      },
-      runtime,
-    });
+      const result = await configureOllamaNonInteractive({
+        nextConfig: {},
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11434",
+          customModelId: modelId,
+        },
+        runtime,
+      });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(
-      "kimi-k2.5:cloud",
-    );
-    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/kimi-k2.5:cloud" });
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(modelId);
+      expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
+    },
+  );
 
   it("exits when Ollama is unreachable", async () => {
     const fetchMock = createOllamaFetchMock({
@@ -1032,11 +1075,13 @@ describe("ollama setup", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
-        "Download it at https://ollama.com/download",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 });
 

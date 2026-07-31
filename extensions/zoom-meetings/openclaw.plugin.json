@@ -3,7 +3,7 @@
   "name": "Zoom meetings",
   "description": "Join Zoom meetings as a Chrome browser guest.",
   "icon": "https://cdn.simpleicons.org/zoom",
-  "enabledByDefault": false,
+  "enabledByDefault": true,
   "commandAliases": [{ "name": "zoommeetings" }],
   "activation": {
     "onStartup": true,
@@ -11,7 +11,8 @@
     "onCapabilities": ["tool"]
   },
   "contracts": {
-    "tools": ["zoom_meetings"]
+    "tools": ["zoom_meetings"],
+    "transcriptSourceProviders": ["zoom"]
   },
   "uiHints": {
     "defaultMode": {

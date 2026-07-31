@@ -59,10 +59,10 @@ export type PluginDoctorStateMigrationDetection = {
 
 export type PluginDoctorStateMigrationContext = {
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
-  /** Doctor-only batch import preserving source age for retention ordering. */
+  /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (
     options: OpenKeyedStoreOptions,
-    entries: readonly { key: string; value: unknown; createdAt: number }[],
+    entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
@@ -246,6 +246,8 @@ function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>
   if (!media) {
     return;
   }
+  // Keep legacy lists visible until the doctor migration window closes so
+  // provider-owned repairs can run in the same pass as core consolidation.
   const modelLists = [
     media.models,
     asNullableRecord(media.audio)?.models,

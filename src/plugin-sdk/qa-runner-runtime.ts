@@ -29,6 +29,7 @@ type QaRunnerAdapterOptions = {
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
   transportPolicy?: QaRunnerTransportPolicy;
@@ -40,8 +41,50 @@ type QaRunnerMessageRecorder = {
   editMessage: (input: QaBusEditMessageInput) => QaBusMessage | Promise<QaBusMessage>;
 };
 
+type QaRunnerCredentialLease<TPayload> = {
+  credentialId?: string;
+  heartbeat(): Promise<void>;
+  heartbeatIntervalMs: number;
+  kind: string;
+  leaseToken?: string;
+  leaseTtlMs: number;
+  ownerId?: string;
+  payload: TPayload;
+  release(): Promise<void>;
+  role?: "ci" | "maintainer";
+  source: "convex" | "env";
+};
+
+type QaRunnerCredentialLeaseOptions<TPayload> = {
+  kind: string;
+  parsePayload: (payload: unknown) => TPayload;
+  resolveEnvPayload: () => TPayload;
+  role?: string;
+  source?: string;
+};
+
+type QaRunnerCredentialHeartbeat = {
+  getFailure(): Error | null;
+  stop(): Promise<void>;
+  throwIfFailed(): void;
+};
+
+type QaRunnerCredentialHost = {
+  acquire<TPayload>(
+    options: QaRunnerCredentialLeaseOptions<TPayload>,
+  ): Promise<QaRunnerCredentialLease<TPayload>>;
+  startHeartbeat(
+    lease: Pick<
+      QaRunnerCredentialLease<unknown>,
+      "heartbeat" | "heartbeatIntervalMs" | "kind" | "source"
+    >,
+  ): QaRunnerCredentialHeartbeat;
+};
+
 type QaRunnerTransportFlowPreparationInput = {
   config: Record<string, unknown>;
+  scenarioId: string;
+  scenarioTitle: string;
   gateway: {
     baseUrl: string;
     tempRoot: string;
@@ -134,14 +177,18 @@ type QaRunnerTransportAdapterDefinition = {
     isolatedWorkers?: boolean;
   }) => string[];
   cleanup?: () => Promise<void>;
+  cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
 type QaRunnerTransportFactory = {
   id: string;
+  /** Each create() call owns isolated runtime state and may run concurrently. */
+  isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
     channelId: string;
+    credentials: QaRunnerCredentialHost;
     driver: string;
     messages: QaRunnerMessageRecorder;
     outputDir: string;
@@ -335,6 +382,8 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (adapterFactory.isolatesInstances !== undefined &&
+            typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||
           typeof adapterFactory.create !== "function")
       ) {

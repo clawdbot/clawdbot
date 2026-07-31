@@ -18,7 +18,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-events.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -293,12 +292,7 @@ export async function prepareAgentRunDispatch(params: {
         runId: params.runId,
         childSessionKey: params.resolvedSessionKey,
         task: params.request.message.trim(),
-        requesterOrigin: normalizeDeliveryContext({
-          channel: params.delivery.resolvedChannel,
-          to: params.delivery.resolvedTo,
-          accountId: params.delivery.resolvedAccountId,
-          threadId: resolvedThreadId,
-        }),
+        requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
       });
     } catch (err) {

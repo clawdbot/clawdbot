@@ -1,6 +1,7 @@
 // Outbound policy enforces message-tool allowlists and cross-context delivery
 // markers/decorations before channel dispatch.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -128,8 +129,7 @@ function resolveAgentMessageToolsConfig(
   if (!trimmedAgentId) {
     return globalConfig;
   }
-  const agentConfig = cfg.agents?.list?.find((entry) => entry.id === trimmedAgentId)?.tools
-    ?.message;
+  const agentConfig = resolveAgentConfig(cfg, trimmedAgentId)?.tools?.message;
   if (!agentConfig) {
     return globalConfig;
   }

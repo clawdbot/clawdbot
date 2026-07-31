@@ -47,8 +47,10 @@ describe("createChannelInboundDebouncer", () => {
         cfg,
         channel: "demo-channel",
         buildKey: (item) => item.id,
-        onFlush: async (items) => {
+        onFlush: (items) => {
           flushed.push(items.map((entry) => entry.id));
+          const completion = Promise.resolve();
+          return { admission: completion, completion };
         },
       });
 
