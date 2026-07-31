@@ -10,16 +10,110 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::sidecar_protocol::SidecarChannelLiveness;
 use crate::{
     CancellationToken, ClientErrorClass, CommandRuntime, HandlerError, InvocationContext,
     InvocationResult, LifecycleDisconnectReason, LifecycleEvent, NodeInvocation, RuntimeBuildError,
     RuntimeErrorClass, SidecarHandshake, SidecarHandshakeState, SidecarPeerRole,
     SidecarProtocolSelection,
 };
+
+const MAX_PORTABLE_JSON_INTEGER: u64 = crate::SIDECAR_MAX_FEATURE_BITS;
+const MIN_PORTABLE_JSON_INTEGER: i64 = -9_007_199_254_740_991;
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde `serialize_with` contract
+fn serialize_portable_u64<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if *value > MAX_PORTABLE_JSON_INTEGER {
+        return Err(S::Error::custom("integer exceeds portable JSON range"));
+    }
+    serializer.serialize_u64(*value)
+}
+
+fn deserialize_portable_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if value > MAX_PORTABLE_JSON_INTEGER {
+        return Err(D::Error::custom("integer exceeds portable JSON range"));
+    }
+    Ok(value)
+}
+
+#[allow(clippy::ref_option)] // serde `serialize_with` contract
+fn serialize_portable_optional_u64<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if value.is_some_and(|value| value > MAX_PORTABLE_JSON_INTEGER) {
+        return Err(S::Error::custom("integer exceeds portable JSON range"));
+    }
+    value.serialize(serializer)
+}
+
+fn deserialize_portable_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<u64>::deserialize(deserializer)?;
+    if value.is_some_and(|value| value > MAX_PORTABLE_JSON_INTEGER) {
+        return Err(D::Error::custom("integer exceeds portable JSON range"));
+    }
+    Ok(value)
+}
+
+fn portable_json_value(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(_) | Value::String(_) => true,
+        Value::Number(number) => {
+            if let Some(value) = number.as_u64() {
+                value <= MAX_PORTABLE_JSON_INTEGER
+            } else if let Some(value) = number.as_i64() {
+                value >= MIN_PORTABLE_JSON_INTEGER
+            } else {
+                number.as_f64().is_some()
+            }
+        }
+        Value::Array(values) => values.iter().all(portable_json_value),
+        Value::Object(values) => values.values().all(portable_json_value),
+    }
+}
+
+fn serialize_portable_value<S>(value: &Value, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if !portable_json_value(value) {
+        return Err(S::Error::custom("integer exceeds portable JSON range"));
+    }
+    value.serialize(serializer)
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference to the borrowed field
+fn serialize_portable_value_ref<S>(value: &&Value, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serialize_portable_value(value, serializer)
+}
+
+fn deserialize_portable_value<'de, D>(deserializer: D) -> Result<Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if !portable_json_value(&value) {
+        return Err(D::Error::custom("integer exceeds portable JSON range"));
+    }
+    Ok(value)
+}
 
 pub type SidecarAdapterFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -32,6 +126,10 @@ pub struct SidecarCommandRegistration {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SidecarRuntimeConfiguration {
+    #[serde(
+        serialize_with = "serialize_portable_u64",
+        deserialize_with = "deserialize_portable_u64"
+    )]
     pub manifest_generation: u64,
     pub capabilities: Vec<String>,
     pub commands: Vec<SidecarCommandRegistration>,
@@ -46,6 +144,10 @@ pub struct SidecarRuntimeConfiguration {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SidecarRuntimeManifest {
+    #[serde(
+        serialize_with = "serialize_portable_u64",
+        deserialize_with = "deserialize_portable_u64"
+    )]
     pub manifest_generation: u64,
     pub capabilities: Vec<String>,
     pub commands: Vec<String>,
@@ -57,7 +159,15 @@ pub struct SidecarInvocation {
     pub id: String,
     pub node_id: String,
     pub command: String,
+    #[serde(
+        serialize_with = "serialize_portable_value",
+        deserialize_with = "deserialize_portable_value"
+    )]
     pub params: Value,
+    #[serde(
+        serialize_with = "serialize_portable_optional_u64",
+        deserialize_with = "deserialize_portable_optional_u64"
+    )]
     pub timeout_ms: Option<u64>,
     pub idempotency_key: Option<String>,
     pub session_key: Option<String>,
@@ -87,8 +197,17 @@ pub enum SidecarAdmissionDecision {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SidecarInvocationResult {
-    Success { payload: Value },
-    Failure { code: String, message: String },
+    Success {
+        #[serde(
+            serialize_with = "serialize_portable_value",
+            deserialize_with = "deserialize_portable_value"
+        )]
+        payload: Value,
+    },
+    Failure {
+        code: String,
+        message: String,
+    },
 }
 
 impl From<SidecarInvocationResult> for Result<Value, HandlerError> {
@@ -146,8 +265,16 @@ pub enum SidecarRuntimeReason {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SidecarRuntimeStatus {
     pub state: SidecarRuntimeState,
+    #[serde(
+        serialize_with = "serialize_portable_u64",
+        deserialize_with = "deserialize_portable_u64"
+    )]
     pub manifest_generation: u64,
     pub runtime_version: String,
+    #[serde(
+        serialize_with = "serialize_portable_u64",
+        deserialize_with = "deserialize_portable_u64"
+    )]
     pub attempt: u64,
     pub reason: Option<SidecarRuntimeReason>,
 }
@@ -194,7 +321,9 @@ struct SidecarInvocationRef<'a> {
     id: &'a str,
     node_id: &'a str,
     command: &'a str,
+    #[serde(serialize_with = "serialize_portable_value_ref")]
     params: &'a Value,
+    #[serde(serialize_with = "serialize_portable_optional_u64")]
     timeout_ms: Option<u64>,
     idempotency_key: Option<&'a str>,
     session_key: Option<&'a str>,
@@ -244,6 +373,7 @@ pub enum SidecarConfigurationState {
     AwaitingAcknowledgement,
     AcknowledgementPending,
     Configured,
+    Activated,
     Failed,
 }
 
@@ -266,7 +396,11 @@ impl SidecarConfigurationExchange {
     /// # Errors
     ///
     /// Returns an error until the supplied handshake is authenticated.
-    pub fn new(handshake: &SidecarHandshake) -> Result<Self, SidecarConfigurationError> {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the authenticated handshake enforces a one-shot phase transition"
+    )]
+    pub fn new(handshake: SidecarHandshake) -> Result<Self, SidecarConfigurationError> {
         if handshake.state() != SidecarHandshakeState::Authenticated {
             return Err(SidecarConfigurationError::HandshakeNotAuthenticated);
         }
@@ -549,10 +683,22 @@ impl SidecarRuntimeBridge {
     /// Returns an error unless the exact runtime configuration acknowledgement
     /// has been delivered successfully, or for a command-runtime registration
     /// failure.
-    pub fn from_configuration<A: SidecarCapabilityAdapter + ?Sized>(
-        exchange: &SidecarConfigurationExchange,
+    pub fn activate<A: SidecarCapabilityAdapter + ?Sized>(
+        exchange: &mut SidecarConfigurationExchange,
+        channel: &mut crate::AuthenticatedSidecarChannel,
         adapter: &Arc<A>,
     ) -> Result<Self, SidecarRuntimeBridgeError> {
+        if channel.instance_id() != exchange.channel_instance_id {
+            channel.retire();
+            return Err(SidecarRuntimeBridgeError::ChannelInstanceMismatch);
+        }
+        if channel.is_retired() {
+            exchange.configuration = None;
+            exchange.expected_manifest = None;
+            exchange.max_payload_bytes = None;
+            exchange.state = SidecarConfigurationState::Failed;
+            return Err(SidecarRuntimeBridgeError::ChannelRetired);
+        }
         if exchange.role != SidecarPeerRole::Runtime {
             return Err(SidecarRuntimeBridgeError::RuntimeRoleRequired);
         }
@@ -569,8 +715,15 @@ impl SidecarRuntimeBridge {
         let max_payload_bytes = exchange
             .max_payload_bytes
             .ok_or(SidecarRuntimeBridgeError::ConfigurationNotValidated)?;
-        let runtime = build_command_runtime(configuration, &manifest, adapter, max_payload_bytes)?;
-        Ok(Self {
+        let liveness = channel.liveness();
+        let runtime = build_command_runtime(
+            configuration,
+            &manifest,
+            adapter,
+            max_payload_bytes,
+            &liveness,
+        )?;
+        let bridge = Self {
             runtime,
             manifest: manifest.clone(),
             status: SidecarRuntimeStatus {
@@ -580,7 +733,9 @@ impl SidecarRuntimeBridge {
                 attempt: 0,
                 reason: None,
             },
-        })
+        };
+        exchange.state = SidecarConfigurationState::Activated;
+        Ok(bridge)
     }
 
     #[must_use]
@@ -659,6 +814,7 @@ impl SidecarRuntimeBridge {
                 Some(SidecarRuntimeReason::Shutdown),
             ),
         };
+        let attempt = attempt.min(MAX_PORTABLE_JSON_INTEGER);
         self.status = SidecarRuntimeStatus {
             state,
             manifest_generation: self.manifest.manifest_generation,
@@ -674,6 +830,7 @@ fn build_command_runtime<A: SidecarCapabilityAdapter + ?Sized>(
     manifest: &SidecarRuntimeManifest,
     adapter: &Arc<A>,
     max_payload_bytes: usize,
+    liveness: &SidecarChannelLiveness,
 ) -> Result<CommandRuntime, RuntimeBuildError> {
     let mut builder = CommandRuntime::builder()
         .max_concurrency(usize::from(configuration.max_concurrency))
@@ -692,13 +849,25 @@ fn build_command_runtime<A: SidecarCapabilityAdapter + ?Sized>(
         builder = builder.capability(capability.clone());
     }
     let admission_adapter = Arc::clone(adapter);
+    let admission_liveness = liveness.clone();
     builder = builder.admission_policy(move |context| {
-        evaluate_sidecar_admission(Arc::clone(&admission_adapter), context, max_payload_bytes)
+        evaluate_sidecar_admission(
+            Arc::clone(&admission_adapter),
+            context,
+            max_payload_bytes,
+            admission_liveness.clone(),
+        )
     });
     for command in &manifest.commands {
         let command_adapter = Arc::clone(adapter);
+        let command_liveness = liveness.clone();
         builder = builder.command(command.clone(), move |context| {
-            evaluate_sidecar_invocation(Arc::clone(&command_adapter), context, max_payload_bytes)
+            evaluate_sidecar_invocation(
+                Arc::clone(&command_adapter),
+                context,
+                max_payload_bytes,
+                command_liveness.clone(),
+            )
         });
     }
     builder.build()
@@ -708,7 +877,12 @@ async fn evaluate_sidecar_admission<A: SidecarCapabilityAdapter + ?Sized>(
     adapter: Arc<A>,
     context: crate::InvocationAdmissionContext,
     max_payload_bytes: usize,
+    liveness: SidecarChannelLiveness,
 ) -> Result<(), HandlerError> {
+    if liveness.is_retired() {
+        context.cancellation.cancel();
+        return Err(channel_retired());
+    }
     let invocation_ref = SidecarInvocationRef::from(&context.invocation);
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::AdmissionRequest {
@@ -718,13 +892,20 @@ async fn evaluate_sidecar_admission<A: SidecarCapabilityAdapter + ?Sized>(
     ) {
         return Err(message_too_large());
     }
-    let decision = adapter
-        .admit(
-            SidecarInvocation::from(&context.invocation),
-            context.cancellation,
-        )
-        .await
-        .map_err(|error| adapter_failure(&error))?;
+    let cancellation = context.cancellation;
+    let adapter_future = adapter.admit(
+        SidecarInvocation::from(&context.invocation),
+        cancellation.clone(),
+    );
+    tokio::pin!(adapter_future);
+    let decision = tokio::select! {
+        biased;
+        () = liveness.retired() => {
+            cancellation.cancel();
+            return Err(channel_retired());
+        },
+        result = &mut adapter_future => result.map_err(|error| adapter_failure(&error))?,
+    };
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::AdmissionDecision {
             invocation_id: &context.invocation.id,
@@ -744,7 +925,12 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
     adapter: Arc<A>,
     context: InvocationContext,
     max_payload_bytes: usize,
+    liveness: SidecarChannelLiveness,
 ) -> Result<Value, HandlerError> {
+    if liveness.is_retired() {
+        context.cancellation.cancel();
+        return Err(channel_retired());
+    }
     let invocation_ref = SidecarInvocationRef::from(&context.invocation);
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::Invoke {
@@ -754,13 +940,20 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
     ) {
         return Err(message_too_large());
     }
-    let result = adapter
-        .invoke(
-            SidecarInvocation::from(&context.invocation),
-            context.cancellation,
-        )
-        .await
-        .map_err(|error| adapter_failure(&error))?;
+    let cancellation = context.cancellation;
+    let adapter_future = adapter.invoke(
+        SidecarInvocation::from(&context.invocation),
+        cancellation.clone(),
+    );
+    tokio::pin!(adapter_future);
+    let result = tokio::select! {
+        biased;
+        () = liveness.retired() => {
+            cancellation.cancel();
+            return Err(channel_retired());
+        },
+        result = &mut adapter_future => result.map_err(|error| adapter_failure(&error))?,
+    };
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::Result {
             invocation_id: &context.invocation.id,
@@ -777,7 +970,9 @@ fn validate_configuration(
     configuration: &SidecarRuntimeConfiguration,
     negotiated: SidecarProtocolSelection,
 ) -> Result<(), SidecarRuntimeBridgeError> {
-    if configuration.manifest_generation == 0 {
+    if configuration.manifest_generation == 0
+        || configuration.manifest_generation > MAX_PORTABLE_JSON_INTEGER
+    {
         return Err(SidecarRuntimeBridgeError::InvalidManifestGeneration);
     }
     if configuration.max_concurrency == 0
@@ -823,7 +1018,7 @@ fn validate_status_budget(
             state: SidecarRuntimeState::BackingOff,
             manifest_generation,
             runtime_version: runtime_version.to_owned(),
-            attempt: u64::MAX,
+            attempt: MAX_PORTABLE_JSON_INTEGER,
             reason: Some(SidecarRuntimeReason::DeliverySaturated),
         },
     };
@@ -897,6 +1092,13 @@ fn message_too_large() -> HandlerError {
     )
 }
 
+fn channel_retired() -> HandlerError {
+    HandlerError::new(
+        "SIDECAR_CHANNEL_RETIRED",
+        "authenticated sidecar channel is no longer live",
+    )
+}
+
 fn runtime_message_within_limit<T: Serialize>(message: &T, limit: usize) -> bool {
     let mut writer = PayloadSizeLimiter { written: 0, limit };
     serde_json::to_writer(&mut writer, message).is_ok()
@@ -947,6 +1149,10 @@ const fn disconnect_reason(reason: LifecycleDisconnectReason) -> SidecarRuntimeR
 pub enum SidecarRuntimeBridgeError {
     #[error("sidecar runtime configuration has not been authenticated and validated")]
     ConfigurationNotValidated,
+    #[error("sidecar runtime bridge cannot move between authenticated channel instances")]
+    ChannelInstanceMismatch,
+    #[error("sidecar runtime bridge requires a live authenticated channel")]
+    ChannelRetired,
     #[error("sidecar runtime status cannot fit the authenticated payload limit")]
     StatusMessageTooLarge,
     #[error("sidecar runtime bridge requires the runtime handshake role")]
@@ -1069,22 +1275,17 @@ mod tests {
         (supervisor, runtime, supervisor_channel, runtime_channel)
     }
 
-    fn authenticated_runtime_handshake() -> SidecarHandshake {
-        authenticated_pair().1
-    }
-
     fn validated_runtime_exchange(
         configuration: &SidecarRuntimeConfiguration,
     ) -> (
-        SidecarHandshake,
         SidecarConfigurationExchange,
         AuthenticatedSidecarChannel,
         SidecarRuntimeConfiguration,
     ) {
         let (supervisor, runtime, mut supervisor_channel, mut runtime_channel) =
             authenticated_pair();
-        let mut supervisor_exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
-        let mut runtime_exchange = SidecarConfigurationExchange::new(&runtime).unwrap();
+        let mut supervisor_exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
+        let mut runtime_exchange = SidecarConfigurationExchange::new(runtime).unwrap();
         let frame = supervisor_exchange
             .start(&mut supervisor_channel, configuration)
             .unwrap();
@@ -1102,7 +1303,7 @@ mod tests {
         supervisor_exchange
             .receive(&mut supervisor_channel, &acknowledgement)
             .unwrap();
-        (runtime, runtime_exchange, runtime_channel, received)
+        (runtime_exchange, runtime_channel, received)
     }
 
     fn configuration() -> SidecarRuntimeConfiguration {
@@ -1174,10 +1375,10 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_routes_admission_then_native_invocation() {
-        let (_handshake, exchange, _channel, _configuration) =
+        let (mut exchange, mut channel, _configuration) =
             validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
-        let bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
 
         assert_eq!(
             bridge.runtime().command_names().collect::<Vec<_>>(),
@@ -1215,14 +1416,14 @@ mod tests {
 
     #[tokio::test]
     async fn admission_denial_never_dispatches_native_work() {
-        let (_handshake, exchange, _channel, _configuration) =
+        let (mut exchange, mut channel, _configuration) =
             validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
         *adapter
             .denied_command
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("product.settings".into());
-        let bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
 
         assert_eq!(
             bridge
@@ -1269,10 +1470,10 @@ mod tests {
         let mut bounded = configuration();
         bounded.max_input_bytes = 4096;
         bounded.max_output_bytes = 4096;
-        let (_handshake, exchange, mut runtime_channel, _received) =
-            validated_runtime_exchange(&bounded);
+        let (mut exchange, mut runtime_channel, _received) = validated_runtime_exchange(&bounded);
         let adapter = Arc::new(RecordingAdapter::default());
-        let bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let bridge =
+            SidecarRuntimeBridge::activate(&mut exchange, &mut runtime_channel, &adapter).unwrap();
         let invocation = NodeInvocation::new(
             "invoke-boundary",
             "node-1",
@@ -1296,9 +1497,15 @@ mod tests {
         assert_eq!(adapter.admissions.load(Ordering::SeqCst), 0);
         assert_eq!(adapter.invocations.load(Ordering::SeqCst), 0);
 
+        let (mut result_exchange, mut result_channel, _received) =
+            validated_runtime_exchange(&bounded);
         let result_adapter = Arc::new(OversizedResultAdapter);
-        let result_bridge =
-            SidecarRuntimeBridge::from_configuration(&exchange, &result_adapter).unwrap();
+        let result_bridge = SidecarRuntimeBridge::activate(
+            &mut result_exchange,
+            &mut result_channel,
+            &result_adapter,
+        )
+        .unwrap();
         assert_eq!(
             result_bridge
                 .runtime()
@@ -1352,7 +1559,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_timeout_reaches_the_product_adapter() {
-        let (_handshake, exchange, _channel, _configuration) =
+        let (mut exchange, mut channel, _configuration) =
             validated_runtime_exchange(&configuration());
         let invoked = Arc::new(Notify::new());
         let cancelled = Arc::new(Notify::new());
@@ -1360,7 +1567,7 @@ mod tests {
             invoked: Arc::clone(&invoked),
             cancelled: Arc::clone(&cancelled),
         });
-        let bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
         let mut invocation =
             NodeInvocation::new("invoke-3", "node-1", "product.status", Value::Null);
         invocation.timeout_ms = Some(100);
@@ -1374,22 +1581,83 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn retired_channel_cancels_and_blocks_native_work() {
+        let (mut exchange, mut channel, _configuration) =
+            validated_runtime_exchange(&configuration());
+        let invoked = Arc::new(Notify::new());
+        let cancelled = Arc::new(Notify::new());
+        let adapter = Arc::new(CancellationAdapter {
+            invoked: Arc::clone(&invoked),
+            cancelled: Arc::clone(&cancelled),
+        });
+        let bridge = Arc::new(
+            SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap(),
+        );
+        let evaluation_bridge = Arc::clone(&bridge);
+        let evaluation = tokio::spawn(async move {
+            evaluation_bridge
+                .runtime()
+                .evaluate(NodeInvocation::new(
+                    "invoke-retired",
+                    "node-1",
+                    "product.status",
+                    Value::Null,
+                ))
+                .await
+        });
+        invoked.notified().await;
+        channel.retire();
+
+        assert_eq!(
+            evaluation.await.unwrap(),
+            InvocationResult::failure(
+                "SIDECAR_CHANNEL_RETIRED",
+                "authenticated sidecar channel is no longer live"
+            )
+        );
+        tokio::time::timeout(Duration::from_secs(1), cancelled.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            bridge
+                .runtime()
+                .evaluate(NodeInvocation::new(
+                    "invoke-after-retire",
+                    "node-1",
+                    "product.status",
+                    Value::Null,
+                ))
+                .await,
+            InvocationResult::failure(
+                "SIDECAR_CHANNEL_RETIRED",
+                "authenticated sidecar channel is no longer live"
+            )
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), invoked.notified())
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn configuration_requires_authenticated_runtime_and_bounded_manifest() {
         let adapter = Arc::new(RecordingAdapter::default());
         let starting = SidecarHandshake::new(offer(SidecarPeerRole::Runtime)).unwrap();
         assert!(matches!(
-            SidecarConfigurationExchange::new(&starting),
+            SidecarConfigurationExchange::new(starting),
             Err(SidecarConfigurationError::HandshakeNotAuthenticated)
         ));
 
-        let handshake = authenticated_runtime_handshake();
-        let exchange = SidecarConfigurationExchange::new(&handshake).unwrap();
+        let (_supervisor, handshake, _supervisor_channel, mut runtime_channel) =
+            authenticated_pair();
+        let selection = SidecarProtocolSelection::from(handshake.negotiated().unwrap());
+        let mut exchange = SidecarConfigurationExchange::new(handshake).unwrap();
         assert!(matches!(
-            SidecarRuntimeBridge::from_configuration(&exchange, &adapter),
+            SidecarRuntimeBridge::activate(&mut exchange, &mut runtime_channel, &adapter),
             Err(SidecarRuntimeBridgeError::ConfigurationNotValidated)
         ));
-        let selection = SidecarProtocolSelection::from(handshake.negotiated().unwrap());
         let mut invalid = configuration();
         invalid.manifest_generation = 0;
         assert!(matches!(
@@ -1428,8 +1696,8 @@ mod tests {
     fn configuration_exchange_preserves_channel_and_manifest_state() {
         let (supervisor, runtime, mut supervisor_channel, mut runtime_channel) =
             authenticated_pair();
-        let mut supervisor_exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
-        let mut runtime_exchange = SidecarConfigurationExchange::new(&runtime).unwrap();
+        let mut supervisor_exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
+        let mut runtime_exchange = SidecarConfigurationExchange::new(runtime).unwrap();
         let configuration = configuration();
 
         let frame = supervisor_exchange
@@ -1450,8 +1718,9 @@ mod tests {
             SidecarConfigurationState::AcknowledgementPending
         );
         assert!(matches!(
-            SidecarRuntimeBridge::from_configuration(
-                &runtime_exchange,
+            SidecarRuntimeBridge::activate(
+                &mut runtime_exchange,
+                &mut runtime_channel,
                 &Arc::new(RecordingAdapter::default())
             ),
             Err(SidecarRuntimeBridgeError::ConfigurationNotValidated)
@@ -1464,7 +1733,9 @@ mod tests {
             .unwrap()
             .is_none());
         let adapter = Arc::new(RecordingAdapter::default());
-        let bridge = SidecarRuntimeBridge::from_configuration(&runtime_exchange, &adapter).unwrap();
+        let bridge =
+            SidecarRuntimeBridge::activate(&mut runtime_exchange, &mut runtime_channel, &adapter)
+                .unwrap();
         assert_eq!(bridge.manifest(), &manifest);
         assert_eq!(
             supervisor_exchange.state(),
@@ -1472,7 +1743,7 @@ mod tests {
         );
         assert_eq!(
             runtime_exchange.state(),
-            SidecarConfigurationState::Configured
+            SidecarConfigurationState::Activated
         );
         assert!(!supervisor_channel.is_retired());
         assert!(!runtime_channel.is_retired());
@@ -1481,7 +1752,7 @@ mod tests {
     #[test]
     fn configuration_exchange_rejects_channel_substitution_without_mutation() {
         let (supervisor, _runtime, mut supervisor_channel, _runtime_channel) = authenticated_pair();
-        let mut exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
+        let mut exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
         let mut replacement = channel(SidecarPeerRole::Supervisor);
 
         assert!(matches!(
@@ -1505,8 +1776,8 @@ mod tests {
     fn failed_configuration_acknowledgement_delivery_is_terminal() {
         let (supervisor, runtime, mut supervisor_channel, mut runtime_channel) =
             authenticated_pair();
-        let mut supervisor_exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
-        let mut runtime_exchange = SidecarConfigurationExchange::new(&runtime).unwrap();
+        let mut supervisor_exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
+        let mut runtime_exchange = SidecarConfigurationExchange::new(runtime).unwrap();
         let frame = supervisor_exchange
             .start(&mut supervisor_channel, &configuration())
             .unwrap();
@@ -1531,7 +1802,7 @@ mod tests {
 
     #[test]
     fn bridge_uses_the_exact_authenticated_configuration() {
-        let (_runtime, exchange, _channel, mut caller_copy) =
+        let (mut exchange, mut channel, mut caller_copy) =
             validated_runtime_exchange(&configuration());
         caller_copy.max_concurrency = u16::MAX;
         caller_copy.max_input_bytes = u32::MAX;
@@ -1542,15 +1813,19 @@ mod tests {
         );
 
         let adapter = Arc::new(RecordingAdapter::default());
-        let bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
         assert_eq!(bridge.manifest().manifest_generation, 3);
+        assert!(matches!(
+            SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter),
+            Err(SidecarRuntimeBridgeError::ConfigurationNotValidated)
+        ));
     }
 
     #[test]
     fn forged_configuration_acknowledgement_is_terminal() {
         let (supervisor, _runtime, mut supervisor_channel, mut runtime_channel) =
             authenticated_pair();
-        let mut supervisor_exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
+        let mut supervisor_exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
         supervisor_exchange
             .start(&mut supervisor_channel, &configuration())
             .unwrap();
@@ -1596,7 +1871,7 @@ mod tests {
             .unwrap();
         assert_eq!(supervisor_channel.max_frame_bytes(), 1024);
 
-        let mut exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
+        let mut exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
         assert!(matches!(
             exchange.start(&mut supervisor_channel, &configuration()),
             Err(SidecarConfigurationError::Configuration(
@@ -1616,10 +1891,11 @@ mod tests {
 
     #[test]
     fn lifecycle_events_project_stable_secret_free_status() {
-        let (_handshake, exchange, _channel, _configuration) =
+        let (mut exchange, mut channel, _configuration) =
             validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
-        let mut bridge = SidecarRuntimeBridge::from_configuration(&exchange, &adapter).unwrap();
+        let mut bridge =
+            SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
         bridge.observe_lifecycle(&LifecycleEvent::Ready { attempt: 2 });
         assert_eq!(
             bridge.status(),
@@ -1660,6 +1936,47 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn runtime_messages_reject_nonportable_json_integers() {
+        let above_max = MAX_PORTABLE_JSON_INTEGER + 1;
+        let status = json!({
+            "type": "status",
+            "status": {
+                "state": "ready",
+                "manifestGeneration": above_max,
+                "runtimeVersion": "1.0.0",
+                "attempt": 1,
+                "reason": null
+            }
+        });
+        assert!(serde_json::from_value::<SidecarRuntimeMessage>(status).is_err());
+
+        let invalid_payload = SidecarRuntimeMessage::Result {
+            invocation_id: "invoke-unsafe".into(),
+            result: SidecarInvocationResult::Success {
+                payload: json!({"nested": [above_max]}),
+            },
+        };
+        assert!(serde_json::to_string(&invalid_payload).is_err());
+
+        let mut invalid_configuration = configuration();
+        invalid_configuration.manifest_generation = above_max;
+        let selection = SidecarProtocolSelection {
+            protocol_major: crate::SIDECAR_PROTOCOL_MAJOR,
+            protocol_minor: crate::SIDECAR_PROTOCOL_MINOR,
+            feature_bits: 0,
+            limits: SidecarLimits {
+                max_frame_bytes: 4096,
+                max_in_flight: 4,
+                bootstrap_timeout_ms: 1_000,
+            },
+        };
+        assert!(matches!(
+            validate_configuration(&invalid_configuration, selection),
+            Err(SidecarRuntimeBridgeError::InvalidManifestGeneration)
+        ));
     }
 
     #[test]

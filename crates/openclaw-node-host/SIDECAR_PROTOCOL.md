@@ -125,6 +125,11 @@ contains the typed configuration, configured acknowledgement, admission,
 invocation, result, cancellation, and status messages plus their exact compact
 JSON encodings. These payloads travel inside the already authenticated,
 sequenced frames; the message corpus does not replace the frame vectors.
+All integer fields, including integers nested inside invocation parameters or
+success payloads, must remain in JSON's exact `-(2^53 - 1)..=2^53 - 1` range.
+Serialization and deserialization reject values outside that range; the shared
+corpus exercises the positive boundary. Floating-point JSON numbers retain
+their normal finite IEEE-754 semantics.
 
 ## Runtime bridge
 
@@ -132,7 +137,12 @@ sequenced frames; the message corpus does not replace the frame vectors.
 validated configuration acknowledgement has been written successfully. The
 runtime remains `AcknowledgementPending` until that delivery is committed, so
 invocation work cannot race ahead of the supervisor-visible manifest. The
-bridge accepts one immutable connection manifest and requires its
+configuration exchange is consumed from its authenticated handshake, and a
+successful activation irreversibly moves it to `Activated`; neither phase can
+be replayed to multiply concurrency. Activation also requires the exact live
+authenticated channel. The bridge carries that channel's retirement signal:
+retirement blocks new native work and cancels in-flight adapter work. The bridge
+accepts one immutable connection manifest and requires its
 concurrency/input/output limits to remain within the negotiated sidecar envelope. Command and capability names
 use the shared ASCII grammar `[A-Za-z0-9._-]{1,128}`, are duplicate-free, and
 are sorted bytewise before acknowledgement; the OpenClaw-owned `system.*`

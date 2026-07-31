@@ -73,7 +73,7 @@ impl CancellationToken {
         }
     }
 
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.sender.send_replace(true);
     }
 }

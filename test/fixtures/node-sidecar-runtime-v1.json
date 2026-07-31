@@ -73,6 +73,16 @@
         "attempt": 1,
         "reason": null
       }
+    },
+    {
+      "type": "status",
+      "status": {
+        "state": "ready",
+        "manifestGeneration": 9007199254740991,
+        "runtimeVersion": "1.0.0",
+        "attempt": 9007199254740991,
+        "reason": null
+      }
     }
   ],
   "canonicalJson": [
@@ -83,6 +93,7 @@
     "{\"type\":\"invoke\",\"invocation\":{\"id\":\"invoke-1\",\"nodeId\":\"node-1\",\"command\":\"product.status\",\"params\":{\"verbose\":true},\"timeoutMs\":1000,\"idempotencyKey\":\"idem-1\",\"sessionKey\":\"agent:main:main\"}}",
     "{\"type\":\"result\",\"invocationId\":\"invoke-1\",\"result\":{\"outcome\":\"success\",\"payload\":{\"ready\":true}}}",
     "{\"type\":\"cancel\",\"invocationId\":\"invoke-1\"}",
-    "{\"type\":\"status\",\"status\":{\"state\":\"ready\",\"manifestGeneration\":3,\"runtimeVersion\":\"1.0.0\",\"attempt\":1,\"reason\":null}}"
+    "{\"type\":\"status\",\"status\":{\"state\":\"ready\",\"manifestGeneration\":3,\"runtimeVersion\":\"1.0.0\",\"attempt\":1,\"reason\":null}}",
+    "{\"type\":\"status\",\"status\":{\"state\":\"ready\",\"manifestGeneration\":9007199254740991,\"runtimeVersion\":\"1.0.0\",\"attempt\":9007199254740991,\"reason\":null}}"
   ]
 }

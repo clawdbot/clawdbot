@@ -8,7 +8,10 @@
 
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -16,7 +19,10 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::watch,
+};
 use zeroize::Zeroize;
 
 pub const SIDECAR_PROTOCOL_MAJOR: u16 = 1;
@@ -236,7 +242,28 @@ pub struct AuthenticatedSidecarChannel {
     max_frame_bytes: u32,
     send_sequence: u64,
     receive_sequence: u64,
-    retired: bool,
+    liveness: SidecarChannelLiveness,
+}
+
+#[derive(Clone)]
+pub(crate) struct SidecarChannelLiveness(Arc<watch::Sender<bool>>);
+
+impl SidecarChannelLiveness {
+    pub(crate) fn is_retired(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    pub(crate) async fn retired(&self) {
+        if self.is_retired() {
+            return;
+        }
+        let mut receiver = self.0.subscribe();
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 impl AuthenticatedSidecarChannel {
@@ -278,19 +305,23 @@ impl AuthenticatedSidecarChannel {
             max_frame_bytes,
             send_sequence: 0,
             receive_sequence: 0,
-            retired: false,
+            liveness: SidecarChannelLiveness(Arc::new(watch::channel(false).0)),
         })
     }
 
     /// Permanently retire this process-session channel.
     pub fn retire(&mut self) {
         self.key.0.zeroize();
-        self.retired = true;
+        self.liveness.0.send_replace(true);
     }
 
     #[must_use]
-    pub const fn is_retired(&self) -> bool {
-        self.retired
+    pub fn is_retired(&self) -> bool {
+        self.liveness.is_retired()
+    }
+
+    pub(crate) fn liveness(&self) -> SidecarChannelLiveness {
+        self.liveness.clone()
     }
 
     /// Return an opaque process-local identity for binding a state machine to
@@ -376,7 +407,7 @@ impl AuthenticatedSidecarChannel {
     /// the local ceiling, the sequence has been exhausted, or the channel was
     /// retired by an inbound or transport failure.
     pub fn seal<T: Serialize>(&mut self, payload: &T) -> Result<Vec<u8>, SidecarFrameError> {
-        if self.retired {
+        if self.is_retired() {
             return Err(SidecarFrameError::ChannelRetired);
         }
         let sequence = self
@@ -450,7 +481,7 @@ impl AuthenticatedSidecarChannel {
     /// Returns an error for authentication, session, generation, direction,
     /// sequence, version, size, framing, or payload failures.
     pub fn open<T: DeserializeOwned>(&mut self, frame: &[u8]) -> Result<T, SidecarFrameError> {
-        if self.retired {
+        if self.is_retired() {
             return Err(SidecarFrameError::ChannelRetired);
         }
 
@@ -529,6 +560,12 @@ impl AuthenticatedSidecarChannel {
         let decoded = serde_json::from_slice(payload).map_err(SidecarFrameError::Deserialize)?;
         self.receive_sequence = sequence;
         Ok(decoded)
+    }
+}
+
+impl Drop for AuthenticatedSidecarChannel {
+    fn drop(&mut self) {
+        self.liveness.0.send_replace(true);
     }
 }
 
