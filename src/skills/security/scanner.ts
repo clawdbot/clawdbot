@@ -292,12 +292,19 @@ function isBenignMemberExecMatch(
 
   if (match[1] !== undefined) {
     // Bare form: only `.exec(` (e.g. RegExp.exec) is benign, unless the object
-    // is a known child_process namespace.
+    // is a known child_process namespace (including aliases bound from
+    // child_process imports/requires, so `proc.exec(` fires when `proc` is a
+    // child_process namespace alias).
     const matchIndex = match.index;
     if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
       return false;
     }
-    return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+    for (const namespace of namespaceAliases) {
+      if (new RegExp(`\\b${namespace}\\s*\\.\\s*exec\\s*\\(`).test(line)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // Computed form `["exec"](`: benign unless the object is a known child_process

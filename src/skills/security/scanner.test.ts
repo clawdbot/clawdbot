@@ -256,6 +256,14 @@ proc["exec"]("node server.js");
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects bare child_process exec through a namespace alias",
+      source: `
+const proc = require("child_process");
+proc.exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects eval usage",
       source: `
 const code = "1+1";
