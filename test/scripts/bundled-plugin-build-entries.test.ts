@@ -349,6 +349,14 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("excludes the externalized Vydra provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/vydra/index.js");
+    expect(artifacts).not.toContain("dist/extensions/vydra/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/vydra/package.json");
+  });
+
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 

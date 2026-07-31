@@ -44,9 +44,7 @@ function resolveVydraVideoRequestBody(
     };
   }
   if ((req.inputImages?.length ?? 0) > 0) {
-    throw new Error(
-      `Vydra ${model} does not support image reference inputs in the bundled plugin.`,
-    );
+    throw new Error(`Vydra ${model} does not support image reference inputs in the Vydra plugin.`);
   }
   return {
     model,

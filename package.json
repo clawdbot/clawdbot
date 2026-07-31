@@ -317,6 +317,7 @@
     "!dist/extensions/vercel-ai-gateway/**",
     "!dist/extensions/voice-call/**",
     "!dist/extensions/voyage/**",
+    "!dist/extensions/vydra/**",
     "!dist/extensions/whatsapp/**",
     "!dist/extensions/zai/**",
     "!dist/extensions/zalo/**",

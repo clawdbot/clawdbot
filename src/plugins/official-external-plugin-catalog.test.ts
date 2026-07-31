@@ -2020,6 +2020,25 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
+  it("lists Vydra as an official external media provider", () => {
+    const vydra = expectCatalogEntry("vydra");
+    const manifest = getOfficialExternalPluginCatalogManifest(vydra);
+
+    expect(resolveOfficialExternalPluginId(vydra)).toBe("vydra");
+    expect(resolveOfficialExternalPluginInstall(vydra)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/vydra-provider",
+      npmSpec: "@openclaw/vydra-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["vydra"]);
+    expect(manifest?.contracts).toMatchObject({
+      speechProviders: ["vydra"],
+      imageGenerationProviders: ["vydra"],
+      videoGenerationProviders: ["vydra"],
+    });
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
