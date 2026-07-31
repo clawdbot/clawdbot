@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -13,6 +14,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -452,6 +454,100 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(3);
     } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
+    const existingTheme = await importCustomThemeFromUrl(
+      "existing",
+      async () =>
+        new Response(
+          JSON.stringify({ ...createTweakcnThemePayload(), name: "Existing Test Theme" }),
+          { headers: { "content-type": "application/json" }, status: 200 },
+        ),
+    );
+    const replacementPayload = createTweakcnThemePayload();
+    let releaseReplacement!: () => void;
+    const replacementGate = new Promise<void>((resolve) => {
+      releaseReplacement = resolve;
+    });
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    await context.addInitScript(
+      ({ key, theme }) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            customTheme: theme,
+            gatewayUrl: "ws://127.0.0.1:18789",
+            theme: "custom",
+          }),
+        );
+      },
+      { key: settingsStorageKey, theme: existingTheme },
+    );
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": configResponse({}, "custom-theme-race-1"),
+        "config.patch": { ok: true },
+      },
+    });
+    await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
+      await replacementGate;
+      await route.fulfill({ json: replacementPayload });
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      expect(response?.status()).toBe(200);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("config.get");
+
+      const themeSection = page.locator("#settings-appearance-theme");
+      const importer = page.locator(".settings-theme-import");
+      const importField = importer.locator("input");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+      await expect
+        .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
+        .toContain("Existing Test Theme");
+      await captureViewport(page, "04-custom-theme-before-replace.png");
+
+      await importField.fill("replacement");
+      await importer.locator("button.primary").click();
+      const replacementResponse = page.waitForResponse("https://tweakcn.com/r/themes/replacement");
+      await expect.poll(() => importer.locator("button.primary").isDisabled()).toBe(true);
+      await importer.locator("button.danger").click();
+
+      await expect
+        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
+        .toBe("true");
+      await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
+      await captureViewport(page, "05-custom-theme-cleared-with-replace-pending.png");
+
+      releaseReplacement();
+      await replacementResponse;
+      await expect
+        .poll(async () => {
+          const settings = await readPersistedSettings(page);
+          return {
+            customTheme: settings.customTheme,
+            theme: settings.theme,
+          };
+        })
+        .toEqual({ customTheme: undefined, theme: "claw" });
+      await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
+      await expect
+        .poll(() => importer.locator(".settings-theme-import__message").textContent())
+        .toContain("removed");
+      await captureViewport(page, "06-custom-theme-clear-remains-final.png");
+    } finally {
+      releaseReplacement();
       await context.close();
     }
   });
