@@ -35,7 +35,10 @@ const NON_OPEN_NODE_SOCKET_STATES = [
   { state: "closed", readyState: WebSocket.CLOSED },
 ];
 
-function createTestNodeSocket(sent: string[] = [], readyState = WebSocket.OPEN): TestNodeSocket {
+function createTestNodeSocket(
+  sent: string[] = [],
+  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
+): TestNodeSocket {
   return {
     readyState,
     bufferedAmount: 0,
