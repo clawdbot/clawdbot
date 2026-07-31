@@ -3,14 +3,17 @@ import {
   GatewayDispatchEvents,
   type APIMessage,
   type APIReaction,
+  type APIUnavailableGuild,
   type APIVoiceState,
+  type GatewayGuildCreateDispatchData,
+  type GatewayGuildDeleteDispatchData,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
 
-type DiscordMessageDispatchData = {
+export type DiscordMessageDispatchData = {
   id?: string;
   channel_id: string;
   channelId?: string;
@@ -51,9 +54,25 @@ export abstract class ResumedListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Resumed;
 }
 
+export abstract class GuildCreateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.GuildCreate;
+  abstract override handle(
+    data: GatewayGuildCreateDispatchData | APIUnavailableGuild,
+    client: Client,
+  ): Promise<void> | void;
+}
+
+export abstract class GuildDeleteListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.GuildDelete;
+  abstract override handle(
+    data: GatewayGuildDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
+}
+
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
-  abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
+  abstract override handle(data: APIMessage, client: Client): Promise<void> | void;
 }
 
 export abstract class InteractionCreateListener extends BaseListener {

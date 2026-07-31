@@ -8,11 +8,18 @@ import {
   type GatewayVoiceStateUpdateDispatchData,
 } from "discord-api-types/v10";
 
+export type DiscordGatewayVoiceStateTransition = {
+  current: APIVoiceState;
+  previous?: APIVoiceState;
+};
+
 export class DiscordGatewayVoiceStateCache {
   private readonly statesByGuild = new Map<string, Map<string, APIVoiceState>>();
+  private transitionsByState = new WeakMap<object, DiscordGatewayVoiceStateTransition>();
 
   clear(): void {
     this.statesByGuild.clear();
+    this.transitionsByState = new WeakMap();
   }
 
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
@@ -29,6 +36,18 @@ export class DiscordGatewayVoiceStateCache {
     return result;
   }
 
+  takeTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    const transition = this.transitionsByState.get(state);
+    if (!transition) {
+      return null;
+    }
+    this.transitionsByState.delete(state);
+    return {
+      current: { ...transition.current },
+      ...(transition.previous ? { previous: { ...transition.previous } } : {}),
+    };
+  }
+
   apply(payload: GatewayDispatchPayload): void {
     if (payload.t === GatewayDispatchEvents.Ready) {
       // READY starts a fresh session. Its following GUILD_CREATE events rebuild
@@ -43,9 +62,17 @@ export class DiscordGatewayVoiceStateCache {
         return;
       }
       const states = new Map<string, APIVoiceState>();
+      const membersByUserId = new Map(
+        (guild.members ?? []).map((member) => [member.user.id, member] as const),
+      );
       for (const state of guild.voice_states as APIBaseVoiceState[]) {
         if (state.channel_id) {
-          states.set(state.user_id, { ...state, guild_id: guild.id });
+          const member = state.member ?? membersByUserId.get(state.user_id);
+          states.set(state.user_id, {
+            ...state,
+            ...(member ? { member } : {}),
+            guild_id: guild.id,
+          });
         }
       }
       this.statesByGuild.set(guild.id, states);
@@ -58,8 +85,20 @@ export class DiscordGatewayVoiceStateCache {
         return;
       }
       const states = this.statesByGuild.get(guildId) ?? new Map<string, APIVoiceState>();
+      const previous = states.get(state.user_id);
+      // Discord may omit member metadata from a later state update. Keep the
+      // snapshot identity so participant labels and human/bot policy stay stable.
+      const current = {
+        ...state,
+        ...(state.member ? {} : previous?.member ? { member: previous.member } : {}),
+        guild_id: guildId,
+      };
+      this.transitionsByState.set(state, {
+        current,
+        ...(previous ? { previous: { ...previous } } : {}),
+      });
       if (state.channel_id) {
-        states.set(state.user_id, { ...state, guild_id: guildId });
+        states.set(state.user_id, current);
       } else {
         states.delete(state.user_id);
       }

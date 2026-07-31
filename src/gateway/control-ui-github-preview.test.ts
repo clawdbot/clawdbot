@@ -53,6 +53,32 @@ describe("parseControlUiGitHubPreviewTarget", () => {
       repo: "openclaw",
     });
     expect(target).toEqual({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" });
+    expect(
+      parseControlUiGitHubPreviewTarget({
+        kind: "issue",
+        number: 1,
+        owner: "github",
+        repo: ".github",
+      }),
+    ).toEqual({ kind: "issue", number: 1, owner: "github", repo: ".github" });
+    for (const repo of [
+      ".whitesource",
+      ".emacs.d",
+      "-edge",
+      "_edge",
+      "repo-",
+      "repo.",
+      "foo..bar",
+    ]) {
+      expect(
+        parseControlUiGitHubPreviewTarget({
+          kind: "issue",
+          number: 1,
+          owner: "openclaw",
+          repo,
+        }),
+      ).toEqual({ kind: "issue", number: 1, owner: "openclaw", repo });
+    }
   });
 
   it("rejects invalid repository paths and item numbers", () => {
@@ -72,6 +98,16 @@ describe("parseControlUiGitHubPreviewTarget", () => {
         repo: "..",
       }),
     ).toBeNull();
+    for (const repo of [".", "..", "repo.git", "repo.atom"]) {
+      expect(
+        parseControlUiGitHubPreviewTarget({
+          kind: "issue",
+          number: 1,
+          owner: "openclaw",
+          repo,
+        }),
+      ).toBeNull();
+    }
   });
 });
 
@@ -121,20 +157,39 @@ describe("loadControlUiGitHubPreview", () => {
     expect(avatarRequest instanceof URL ? avatarRequest.href : "").toContain(
       "avatars.githubusercontent.com/u/58493",
     );
+    expect(avatarRequest instanceof URL ? avatarRequest.hash : "").toBe("");
+    expect(avatarRequest instanceof URL ? avatarRequest.search : "").toBe("?s=64");
     expect(avatarRequest instanceof URL ? avatarRequest.searchParams.get("s") : null).toBe("64");
   });
 
-  it("does not fetch avatar URLs outside GitHub's avatar host", async () => {
+  it.each([
+    { avatarUrl: "https://example.com/avatar.png", number: 70001, repo: "avatar-host" },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u/58493?v=4#fragment",
+      number: 70002,
+      repo: "avatar-fragment",
+    },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u/../58493?v=4",
+      number: 70003,
+      repo: "avatar-dot-segment",
+    },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u\\58493?v=4",
+      number: 70004,
+      repo: "avatar-backslash",
+    },
+  ])("does not fetch unsafe avatar URL $avatarUrl", async ({ avatarUrl, number, repo }) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       githubJson(
         previewPayload({
-          user: { avatar_url: "https://example.com/avatar.png", login: "octocat" },
+          user: { avatar_url: avatarUrl, login: "octocat" },
         }),
       ),
     );
 
     const preview = await loadControlUiGitHubPreview(
-      { kind: "issue", number: 70001, owner: "openclaw", repo: "avatar-safety" },
+      { kind: "issue", number, owner: "openclaw", repo },
       fetchMock,
     );
 

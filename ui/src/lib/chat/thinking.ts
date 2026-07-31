@@ -15,7 +15,8 @@ type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+/** Canonical thinking levels; surfaces needing a subset derive it explicitly. */
+export const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
 export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (!raw) {
@@ -255,16 +256,19 @@ function resolveThinkingLevelOptions(params: {
 
 export function resolveChatThinkingSelectState(params: {
   catalog: readonly ThinkingCatalogEntry[];
+  defaults?: SessionsListResult["defaults"];
+  session?: GatewaySessionRow;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {
-  const session = params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+  const session =
+    params.session ?? params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
   const persisted = session?.thinkingLevel;
   const currentOverride =
     typeof persisted === "string" && persisted.trim()
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
-  const defaults = params.sessionsResult?.defaults;
+  const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
   const levels = resolveThinkingLevelOptions({
     catalog: params.catalog,

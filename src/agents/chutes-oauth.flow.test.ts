@@ -1,12 +1,10 @@
 /** Tests Chutes OAuth token exchange and refresh HTTP flows. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import {
-  CHUTES_TOKEN_ENDPOINT,
-  CHUTES_USERINFO_ENDPOINT,
-  exchangeChutesCodeForTokens,
-  refreshChutesTokens,
-} from "./chutes-oauth.js";
+import { exchangeChutesCodeForTokens, refreshChutesTokens } from "./chutes-oauth.js";
+
+const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
+const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 
 const urlToString = (url: Request | URL | string): string => {
   if (typeof url === "string") {

@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import { getTotalQueueSize, resetCommandQueueStateForTest } from "../process/command-queue.js";
+import { getTotalQueueSize } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { createDeferred } from "../test-utils/deferred.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {

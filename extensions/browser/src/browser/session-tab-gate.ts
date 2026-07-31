@@ -18,75 +18,6 @@ type BrowserSessionAccessWaiter = {
 
 const browserSessionGates = new Map<string, BrowserSessionGate>();
 
-function releaseBrowserSessionAccess(
-  sessionKey: string,
-  gate: BrowserSessionGate,
-  hasTrackedTabs: (sessionKey: string) => boolean,
-): () => void {
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    gate.activeAccesses = Math.max(0, gate.activeAccesses - 1);
-    pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
-  };
-}
-
-function releaseBrowserSessionCleanup(
-  sessionKey: string,
-  gate: BrowserSessionGate,
-  hasTrackedTabs: (sessionKey: string) => boolean,
-): () => void {
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    gate.cleanupActive = false;
-    pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
-  };
-}
-
-function pumpBrowserSessionGate(
-  sessionKey: string,
-  gate: BrowserSessionGate,
-  hasTrackedTabs: (sessionKey: string) => boolean,
-): void {
-  if (gate.cleanupActive || gate.activeAccesses > 0) {
-    return;
-  }
-  const cleanupWaiter = gate.cleanupWaiters.shift();
-  if (cleanupWaiter) {
-    gate.cleanupActive = true;
-    cleanupWaiter(releaseBrowserSessionCleanup(sessionKey, gate, hasTrackedTabs));
-    return;
-  }
-  while (gate.accessWaiters.length > 0) {
-    const waiter = gate.accessWaiters.shift();
-    if (!waiter || waiter.signal?.aborted) {
-      continue;
-    }
-    if (waiter.signal && waiter.onAbort) {
-      waiter.signal.removeEventListener("abort", waiter.onAbort);
-    }
-    gate.activeAccesses += 1;
-    waiter.resolve(releaseBrowserSessionAccess(sessionKey, gate, hasTrackedTabs));
-  }
-  if (
-    gate.activeAccesses === 0 &&
-    !gate.cleanupActive &&
-    gate.accessWaiters.length === 0 &&
-    gate.cleanupWaiters.length === 0 &&
-    !gate.latestOwnerClaim &&
-    !hasTrackedTabs(sessionKey)
-  ) {
-    browserSessionGates.delete(sessionKey);
-  }
-}
-
 function getBrowserSessionGate(sessionKey: string): BrowserSessionGate {
   const existing = browserSessionGates.get(sessionKey);
   if (existing) {
@@ -101,6 +32,57 @@ function getBrowserSessionGate(sessionKey: string): BrowserSessionGate {
   };
   browserSessionGates.set(sessionKey, gate);
   return gate;
+}
+
+function pumpBrowserSessionGate(
+  sessionKey: string,
+  gate: BrowserSessionGate,
+  hasTrackedTabs: (sessionKey: string) => boolean,
+): void {
+  if (gate.cleanupActive || gate.activeAccesses > 0) {
+    return;
+  }
+  const cleanupWaiter = gate.cleanupWaiters.shift();
+  if (cleanupWaiter) {
+    gate.cleanupActive = true;
+    cleanupWaiter(() => {
+      if (!gate.cleanupActive) {
+        return;
+      }
+      gate.cleanupActive = false;
+      pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
+    });
+    return;
+  }
+  while (gate.accessWaiters.length > 0) {
+    const waiter = gate.accessWaiters.shift();
+    if (!waiter || waiter.signal?.aborted) {
+      continue;
+    }
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
+    gate.activeAccesses += 1;
+    let released = false;
+    waiter.resolve(() => {
+      if (released) {
+        return;
+      }
+      released = true;
+      gate.activeAccesses = Math.max(0, gate.activeAccesses - 1);
+      pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
+    });
+  }
+  if (
+    gate.activeAccesses === 0 &&
+    !gate.cleanupActive &&
+    gate.accessWaiters.length === 0 &&
+    gate.cleanupWaiters.length === 0 &&
+    !gate.latestOwnerClaim &&
+    !hasTrackedTabs(sessionKey)
+  ) {
+    browserSessionGates.delete(sessionKey);
+  }
 }
 
 export function claimBrowserSessionOwner(sessionKey: string, ownerId: string): number {
@@ -146,7 +128,15 @@ export function acquireBrowserSessionAccess(
   const gate = getBrowserSessionGate(sessionKey);
   if (!gate.cleanupActive && gate.cleanupWaiters.length === 0) {
     gate.activeAccesses += 1;
-    return Promise.resolve(releaseBrowserSessionAccess(sessionKey, gate, hasTrackedTabs));
+    let released = false;
+    return Promise.resolve(() => {
+      if (released) {
+        return;
+      }
+      released = true;
+      gate.activeAccesses = Math.max(0, gate.activeAccesses - 1);
+      pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
+    });
   }
   return new Promise((resolve, reject) => {
     const waiter: BrowserSessionAccessWaiter = { resolve, reject, signal };

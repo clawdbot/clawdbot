@@ -70,6 +70,9 @@ function main() {
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
+    requireCompletePlatformAssets: args["require-complete-platform-assets"] === "true",
+    windowsNodeReleaseRunId: args["windows-node-release-run-id"],
+    windowsNodeInstallerDigests: args["windows-node-installer-digests"],
     nowMs: Date.now(),
   });
   if (result.errors.length > 0 || !result.manifest) {

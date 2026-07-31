@@ -11,7 +11,7 @@ import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 const LEGACY_STORE_VERSION = 1;
 export const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
 export const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
-export const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type TelegramBotInfoCacheState = {
   tokenFingerprint: string;
@@ -29,8 +29,6 @@ type TelegramBotInfoCacheStore = {
   lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
   delete(key: string): Promise<boolean>;
 };
-
-let botInfoCacheStoreForTest: TelegramBotInfoCacheStore | undefined;
 
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
@@ -53,14 +51,11 @@ export function resolveTelegramBotInfoCachePath(
 }
 
 function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
-  return (
-    botInfoCacheStoreForTest ??
-    getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
-      namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-      maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-      defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
-    })
-  );
+  return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
+    namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+    defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
+  });
 }
 
 function parseCachedTelegramBotInfo(value: unknown) {
@@ -142,12 +137,6 @@ export async function writeCachedTelegramBotInfo(params: {
 
 export async function deleteCachedTelegramBotInfo(params: { accountId?: string }): Promise<void> {
   await openBotInfoCacheStore().delete(normalizeTelegramStateAccountId(params.accountId));
-}
-
-export function setTelegramBotInfoCacheStoreForTest(
-  store: TelegramBotInfoCacheStore | undefined,
-): void {
-  botInfoCacheStoreForTest = store;
 }
 
 export async function listTelegramLegacyBotInfoCacheEntries(params: {

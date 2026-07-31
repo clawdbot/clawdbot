@@ -18,38 +18,6 @@ export function normalizeAuthEmailToken(value: string | undefined): string | und
 }
 
 /**
- * Returns true if `existing` and `incoming` provably belong to the same
- * account. Used to gate cross-agent credential mirroring.
- */
-export function isSameOAuthIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
-): boolean {
-  const aAcct = normalizeAuthIdentityToken(existing.accountId);
-  const bAcct = normalizeAuthIdentityToken(incoming.accountId);
-  const aEmail = normalizeAuthEmailToken(existing.email);
-  const bEmail = normalizeAuthEmailToken(incoming.email);
-  const aHasIdentity = aAcct !== undefined || aEmail !== undefined;
-  const bHasIdentity = bAcct !== undefined || bEmail !== undefined;
-
-  if (aHasIdentity !== bHasIdentity) {
-    return false;
-  }
-
-  if (aHasIdentity) {
-    if (aAcct !== undefined && bAcct !== undefined) {
-      return aAcct === bAcct;
-    }
-    if (aEmail !== undefined && bEmail !== undefined) {
-      return aEmail === bEmail;
-    }
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * One-sided copy gate for both directions:
  * - mirror: sub-agent refresh -> main-agent store
  * - adopt: main-agent store -> sub-agent store

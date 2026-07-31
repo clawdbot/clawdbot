@@ -5,7 +5,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import {
   createOpenClawTestState,
@@ -65,18 +65,75 @@ async function listMediaFiles(root: string): Promise<string[]> {
   return entries;
 }
 
+function createInjectedRequest(onEnd: (response: PassThrough) => void): {
+  requestImpl: typeof http.request;
+  requestEnded: Promise<void>;
+} {
+  const response = Object.assign(new PassThrough(), {
+    statusCode: 200,
+    headers: { "content-type": "text/plain" },
+  });
+  let markRequestEnded!: () => void;
+  const requestEnded = new Promise<void>((resolve) => {
+    markRequestEnded = resolve;
+  });
+  const request = Object.assign(new EventEmitter(), {
+    end: () => {
+      onEnd(response);
+      markRequestEnded();
+    },
+    destroy: (err?: Error) => {
+      if (err) {
+        request.emit("error", err);
+      }
+      response.destroy();
+    },
+  }) as unknown as ReturnType<typeof http.request>;
+  const requestImpl = ((_url: URL, _options: unknown, onResponse: (res: unknown) => void) => {
+    onResponse(response);
+    return request;
+  }) as unknown as typeof http.request;
+  return { requestImpl, requestEnded };
+}
+
+function useInjectedRequest(
+  requestImpl: typeof http.request,
+  timeouts: { responseHeaderTimeoutMs: number; readIdleTimeoutMs: number },
+): void {
+  setMediaStoreDownloadDepsForTest({
+    httpRequest: requestImpl,
+    resolvePinnedHostname: async (hostname) => ({
+      hostname,
+      addresses: ["127.0.0.1"],
+      lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+    }),
+    ...timeouts,
+  });
+}
+
+// Tight budgets go only on the phase a test asserts times out. Phases expected
+// to make progress keep production-default budgets: a 40ms real-timer watchdog
+// on a progressing phase fires spuriously under CI worker contention.
+function usePinnedResolver(timeouts?: {
+  responseHeaderTimeoutMs?: number;
+  readIdleTimeoutMs?: number;
+}): void {
+  setMediaStoreDownloadDepsForTest({
+    resolvePinnedHostname: async (hostname) => ({
+      hostname,
+      addresses: ["127.0.0.1"],
+      lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+    }),
+    ...timeouts,
+  });
+}
+
 describe("media store download timeouts", () => {
   let testState: OpenClawTestState;
   let mediaRoot: string;
   let server: http.Server;
   let baseUrl: string;
-  let mode:
-    | "hang-headers"
-    | "stall-body"
-    | "stall-error"
-    | "stall-redirect"
-    | "slow-progress"
-    | "ok" = "ok";
+  let mode: "hang-headers" | "stall-body" | "stall-error" | "stall-redirect" | "ok" = "ok";
   let openSockets: Set<import("node:net").Socket>;
   let stalledSocketClosed: Promise<void> | undefined;
 
@@ -116,22 +173,6 @@ describe("media store download timeouts", () => {
         res.write("partial redirect");
         return;
       }
-      if (mode === "slow-progress") {
-        res.writeHead(200, { "content-type": "text/plain" });
-        res.write("a");
-        let chunksRemaining = 5;
-        const interval = setInterval(() => {
-          chunksRemaining -= 1;
-          if (chunksRemaining === 0) {
-            clearInterval(interval);
-            res.end("e");
-            return;
-          }
-          res.write("a");
-        }, 50);
-        res.once("close", () => clearInterval(interval));
-        return;
-      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok");
     });
@@ -151,15 +192,7 @@ describe("media store download timeouts", () => {
   beforeEach(() => {
     mode = "ok";
     stalledSocketClosed = undefined;
-    setMediaStoreDownloadDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-      responseHeaderTimeoutMs: HEADER_TIMEOUT_MS,
-      readIdleTimeoutMs: IDLE_TIMEOUT_MS,
-    });
+    usePinnedResolver();
   });
 
   afterEach(async () => {
@@ -183,6 +216,7 @@ describe("media store download timeouts", () => {
 
   it("times out when the server accepts a connection but never sends headers", async () => {
     mode = "hang-headers";
+    usePinnedResolver({ responseHeaderTimeoutMs: HEADER_TIMEOUT_MS });
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(
       /timed out waiting for response headers after 40ms/i,
     );
@@ -199,7 +233,6 @@ describe("media store download timeouts", () => {
       }) as unknown as typeof http.request,
       resolvePinnedHostname: async () => await new Promise<never>(() => {}),
       responseHeaderTimeoutMs: HEADER_TIMEOUT_MS,
-      readIdleTimeoutMs: IDLE_TIMEOUT_MS,
     });
 
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(
@@ -211,6 +244,7 @@ describe("media store download timeouts", () => {
 
   it("times out when the response body stalls after partial data", async () => {
     mode = "stall-body";
+    usePinnedResolver({ readIdleTimeoutMs: IDLE_TIMEOUT_MS });
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(/stalled: no data received for 40ms/i);
     await expectSocketClosed(stalledSocketClosed);
     expect(await listMediaFiles(mediaRoot)).toEqual([]);
@@ -231,53 +265,58 @@ describe("media store download timeouts", () => {
   });
 
   it("keeps a slow response alive while each body chunk makes progress", async () => {
-    mode = "slow-progress";
-    setMediaStoreDownloadDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-      responseHeaderTimeoutMs: 500,
-      readIdleTimeoutMs: 200,
-    });
-    const startedAt = Date.now();
-    const saved = await saveMediaSource(baseUrl);
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(200);
-    expect(await fs.readFile(saved.path, "utf8")).toBe("aaaaae");
+    vi.useFakeTimers();
+    try {
+      const { requestImpl, requestEnded } = createInjectedRequest((response) => {
+        response.write("a");
+        let chunksRemaining = 5;
+        const interval = setInterval(() => {
+          chunksRemaining -= 1;
+          if (chunksRemaining === 0) {
+            clearInterval(interval);
+            response.end("e");
+            return;
+          }
+          response.write("a");
+        }, 50);
+        response.once("close", () => clearInterval(interval));
+      });
+      useInjectedRequest(requestImpl, {
+        responseHeaderTimeoutMs: 500,
+        readIdleTimeoutMs: 200,
+      });
+
+      const result = saveMediaSource(baseUrl);
+      await requestEnded;
+      await vi.advanceTimersByTimeAsync(250);
+
+      const saved = await result;
+      expect(await fs.readFile(saved.path, "utf8")).toBe("aaaaae");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the header deadline when an injected request responds synchronously", async () => {
-    const response = Object.assign(new PassThrough(), {
-      statusCode: 200,
-      headers: { "content-type": "text/plain" },
-    });
-    const request = Object.assign(new EventEmitter(), {
-      end: () => setTimeout(() => response.end("sync response"), 80),
-      destroy: (err?: Error) => {
-        if (err) {
-          request.emit("error", err);
-        }
-        response.destroy();
-      },
-    }) as unknown as ReturnType<typeof http.request>;
-    const requestImpl = ((_url: URL, _options: unknown, onResponse: (res: unknown) => void) => {
-      onResponse(response);
-      return request;
-    }) as unknown as typeof http.request;
-    setMediaStoreDownloadDepsForTest({
-      httpRequest: requestImpl,
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-      responseHeaderTimeoutMs: 30,
-      readIdleTimeoutMs: 200,
-    });
+    vi.useFakeTimers();
+    try {
+      const { requestImpl, requestEnded } = createInjectedRequest((response) => {
+        setTimeout(() => response.end("sync response"), 80);
+      });
+      useInjectedRequest(requestImpl, {
+        responseHeaderTimeoutMs: 30,
+        readIdleTimeoutMs: 200,
+      });
 
-    const saved = await saveMediaSource(baseUrl);
-    expect(await fs.readFile(saved.path, "utf8")).toBe("sync response");
+      const result = saveMediaSource(baseUrl);
+      await requestEnded;
+      await vi.advanceTimersByTimeAsync(80);
+
+      const saved = await result;
+      expect(await fs.readFile(saved.path, "utf8")).toBe("sync response");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still saves when the remote body completes before idle timeout", async () => {

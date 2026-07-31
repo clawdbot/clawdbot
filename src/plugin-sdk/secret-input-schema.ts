@@ -17,6 +17,12 @@ export function buildSecretInputSchema() {
   return secretInputSchema;
 }
 
+/** Register a plugin-owned config schema leaf for redaction in host config projections. */
+export function registerSensitiveConfigSchema<TSchema extends z.ZodType>(schema: TSchema): TSchema {
+  sensitive.add(schema);
+  return schema;
+}
+
 const providerSchema = z
   .string()
   .regex(

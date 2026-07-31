@@ -23,7 +23,10 @@ vi.mock("../agents/model-catalog.js", () => ({
     provider: string,
     modelId: string,
   ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
-  loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", async (importOriginal) => ({
@@ -374,6 +377,15 @@ describe("doctor runtime tool schema checks", () => {
     );
     expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "worker", toolPolicyAuditLogLevel: "debug" }),
+    );
+    expect(mocks.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: "worker" }),
     );
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
@@ -1161,3 +1173,4 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

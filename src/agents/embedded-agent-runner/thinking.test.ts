@@ -5,17 +5,16 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
-  OMITTED_ASSISTANT_REASONING_TEXT,
   assessLastAssistantMessage,
   dropReasoningFromHistory,
   dropThinkingBlocks,
-  isAssistantMessageWithContent,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   // Single-assistant fixture exercises the "latest assistant turn" path where
@@ -59,21 +58,6 @@ describe("thinking-free history contract", () => {
       expect(result).toBe(messages);
     },
   );
-});
-
-describe("isAssistantMessageWithContent", () => {
-  it("accepts assistant messages with array content and rejects others", () => {
-    const assistant = castAgentMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "ok" }],
-    });
-    const user = castAgentMessage({ role: "user", content: "hi" });
-    const malformed = castAgentMessage({ role: "assistant", content: "not-array" });
-
-    expect(isAssistantMessageWithContent(assistant)).toBe(true);
-    expect(isAssistantMessageWithContent(user)).toBe(false);
-    expect(isAssistantMessageWithContent(malformed)).toBe(false);
-  });
 });
 
 describe("dropThinkingBlocks", () => {
@@ -1293,3 +1277,4 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(result).toBe(messages);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

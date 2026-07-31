@@ -11,10 +11,7 @@ import {
   cellNetworkName,
   cellOwnerId,
   DEFAULT_FLEET_IMAGE,
-  FLEET_BASE_PORT,
   FLEET_ATTEMPT_LABEL,
-  FLEET_CONTAINER_AUTH_SECRET_DIR,
-  FLEET_CONTAINER_STATE_DIR,
   FLEET_ENV_KEYS_LABEL,
   FLEET_GATEWAY_PORT,
   FLEET_OWNER_LABEL,
@@ -26,6 +23,9 @@ import {
   validateTenantId,
 } from "./cell-profile.js";
 
+const FLEET_BASE_PORT = 19_100;
+const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
+const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
 const TEST_ENVIRONMENT_FILE = "/tmp/openclaw-fleet-env/cell.env";
 
 function makeProfile(overrides: Partial<CellContainerProfile> = {}): CellContainerProfile {

@@ -354,9 +354,28 @@ describe("nextcloud-talk send cfg threading", () => {
     expect(hoisted.resolveNextcloudTalkAccount).not.toHaveBeenCalled();
   });
 
-  it("uses provided cfg for sendReaction and posts the reaction payload", async () => {
+  it("uses provided cfg, posts the reaction payload, and discards the success body", async () => {
     const cfg = { source: "provided" } as const;
-    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    const events: string[] = [];
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            events.push("cancel");
+          },
+        }),
+        { status: 201 },
+      ),
+    );
+    hoisted.mockFetchGuard.mockImplementationOnce(
+      async (p: { url: string; init?: RequestInit }) => ({
+        response: await globalThis.fetch(p.url, p.init),
+        release: async () => {
+          events.push("release");
+        },
+        finalUrl: p.url,
+      }),
+    );
 
     const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
       cfg,
@@ -387,6 +406,7 @@ describe("nextcloud-talk send cfg threading", () => {
       },
     );
     expect(result).toEqual({ ok: true });
+    expect(events).toEqual(["cancel", "release"]);
   });
 
   it("surfaces sendReaction HTTP failures", async () => {

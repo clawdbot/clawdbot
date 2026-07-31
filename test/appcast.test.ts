@@ -60,6 +60,7 @@ describe("appcast.xml", () => {
         throw new Error(`Appcast entry missing version fields: ${item.raw}`);
       }
       expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion));
+      expect(item.raw).toMatch(/sparkle:edSignature="[^"]+"/u);
     }
   });
 

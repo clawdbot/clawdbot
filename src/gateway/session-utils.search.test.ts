@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -29,7 +30,6 @@ const MAIN_SESSION_ID = "sess-main";
 const TRANSCRIPT_TOTAL_TOKENS = 3_200;
 const TRANSCRIPT_COST_USD = 0.007725;
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const ANTHROPIC_CONTEXT_TOKENS = 1_048_576;
 const FREE_OPENAI_MODEL = "gpt-5.3-codex-spark";
 
 type TranscriptUsageFixture = {
@@ -317,7 +317,7 @@ function transcriptFallbackEntry(now: number, overrides: Partial<SessionEntry> =
 
 function expectAnthropicBackfill(session: ListedSession | undefined) {
   expectTranscriptBackfill(session, {
-    contextTokens: ANTHROPIC_CONTEXT_TOKENS,
+    contextTokens: ANTHROPIC_CONTEXT_1M_TOKENS,
     estimatedCostUsd: TRANSCRIPT_COST_USD,
   });
 }
@@ -583,6 +583,52 @@ describe("listSessionsFromStore search", () => {
     });
 
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
+  });
+
+  test("ranks sessions by real interaction without heartbeat or cron noise", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "main",
+        updatedAt: now - 10_000,
+        lastInteractionAt: now - 1_000,
+      } as SessionEntry,
+      "agent:main:heartbeat-noise": {
+        sessionId: "heartbeat-noise",
+        updatedAt: now,
+        lastInteractionAt: now - 5_000,
+        pinnedAt: now,
+      } as SessionEntry,
+      "agent:main:background-only": {
+        sessionId: "background-only",
+        updatedAt: now + 1_000,
+      } as SessionEntry,
+      "agent:main:main:heartbeat": {
+        sessionId: "isolated-heartbeat",
+        updatedAt: now + 3_000,
+        lastInteractionAt: now + 3_000,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:cron:job-1:run:run-abc": {
+        sessionId: "run-abc",
+        updatedAt: now + 2_000,
+        lastInteractionAt: now + 2_000,
+      } as SessionEntry,
+    };
+
+    const result = listSearchSessions({
+      store,
+      opts: {
+        requireLastInteraction: true,
+        sortBy: "lastInteractionAt",
+      },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+      "agent:main:heartbeat-noise",
+    ]);
+    expect(result.sessions[0]?.lastInteractionAt).toBe(now - 1_000);
   });
 
   test.each([

@@ -16,7 +16,7 @@ import {
   shouldRetryTelegramTransportFallback,
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
-import { resolveTelegramMediaPlaceholder } from "./helpers.js";
+import { resolveTelegramPrimaryMedia, type TelegramMediaKind } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
@@ -375,7 +375,7 @@ async function resolveStickerMedia(params: {
   | {
       path: string;
       contentType?: string;
-      placeholder: string;
+      kind: TelegramMediaKind;
       stickerMetadata?: StickerMetadata;
     }
   | null
@@ -429,7 +429,7 @@ async function resolveStickerMedia(params: {
     return {
       path: saved.path,
       contentType: saved.contentType,
-      placeholder: "<media:sticker>",
+      kind: "sticker",
       stickerMetadata: {
         emoji,
         setName,
@@ -444,7 +444,7 @@ async function resolveStickerMedia(params: {
   return {
     path: saved.path,
     contentType: saved.contentType,
-    placeholder: "<media:sticker>",
+    kind: "sticker",
     stickerMetadata: {
       emoji: sticker.emoji ?? undefined,
       setName: sticker.set_name ?? undefined,
@@ -466,7 +466,7 @@ export async function resolveMedia(params: {
 }): Promise<{
   path: string;
   contentType?: string;
-  placeholder: string;
+  kind: TelegramMediaKind;
   stickerMetadata?: StickerMetadata;
 } | null> {
   const {
@@ -517,8 +517,12 @@ export async function resolveMedia(params: {
     dangerouslyAllowPrivateNetwork,
     abortSignal,
   });
-  const placeholder = saved.contentType?.startsWith("audio/")
-    ? "<media:audio>"
-    : (resolveTelegramMediaPlaceholder(msg) ?? "<media:document>");
-  return { path: saved.path, contentType: saved.contentType, placeholder };
+  const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
+  const kind =
+    nativeKind === "sticker"
+      ? nativeKind
+      : saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind;
+  return { path: saved.path, contentType: saved.contentType, kind };
 }

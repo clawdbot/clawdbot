@@ -1,0 +1,19 @@
+title: Slack progress commentary true is independent from tool progress
+scenario:
+  id: slack-progress-commentary-true
+  surface: channels
+  coverage:
+    primary:
+      - agent-runtime.streaming-replies
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaProgressCommentaryTrueScenario }

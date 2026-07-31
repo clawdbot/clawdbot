@@ -13,7 +13,7 @@ import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 type CronRunHistorySortDir = "asc" | "desc";
 type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
-export type ReadCronTaskRunHistoryPageOptions = {
+type ReadCronTaskRunHistoryPageOptions = {
   storeKey: string;
   limit?: number;
   offset?: number;
@@ -30,7 +30,7 @@ export type ReadCronTaskRunHistoryPageOptions = {
   jobNameById?: Record<string, string>;
 };
 
-export type CronTaskRunHistoryPage = {
+type CronTaskRunHistoryPage = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;

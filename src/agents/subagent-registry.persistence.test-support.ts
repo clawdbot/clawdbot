@@ -12,6 +12,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
@@ -19,11 +20,37 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
+/** Expands shorthand test records into the canonical nested persistence shape. */
+export function createCanonicalSubagentRunFixture(run: SubagentRunRecord): SubagentRunRecord {
+  const terminal = typeof run.endedAt === "number";
+  return {
+    execution: terminal
+      ? { status: "terminal", startedAt: run.startedAt, endedAt: run.endedAt, outcome: run.outcome }
+      : { status: "running", startedAt: run.startedAt },
+    completion: { required: run.expectsCompletionMessage === true },
+    delivery: {
+      status:
+        run.expectsCompletionMessage === false
+          ? "not_required"
+          : terminal
+            ? "pending"
+            : "not_required",
+    },
+    ...run,
+  };
+}
+
+export function canonicalSubagentRunFixtures(
+  runs: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunRecord> {
+  return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
+}
+
 /** Reads test session entries through the active SQLite accessor. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  ) as SessionStore;
+  ) as unknown as SessionStore;
 }
 
 /** Writes or updates one SQLite-backed subagent session entry for persistence tests. */
@@ -75,6 +102,11 @@ export function createSubagentRegistryTestDeps(
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
+    getGatewayRecoveryRuntime: vi.fn(() => ({
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    })),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

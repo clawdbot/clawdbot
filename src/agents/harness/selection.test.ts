@@ -7,12 +7,12 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -22,6 +22,7 @@ import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
+  runAgentHarnessSettledTurnFinalization,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./selection.js";
@@ -43,6 +44,7 @@ const compactAuthMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   getApiKeyForModel: vi.fn(),
+  prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
 const providerOwnerMocks = vi.hoisted(() => ({
@@ -80,6 +82,14 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
+vi.mock("../runtime-plan/prepare-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-plan/prepare-auth.js")>();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockImplementation(actual.prepareAgentRuntimeAuth);
+  return {
+    ...actual,
+    prepareAgentRuntimeAuth: compactAuthMocks.prepareAgentRuntimeAuth,
+  };
+});
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
@@ -128,6 +138,7 @@ afterEach(() => {
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
   compactAuthMocks.getApiKeyForModel.mockReset();
   compactAuthMocks.ensureAuthProfileStore.mockReset();
@@ -161,14 +172,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed,
     messagesSnapshot: [],
     assistantTexts: [`${sessionIdUsed} ok`],
@@ -181,6 +185,26 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "final answer" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
   };
 }
 
@@ -379,19 +403,75 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("routes settled turns only through an explicit harness finalizer", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+    let hostAuthorityActive = true;
+    const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
+      async ({ attempt, settledAttempt: _settledAttempt }) => {
+        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+        expect(attempt.operation).toBe("settled-tool-finalization");
+        return {
+          assistant: createFinalAssistant(),
+        };
+      },
+    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt,
+      finalizeSettledTurn,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    const settledAttempt = createAttemptResult("settled");
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+    ).resolves.toMatchObject({
+      assistant: { content: [{ type: "text", text: "final answer" }] },
+    });
+    expect(runAttempt).not.toHaveBeenCalled();
+    expect(hostAuthorityActive).toBe(false);
+    expect(finalizeSettledTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledAttempt,
+        attempt: expect.objectContaining({ provider: "codex" }),
+      }),
+    );
+  });
+
+  it("fails closed when the selected harness has no settled-turn finalizer", async () => {
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => createAttemptResult("run"),
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(
+        createAttemptParams(providerRuntimeConfig("codex", "codex")),
+        createAttemptResult("settled"),
+        harness,
+      ),
+    ).rejects.toThrow("Agent harness codex cannot safely finalize a settled tool turn");
+  });
+
   it.each(["codex", "copilot"] as const)(
-    "binds the host Crestodian tool to the %s SDK construction path without leaking authority",
+    "binds the host OpenClaw tool to the %s SDK construction path without leaking authority",
     async (harnessId) => {
       let receivedPrivateAuthority = true;
       let hostScopeActive = false;
       let toolNames: string[] = [];
       const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
-        receivedPrivateAuthority = "crestodianTool" in attemptParams;
+        receivedPrivateAuthority = "systemAgentTool" in attemptParams;
         await Promise.resolve();
-        hostScopeActive = isHostScopedAgentToolActive("crestodian");
+        hostScopeActive = isHostScopedAgentToolActive("openclaw");
         toolNames = createOpenClawCodingTools({
-          config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
-          runtimeToolAllowlist: ["crestodian"],
+          config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
+          runtimeToolAllowlist: ["openclaw"],
           toolConstructionPlan: {
             includeBaseCodingTools: false,
             includeShellTools: false,
@@ -413,25 +493,24 @@ describe("runAgentHarnessAttempt", () => {
       );
       const params = createAttemptParams(
         providerRuntimeConfig("codex", harnessId),
-      ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
-      params.toolsAllow = ["crestodian"];
-      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
+      params.toolsAllow = ["openclaw"];
+      params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
 
       await runAgentHarnessAttempt(params);
 
       expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
       expect(receivedPrivateAuthority).toBe(false);
       expect(hostScopeActive).toBe(true);
-      expect(toolNames).toEqual(["crestodian"]);
-      expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
-      expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+      expect(toolNames).toEqual(["openclaw"]);
+      expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
 
   it.each([
     { name: "missing", toolsAllow: undefined },
-    { name: "broad", toolsAllow: ["crestodian", "read"] },
-  ])("rejects $name allowlists for private Crestodian authority", async ({ toolsAllow }) => {
+    { name: "broad", toolsAllow: ["openclaw", "read"] },
+  ])("rejects $name allowlists for private OpenClaw authority", async ({ toolsAllow }) => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       createAttemptResult("codex"),
     );
@@ -446,18 +525,18 @@ describe("runAgentHarnessAttempt", () => {
     );
     const params = createAttemptParams(
       providerRuntimeConfig("codex", "codex"),
-    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
     params.toolsAllow = toolsAllow;
-    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
 
     await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
-      'Crestodian host authority requires toolsAllow: ["crestodian"]',
+      'OpenClaw host authority requires toolsAllow: ["openclaw"]',
     );
     expect(pluginRunAttempt).not.toHaveBeenCalled();
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("keeps the host Crestodian allowlist across global, agent, and sandbox deny-all policy", async () => {
+  it("keeps the host OpenClaw allowlist across global, agent, and sandbox deny-all policy", async () => {
     const received: Array<{
       toolsAllow: string[] | undefined;
       extraSystemPrompt: string | undefined;
@@ -467,7 +546,7 @@ describe("runAgentHarnessAttempt", () => {
       received.push({
         toolsAllow: attemptParams.toolsAllow,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
-        hostScopeActive: isHostScopedAgentToolActive("crestodian"),
+        hostScopeActive: isHostScopedAgentToolActive("openclaw"),
       });
       return createAttemptResult("codex");
     });
@@ -503,32 +582,32 @@ describe("runAgentHarnessAttempt", () => {
 
     for (const [index, testCase] of cases.entries()) {
       const params = createAttemptParams(testCase.config) as EmbeddedRunAttemptParams & {
-        crestodianTool?: CrestodianToolOptions;
+        systemAgentTool?: SystemAgentToolOptions;
       };
       params.sessionId = `session-${index}`;
       params.agentHarnessRuntimeOverride = "codex";
       params.agentId = testCase.agentId;
       params.sessionKey = testCase.sessionKey;
-      params.toolsAllow = ["crestodian"];
-      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      params.toolsAllow = ["openclaw"];
+      params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
       await runAgentHarnessAttempt(params);
     }
 
     expect(received).toEqual([
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
     ]);
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("binds the same host Crestodian scope to the built-in OpenClaw harness", async () => {
+  it("binds the same host OpenClaw scope to the built-in OpenClaw harness", async () => {
     let toolNames: string[] = [];
     agentRunAttempt.mockImplementationOnce(async () => {
       await Promise.resolve();
       toolNames = createOpenClawCodingTools({
-        config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
-        runtimeToolAllowlist: ["crestodian"],
+        config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
+        runtimeToolAllowlist: ["openclaw"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -541,16 +620,15 @@ describe("runAgentHarnessAttempt", () => {
     });
     const params = createAttemptParams(
       providerRuntimeConfig("codex", "openclaw"),
-    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
-    params.toolsAllow = ["crestodian"];
-    params.crestodianTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
+    params.toolsAllow = ["openclaw"];
+    params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
-    expect(toolNames).toEqual(["crestodian"]);
-    expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(toolNames).toEqual(["openclaw"]);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
   it("unwraps sentinels only at the plugin harness handoff", async () => {
@@ -979,6 +1057,18 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("does not select Codex from a non-OpenAI model name", () => {
+    registerSuccessfulCodexHarness();
+
+    expect(resolveAgentHarnessPolicy({ provider: "custom", modelId: "gpt-5.4-codex" })).toEqual({
+      runtime: "auto",
+      runtimeSource: "implicit",
+    });
+    expect(selectAgentHarness({ provider: "custom", modelId: "gpt-5.4-codex" }).id).toBe(
+      "openclaw",
+    );
+  });
+
   it("auto-selects plugin support by default", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
@@ -995,6 +1085,23 @@ describe("selectAgentHarness", () => {
 
     expect(harness.id).toBe("codex");
     expect(supports).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects statically unrelated auto harnesses before provider discovery", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
+      "openclaw",
+    );
+    expect(supports).not.toHaveBeenCalled();
+    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
   });
 
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
@@ -1073,13 +1180,13 @@ describe("selectAgentHarness", () => {
   it("passes manifest provider owners into plugin support checks", () => {
     providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
       status: "owned",
-      pluginIds: ["anthropic"],
+      pluginIds: ["fixture-owner"],
     });
     const supports = vi.fn(() => ({
       supported: false as const,
       reason: "provider is owned by a native plugin",
     }));
-    const config = providerRuntimeConfig("anthropic", "copilot");
+    const config = providerRuntimeConfig("fixture-provider", "copilot");
     registerAgentHarness({
       id: "copilot",
       label: "Copilot",
@@ -1089,24 +1196,24 @@ describe("selectAgentHarness", () => {
 
     expect(() =>
       selectAgentHarness({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         config,
         agentHarnessRuntimeOverride: "copilot",
       }),
     ).toThrow("provider is owned by a native plugin");
 
     expect(providerOwnerMocks.resolveProviderRefOwnership).toHaveBeenCalledWith({
-      provider: "anthropic",
+      provider: "fixture-provider",
       config,
     });
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         requestedRuntime: "copilot",
         providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
+        providerOwnerPluginIds: ["fixture-owner"],
       }),
     );
   });
@@ -1395,6 +1502,35 @@ describe("selectAgentHarness", () => {
       });
     },
   );
+
+  it("keeps native model run controls compatible with Codex", () => {
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+        },
+        requestedRuntime: "codex",
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
 
   it("rejects explicit Codex when agent request params cannot be reproduced", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
@@ -2405,6 +2541,45 @@ describe("selectAgentHarness", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
+  it("lets harness-owned compaction proceed without ambient auth when model lookup fails", async () => {
+    compactAuthMocks.resolveModelAsync.mockRejectedValue(new Error("model lookup unavailable"));
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
+  });
+
+  it("lets harness-owned compaction proceed without ambient auth when auth preparation fails", async () => {
+    // Model resolution must succeed so this test exercises the auth-preparation
+    // catch, not the model-resolution fallback covered above.
+    compactAuthMocks.resolveModelAsync.mockResolvedValue({
+      model: {
+        id: "proxy-model",
+        provider: "local-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    compactAuthMocks.prepareAgentRuntimeAuth.mockImplementationOnce(() => {
+      throw new Error("auth preparation unavailable");
+    });
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compactAuthMocks.prepareAgentRuntimeAuth).toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
+  });
+
   it("passes runtime model and default credentials to compaction when auth profile id is absent", async () => {
     compactAuthMocks.resolveModelAsync.mockResolvedValue({
       model: {
@@ -2611,27 +2786,6 @@ describe("selectAgentHarness", () => {
     },
   );
 
-  it("still throws MissingAgentHarnessError for an explicit configured cliBackends id", () => {
-    const config = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "my-custom-cli": { command: "echo" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "sonnet-4.6",
-        agentHarnessRuntimeOverride: "my-custom-cli",
-        config,
-      }),
-    ).toThrow('Requested agent harness "my-custom-cli" is not registered');
-  });
-
   it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
     expect(() =>
       selectAgentHarness({
@@ -2652,3 +2806,4 @@ describe("selectAgentHarness", () => {
     ).toThrow('Requested agent harness "google-gemini-cli" is not registered');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

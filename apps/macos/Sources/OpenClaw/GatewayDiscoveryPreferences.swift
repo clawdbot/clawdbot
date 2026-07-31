@@ -61,7 +61,7 @@ enum GatewayDiscoveryPreferences {
         } else {
             defaultRemotePort
         }
-        return OnboardingCrestodianResumeStore.routeIdentity(
+        return OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: remoteTransport,
@@ -86,7 +86,7 @@ enum GatewayDiscoveryPreferences {
                 remoteURL: remoteURL,
                 remoteTarget: remoteTarget)
         }
-        return OnboardingCrestodianResumeStore.routeIdentity(
+        return OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: connectionMode,
             preferredGatewayID: nil,
             remoteTransport: remoteTransport,

@@ -194,6 +194,32 @@ describe("native link routing", () => {
     );
   });
 
+  it("ignores a stale hide event after replacing the context menu", async () => {
+    installBridge();
+    routing = startNativeLinkRouting();
+    const firstAnchor = appendLink("https://example.com/first");
+    const secondAnchor = appendLink("https://example.com/second");
+
+    contextMenu(firstAnchor);
+    const firstMenu = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-native-link-menu",
+    );
+    expect(firstMenu).not.toBeNull();
+    await firstMenu?.updateComplete;
+    const firstDropdown = firstMenu?.querySelector("wa-dropdown");
+    expect(firstDropdown).not.toBeNull();
+
+    contextMenu(secondAnchor);
+    const secondMenu = document.querySelector("openclaw-native-link-menu");
+    expect(secondMenu).not.toBe(firstMenu);
+
+    firstDropdown?.dispatchEvent(
+      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+    );
+
+    expect(document.querySelector("openclaw-native-link-menu")).toBe(secondMenu);
+  });
+
   it("mounts a fallback menu inside an active dialog", async () => {
     installBridge();
     routing = startNativeLinkRouting();

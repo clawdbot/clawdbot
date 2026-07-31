@@ -1,7 +1,9 @@
 // Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
@@ -31,14 +33,17 @@ describe("runCommandWithTimeout", () => {
       argv: ["node", "script.js"],
       baseEnv: {
         OPENCLAW_BASE_ENV: "base",
+        OPENCLAW_CHILD_ENV_REMOVE: "base",
         OPENCLAW_TO_REMOVE: undefined,
       },
       env: {
+        OPENCLAW_CHILD_ENV_REMOVE: undefined,
         OPENCLAW_TEST_ENV: "ok",
       },
     });
 
     expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_CHILD_ENV_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
@@ -62,6 +67,22 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.PATH).toBe("C:\\override\\bin");
     expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("removes case-insensitive inherited env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+      },
+      env: {
+        PATH: undefined,
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBeUndefined();
   });
 
   it("preserves case-distinct env keys outside Windows", () => {
@@ -502,7 +523,8 @@ describe("runCommandBuffered", () => {
         "process.stdout.write(`PID:${child.pid}\\n`)",
       ].join(";");
       const result = await runCommandBuffered([process.execPath, "-e", parentSource], {
-        timeoutMs: 50,
+        // The timeout starts before Node initializes; loaded CI still needs time to spawn and report the descendant.
+        timeoutMs: 500,
       });
       const pidMatch = result.stdout.toString().match(/PID:(\d+)/u);
       if (!pidMatch) {
@@ -609,6 +631,20 @@ describe("runExec", () => {
     );
     expect(stdout).toBe("input");
     expect(stderr).toBe("base");
+  });
+
+  it("supports an inherited file descriptor as stdin", async () => {
+    const handle = await fs.open(fileURLToPath(import.meta.url), "r");
+    try {
+      const { stdout } = await runExec(
+        process.execPath,
+        ["-e", "process.stdin.pipe(process.stdout)"],
+        { stdinFileDescriptor: handle.fd, timeoutMs: 3_000 },
+      );
+      expect(stdout).toContain("// Exec tests cover command execution");
+    } finally {
+      await handle.close();
+    }
   });
 
   it("can keep sensitive output out of verbose logs", async () => {

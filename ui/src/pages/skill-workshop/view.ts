@@ -11,54 +11,17 @@ import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
-  type SkillWorkshopActionBusy,
   type SkillWorkshopActionNotice,
-  type SkillWorkshopMode,
+  type SkillWorkshopEvaluation,
+  type SkillWorkshopEvaluationFinding,
+  type SkillWorkshopEvaluationOutcome,
   type SkillWorkshopProposal,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
 import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
-import { renderSelfLearningError, type SkillWorkshopSelfLearning } from "./self-learning.ts";
-
-type SkillWorkshopProps = {
-  loading: boolean;
-  error: string | null;
-  inspectingKey: string | null;
-  proposals: SkillWorkshopProposal[];
-  selectedKey: string | null;
-  statusFilter: SkillWorkshopStatusFilter;
-  query: string;
-  filePreviewKey: string | null;
-  filePreviewQuery: string;
-  queueWidth: number;
-  mode: SkillWorkshopMode;
-  actionBusy: SkillWorkshopActionBusy | null;
-  actionNotice: SkillWorkshopActionNotice | null;
-  revisionKey: string | null;
-  revisionDraft: string;
-  assistantName: string;
-  workshopAgentName: string;
-  selfLearning: SkillWorkshopSelfLearning | null;
-  counts: Record<SkillWorkshopStatusFilter, number>;
-  onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
-  onRetry: () => void;
-  onQueryChange: (query: string) => void;
-  onFilePreviewQueryChange: (query: string) => void;
-  onQueueWidthChange: (width: number) => void;
-  onModeChange: (mode: SkillWorkshopMode) => void;
-  onSelect: (key: string) => void;
-  onPrev: () => void;
-  onNext: () => void;
-  onApply: (key: string) => void;
-  onRevise: (key: string) => void;
-  onReject: (key: string) => void;
-  onRevisionDraftChange: (draft: string) => void;
-  onRevisionCancel: () => void;
-  onRevisionSubmit: (key: string) => void;
-  onPreviewFile: (key: string, path: string) => void;
-  onClosePreview: () => void;
-  onSelfLearningToggle: (enabled: boolean) => void;
-};
+import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
+import { renderSelfLearningError } from "./self-learning.ts";
+import type { SkillWorkshopProps } from "./view-types.ts";
 
 const STATUS_TABS: SkillWorkshopStatusFilter[] = [
   "all",
@@ -123,6 +86,10 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
           </div>`
         : nothing}
       ${renderSelfLearningError(props.selfLearning)}
+      ${renderSkillWorkshopHistoryScan({
+        state: props.historyScan,
+        onScan: props.onHistoryScan,
+      })}
       <div class="sw-view" data-mode=${props.mode}>
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
@@ -445,6 +412,7 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
               </div>
             `
           : nothing}
+        ${proposal.evaluation ? renderEvaluation(proposal.evaluation) : nothing}
       </div>
 
       ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
@@ -468,6 +436,15 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
   const disabled = Boolean(props.actionBusy);
   return html`
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
+      <button
+        class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
+        ?disabled=${disabled}
+        @click=${() => props.onEvaluate(proposal.key)}
+      >
+        ${busy === "evaluate"
+          ? t("skillWorkshop.actions.evaluating")
+          : t("skillWorkshop.actions.evaluate")}
+      </button>
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
         ?disabled=${disabled}
@@ -606,9 +583,22 @@ function renderToday(
           </span>
         </div>
 
+        ${hero.evaluation ? renderEvaluation(hero.evaluation, true) : nothing}
         ${isPending
           ? html`
               <div class="sw-today__actions" aria-busy=${busy ? "true" : "false"}>
+                <button
+                  class="sw-today__big sw-today__big--evaluate ${busy === "evaluate"
+                    ? "is-busy"
+                    : ""}"
+                  ?disabled=${disabled}
+                  @click=${() => props.onEvaluate(hero.key)}
+                >
+                  ${busy === "evaluate"
+                    ? t("skillWorkshop.actions.evaluating")
+                    : t("skillWorkshop.today.evaluate")}
+                  <span class="sw-today__big-sub">${t("skillWorkshop.today.runChecks")}</span>
+                </button>
                 <button
                   class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
                   ?disabled=${disabled}
@@ -710,6 +700,137 @@ function renderToday(
             </section>
           `
         : nothing}
+    </div>
+  `;
+}
+
+function renderEvaluation(evaluation: SkillWorkshopEvaluation, today = false) {
+  const completedAt = Date.parse(evaluation.completedAt);
+  return html`
+    <section class="sw-evaluation ${today ? "sw-evaluation--today" : ""}">
+      <header class="sw-evaluation__head">
+        <h3>${t("skillWorkshop.evaluation.title")}</h3>
+        <div class="sw-evaluation__meta">
+          <span>
+            ${t("skillWorkshop.evaluation.version", {
+              version: evaluation.proposedVersion,
+            })}
+          </span>
+          ${Number.isFinite(completedAt)
+            ? html`<span>
+                ${t("skillWorkshop.evaluation.completedAt", {
+                  time: formatRelative(completedAt),
+                })}
+              </span>`
+            : nothing}
+        </div>
+      </header>
+      <div class="sw-evaluation__outcomes">
+        ${evaluation.outcomes.map((outcome) => renderEvaluationOutcome(outcome))}
+      </div>
+    </section>
+  `;
+}
+
+function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
+  const result = outcome.result;
+  const pluginLabel = outcome.pluginVersion
+    ? `${outcome.pluginId} ${outcome.pluginVersion}`
+    : outcome.pluginId;
+  return html`
+    <section class="sw-evaluation__outcome">
+      <div class="sw-evaluation__outcome-head">
+        <div class="sw-evaluation__identity">
+          <strong>${outcome.evaluatorId}</strong>
+          <span>${pluginLabel}</span>
+        </div>
+        <div class="sw-evaluation__badges">
+          <span class="sw-evaluation__badge is-${outcome.status}">
+            ${t(`skillWorkshop.evaluation.status.${outcome.status}`)}
+          </span>
+          ${result?.decision
+            ? html`<span class="sw-evaluation__badge is-${result.decision}">
+                ${t(`skillWorkshop.evaluation.decision.${result.decision}`)}
+              </span>`
+            : nothing}
+        </div>
+      </div>
+      ${result?.summary ? html`<p class="sw-evaluation__summary">${result.summary}</p>` : nothing}
+      ${result?.decisionReason
+        ? html`<p class="sw-evaluation__reason">${result.decisionReason}</p>`
+        : nothing}
+      ${outcome.error ? html`<p class="sw-evaluation__error">${outcome.error}</p>` : nothing}
+      ${result?.findings?.length ? renderEvaluationFindings(result.findings) : nothing}
+      ${result?.metrics && Object.keys(result.metrics).length > 0
+        ? renderEvaluationMetrics(result.metrics)
+        : nothing}
+      ${result?.evaluatorVersion || result?.mode
+        ? html`
+            <div class="sw-evaluation__runtime">
+              ${result.evaluatorVersion
+                ? html`<span>
+                    ${t("skillWorkshop.evaluation.evaluatorVersion", {
+                      version: result.evaluatorVersion,
+                    })}
+                  </span>`
+                : nothing}
+              ${result.mode
+                ? html`<span> ${t("skillWorkshop.evaluation.mode", { mode: result.mode })} </span>`
+                : nothing}
+            </div>
+          `
+        : nothing}
+    </section>
+  `;
+}
+
+function renderEvaluationFindings(findings: SkillWorkshopEvaluationFinding[]) {
+  return html`
+    <div class="sw-evaluation__findings">
+      <h4>${t("skillWorkshop.evaluation.findings")}</h4>
+      <ul>
+        ${findings.map((finding) => {
+          const location = finding.file
+            ? finding.line
+              ? t("skillWorkshop.evaluation.fileLine", {
+                  file: finding.file,
+                  line: String(finding.line),
+                })
+              : finding.file
+            : null;
+          return html`
+            <li>
+              <span class="sw-evaluation__severity is-${finding.severity}">
+                ${t(`skillWorkshop.evaluation.severity.${finding.severity}`)}
+              </span>
+              <span>
+                <code class="sw-evaluation__rule">${finding.ruleId}</code>
+                ${finding.message} ${location ? html`<small>${location}</small>` : nothing}
+              </span>
+            </li>
+          `;
+        })}
+      </ul>
+    </div>
+  `;
+}
+
+function renderEvaluationMetrics(metrics: Record<string, string | number | boolean>) {
+  return html`
+    <div class="sw-evaluation__metrics">
+      <h4>${t("skillWorkshop.evaluation.metrics")}</h4>
+      <dl>
+        ${Object.entries(metrics)
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(
+            ([name, value]) => html`
+              <div>
+                <dt>${name}</dt>
+                <dd>${String(value)}</dd>
+              </div>
+            `,
+          )}
+      </dl>
     </div>
   `;
 }
@@ -1008,3 +1129,4 @@ function formatRelative(ms: number): string {
   }
   return new Date(ms).toLocaleDateString();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

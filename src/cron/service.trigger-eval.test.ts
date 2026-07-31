@@ -39,7 +39,7 @@ async function createHarness(params: {
   const cron = new CronService({
     storePath,
     cronEnabled: true,
-    cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+    cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent,
     requestHeartbeat: vi.fn(),

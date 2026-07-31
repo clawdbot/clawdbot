@@ -2,11 +2,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
+import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-response-body-timeout.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
+
+export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -129,53 +131,6 @@ function advanceRequestBodyChunk(
   };
 }
 
-/** Reads one chunk, rejecting and cancelling the reader after an idle timeout. */
-export async function readChunkWithIdleTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  chunkTimeoutMs: number,
-  onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
-): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-
-  return await new Promise((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      const error =
-        onIdleTimeout?.({ chunkTimeoutMs: resolvedChunkTimeoutMs }) ??
-        new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`);
-      clear();
-      // Cancel with the timeout error so fetch-backed streams release sockets
-      // and buffers instead of continuing after the caller has failed.
-      void reader.cancel(error).catch(() => undefined);
-      reject(error);
-    }, resolvedChunkTimeoutMs);
-
-    void reader.read().then(
-      (result) => {
-        clear();
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        clear();
-        if (!timedOut) {
-          reject(toErrorObject(error, "Non-Error rejection"));
-        }
-      },
-    );
-  });
-}
-
 type ReadResponsePrefixResult = {
   buffer: Buffer;
   size: number;
@@ -185,6 +140,9 @@ type ReadResponsePrefixResult = {
 export type ReadResponseTextPrefixOptions = {
   chunkTimeoutMs?: number;
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+  /** Static timeout or lazy resolver evaluated immediately before body consumption. */
+  timeoutMs?: number | (() => number);
+  onTimeout?: (params: { timeoutMs: number }) => Error;
 };
 
 type ReadResponsePrefixOptions = ReadResponseTextPrefixOptions & {
@@ -197,26 +155,11 @@ function validateMaxBytes(maxBytes: number): void {
   }
 }
 
-async function readResponsePrefix(
-  response: Response,
+async function readResponsePrefixFromReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
   maxBytes: number,
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
-  validateMaxBytes(maxBytes);
-  const body = response.body;
-  if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await response.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
-    }
-    return { buffer: fallback, size: fallback.length, truncated: false };
-  }
-
-  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let size = 0;
@@ -267,6 +210,48 @@ async function readResponsePrefix(
   };
 }
 
+async function readResponsePrefix(
+  response: Response,
+  maxBytes: number,
+  options?: ReadResponsePrefixOptions,
+): Promise<ReadResponsePrefixResult> {
+  validateMaxBytes(maxBytes);
+  let timeoutMs: number | undefined;
+  try {
+    timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
+  } catch (error) {
+    await response.body?.cancel(error).catch(() => undefined);
+    throw error;
+  }
+  const body = response.body;
+  if (!body || typeof body.getReader !== "function") {
+    return await withResponseBodyTimeout({
+      timeoutMs,
+      onTimeout: options?.onTimeout,
+      cancel: async (error) => await body?.cancel(error),
+      read: async () => {
+        const fallback = Buffer.from(await response.arrayBuffer());
+        if (fallback.length > maxBytes) {
+          return {
+            buffer: fallback.subarray(0, maxBytes),
+            size: fallback.length,
+            truncated: true,
+          };
+        }
+        return { buffer: fallback, size: fallback.length, truncated: false };
+      },
+    });
+  }
+
+  const reader = body.getReader();
+  return await withResponseBodyTimeout({
+    timeoutMs,
+    onTimeout: options?.onTimeout,
+    cancel: async (error) => await reader.cancel(error),
+    read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),
+  });
+}
+
 export type ReadResponseTextPrefixResult = {
   text: string;
   size: number;
@@ -290,14 +275,12 @@ export async function readResponseTextPrefix(
   };
 }
 
-/** Reads a response body under a byte cap, cancelling the stream on overflow or idle timeout. */
+/** Reads a response body under byte, idle, and overall timeout bounds. */
 export async function readResponseWithLimit(
   response: Response,
   maxBytes: number,
-  options?: {
+  options?: ReadResponseTextPrefixOptions & {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
-    chunkTimeoutMs?: number;
-    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<Buffer> {
   const onOverflow =
@@ -307,6 +290,8 @@ export async function readResponseWithLimit(
   const prefix = await readResponsePrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
+    timeoutMs: options?.timeoutMs,
+    onTimeout: options?.onTimeout,
   });
   if (prefix.truncated) {
     throw onOverflow({ size: prefix.size, maxBytes, res: response });
@@ -317,11 +302,9 @@ export async function readResponseWithLimit(
 /** Reads a small collapsed text prefix from a response body for diagnostics/errors. */
 export async function readResponseTextSnippet(
   response: Response,
-  options?: {
+  options?: ReadResponseTextPrefixOptions & {
     maxBytes?: number;
     maxChars?: number;
-    chunkTimeoutMs?: number;
-    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<string | undefined> {
   const maxBytes = options?.maxBytes ?? 8 * 1024;
@@ -329,6 +312,8 @@ export async function readResponseTextSnippet(
   const prefix = await readResponseTextPrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
+    timeoutMs: options?.timeoutMs,
+    onTimeout: options?.onTimeout,
   });
   if (!prefix.text) {
     return undefined;

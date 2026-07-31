@@ -12,9 +12,6 @@ function assignChildEnvValue(params: {
   platform: NodeJS.Platform;
   value: string | undefined;
 }): void {
-  if (params.value === undefined) {
-    return;
-  }
   if (params.platform === "win32") {
     const normalizedKey = params.key.toLowerCase();
     for (const existingKey of Object.keys(params.env)) {
@@ -22,6 +19,10 @@ function assignChildEnvValue(params: {
         delete params.env[existingKey];
       }
     }
+  }
+  if (params.value === undefined) {
+    delete params.env[params.key];
+    return;
   }
   params.env[params.key] = params.value;
 }
@@ -54,13 +55,8 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-export type SpawnCommandOptions = Omit<
-  ExecaOptions,
-  "env" | "extendEnv" | "shell" | "windowsHide" | "windowsVerbatimArguments"
-> & {
+type SpawnCommandOptions = ExecaOptions & {
   baseEnv?: NodeJS.ProcessEnv;
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
 };
 
 export function spawnCommandWithInvocation<
@@ -87,7 +83,7 @@ export function spawnCommandWithInvocation<
     shell: false,
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as unknown as ResultPromise<OptionsType>;
+  } as ExecaOptions) as unknown as ResultPromise<OptionsType>;
   return { child, invocation };
 }
 

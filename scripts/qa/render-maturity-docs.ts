@@ -157,8 +157,14 @@ Options:
 
 function familyTitle(value: string): string {
   const titles: Record<string, string> = {
+    googlechat: "Google Chat",
+    imessage: "iMessage",
+    msteams: "Microsoft Teams",
+    openai: "OpenAI",
+    openclaw: "OpenClaw",
     "platform-app": "Platform",
     "provider-tool": "Provider and tool",
+    whatsapp: "WhatsApp",
   };
   return (
     titles[value] ??
@@ -1117,7 +1123,11 @@ function renderTaxonomy({
           `    <div>${scoreMeter(coverageScore)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.quality)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.completeness)}</div>`,
-          `    <div className="maturity-category-docs">${docs || "No linked docs"}</div>`,
+          '    <div className="maturity-category-docs">',
+          "",
+          docs || "No linked docs",
+          "",
+          "</div>",
           "  </div>",
         );
       }

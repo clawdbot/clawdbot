@@ -2,11 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
-import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import "../../components/tooltip.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../components/tooltip.ts";
+import { formatDurationCompact } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
@@ -27,10 +27,7 @@ import type {
 } from "./types.ts";
 
 function pct(part: number, total: number): number {
-  if (total === 0) {
-    return 0;
-  }
-  return (part / total) * 100;
+  return total === 0 ? 0 : (part / total) * 100;
 }
 
 function formatAnalysisCost(value: number): string {
@@ -104,7 +101,7 @@ function renderFilterChips(
     ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
-      ? selectedSessionKey.slice(0, 8) + "…"
+      ? truncateUtf16Safe(selectedSessionKey, 8) + "…"
       : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
@@ -594,7 +591,15 @@ function renderPeakErrorList(
   `;
 }
 
+function focusSummaryHint(event: MouseEvent) {
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    target.focus();
+  }
+}
+
 function renderSummaryStat(params: {
+  hintId: string;
   title: string;
   hint: string;
   value: string | number;
@@ -603,6 +608,7 @@ function renderSummaryStat(params: {
   className?: string;
   compactValue?: boolean;
 }) {
+  const hintId = `usage-summary-hint-${params.hintId}`;
   const classes = [
     "stat",
     "usage-summary-card",
@@ -623,7 +629,22 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <span class="usage-summary-hint" title=${params.hint}>?</span>
+        <openclaw-tooltip open-on-click>
+          <button
+            id=${hintId}
+            type="button"
+            class="usage-summary-hint"
+            aria-label=${params.title}
+            @click=${focusSummaryHint}
+          >
+            ?
+          </button>
+          <!-- Shared tooltips dismiss pointer activation so action buttons never
+               strand one open. This hint exists only to be read, so it opts in to
+               click-to-open; the click handler still normalizes browsers that do
+               not focus buttons on pointer activation. -->
+          <span slot="content">${params.hint}</span>
+        </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
       <div class="usage-summary-sub">${params.sub}</div>
@@ -736,6 +757,7 @@ function renderUsageInsights(
         <div class="usage-overview-layout">
           <div class="usage-summary-grid">
             ${renderSummaryStat({
+              hintId: "messages",
               title: t("usage.overview.messages"),
               hint: t("usage.overview.messagesHint"),
               value: aggregates.messages.total,
@@ -743,6 +765,7 @@ function renderUsageInsights(
               className: "usage-summary-card--hero",
             })}
             ${renderSummaryStat({
+              hintId: "throughput",
               title: t("usage.overview.throughput"),
               hint: throughputHint,
               value: throughputLabel,
@@ -751,6 +774,7 @@ function renderUsageInsights(
               compactValue: true,
             })}
             ${renderSummaryStat({
+              hintId: "tool-calls",
               title: t("usage.overview.toolCalls"),
               hint: t("usage.overview.toolCallsHint"),
               value: aggregates.tools.totalCalls,
@@ -758,6 +782,7 @@ function renderUsageInsights(
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
+              hintId: "average-tokens",
               title: t("usage.overview.avgTokens"),
               hint: tokensHint,
               value: formatTokens(avgTokens),
@@ -767,6 +792,7 @@ function renderUsageInsights(
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
+              hintId: "cache-hit-rate",
               title: t("usage.overview.cacheHitRate"),
               hint: cacheHint,
               value: cacheHitLabel,
@@ -775,6 +801,7 @@ function renderUsageInsights(
               className: "usage-summary-card--medium",
             })}
             ${renderSummaryStat({
+              hintId: "error-rate",
               title: t("usage.overview.errorRate"),
               hint: errorHint,
               value: `${errorRatePct.toFixed(2)}%`,
@@ -783,6 +810,7 @@ function renderUsageInsights(
               className: "usage-summary-card--medium",
             })}
             ${renderSummaryStat({
+              hintId: "average-cost",
               title: t("usage.overview.avgCost"),
               hint: costHint,
               value: formatAnalysisCost(avgCost),
@@ -790,6 +818,7 @@ function renderUsageInsights(
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
+              hintId: "sessions",
               title: t("usage.overview.sessions"),
               hint: t("usage.overview.sessionsHint"),
               value: sessionCount,
@@ -797,6 +826,7 @@ function renderUsageInsights(
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
+              hintId: "errors",
               title: t("usage.overview.errors"),
               hint: t("usage.overview.errorsHint"),
               value: aggregates.messages.errors,
@@ -1053,6 +1083,7 @@ function renderSessionsCard(
           <label class="sessions-sort">
             <span>${t("usage.sessions.sort")}</span>
             <select
+              class="settings-select"
               @change=${(e: Event) =>
                 onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
             >
@@ -1146,3 +1177,4 @@ export {
   renderSessionsCard,
   renderUsageInsights,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

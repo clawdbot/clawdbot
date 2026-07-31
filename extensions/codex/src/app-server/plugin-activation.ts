@@ -10,11 +10,13 @@ import {
 } from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
+  isOpenAiCuratedMarketplace,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import type { v2 } from "./protocol.js";
+import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
 type CodexPluginActivationReason =
@@ -48,7 +50,10 @@ type EnsureCodexPluginActivationParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
+  /** Thread setup batches app refresh once after all plugin activations. */
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
 
@@ -68,14 +73,10 @@ export async function ensureCodexPluginActivation(
     });
   }
 
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
+  const listed = await listCuratedCodexPluginMetadata(params);
   const resolved = findOpenAiCuratedPluginSummary(listed, params.identity.pluginName);
   if (!resolved) {
-    const hasCuratedMarketplace = listed.marketplaces.some(
-      (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    );
+    const hasCuratedMarketplace = listed.marketplaces.some(isOpenAiCuratedMarketplace);
     if (!hasCuratedMarketplace) {
       return activationFailure(params.identity, "marketplace_missing", {
         message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
@@ -83,6 +84,12 @@ export async function ensureCodexPluginActivation(
     }
     return activationFailure(params.identity, "plugin_missing", {
       message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+    });
+  }
+
+  if (resolved.marketplace.remoteMarketplaceName && !resolved.summary.remotePluginId) {
+    return activationFailure(params.identity, "plugin_missing", {
+      message: `${params.identity.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
     });
   }
 
@@ -106,6 +113,9 @@ export async function ensureCodexPluginActivation(
         : params.identity.pluginName,
     ) satisfies v2.PluginInstallParams,
   )) as v2.PluginInstallResponse;
+  if (params.metadataCache && params.appCacheKey) {
+    params.metadataCache.invalidate(params.appCacheKey);
+  }
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
@@ -113,6 +123,8 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      metadataCache: params.metadataCache,
+      deferAppInventoryRefresh: params.deferAppInventoryRefresh,
       targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
@@ -152,20 +164,20 @@ async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  metadataCache?: CodexPluginMetadataCache;
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
-  await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams);
-  await params.request("skills/list", {
+  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
+  await (params.request("skills/list", {
     cwds: [],
     forceReload: true,
-  } satisfies v2.SkillsListParams);
+  } satisfies v2.SkillsListParams) as Promise<v2.SkillsListResponse>);
   try {
-    await params.request("hooks/list", {
+    await (params.request("hooks/list", {
       cwds: [],
-    } satisfies v2.HooksListParams);
+    } satisfies v2.HooksListParams) as Promise<v2.HooksListResponse>);
   } catch (error) {
     diagnostics.push({
       message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -174,9 +186,19 @@ async function refreshCodexPluginRuntimeState(params: {
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
-    params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
+    // Scope the invalidation to the activated plugin's apps so the follow-up
+    // targeted refresh (immediate or deferred union) can revalidate the entry.
+    params.appCache.invalidate(
+      params.appCacheKey,
+      "Codex plugin activation changed app inventory",
+      undefined,
+      params.targetAppIds,
+    );
+    if (params.deferAppInventoryRefresh) {
+      return { diagnostics };
+    }
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
-      (await params.request(method, requestParams)) as v2.AppsListResponse;
+      (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
       await params.appCache.refreshNow({
         key: params.appCacheKey,
@@ -194,6 +216,35 @@ async function refreshCodexPluginRuntimeState(params: {
   }
 
   return { diagnostics };
+}
+
+async function listCuratedCodexPluginMetadata(
+  params: {
+    request: CodexPluginRuntimeRequest;
+    metadataCache?: CodexPluginMetadataCache;
+    appCacheKey?: string;
+  },
+  options: { forceRefetch?: boolean } = {},
+): Promise<v2.PluginListResponse> {
+  const requestParams = (
+    options.forceRefetch ? { forceRefetch: true } : {}
+  ) satisfies v2.PluginListParams;
+  if (!params.metadataCache || !params.appCacheKey) {
+    return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
+  }
+  const snapshot = await params.metadataCache.load({
+    appCacheKey: params.appCacheKey,
+    queryKind: "curated-global",
+    requestParams,
+    request: async (method, listedParams) =>
+      (await params.request(method, listedParams)) as v2.PluginListResponse,
+    // Fail-open guard: never settle a curated snapshot that lacks the curated
+    // marketplace itself (upstream returns local-only on remote fetch failure
+    // without a load error). See listCodexPluginMetadata in plugin-inventory.
+    cacheable: (response: v2.PluginListResponse) =>
+      response.marketplaces.some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+  });
+  return snapshot.response;
 }
 
 function activationFailure(

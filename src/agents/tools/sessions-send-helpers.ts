@@ -9,7 +9,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -31,7 +31,31 @@ export type AnnounceTarget = {
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
-    return null;
+    const directRoute = parseSessionDeliveryRoute(sessionKey);
+    if (!directRoute || (directRoute.peerKind !== "direct" && directRoute.peerKind !== "dm")) {
+      return null;
+    }
+
+    const normalizedChannel =
+      normalizeAnyChannelId(directRoute.channel) ?? normalizeChatChannelId(directRoute.channel);
+    const channel = normalizedChannel ?? directRoute.channel;
+    const messaging = normalizedChannel
+      ? getChannelPlugin(normalizedChannel)?.messaging
+      : undefined;
+    // Session peers are canonical; adapters restore API casing at their boundary.
+    // Channel-style resolvers must not turn an explicit direct user into a room.
+    const resolvedTarget =
+      messaging?.directTargetStyle === "user-prefixed"
+        ? undefined
+        : messaging?.resolveDeliveryTarget?.({ conversationId: directRoute.peerId });
+    const directTarget = `user:${directRoute.peerId}`;
+
+    return {
+      channel,
+      to: resolvedTarget?.to?.trim() || messaging?.normalizeTarget?.(directTarget) || directTarget,
+      ...(directRoute.accountId ? { accountId: directRoute.accountId } : {}),
+      threadId: resolvedTarget?.threadId ?? directRoute.threadId,
+    };
   }
   const normalizedChannel =
     normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);
@@ -130,13 +154,7 @@ export function buildAgentToAgentAnnounceContext(params: {
   return lines.join("\n");
 }
 
-/** Resolves the configured A2A ping-pong turn limit with a hard runtime cap. */
-export function resolvePingPongTurns(cfg?: OpenClawConfig) {
-  const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
-  const fallback = DEFAULT_AGENTNG_PONG_TURNS;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallback;
-  }
-  const rounded = Math.floor(raw);
-  return Math.max(0, Math.min(MAX_PING_PONG_TURNS, rounded));
+/** Resolves the fixed A2A ping-pong turn limit with a hard runtime cap. */
+export function resolvePingPongTurns() {
+  return Math.min(MAX_PING_PONG_TURNS, DEFAULT_AGENTNG_PONG_TURNS);
 }

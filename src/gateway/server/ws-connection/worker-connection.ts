@@ -45,7 +45,7 @@ import {
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { rawDataToString } from "../../../infra/ws.js";
+import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
@@ -346,13 +346,6 @@ async function dispatchWorkerRequest(params: {
     ownerEpoch: params.identity.ownerEpoch,
   };
   params.respond(true, result);
-}
-
-function rawDataByteLength(data: RawData): number {
-  if (Array.isArray(data)) {
-    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
-  }
-  return data.byteLength;
 }
 
 /** Dedicated ingress handler: worker frames never enter the generic message handler. */

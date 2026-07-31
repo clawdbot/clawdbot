@@ -10,6 +10,8 @@ import {
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mjs";
 export { PACKAGE_DIST_INVENTORY_RELATIVE_PATH };
 
+export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
+
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 
 function normalizeRelativePath(value: string): string {
@@ -116,10 +118,33 @@ async function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string):
   );
 }
 
-export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
-  const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
+async function writePackageDistInventoryFile(
+  packageRoot: string,
+  entries: string[],
+): Promise<string[]> {
+  // The packed guard intentionally stays outside the inventory until preinstall removes it.
+  // An updater that skips lifecycle scripts rejects the staged package before activation.
+  const inventory = sortUniqueStrings(
+    entries.filter((relativePath) => relativePath !== PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+  );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await writeJson(inventoryPath, inventory, { trailingNewline: true });
+  return inventory;
+}
+
+export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
+  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
+  return writePackageDistInventoryFile(packageRoot, await collectPackageDistInventory(packageRoot));
+}
+
+async function writePackageInstallGuardMarker(packageRoot: string): Promise<void> {
+  const markerPath = path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(markerPath), { recursive: true });
+  await fs.writeFile(markerPath, "OpenClaw package preinstall has not completed.\n", "utf8");
+}
+
+export async function writePackageDistInventoryForPublish(packageRoot: string): Promise<string[]> {
+  const inventory = await writePackageDistInventory(packageRoot);
+  await writePackageInstallGuardMarker(packageRoot);
   return inventory;
 }

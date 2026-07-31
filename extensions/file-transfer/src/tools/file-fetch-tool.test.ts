@@ -80,6 +80,45 @@ describe("file_fetch tool", () => {
     expect(text).not.toContain('<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeef12345678">>>'); // pragma: allowlist secret
   });
 
+  it("strips one leading UTF-8 BOM only from inline text", async () => {
+    const fileText = "\uFEFF# Title\nembedded marker: \uFEFFkeep\n";
+    const originalBuffer = Buffer.from(fileText, "utf-8");
+    const originalSha256 = crypto.createHash("sha256").update(originalBuffer).digest("hex");
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: textPayload({
+        path: "/tmp/bom.md",
+        mimeType: "text/markdown",
+        text: fileText,
+      }),
+    });
+    vi.mocked(saveMediaBuffer).mockResolvedValue({
+      id: "media-1",
+      path: "/gateway/media/file-transfer/bom.md",
+      size: originalBuffer.byteLength,
+      contentType: "text/markdown",
+    });
+
+    const result = await createFileFetchTool().execute("tool-call-1", {
+      node: "node-1",
+      path: "/tmp/bom.md",
+    });
+
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("--- contents ---\n# Title\nembedded marker: \uFEFFkeep\n");
+    expect(text).not.toContain("--- contents ---\n\uFEFF# Title");
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      originalBuffer,
+      "text/markdown",
+      expect.any(String),
+      expect.any(Number),
+    );
+    const details = result.details as { sha256: string; size: number };
+    expect(details.sha256).toBe(originalSha256);
+    expect(details.size).toBe(originalBuffer.byteLength);
+  });
+
   it("falls back to text for a zero-byte file with an image-extension mimeType", async () => {
     vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
     vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");

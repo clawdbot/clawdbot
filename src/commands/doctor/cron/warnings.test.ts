@@ -1,6 +1,25 @@
 // Doctor cron delivery-target advisory tests cover concrete-vs-pseudo channel detection.
-import { describe, expect, it, vi } from "vitest";
-import { collectCronDeliveryTargetAdvisory } from "./warnings.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectLegacyWhatsAppCrontabHealthWarning,
+  noteCronDeliveryTargetAdvisory,
+} from "./warnings.js";
+
+const mocks = vi.hoisted(() => ({
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
+  note: vi.fn(),
+  runExec: vi.fn(),
+}));
+
+vi.mock("../../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+}));
+vi.mock("../../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
+vi.mock("../../../process/exec.js", () => ({ runExec: mocks.runExec }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 const STORE_PATH = "/tmp/openclaw/cron/jobs.sqlite";
 
@@ -13,6 +32,24 @@ function availableChannels(...ids: string[]) {
   return vi.fn(() => ids);
 }
 
+function collectCronDeliveryTargetAdvisory(params: {
+  jobs: Array<Record<string, unknown>>;
+  storePath: string;
+  resolveAvailableChannelIds: () => string[];
+}): string | null {
+  mocks.note.mockClear();
+  mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() =>
+    params.resolveAvailableChannelIds().map((id) => ({ id })),
+  );
+  noteCronDeliveryTargetAdvisory({
+    cfg: {},
+    jobs: params.jobs,
+    storePath: params.storePath,
+  });
+  const body = mocks.note.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body : null;
+}
+
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
@@ -21,7 +58,7 @@ describe("collectCronDeliveryTargetAdvisory", () => {
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).not.toBeNull();
-    expect(advisory).toContain("Cron delivery targets unavailable channels");
+    expect(advisory).toContain("Automation delivery targets unavailable channels");
     expect(advisory).toContain("1 job announces");
     expect(advisory).toContain("Channels: missing-channel=1");
     expect(advisory).toContain("Examples: report -> missing-channel");
@@ -136,5 +173,19 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     });
     expect(advisory).toContain("Nightly digest -> ghost");
     expect(advisory).toContain("<unnamed> -> ghost");
+  });
+});
+
+describe("collectLegacyWhatsAppCrontabHealthWarning", () => {
+  it("bounds the best-effort crontab read", async () => {
+    mocks.runExec.mockRejectedValueOnce(new Error("crontab timed out"));
+
+    await expect(
+      collectLegacyWhatsAppCrontabHealthWarning({ platform: "linux" }),
+    ).resolves.toBeNull();
+    expect(mocks.runExec).toHaveBeenCalledWith("crontab", ["-l"], {
+      logOutput: false,
+      timeoutMs: 5_000,
+    });
   });
 });

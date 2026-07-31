@@ -7,7 +7,16 @@ import {
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizeAgentId,
+  type ResolvedAgentRoute,
+  type RoutePeer,
+} from "openclaw/plugin-sdk/routing";
+import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
+import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
+import { buildClickClackTarget } from "./target.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = "clickclack" as const;
@@ -30,6 +39,117 @@ const clickClackIngressIdentity = {
   entryIdPrefix: "clickclack-user",
 } satisfies StableChannelIngressIdentityParams;
 
+type ClickClackDiscussionRoute = Extract<
+  ReturnType<typeof resolveClickClackDiscussionRoute>,
+  { state: "active" }
+>["route"];
+
+type ClickClackPreparedInboundRoute = {
+  isDirect: boolean;
+  target: string;
+  route: ResolvedAgentRoute;
+  discussionRoute?: ClickClackDiscussionRoute;
+  revoked: boolean;
+};
+
+function resolveAccountAgentRoute(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedClickClackAccount;
+  target: string;
+  isDirect: boolean;
+}): ResolvedAgentRoute {
+  const runtime = getClickClackRuntime();
+  const peer: RoutePeer = {
+    kind: params.isDirect ? "direct" : "channel",
+    id: params.target,
+  };
+  const route = runtime.channel.routing.resolveAgentRoute({
+    cfg: params.cfg,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer,
+  });
+  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
+  if (agentId === route.agentId) {
+    return route;
+  }
+  const dmScope = params.cfg.session?.dmScope ?? "main";
+  // Account-level agent ownership changes only the agent prefix. Preserve the
+  // resolved session policy so outbound recipient routing reaches this key.
+  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer,
+    dmScope,
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    dmScope: "main",
+  });
+  return {
+    ...route,
+    agentId,
+    dmScope,
+    sessionKey,
+    mainSessionKey,
+    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
+  };
+}
+
+function resolvePreparedInboundRoute(params: {
+  account: ResolvedClickClackAccount;
+  config: CoreConfig;
+  message: ClickClackMessage;
+}): ClickClackPreparedInboundRoute {
+  const runtime = getClickClackRuntime();
+  const isDirect = Boolean(params.message.direct_conversation_id);
+  const target = buildClickClackTarget(
+    isDirect
+      ? { chatType: "direct", kind: "dm", id: params.message.author_id }
+      : { chatType: "group", kind: "channel", id: params.message.channel_id ?? "" },
+  );
+  const accountRoute = resolveAccountAgentRoute({
+    cfg: params.config as OpenClawConfig,
+    account: params.account,
+    target,
+    isDirect,
+  });
+  const discussionResolution =
+    !isDirect && params.message.channel_id
+      ? resolveClickClackDiscussionRoute({
+          runtime,
+          config: params.config,
+          accountId: params.account.accountId,
+          serverBaseUrl: params.account.baseUrl,
+          workspaceId: params.message.workspace_id,
+          channelId: params.message.channel_id,
+        })
+      : { state: "unbound" as const };
+  const discussionRoute =
+    discussionResolution.state === "active" ? discussionResolution.route : undefined;
+
+  return {
+    isDirect,
+    target,
+    route: discussionRoute
+      ? {
+          ...accountRoute,
+          agentId: discussionRoute.agentId,
+          sessionKey: discussionRoute.sessionKey,
+          lastRoutePolicy: "session",
+        }
+      : accountRoute,
+    discussionRoute,
+    revoked: discussionResolution.state === "revoked",
+  };
+}
+
 /**
  * Dispatch and command authorization decision for one inbound ClickClack
  * message.
@@ -37,6 +157,14 @@ const clickClackIngressIdentity = {
 export type ClickClackInboundAccess = {
   shouldDispatch: boolean;
   commandAuthorized: boolean;
+  /** Whether the resolved group policy required a direct mention. */
+  requireMention?: boolean;
+  mentionFacts: {
+    canDetectMention: boolean;
+    wasMentioned: boolean;
+    hasAnyMention?: boolean;
+  };
+  preparedRoute: ClickClackPreparedInboundRoute;
 };
 
 /**
@@ -49,12 +177,35 @@ export async function resolveClickClackInboundAccess(params: {
   message: ClickClackMessage;
 }): Promise<ClickClackInboundAccess> {
   const runtime = getClickClackRuntime();
-  const isDirect = Boolean(params.message.direct_conversation_id);
   const cfg = params.config as OpenClawConfig;
+  const preparedRoute = resolvePreparedInboundRoute(params);
   const shouldCheckCommand = runtime.channel.commands.shouldComputeCommandAuthorized(
     params.message.body,
     cfg,
   );
+
+  // Resolve group policy and mention facts for the channel.
+  const effectiveGroupPolicy = resolveClickClackGroupPolicy({
+    account: params.account,
+    channelId: params.message.channel_id,
+  });
+  const mentionFacts = resolveClickClackMentionFacts({
+    isDirect: preparedRoute.isDirect,
+    body: params.message.body,
+    mentionPatterns: effectiveGroupPolicy.mentionPatterns,
+    botHandle: params.account.botHandle,
+    cfg,
+    agentId: preparedRoute.route.agentId,
+    channelId: params.message.channel_id,
+  });
+  const allowTextCommands =
+    params.account.replyMode === "agent" &&
+    runtime.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: CHANNEL_ID,
+      commandSource: "text",
+    });
+
   const resolved = await resolveStableChannelMessageIngress({
     channelId: CHANNEL_ID,
     accountId: params.account.accountId,
@@ -62,14 +213,21 @@ export async function resolveClickClackInboundAccess(params: {
     cfg,
     subject: { stableId: params.message.author_id },
     conversation: {
-      kind: isDirect ? "direct" : "group",
-      id: isDirect
+      kind: preparedRoute.isDirect ? "direct" : "group",
+      id: preparedRoute.isDirect
         ? (params.message.direct_conversation_id ?? params.message.author_id)
         : (params.message.channel_id ?? params.message.thread_root_id),
     },
     allowFrom: params.account.allowFrom,
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
+    mentionFacts,
+    policy: {
+      activation: {
+        requireMention: effectiveGroupPolicy.requireMention,
+        allowTextCommands,
+      },
+    },
     command: shouldCheckCommand
       ? {
           cfg,
@@ -79,9 +237,12 @@ export async function resolveClickClackInboundAccess(params: {
   });
 
   return {
-    shouldDispatch: resolved.ingress.admission === "dispatch",
+    shouldDispatch: !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,
+    requireMention: effectiveGroupPolicy.requireMention,
+    mentionFacts,
+    preparedRoute,
   };
 }

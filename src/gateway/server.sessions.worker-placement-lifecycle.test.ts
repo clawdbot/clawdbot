@@ -172,7 +172,13 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
     "sessions.delete",
     { key: sessionKey },
     {
-      context: { workerSessionPlacementService: placementReader },
+      context: {
+        workerEnvironmentService: {
+          get: () => ({ state: "attached" }),
+          resolveInferenceSessionForRunId: () => undefined,
+        } as never,
+        workerSessionPlacementService: placementReader,
+      },
     },
   );
 
@@ -180,6 +186,60 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
   expect(deleted.error?.message).toContain("cloud worker placement is failed");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
+});
+
+test("sessions.delete allows failed placement after its worker is destroyed", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "discord:group:destroyed-failed-worker-session";
+  const sessionId = "sess-destroyed-failed-worker-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placementReader = sequencedPlacementReader([terminalPlacementRecord(sessionId, "failed")]);
+
+  const deleted = await directSessionReq(
+    "sessions.delete",
+    { key: sessionKey },
+    {
+      context: {
+        workerEnvironmentService: {
+          get: (environmentId: string) => {
+            expect(environmentId).toBe("worker-environment");
+            return { state: "destroyed" };
+          },
+          hasInferenceForSession: () => false,
+          resolveInferenceSessionForRunId: () => undefined,
+        } as never,
+        workerSessionPlacementService: placementReader,
+      },
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
+  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+});
+
+test("sessions.delete allows failed placement that never acquired a worker", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "discord:group:unallocated-failed-worker-session";
+  const sessionId = "sess-unallocated-failed-worker-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placement = terminalPlacementRecord(sessionId, "failed");
+  if (placement.state !== "failed") {
+    throw new Error("expected failed placement fixture");
+  }
+  placement.environmentId = null;
+
+  const deleted = await directSessionReq(
+    "sessions.delete",
+    { key: sessionKey },
+    {
+      context: { workerSessionPlacementService: sequencedPlacementReader([placement]) },
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
+  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
 });
 
 test("sessions.delete allows reclaimed placement with no live worker owner", async () => {

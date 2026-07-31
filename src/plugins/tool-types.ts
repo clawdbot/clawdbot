@@ -1,4 +1,5 @@
 // Defines plugin tool metadata and filesystem policy types.
+import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -24,11 +25,17 @@ export type OpenClawPluginToolContext = {
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
+  /** Host-issued opaque identifier for the active agent run, when available. */
+  runId?: string;
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
-  /** Stable host-issued run id for resource ownership; plugins must treat it as opaque. */
-  runId?: string;
+  /** Out-of-band plugin-owned bindings attached by the current run initiator. */
+  toolBindings?: Readonly<Record<string, unknown>>;
+  /** Host-prepared repository identities for project-aware tool behavior. */
+  activeProjectKeys?: readonly string[];
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   /**
    * Runtime-supplied active model metadata for informational use, diagnostics,
    * and plugin-owned policy decisions. This is not a security boundary against

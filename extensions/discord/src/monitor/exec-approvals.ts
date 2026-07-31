@@ -93,7 +93,7 @@ function isStructuredApprovalNotFoundError(err: unknown): boolean {
   );
 }
 
-export class ExecApprovalButton extends Button {
+class ExecApprovalButton extends Button {
   override label = "execapproval";
   customId = "execapproval:seed=1";
   override style = ButtonStyle.Primary;

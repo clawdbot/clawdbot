@@ -141,7 +141,7 @@ export function getMatrixApprovalApprovers(params: {
   return getMatrixExecApprovalApprovers(params);
 }
 
-export function isMatrixExecApprovalTargetRecipient(params: {
+function isMatrixExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
   accountId?: string | null;
@@ -168,10 +168,8 @@ const matrixExecApprovalProfile = createChannelExecApprovalProfile({
 });
 
 export const isMatrixExecApprovalClientEnabled = matrixExecApprovalProfile.isClientEnabled;
-export const isMatrixExecApprovalApprover = matrixExecApprovalProfile.isApprover;
 export const isMatrixExecApprovalAuthorizedSender = matrixExecApprovalProfile.isAuthorizedSender;
 export const resolveMatrixExecApprovalTarget = matrixExecApprovalProfile.resolveTarget;
-export const shouldHandleMatrixExecApprovalRequest = matrixExecApprovalProfile.shouldHandleRequest;
 
 export function isMatrixApprovalClientEnabled(params: {
   cfg: OpenClawConfig;

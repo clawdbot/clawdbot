@@ -6,11 +6,11 @@ import { pathToFileURL } from "node:url";
 import type * as Sdk from "@github/copilot-sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
-export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
+function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
 
-export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
+const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
 
 let cached: Promise<typeof Sdk> | undefined;
 
@@ -36,10 +36,6 @@ export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promi
     return cached;
   }
   return promise;
-}
-
-export function resetCopilotSdkCacheForTests(): void {
-  cached = undefined;
 }
 
 async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {

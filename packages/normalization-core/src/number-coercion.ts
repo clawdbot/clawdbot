@@ -214,6 +214,9 @@ export function finiteSecondsToTimerSafeMilliseconds(
     return undefined;
   }
   const boundedSeconds = opts.floorSeconds ? Math.floor(seconds) : seconds;
+  if (boundedSeconds >= MAX_TIMER_TIMEOUT_SECONDS) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
   const milliseconds = Math.floor(boundedSeconds * 1000);
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return undefined;

@@ -121,6 +121,7 @@ describe("runNodeDaemonInstall", () => {
 
     expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({
+        contextPath: undefined,
         tls: false,
         tlsFingerprint: undefined,
       }),
@@ -149,9 +150,33 @@ describe("runNodeDaemonInstall", () => {
 
     expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({
+        contextPath: "/saved",
         tls: true,
         tlsFingerprint: "saved-fingerprint",
       }),
+    );
+  });
+
+  it("installs an explicitly plaintext node for a saved TLS gateway", async () => {
+    await runNodeDaemonInstall({ force: true, tls: false });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "saved-gateway.local",
+        port: 18789,
+        contextPath: "/saved",
+        tls: false,
+        tlsFingerprint: undefined,
+      }),
+    );
+  });
+
+  it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
+    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: "new-fingerprint" });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
     );
   });
 });
@@ -173,6 +198,31 @@ describe("runNodeDaemonStatus", () => {
     mocks.service.isLoaded.mockReset().mockResolvedValue(true);
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.readRuntime.mockReset().mockResolvedValue({ status: "running" });
+  });
+
+  it("reports a failed service check instead of claiming the node is not installed", async () => {
+    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+
+    await runNodeDaemonStatus();
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Node service check failed: Error: systemd unavailable",
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(stdout()).not.toContain("not loaded");
+    expect(stdout()).not.toContain("openclaw node install");
+  });
+
+  it("reports a failed service check as JSON without inventing node status", async () => {
+    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+
+    await runNodeDaemonStatus({ json: true });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      error: "Node service check failed: Error: systemd unavailable",
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 
   it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {

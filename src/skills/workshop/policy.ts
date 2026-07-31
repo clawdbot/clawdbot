@@ -147,7 +147,7 @@ function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefi
     return config;
   }
   // Explicit hook config wins. Missing hook config may happen on agent paths;
-  // unreadable runtime config keeps the default pending approval gate.
+  // unreadable runtime config cannot supply an explicit pending override.
   try {
     return getRuntimeConfig();
   } catch {

@@ -15,6 +15,7 @@ export type NodeInvokeRequestPayload = {
   paramsJSON?: string | null;
   timeoutMs?: number | null;
   idempotencyKey?: string | null;
+  sessionKey?: string | null;
 };
 
 /** Input payload for a node-host system.run invocation. */

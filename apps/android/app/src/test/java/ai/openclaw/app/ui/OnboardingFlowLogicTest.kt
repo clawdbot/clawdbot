@@ -6,6 +6,7 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.ui.design.MascotMood
 import android.Manifest
 import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CompletableDeferred
@@ -19,6 +20,43 @@ import org.junit.Test
 import java.util.Base64
 
 class OnboardingFlowLogicTest {
+  @Test
+  fun mascotMoodTracksVisibleOnboardingState() {
+    assertEquals(MascotMood.Idle, onboardingMascotMood(OnboardingStep.Welcome))
+    assertEquals(MascotMood.Curious, onboardingMascotMood(OnboardingStep.Permissions))
+    assertEquals(MascotMood.Thinking, onboardingMascotMood(OnboardingStep.NodeApproval))
+    assertEquals(
+      MascotMood.Working,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Finishing),
+    )
+    assertEquals(
+      MascotMood.Working,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.TakingLonger),
+    )
+    assertEquals(
+      MascotMood.Celebrating,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Connected),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Failed),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(
+        step = OnboardingStep.EnterSetupCode,
+        setupErrorCode = OnboardingErrorCode.SetupCodeRejected,
+      ),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(
+        step = OnboardingStep.SetupCode,
+        setupScanErrorCode = OnboardingErrorCode.InvalidSetupQr,
+      ),
+    )
+  }
+
   @Test
   fun onboardingBackDestinationsMatchTheVisibleFlow() {
     assertEquals(null, onboardingBackDestination(OnboardingStep.Welcome))
@@ -139,6 +177,21 @@ class OnboardingFlowLogicTest {
       OnboardingBackDestination(OnboardingStep.Manual),
       onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.Manual),
     )
+  }
+
+  @Test
+  fun standardPortraitWidthKeepsOnboardingFieldsInline() {
+    assertFalse(onboardingFormUsesStackedLayout(availableWidthDp = 342f, fontScale = 1f))
+  }
+
+  @Test
+  fun narrowWidthStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 320f, fontScale = 1f))
+  }
+
+  @Test
+  fun largeFontScaleStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 600f, fontScale = 1.3f))
   }
 
   @Test

@@ -32,4 +32,42 @@ describe("channel config UI hint helpers", () => {
     ]);
     expect(hints["streaming.progress.label"]?.label).toBe("Example Progress Label");
   });
+
+  it("builds the shared streaming hint group", () => {
+    const hints = createChannelConfigUiHints({
+      channelLabel: "Example",
+      streaming: {
+        "": "Root help",
+        "block.enabled": "Block help",
+        nativeTransport: "Native help",
+      },
+    });
+    expect(hints).toEqual({
+      streaming: { label: "Example Streaming Mode", help: "Root help" },
+      "streaming.block.enabled": {
+        label: "Example Block Streaming Enabled",
+        help: "Block help",
+      },
+      "streaming.nativeTransport": {
+        label: "Example Native Streaming",
+        help: "Native help",
+      },
+    });
+  });
+
+  it("builds the shared implicit mention hint group", () => {
+    const hints = createChannelConfigUiHints({
+      channelLabel: "Example",
+      implicitMentions: true,
+    });
+    expect(Object.keys(hints)).toEqual([
+      "implicitMentions",
+      "implicitMentions.replyToBot",
+      "implicitMentions.quotedBot",
+      "implicitMentions.threadParticipation",
+    ]);
+    expect(hints["implicitMentions.threadParticipation"]?.label).toBe(
+      "Example Thread Participation",
+    );
+  });
 });

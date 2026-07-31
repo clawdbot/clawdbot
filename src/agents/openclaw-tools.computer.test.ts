@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 function computerTool(modelHasVision?: boolean) {
-  return createOpenClawTools({ modelHasVision }).find((tool) => tool.name === "computer");
+  return createOpenClawTools({
+    modelHasVision,
+    config: { agents: { entries: { main: { default: true } } } },
+  }).find((tool) => tool.name === "computer");
 }
 
 describe("computer tool vision gating", () => {

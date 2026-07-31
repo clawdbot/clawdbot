@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
@@ -27,13 +28,13 @@ import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-
 import { cliBackendLog } from "./log.js";
 
 /** Maximum transcript size read for CLI session history. */
-export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 /** Maximum transcript messages exposed to CLI hook history. */
-export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 /** Minimum reseed-history prompt budget for fresh CLI sessions. */
-export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 /** Maximum automatic reseed-history prompt budget derived from context size. */
-export const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const CLI_SESSION_HISTORY_HEADER_READ_BYTES = 64 * 1024;
@@ -316,20 +317,32 @@ async function readCliSessionHeaderLine(filePath: string): Promise<string | unde
 
 async function readBoundedCliSessionTranscript(
   filePath: string,
-  fileSize: number,
 ): Promise<{ content: string; truncated: boolean }> {
-  if (fileSize <= MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
-    return { content: await fsp.readFile(filePath, "utf-8"), truncated: false };
-  }
-
-  cliBackendLog.warn(
-    `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${filePath}`,
-  );
   const handle = await fsp.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(MAX_CLI_SESSION_HISTORY_FILE_BYTES);
-    await handle.read(buffer, 0, buffer.length, fileSize - buffer.length);
-    const tail = buffer.toString("utf-8");
+    let buffer = Buffer.alloc(0);
+    let bytesRead = 0;
+    let position = 0;
+    // Compaction can shrink the open file between stat and read. Retry from
+    // the new tail after EOF so a stale offset cannot discard valid history.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const currentSize = (await handle.stat()).size;
+      const readLength = Math.min(currentSize, MAX_CLI_SESSION_HISTORY_FILE_BYTES);
+      position = Math.max(0, currentSize - readLength);
+      buffer = Buffer.alloc(readLength);
+      bytesRead = await readFileWindowFully(handle, buffer, position);
+      if (bytesRead === buffer.length || position === 0) {
+        break;
+      }
+    }
+    const tail = buffer.subarray(0, bytesRead).toString("utf-8");
+    if (position === 0) {
+      return { content: tail, truncated: false };
+    }
+
+    cliBackendLog.warn(
+      `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${filePath}`,
+    );
     const firstLineEnd = tail.indexOf("\n");
     const completeTail = firstLineEnd >= 0 ? tail.slice(firstLineEnd + 1) : "";
     const headerLine = await readCliSessionHeaderLine(filePath);
@@ -449,7 +462,7 @@ async function loadCliSessionEntries(params: {
     if (!stat.isFile()) {
       return [];
     }
-    const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
+    const transcript = await readBoundedCliSessionTranscript(realSessionFile);
     const entries = parseCliSessionEntries(transcript.content);
     if (!entries) {
       return [];
@@ -469,13 +482,52 @@ async function loadCliSessionEntries(params: {
       );
       return [];
     }
-    return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
+    return projectLatestCliHistoryBoundary(
+      selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries,
+    );
   } catch (error) {
     if (!isFileNotFoundError(error)) {
       cliBackendLog.warn(`cli session history load failed: ${formatErrorMessage(error)}`);
     }
     return [];
   }
+}
+
+function projectLatestCliHistoryBoundary(entries: unknown[]): unknown[] {
+  const boundaryIndex = entries.findLastIndex((entry) => {
+    const type = (entry as { type?: unknown } | null)?.type;
+    return type === "compaction" || type === "reset";
+  });
+  if (boundaryIndex < 0) {
+    return entries;
+  }
+  const boundary = entries[boundaryIndex] as {
+    type?: unknown;
+    firstKeptEntryId?: unknown;
+  };
+  if (boundary.type !== "reset") {
+    return entries;
+  }
+  const firstKeptIndex =
+    typeof boundary.firstKeptEntryId === "string"
+      ? entries.findIndex(
+          (entry, index) =>
+            index < boundaryIndex &&
+            (entry as { id?: unknown } | null)?.id === boundary.firstKeptEntryId,
+        )
+      : -1;
+  const kept =
+    firstKeptIndex < 0
+      ? []
+      : entries.slice(firstKeptIndex, boundaryIndex).filter((entry) => {
+          const candidate = entry as HistoryEntry;
+          const message = candidate.message as HistoryMessage | undefined;
+          return (
+            candidate.type === "message" &&
+            (message?.role === "user" || message?.role === "assistant")
+          );
+        });
+  return [...kept, ...entries.slice(boundaryIndex + 1)];
 }
 
 /** Checks whether a safe, bounded transcript file exists for a CLI session. */

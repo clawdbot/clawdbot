@@ -46,11 +46,14 @@ export function buildCodexSyntheticUsageAuth(
 export function shouldUseCodexSyntheticUsageForRuntime(params: {
   provider?: string;
   effectiveHarness?: string;
+  sessionHarnessId?: string;
 }): boolean {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const sessionHarness = normalizeOptionalLowercaseString(params.sessionHarnessId);
   const provider = normalizeOptionalLowercaseString(params.provider);
   return (
-    harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER &&
+    (harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER ||
+      sessionHarness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER) &&
     (provider === CODEX_SYNTHETIC_USAGE_PROVIDER || provider === "codex")
   );
 }
@@ -70,15 +73,23 @@ function usageSnapshotRank(snapshot: ProviderUsageSnapshot): number {
   return snapshot.error ? 0 : 1;
 }
 
+type Precedence<T> = [preferred: T, secondary: T];
+function byPrecedence<T>(candidate: T, existing: T, rank: (value: T) => number): Precedence<T> {
+  const candidateRank = rank(candidate);
+  const existingRank = rank(existing);
+  return candidateRank >= existingRank && !(candidateRank === 0 && existingRank === 0)
+    ? [candidate, existing]
+    : [existing, candidate];
+}
+
 function billingEntryKey(entry: ProviderUsageBilling): string {
   const period = "period" in entry ? (entry.period ?? "") : "";
   return [entry.type, entry.label ?? "", entry.unit, period].join("\0");
 }
 
-function mergeBilling(
-  preferred: ProviderUsageSnapshot,
-  secondary: ProviderUsageSnapshot,
-): ProviderUsageBilling[] | undefined {
+function mergeBilling([preferred, secondary]: Precedence<ProviderUsageSnapshot>):
+  | ProviderUsageBilling[]
+  | undefined {
   const entries = new Map<string, ProviderUsageBilling>();
   for (const entry of secondary.billing ?? []) {
     entries.set(billingEntryKey(entry), entry);
@@ -89,12 +100,9 @@ function mergeBilling(
   return entries.size > 0 ? [...entries.values()] : undefined;
 }
 
-function mergeUsageSnapshots(
-  preferred: ProviderUsageSnapshot,
-  secondary: ProviderUsageSnapshot,
-): ProviderUsageSnapshot {
-  const billing = mergeBilling(preferred, secondary);
-  // Synthetic and OAuth sources can own different facts for the same provider.
+function mergeUsageSnapshots(precedence: Precedence<ProviderUsageSnapshot>): ProviderUsageSnapshot {
+  const [preferred, secondary] = precedence;
+  const billing = mergeBilling(precedence);
   // Preserve complementary plan/billing data while the preferred source owns windows/errors.
   return {
     ...secondary,
@@ -129,18 +137,11 @@ export function mergeUsageSummaries(
       providersById.set(provider.provider, provider);
       continue;
     }
-    const providerRank = usageSnapshotRank(provider);
-    const existingRank = usageSnapshotRank(existing);
-    // Synthetic errors must not hide the concrete provider endpoint's error.
-    // Synthetic data still wins equal displayable ranks so its live windows stay authoritative.
-    const preferred =
-      providerRank === 0 && existingRank === 0
-        ? existing
-        : providerRank >= existingRank
-          ? provider
-          : existing;
-    const secondary = preferred === provider ? existing : provider;
-    providersById.set(provider.provider, mergeUsageSnapshots(preferred, secondary));
+    // Preserve concrete endpoint errors; synthetic data wins equal displayable ranks.
+    providersById.set(
+      provider.provider,
+      mergeUsageSnapshots(byPrecedence(provider, existing, usageSnapshotRank)),
+    );
   }
   return {
     updatedAt: base.updatedAt,

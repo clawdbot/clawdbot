@@ -30,14 +30,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   entitlement. Mandatory live providers must pass a real completion probe
   before release dispatch. Fix the credential first; do not add an alternate
   auth path merely to bypass a failed release credential.
-- Full Release Validation parent monitors fail fast: once a required child job
-  fails, the parent cancels the remaining child matrix and prints the failed
-  job summary. Inspect that first red job instead of waiting for unrelated
-  matrix tails.
-- Treat the product-complete pre-changelog commit as the Code SHA. Full product
-  validation and performance evidence bind to that SHA. The later Release SHA
-  may reuse those results only when it is a descendant whose complete changed
-  path set is exactly `CHANGELOG.md`.
+- Full Release Validation collects independent child failures to terminal
+  completion by default. Pass `fail_fast=true` only when the shorter
+  first-failure cancellation path is preferable.
+- For regular beta/stable releases, treat the product-complete pre-changelog
+  commit as the Code SHA. Full product validation and performance evidence bind
+  to that SHA. The later Release SHA may reuse those results only when it is a
+  descendant whose complete changed path set is exactly `CHANGELOG.md`.
+- Extended-stable validates one exact branch tip; it does not reuse the regular
+  Code-SHA/Release-SHA evidence model.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
   `pnpm-lock.yaml`, and every source path the selected check reads. If any are
   absent, that checkout cannot validate a release dependency or Docker lane:
@@ -170,6 +171,29 @@ Publish with `openclaw-release-publish.yml` using `release_profile=from-validati
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
 
+### Extended-stable validation
+
+For `.33+`, dispatch from and target the canonical branch; the regular
+SHA-pinned helper would produce a rejected `release-ci/*` identity:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
+  -f release_profile=stable
+```
+
+Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
+manifest `workflowRef`, and package versions identify the same commit. Save its
+successful `run_attempt` and require the final tag to resolve there. Reject
+`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
+
+Product failures need an approved backport. Frozen-target tooling failures need
+the smallest behavior-preserving repair. Provider, approval, runner, or log
+races keep the candidate unchanged. Record repairs and superseded runs; any
+branch change requires a new complete parent. Omit only an explicitly
+unsupported frozen-target scenario, never a required behavior or package.
+
 ## Watch
 
 Use the transition-only summary watcher instead of repeated raw polling:
@@ -215,16 +239,15 @@ Stop watchers before ending the turn or switching strategy.
      failed child; never rebuild an immutable version that already published
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
-   First check the target-owned workflow with `git show
-<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
-   declares `pr_number`, dispatch the explicit exact-SHA fallback:
+   First verify the PR head carries the current fallback schema:
+   `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
+--jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
+   refresh the PR head from `main` and use the new head SHA; let normal CI run
+   before considering another fallback.
+   From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
-release_gate=true`.
-   The workflow authenticates that PR's head/base, validates GitHub's current
-   synthetic merge tree, and runs the LOC task from that tree. Older workflow
-   schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
-   restart exact-head proof on the new SHA instead of dispatching them.
+target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
+include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
@@ -238,7 +261,8 @@ release_gate=true`.
 
 Record:
 
-- Code SHA and Release SHA
+- release identity: Code/Release SHAs for regular releases; canonical branch,
+  exact SHA, and immutable tag for extended-stable
 - evidence-reuse policy and complete changed-path set
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
@@ -246,6 +270,8 @@ Record:
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result
+- frozen-target compatibility repairs or omitted inapplicable scenarios, with
+  their source PRs and invariant
 - known gaps or unrelated failures
 
 For lessons and recovery patterns, read `references/release-ci-notes.md`.

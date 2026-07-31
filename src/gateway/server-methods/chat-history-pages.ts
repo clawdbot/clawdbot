@@ -1,6 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
   dropPreSessionStartAnnouncePairs,
+  isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
   projectRecentChatDisplayMessages,
 } from "../chat-display-projection.js";
@@ -15,6 +17,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
+  type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
 
@@ -30,6 +33,7 @@ export function readChatHistoryMessageSeq(message: unknown): number | undefined 
 }
 
 type ChatHistoryPage = {
+  activeLeafEntryId?: string | null;
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
@@ -43,6 +47,67 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+function resolveChatHistoryActiveLeafEntryId(
+  readPage: ReadRecentSessionMessagesResult,
+): string | null {
+  if (readPage.transcriptSource !== "active") {
+    return null;
+  }
+  if (Object.hasOwn(readPage, "activeLeafEntryId")) {
+    return readPage.activeLeafEntryId ?? null;
+  }
+  return resolveSessionTranscriptActiveLeafEntryId(readPage.transcriptEvents ?? []) ?? null;
+}
+
+/** Add checkpoint token metrics to the synthetic transcript compaction marker. */
+export function enrichChatHistoryCompactionMarkers(
+  messages: unknown[],
+  entry: ReturnType<typeof loadSessionEntry>["entry"],
+): unknown[] {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return messages;
+  }
+  const checkpointByEntryId = new Map(
+    checkpoints.flatMap((checkpoint) => {
+      const entryId = checkpoint.postCompaction?.entryId;
+      return typeof entryId === "string" && entryId ? [[entryId, checkpoint] as const] : [];
+    }),
+  );
+  let changed = false;
+  const enriched = messages.map((message) => {
+    const record = asOptionalRecord(message);
+    const metadata = asOptionalRecord(record?.["__openclaw"]);
+    if (metadata?.kind !== "compaction" || typeof metadata.id !== "string") {
+      return message;
+    }
+    const checkpoint = checkpointByEntryId.get(metadata.id);
+    if (!checkpoint) {
+      return message;
+    }
+    const tokensBefore = checkpoint.tokensBefore;
+    const tokensAfter = checkpoint.tokensAfter;
+    if (
+      (typeof tokensBefore !== "number" || !Number.isFinite(tokensBefore)) &&
+      (typeof tokensAfter !== "number" || !Number.isFinite(tokensAfter))
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...record,
+      __openclaw: {
+        ...metadata,
+        ...(typeof tokensBefore === "number" && Number.isFinite(tokensBefore)
+          ? { tokensBefore }
+          : {}),
+        ...(typeof tokensAfter === "number" && Number.isFinite(tokensAfter) ? { tokensAfter } : {}),
+      },
+    };
+  });
+  return changed ? enriched : messages;
+}
 
 function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
   if (messages.length <= max) {
@@ -170,6 +235,7 @@ export async function readChatHistoryPage(params: {
       return { messages: [] };
     }
     return {
+      ...((offset ?? 0) === 0 ? { activeLeafEntryId: null } : {}),
       messages: [],
       ...(offset !== undefined ? { responseOffset: offset } : {}),
       pagination: { offset: offset ?? 0, totalMessages: 0, rawPageMessages: 0 },
@@ -194,7 +260,7 @@ export async function readChatHistoryPage(params: {
     const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
     let pageOffset = offset ?? 0;
     let hasOverreadContext = false;
-    let readPage: { messages: unknown[]; totalMessages: number };
+    let readPage: ReadRecentSessionMessagesResult;
     if (messageId) {
       const anchoredPage = await readSessionMessagesAroundIdWithStatsAsync(readScope, {
         messageId,
@@ -254,9 +320,11 @@ export async function readChatHistoryPage(params: {
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
           maxMessages: max,
+          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         })
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
       ? (capChatHistoryAroundMessage({
@@ -273,6 +341,11 @@ export async function readChatHistoryPage(params: {
       return { messages: normalized };
     }
     return {
+      ...(isTailPage
+        ? {
+            activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
+          }
+        : {}),
       messages: normalized,
       responseOffset: pageOffset,
       pagination: {
@@ -295,6 +368,8 @@ export async function readChatHistoryPage(params: {
   });
   const overreadContextMessage =
     readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
+  const turnBoundaryPending = isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage);
+  const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
     dropPreSessionStartAnnouncePairs(
       readPage.messages,
@@ -342,6 +417,7 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
     });
     return {
+      activeLeafEntryId,
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
       completeCliImport: true,
       pagination: {
@@ -364,8 +440,10 @@ export async function readChatHistoryPage(params: {
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,
+    turnBoundaryPending,
   });
   return {
+    activeLeafEntryId,
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
     pagination: {
       offset: 0,

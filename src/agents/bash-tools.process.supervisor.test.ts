@@ -30,7 +30,7 @@ let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
@@ -84,8 +84,8 @@ describe("process tool supervisor cancellation", () => {
       getFinishedSession,
       getSession,
       markBackgrounded,
-      resetProcessRegistryForTests,
     } = await import("./bash-process-registry.js"));
+    ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
     ({ createProcessTool } = await import("./bash-tools.process.js"));
   });

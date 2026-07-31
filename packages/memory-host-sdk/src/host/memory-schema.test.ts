@@ -4,9 +4,84 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { readMemoryRecallMetadata } from "./memory-recall-metadata.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index schema", () => {
+  it("migrates unreleased inline recall metadata without changing chunk rows", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE memory_index_chunks (
+          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
+          triggers TEXT,
+          project_key TEXT
+        ) STRICT;
+        INSERT INTO memory_index_chunks VALUES (
+          'legacy', 'MEMORY.md', 'memory', 1, 1, 'h', 'm', 'body', '[]', 7,
+          8, 'legacy trigger', 'project/key'
+        );
+      `);
+
+      ensureMemoryRecallMetadataSchema(db);
+
+      expect(
+        db
+          .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual([
+        "id",
+        "path",
+        "source",
+        "start_line",
+        "end_line",
+        "hash",
+        "model",
+        "text",
+        "embedding",
+        "updated_at",
+      ]);
+      expect(db.prepare("SELECT id, text, updated_at FROM memory_index_chunks").get()).toEqual({
+        id: "legacy",
+        text: "body",
+        updated_at: 7,
+      });
+      expect(readMemoryRecallMetadata(db, ["legacy"]).get("legacy")).toEqual({
+        id: "legacy",
+        importance: 8,
+        triggers: "legacy trigger",
+        project_key: "project/key",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps recall metadata ensure read-only when the schema is current", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-recall-schema-"));
+    const databasePath = path.join(rootDir, "memory.sqlite");
+    const writable = new DatabaseSync(databasePath);
+    try {
+      ensureMemoryIndexSchema({ db: writable, cacheEnabled: false, ftsEnabled: false });
+    } finally {
+      writable.close();
+    }
+
+    const readOnly = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(() => ensureMemoryRecallMetadataSchema(readOnly)).not.toThrow();
+    } finally {
+      readOnly.close();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates shipped generic tables into canonical memory tables", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -46,7 +121,7 @@ describe("memory index schema", () => {
           start_line UNINDEXED, end_line UNINDEXED
         );
         INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
-        INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
+        INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10.75, 20);
         INSERT INTO chunks VALUES (
           'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
           'remember this', '[1,0,0]', 30
@@ -67,17 +142,79 @@ describe("memory index schema", () => {
 
       expect(result.ftsAvailable).toBe(true);
       expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([
-        { id: 1, path: "MEMORY.md", source: "memory", hash: "file-hash", mtime: 10, size: 20 },
+        {
+          id: 1,
+          path: "MEMORY.md",
+          source: "memory",
+          hash: "",
+          mtime: 10.75,
+          size: 20,
+        },
       ]);
       expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);
+      expect(db.prepare("SELECT * FROM memory_index_chunk_provenance").all()).toEqual([
+        {
+          chunk_id: "chunk-1",
+          origin_class: "untrusted",
+          session_kind: "unknown",
+          observed_at: 30,
+          supersedes_key: null,
+        },
+      ]);
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunk_provenance").get(),
+      ).toEqual({
+        count: 1,
+      });
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run("chunk-2", "MEMORY.md", "memory", 3, 3, "hash-2", "fts-only", "next", "[]", 50);
+      expect(
+        db
+          .prepare(
+            `SELECT origin_class, session_kind, observed_at
+           FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+          )
+          .get("chunk-2"),
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db
+          .prepare(
+            `SELECT origin_class, session_kind, observed_at
+             FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+          )
+          .get("chunk-2"),
+      ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);
       expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "openai", hash: "chunk-hash" },
       ]);
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM pragma_table_list
+             WHERE schema = 'main'
+               AND type = 'table'
+               AND name LIKE 'memory_%'
+               AND strict <> 1`,
+          )
+          .all(),
+      ).toEqual([]);
       expect(
         db
           .prepare(
@@ -90,24 +227,24 @@ describe("memory index schema", () => {
     }
   });
 
-  it("does not import a legacy sidecar memory database during schema startup", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-sidecar-"));
-    const legacyPath = path.join(rootDir, "memory", "main.sqlite");
-    const agentPath = path.join(rootDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-    fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-    const legacyDb = new DatabaseSync(legacyPath);
+  it("upgrades canonical tables, preserves mtimes, and invalidates missing provenance", () => {
+    const db = new DatabaseSync(":memory:");
     try {
-      legacyDb.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
+      db.exec(`
+        CREATE TABLE memory_index_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE memory_index_sources (
+          id INTEGER PRIMARY KEY,
+          path TEXT NOT NULL,
           source TEXT NOT NULL DEFAULT 'memory',
           hash TEXT NOT NULL,
           mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
+          size INTEGER NOT NULL,
+          UNIQUE (path, source)
         );
-        CREATE TABLE chunks (
+        CREATE TABLE memory_index_chunks (
           id TEXT PRIMARY KEY,
           path TEXT NOT NULL,
           source TEXT NOT NULL DEFAULT 'memory',
@@ -119,47 +256,55 @@ describe("memory index schema", () => {
           embedding TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        CREATE TABLE embedding_cache (
-          provider TEXT NOT NULL,
-          model TEXT NOT NULL,
-          provider_key TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          dims INTEGER,
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (provider, model, provider_key, hash)
+        CREATE TABLE memory_index_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          revision INTEGER NOT NULL
         );
-        INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
-        INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
-        INSERT INTO chunks VALUES (
-          'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
-          'remember this', '[1,0,0]', 30
+        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', '{}');
+        INSERT INTO memory_index_sources
+          (path, source, hash, mtime, size)
+        VALUES ('MEMORY.md', 'memory', 'source-hash', 10.75, 20);
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
+          'chunk-1', 'MEMORY.md', 'memory', 1, 1, 'chunk-hash', 'model', 'body', '[]', 30
         );
-        INSERT INTO embedding_cache VALUES (
-          'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
-        );
+        INSERT INTO memory_index_state VALUES (1, 3);
       `);
-    } finally {
-      legacyDb.close();
-    }
 
-    const db = new DatabaseSync(agentPath);
-    try {
-      const result = ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: true,
-        ftsEnabled: true,
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM pragma_table_list
+             WHERE schema = 'main'
+               AND type = 'table'
+               AND name LIKE 'memory_index_%'
+               AND strict <> 1`,
+          )
+          .all(),
+      ).toEqual([]);
+      expect(
+        db.prepare("SELECT mtime, typeof(mtime) AS storage_type FROM memory_index_sources").get(),
+      ).toEqual({ mtime: 10.75, storage_type: "real" });
+      expect(
+        db
+          .prepare(
+            "SELECT type FROM pragma_table_info('memory_index_sources') WHERE name = 'mtime'",
+          )
+          .get(),
+      ).toEqual({ type: "REAL" });
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
+        id: "chunk-1",
+        text: "body",
       });
-
-      expect(result.ftsAvailable).toBe(true);
-      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([]);
-      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([]);
-      expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([]);
-      expect(fs.existsSync(legacyPath)).toBe(true);
+      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
+      expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").get()).toEqual({
+        origin_class: "untrusted",
+      });
     } finally {
       db.close();
-      fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
@@ -184,6 +329,51 @@ describe("memory index schema", () => {
       ).toEqual([
         { path: "shared.md", source: "memory", hash: "memory-hash" },
         { path: "shared.md", source: "sessions", hash: "session-hash" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds body FTS after indexing while hybrid search is disabled", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      db.exec(`
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
+          'chunk-before', 'before.md', 'memory', 1, 1, 'before-hash', 'fts-only',
+          'before body', '[]', 1
+        );
+        INSERT INTO memory_index_chunks_fts
+          (text, id, path, source, model, start_line, end_line)
+        VALUES ('before body', 'chunk-before', 'before.md', 'memory', 'fts-only', 1, 1);
+      `);
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_chunks_fts'",
+          )
+          .get(),
+      ).toBeUndefined();
+      db.exec(`
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
+          'chunk-disabled', 'disabled.md', 'memory', 1, 1, 'disabled-hash', 'fts-only',
+          'disabled body', '[]', 2
+        );
+      `);
+
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "chunk-before", text: "before body" },
+        { id: "chunk-disabled", text: "disabled body" },
       ]);
     } finally {
       db.close();
@@ -406,7 +596,7 @@ describe("memory index schema", () => {
           mtime INTEGER NOT NULL,
           size INTEGER NOT NULL
         );
-        INSERT INTO memory_index_sources VALUES ('shared.md', 'memory', 'memory-hash', 10, 20);
+        INSERT INTO memory_index_sources VALUES ('shared.md', 'memory', 'memory-hash', 10.75, 20);
       `);
 
       ensureMemoryIndexSchema({
@@ -420,10 +610,12 @@ describe("memory index schema", () => {
       ).run("shared.md", "sessions", "session-hash", 30, 40);
 
       expect(
-        db.prepare("SELECT id, path, source, hash FROM memory_index_sources ORDER BY source").all(),
+        db
+          .prepare("SELECT id, path, source, hash, mtime FROM memory_index_sources ORDER BY source")
+          .all(),
       ).toEqual([
-        { id: 1, path: "shared.md", source: "memory", hash: "memory-hash" },
-        { id: 2, path: "shared.md", source: "sessions", hash: "session-hash" },
+        { id: 1, path: "shared.md", source: "memory", hash: "memory-hash", mtime: 10.75 },
+        { id: 2, path: "shared.md", source: "sessions", hash: "session-hash", mtime: 30 },
       ]);
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
       expect(db.prepare("SELECT id FROM memory_index_sources ORDER BY id").all()).toEqual([
@@ -736,95 +928,6 @@ describe("memory index schema", () => {
           )
           .get(),
       ).toEqual({ name: "memory_index_paths_fts_after_delete" });
-    } finally {
-      db.close();
-    }
-  });
-
-  it("leaves unrelated generic tables untouched", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, owner TEXT);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL,
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-      `);
-
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
-      });
-
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
-          )
-          .all(),
-      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("keeps legacy tables when canonical rows conflict", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL DEFAULT 'memory',
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO meta VALUES ('memory_index_meta_v1', 'legacy');
-        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
-      `);
-
-      expect(() =>
-        ensureMemoryIndexSchema({
-          db,
-          cacheEnabled: false,
-          ftsEnabled: false,
-        }),
-      ).toThrow("legacy memory meta rows conflict");
-      expect(db.prepare("SELECT value FROM meta").get()).toEqual({ value: "legacy" });
-      expect(db.prepare("SELECT value FROM memory_index_meta").get()).toEqual({
-        value: "canonical",
-      });
     } finally {
       db.close();
     }

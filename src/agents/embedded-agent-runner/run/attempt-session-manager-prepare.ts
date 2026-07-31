@@ -1,0 +1,201 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
+/**
+ * Prepares the durable session manager before embedded-agent session creation.
+ */
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { SessionManager } from "../../sessions/index.js";
+import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
+import { log } from "../logger.js";
+import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
+import {
+  runAttemptContextEngineBootstrap,
+  type AttemptContextEngine,
+} from "./attempt.context-engine-helpers.js";
+import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
+import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
+import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
+import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+export async function prepareEmbeddedAttemptSessionManager(input: {
+  attempt: EmbeddedRunAttemptParams;
+  activeContextEngine?: AttemptContextEngine;
+  agentDir: string;
+  effectiveCwd: string;
+  effectiveWorkspace: string;
+  onSessionManagerCreated: (sessionManager: AttemptSessionManager) => void;
+  replayAllowedToolNames: ReadonlySet<string>;
+  resolveActiveContextEnginePluginId: () => string | undefined;
+  sessionAgentId: string;
+  sessionLockController: EmbeddedAttemptSessionLockController;
+  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+}) {
+  const { attempt } = input;
+  const transcriptState = await resolveExistingAttemptTranscriptState({
+    agentId: input.sessionAgentId,
+    config: attempt.config,
+    sessionFile: attempt.sessionFile,
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionTarget,
+  });
+  const transcriptPolicy = resolveAttemptTranscriptPolicy({
+    runtimePlan: attempt.runtimePlan,
+    runtimePlanModelContext: {
+      workspaceDir: input.effectiveWorkspace,
+      modelApi: attempt.model.api,
+      model: attempt.model,
+    },
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    config: attempt.config,
+    env: process.env,
+  });
+  const isOpenAIResponsesApi =
+    attempt.model.api === "openai-responses" ||
+    attempt.model.api === "azure-openai-responses" ||
+    attempt.model.api === "openai-chatgpt-responses";
+
+  const preparedUserTurnMessage = attempt.skipPreparedUserTurnMessage
+    ? undefined
+    : await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  let latestPersistedUserMessage: AgentMessage | undefined;
+  let latestRuntimeUserMessage: AgentMessage | undefined;
+  let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
+  const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
+  const sessionManager = guardSessionManager(
+    attempt.sessionManager ??
+      (attempt.sessionTarget
+        ? SessionManager.open(
+            attempt.sessionTarget as SessionTranscriptRuntimeTarget,
+            input.effectiveCwd,
+          )
+        : SessionManager.inMemory(input.effectiveCwd)),
+    {
+      agentId: input.sessionAgentId,
+      sessionKey: attempt.sessionKey,
+      config: attempt.config,
+      contextWindowTokens: attempt.contextTokenBudget,
+      inputProvenance: attempt.inputProvenance,
+      preparedUserTurnMessage,
+      preparedUserTurnTranscriptRecorder: preparedUserTurnMessage
+        ? attempt.userTurnTranscriptRecorder
+        : undefined,
+      allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+      missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+      allowedToolNames: input.replayAllowedToolNames,
+      trigger: attempt.trigger,
+      suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+      suppressTranscriptOnlyAssistantPersistence:
+        attempt.suppressTranscriptOnlyAssistantPersistence,
+      suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+      skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
+      onMessagePersisted: () => {
+        input.sessionLockController.refreshAfterOwnedSessionWrite();
+      },
+      onUserMessagePreparingForPersistence: (_message, recorder) => {
+        latestPersistedUserMessage = undefined;
+        latestUserTurnTranscriptRecorder = recorder;
+      },
+      onUserMessagePersisted: (message, runtimeMessage) => {
+        latestPersistedUserMessage = message;
+        latestRuntimeUserMessage = runtimeMessage;
+        if (runtimeMessage) {
+          userTranscriptContextRegistry.record(runtimeMessage, message);
+        }
+        attempt.onUserMessagePersisted?.(message);
+      },
+      onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+        latestRuntimeUserMessage = runtimeMessage;
+      },
+      onUserMessageBlocked: () => {
+        attempt.userTurnTranscriptRecorder?.markBlocked();
+      },
+      onAssistantErrorMessagePersisted: (message) => {
+        attempt.onAssistantErrorMessagePersisted?.(message);
+      },
+    },
+  );
+  attempt.promptCacheKey = resolveSessionBoundaryPromptCacheKey({
+    api: attempt.model.api,
+    boundaryCount: sessionManager.getBoundaryCount(),
+    promptCacheKey: attempt.promptCacheKey,
+    sessionId: attempt.sessionId,
+  });
+  // Publish ownership before async bootstrap. Outer cleanup must close this manager
+  // even when a context-engine or transcript preparation step fails.
+  input.onSessionManagerCreated(sessionManager);
+
+  await input.withOwnedSessionWriteLock(async () => {
+    await runAttemptContextEngineBootstrap({
+      hadSessionFile: transcriptState.hasBootstrapTranscriptState,
+      contextEngine: input.activeContextEngine,
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
+      sessionTarget: attempt.sessionTarget,
+      sessionFile: attempt.sessionFile,
+      sessionManager,
+      runtimeContext: buildAfterTurnRuntimeContext({
+        attempt,
+        workspaceDir: input.effectiveWorkspace,
+        cwd: input.effectiveCwd,
+        agentDir: input.agentDir,
+        tokenBudget: attempt.contextTokenBudget,
+        activeAgentId: input.sessionAgentId,
+        contextEnginePluginId: input.resolveActiveContextEnginePluginId(),
+      }),
+      contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      providerId: attempt.provider,
+      requestedModelId: attempt.requestedModelId,
+      modelId: attempt.modelId,
+      fallbackReason: attempt.fallbackReason,
+      degradedReason: attempt.degradedReason,
+      runMaintenance: async (contextParams) =>
+        await runContextEngineMaintenance({
+          contextEngine: contextParams.contextEngine as never,
+          sessionId: contextParams.sessionId,
+          sessionKey: contextParams.sessionKey,
+          sessionTarget: contextParams.sessionTarget,
+          sessionFile: contextParams.sessionFile,
+          reason: contextParams.reason,
+          sessionManager: contextParams.sessionManager as never,
+          runtimeContext: contextParams.runtimeContext,
+          runtimeSettings: contextParams.runtimeSettings,
+          config: attempt.config,
+          agentId: input.sessionAgentId,
+        }),
+      warn: (message) => log.warn(message),
+    });
+  });
+  // Bootstrap may repair or migrate transcript rows. Only user writes after
+  // preparation can be the active prompt source at the provider boundary.
+  latestPersistedUserMessage = undefined;
+  latestRuntimeUserMessage = undefined;
+  userTranscriptContextRegistry.clear();
+
+  return {
+    userMessageBoundary: {
+      getUserTranscriptContexts: () => {
+        const transcriptMessage =
+          latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
+        // A suppressed retry reuses the canonical persisted row, while the SDK
+        // may rebuild its runtime object. Match against that row as the stable
+        // fallback after preferring the exact suppressed runtime correlation.
+        const runtimeMessage =
+          latestRuntimeUserMessage ??
+          (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
+        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
+      },
+      preparedUserTurnMessage,
+    },
+    isOpenAIResponsesApi,
+    preparedUserTurnMessage,
+    sessionManager,
+    transcriptPolicy,
+  };
+}

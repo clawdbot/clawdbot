@@ -16,7 +16,7 @@ Guarded end-to-end encrypted claw channel.
 
 ## Surface
 
-channels: reef
+channels: `reef`
 
 ## Related docs
 

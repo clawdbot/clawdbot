@@ -91,7 +91,7 @@ export function resolveConfiguredBindingRecord(params: {
 /**
  * Resolves a configured binding record from a normalized conversation reference.
  */
-export function resolveConfiguredBindingRecordForConversation(params: {
+function resolveConfiguredBindingRecordForConversation(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingRecordResolution | null {

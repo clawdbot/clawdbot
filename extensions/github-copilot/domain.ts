@@ -25,6 +25,7 @@ function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | un
  */
 export function resolveGithubCopilotDomain(params?: {
   env?: NodeJS.ProcessEnv;
+  explicit?: string;
   config?: OpenClawConfig;
 }): string {
   const env = params?.env ?? process.env;
@@ -32,5 +33,42 @@ export function resolveGithubCopilotDomain(params?: {
   if (fromEnv) {
     return normalizeGithubCopilotDomain(fromEnv);
   }
+  if (params?.explicit) {
+    return normalizeGithubCopilotDomain(params.explicit);
+  }
   return normalizeGithubCopilotDomain(readConfiguredGithubCopilotDomain(params?.config));
+}
+
+// Shortcut login must persist its token's tenant. A missing domain would route
+// the tenant token back to github.com after the environment override is removed.
+export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
+  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
+  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
+  const provider = providers["github-copilot"];
+  const params = provider?.params;
+  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
+  if (isDefault && !(params && "githubDomain" in params)) {
+    return cfg;
+  }
+  const nextParams: Record<string, unknown> = { ...params };
+  if (isDefault) {
+    delete nextParams.githubDomain;
+  } else {
+    nextParams.githubDomain = domain;
+  }
+  const nextProviders = { ...providers };
+  if (provider) {
+    nextProviders["github-copilot"] = { ...provider, params: nextParams };
+  } else {
+    // Source config accepts partial provider inputs; catalog materialization
+    // supplies baseUrl/models before runtime consumption.
+    Object.assign(nextProviders, { "github-copilot": { params: nextParams } });
+  }
+  return {
+    ...cfg,
+    models: {
+      ...models,
+      providers: nextProviders,
+    },
+  };
 }

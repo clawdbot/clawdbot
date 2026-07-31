@@ -16,6 +16,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
@@ -131,7 +132,12 @@ function formatMultipleConfiguredChannelsMessage(configured: readonly string[]):
   ].join(" ");
 }
 
-const loggedChannelSelectionErrors = new Set<string>();
+const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
+// Bound process-lifetime warning state; evicted plugin/account failures may log again.
+const loggedChannelSelectionErrors = createDedupeCache({
+  ttlMs: 0,
+  maxSize: CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT,
+});
 
 function logChannelSelectionError(params: {
   pluginId: string;
@@ -141,10 +147,9 @@ function logChannelSelectionError(params: {
 }) {
   const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
-  if (loggedChannelSelectionErrors.has(key)) {
+  if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
-  loggedChannelSelectionErrors.add(key);
   defaultRuntime.error?.(
     `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
   );

@@ -47,7 +47,7 @@ function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
 }
 
 /** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
-export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
+function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
   }

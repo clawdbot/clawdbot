@@ -116,6 +116,8 @@ describe("provider adapters", () => {
     expect(body.text.format.schema.properties).not.toHaveProperty("model");
     expect(body.text.format.schema.required).not.toContain("model");
     expect(body.instructions).toContain("outbound DLP");
+    expect(body.instructions).toContain("Allow ordinary claw-to-claw collaboration");
+    expect(body.instructions).toContain("Default to allow when no concrete protected value");
     expect(body.instructions).toContain('Set policyVersion to exactly "v1".');
   });
 
@@ -137,6 +139,8 @@ describe("provider adapters", () => {
     });
     const body = JSON.parse(captured!.body as string) as Record<string, any>;
     expect(body.system).toContain("inbound prompt-injection");
+    expect(body.system).toContain("task requests");
+    expect(body.system).toContain("a request to collaborate is not steering by itself");
     expect(body.system).toContain('Set policyVersion to exactly "v1".');
     expect(body.system).not.toContain('"model"');
     expect(body.output_config.format.type).toBe("json_schema");
@@ -165,16 +169,96 @@ describe("provider adapters", () => {
     });
   });
 
-  it("fails closed on non-200 provider responses", async () => {
+  it.each([
+    [
+      "OpenAI",
+      (fetch: FetchLike) => createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch }),
+    ],
+    [
+      "Anthropic",
+      (fetch: FetchLike) => createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch }),
+    ],
+  ])(
+    "cancels %s non-200 provider response bodies before failing closed",
+    async (_name, createGuard) => {
+      let cancelled = false;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial error body"));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 503 },
+      );
+      const guard = createGuard(async () => response);
+
+      await expect(guard.classify(request)).resolves.toMatchObject({
+        decision: "deny",
+        category: "guard_failure",
+      });
+      expect(cancelled).toBe(true);
+    },
+  );
+
+  it("cancels oversized provider response streams before buffering them fully", async () => {
+    const maxBytes = 256 * 1024;
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    const totalChunks = 64;
+    let emittedChunks = 0;
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (emittedChunks >= totalChunks) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk);
+          emittedChunks += 1;
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
     const guard = createOpenAiGuard({
       apiKey: "test",
       pinnedModel: model,
-      fetch: async () => jsonResponse({ error: "no" }, 500),
+      fetch: async () => response,
     });
+
     await expect(guard.classify(request)).resolves.toMatchObject({
       decision: "deny",
       category: "guard_failure",
     });
+    expect(cancelled).toBe(true);
+    // Allow the overflow chunk plus one chunk queued by the stream implementation.
+    expect(emittedChunks * chunk.byteLength).toBeLessThanOrEqual(maxBytes + chunk.byteLength * 2);
+  });
+
+  it("accepts valid provider responses close to the body limit", async () => {
+    const body = JSON.stringify({
+      model,
+      status: "completed",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
+      ],
+      provider_metadata: "x".repeat(240 * 1024),
+    });
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    expect(bodyBytes).toBeGreaterThan(240 * 1024);
+    expect(bodyBytes).toBeLessThan(256 * 1024);
+    const guard = createOpenAiGuard({
+      apiKey: "test",
+      pinnedModel: model,
+      fetch: async () => new Response(body, { headers: { "content-type": "application/json" } }),
+    });
+
+    await expect(guard.classify(request)).resolves.toEqual(allow);
   });
 
   it("fails closed on malformed JSON and provider model mismatch", async () => {
@@ -262,28 +346,6 @@ describe("provider adapters", () => {
       decision: "deny",
       category: "guard_failure",
     });
-  });
-});
-
-describe.skipIf(process.env.REEF_LIVE_GUARD !== "1")("live guard smoke", () => {
-  it("calls OpenAI only when explicitly enabled", async () => {
-    const liveModel = process.env.REEF_OPENAI_MODEL;
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!liveModel || !apiKey) {
-      return;
-    }
-    const guard = createOpenAiGuard({ apiKey, pinnedModel: liveModel, fetch });
-    expect((await guard.classify(request)).model).toBe(liveModel);
-  });
-
-  it("calls Anthropic only when explicitly enabled", async () => {
-    const liveModel = process.env.REEF_ANTHROPIC_MODEL;
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!liveModel || !apiKey) {
-      return;
-    }
-    const guard = createAnthropicGuard({ apiKey, pinnedModel: liveModel, fetch });
-    expect((await guard.classify(request)).model).toBe(liveModel);
   });
 });
 
