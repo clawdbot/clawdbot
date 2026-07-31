@@ -2385,6 +2385,7 @@ describe("package artifact reuse", () => {
     const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
     const setupNodeStep = workflowStep(checkTestboxJob, "Setup Node environment");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const closeTestboxSshStep = workflowStep(checkTestboxJob, "Close Testbox SSH sessions");
     const runArmTestboxStep = workflowStep(
       workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
       "Run Testbox",
@@ -2411,7 +2412,14 @@ describe("package artifact reuse", () => {
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && !cancelled()");
+    expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(closeTestboxSshStep.run).toContain(
+      'ss -K state established \\\n  "( sport = :${runner_ssh_port} )"',
+    );
+    expect(checkTestboxJob.steps.indexOf(closeTestboxSshStep)).toBe(
+      checkTestboxJob.steps.indexOf(runTestboxStep) + 1,
+    );
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.if).toBe("always()");

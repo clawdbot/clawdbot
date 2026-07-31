@@ -185,6 +185,24 @@ jobs:
 
       - name: Run Testbox
         uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
-        if: github.event_name == 'workflow_dispatch' && always()
+        if: github.event_name == 'workflow_dispatch' && !cancelled()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+      - name: Close Testbox SSH sessions
+        if: github.event_name == 'workflow_dispatch' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runner_ssh_port="$(cat /tmp/.testbox/runner_ssh_port 2>/dev/null || true)"
+          if [[ ! "$runner_ssh_port" =~ ^[0-9]+$ ]] ||
+            (( runner_ssh_port < 1 || runner_ssh_port > 65535 )); then
+            echo "No valid Testbox SSH port found; skipping session cleanup"
+            exit 0
+          fi
+
+          # run-testbox has no post hook. Close only Testbox client sockets so
+          # Blacksmith's runner teardown does not wait for its 290-second grace.
+          timeout --signal=KILL 5s sudo ss -K state established \
+            "( sport = :${runner_ssh_port} )" || true
