@@ -85,20 +85,30 @@ export function createAgentCommandLifecycle(params: {
       : undefined) ??
     (runResult.meta.error ? "Agent run failed" : undefined);
   const emitTerminalPhase = (
-    phase: "finishing" | "end",
+    phase: "finishing" | "end" | "error",
     terminal: EmbeddedAgentRunEntryTerminal,
+    error?: string,
+    fallbackExhausted?: boolean,
   ) => {
+    const { aborted, yielded, replayInvalid } = terminal.metadata;
+    const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     emitAgentEvent({
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration(),
       stream: "lifecycle",
       data: {
-        ...terminal.metadata,
         phase,
         startedAt: params.startedAt,
         endedAt: Date.now(),
-        aborted: terminal.metadata.aborted ?? false,
-        stopReason: terminal.outcome.stopReason,
+        aborted: typeof aborted === "boolean" ? aborted : false,
+        stopReason,
+        ...(yielded === true ? { yielded } : {}),
+        ...(replayInvalid === true ? { replayInvalid } : {}),
+        ...(livenessState ? { livenessState } : {}),
+        ...(timeoutPhase ? { timeoutPhase } : {}),
+        ...(providerStarted !== undefined ? { providerStarted } : {}),
+        ...(error ? { error } : {}),
+        ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
       },
     });
@@ -142,19 +152,7 @@ export function createAgentCommandLifecycle(params: {
       const error =
         resolveResultError(runResult, fallbackExhausted) ??
         (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
-      emitAgentEvent({
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration(),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          startedAt: params.startedAt,
-          endedAt: Date.now(),
-          error,
-          ...terminal.metadata,
-          ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
-        },
-      });
+      emitTerminalPhase("error", terminal, error, fallbackExhausted);
     },
     emitPostTurnError(error: unknown) {
       if (params.state.lifecycleEnded) {

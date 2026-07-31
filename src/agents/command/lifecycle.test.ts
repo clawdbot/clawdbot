@@ -10,16 +10,21 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 describe("createAgentCommandLifecycle", () => {
-  it.each(["finishing", "end"] as const)(
-    "preserves the canonical terminal facts on %s events",
+  it.each(["finishing", "end", "error"] as const)(
+    "preserves only canonical terminal facts on %s events",
     (phase) => {
       emitAgentEvent.mockClear();
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
       const metadata = {
         aborted: true,
         stopReason: "timeout",
         timeoutPhase: "provider",
         providerStarted: true,
         livenessState: "blocked",
+        yielded: true,
+        replayInvalid: true,
+        error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
+        unsafeMetadata: { credential: secret },
       };
       const lifecycle = createAgentCommandLifecycle({
         runId: "terminal-owner",
@@ -38,17 +43,97 @@ describe("createAgentCommandLifecycle", () => {
 
       if (phase === "finishing") {
         lifecycle.emitFinishing(terminal);
-      } else {
+      } else if (phase === "end") {
         lifecycle.emitEnd(terminal);
+      } else {
+        lifecycle.emitResultError(
+          {
+            payloads: [],
+            meta: { error: { message: "internal provider diagnostic" } },
+          } as Parameters<typeof lifecycle.emitResultError>[0],
+          true,
+          terminal,
+        );
       }
 
       expect(emitAgentEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           runId: "terminal-owner",
           stream: "lifecycle",
-          data: expect.objectContaining({ phase, ...metadata }),
+          data: expect.objectContaining({
+            phase,
+            aborted: true,
+            stopReason: "timeout",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            livenessState: "blocked",
+            yielded: true,
+            replayInvalid: true,
+            ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
+          }),
         }),
       );
+      expect(JSON.stringify(emitAgentEvent.mock.calls[0]?.[0])).not.toContain(secret);
+      expect(emitAgentEvent.mock.calls[0]?.[0]?.data).not.toHaveProperty("unsafeMetadata");
+    },
+  );
+
+  it.each(["finishing", "end", "error"] as const)(
+    "rejects malformed canonical metadata on %s events",
+    (phase) => {
+      emitAgentEvent.mockClear();
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+      const malicious = { authorization: `Bearer ${secret}`, nested: { secret } };
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "malformed-terminal-owner",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      const terminal = {
+        metadata: {
+          aborted: malicious,
+          stopReason: malicious,
+          yielded: malicious,
+          timeoutPhase: malicious,
+          providerStarted: malicious,
+          livenessState: malicious,
+          replayInvalid: malicious,
+          error: malicious,
+          unknownMetadata: malicious,
+        },
+        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+      };
+
+      if (phase === "finishing") {
+        lifecycle.emitFinishing(terminal);
+      } else if (phase === "end") {
+        lifecycle.emitEnd(terminal);
+      } else {
+        lifecycle.emitResultError(
+          { payloads: [], meta: {} } as Parameters<typeof lifecycle.emitResultError>[0],
+          false,
+          terminal,
+        );
+      }
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data).toMatchObject({ phase, aborted: false, stopReason: "error" });
+      expect(JSON.stringify(event)).not.toContain(secret);
+      for (const field of [
+        "yielded",
+        "timeoutPhase",
+        "providerStarted",
+        "livenessState",
+        "replayInvalid",
+        "unknownMetadata",
+      ]) {
+        expect(event.data).not.toHaveProperty(field);
+      }
     },
   );
 });

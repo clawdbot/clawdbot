@@ -1315,9 +1315,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const diagnostic =
       state === "aborted"
         ? readToolValidationErrorSummary(metadata.toolErrorSummary)
-        : options.visibleText ||
+        : (outcome.reason === "failed" && options.visibleText) ||
           outcome.error ||
-          (outcome.reason === "hard_timeout"
+          (outcome.status === "timeout"
             ? "The provider timed out. Please try again."
             : "Agent run failed.");
     if (metadata.phase === "error" && state === "error") {

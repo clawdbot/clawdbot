@@ -2045,6 +2045,13 @@ describe("EmbeddedTuiBackend", () => {
         providerStarted: true,
       },
       text: "The provider timed out. Please try again.",
+      partialText: "A partial response before the provider timed out.",
+    },
+    {
+      label: "a non-provider timeout with partial assistant output",
+      meta: { stopReason: "timeout" },
+      text: "The provider timed out. Please try again.",
+      partialText: "A partial response before the run timed out.",
     },
     {
       label: "a mechanically aborted blocked turn",
@@ -2056,12 +2063,14 @@ describe("EmbeddedTuiBackend", () => {
       },
       meta: { aborted: true, stopReason: "aborted", livenessState: "blocked" },
       text: "Agent run blocked before producing a usable result.",
+      partialText: "A partial response before the run became blocked.",
     },
     {
       label: "an abandoned turn without cancellation",
       lifecycle: { phase: "end", livenessState: "abandoned" },
       meta: { livenessState: "abandoned" },
       text: "Agent run ended before producing a complete result.",
+      partialText: "A partial response before the run was abandoned.",
     },
     {
       label: "a structured agent failure",
@@ -2098,7 +2107,7 @@ describe("EmbeddedTuiBackend", () => {
     },
   ])(
     "projects $label as an actionable terminal failure",
-    async ({ lifecycle, meta, text, abortBeforeLifecycle, secret }) => {
+    async ({ lifecycle, meta, text, partialText, abortBeforeLifecycle, secret }) => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const pending = deferred<{
         payloads: Array<{ text: string; mediaUrl: null }>;
@@ -2140,7 +2149,7 @@ describe("EmbeddedTuiBackend", () => {
           },
         });
       }
-      pending.resolve({ payloads: [{ text, mediaUrl: null }], meta });
+      pending.resolve({ payloads: [{ text: partialText ?? text, mediaUrl: null }], meta });
       await flushMicrotasks();
 
       expect(events).toContainEqual({
@@ -2169,6 +2178,58 @@ describe("EmbeddedTuiBackend", () => {
       }
     },
   );
+
+  it.each([
+    {
+      label: "a provider timeout",
+      meta: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
+      diagnostic: "The provider timed out. Please try again.",
+    },
+    {
+      label: "a queued timeout",
+      meta: { stopReason: "timeout", timeoutPhase: "queue", providerStarted: false },
+      diagnostic: "The provider timed out. Please try again.",
+    },
+    {
+      label: "a blocked run",
+      meta: { livenessState: "blocked" },
+      diagnostic: "Agent run blocked before producing a usable result.",
+    },
+    {
+      label: "an abandoned run",
+      meta: { livenessState: "abandoned" },
+      diagnostic: "Agent run ended before producing a complete result.",
+    },
+  ])("does not let partial assistant output hide $label", async ({ meta, diagnostic }) => {
+    const partialText = "Partial assistant output before the terminal failure.";
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: partialText }],
+      meta,
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "preserve the canonical failure diagnostic",
+      runId: "partial-terminal",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "partial-terminal",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "error",
+        errorMessage: diagnostic,
+      },
+    });
+  });
 
   it("surfaces canonical error-only thrown outcomes without exposing the wrapped cause", async () => {
     const { AgentRunTerminalOutcomeError } =
