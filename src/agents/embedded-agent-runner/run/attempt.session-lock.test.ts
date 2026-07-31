@@ -730,8 +730,11 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     const reason = new Error("cron setup timed out");
     reason.name = "TimeoutError";
 
+    expect(controller.isPromptSubmissionBlockedError(undefined)).toBe(false);
     await controller.releaseHeldLockForAbort({ reason });
 
+    expect(controller.isPromptSubmissionBlockedError(reason)).toBe(true);
+    expect(controller.isPromptSubmissionBlockedError(new Error(reason.message))).toBe(false);
     await expect(controller.releaseForPrompt()).rejects.toBe(reason);
   });
 
