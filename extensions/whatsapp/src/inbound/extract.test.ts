@@ -1,8 +1,9 @@
 // Whatsapp tests cover extract plugin behavior.
-import type { proto } from "baileys";
+import { generateWAMessageFromContent, type proto } from "baileys";
 import { describe, expect, it } from "vitest";
 import {
   describeReplyContext,
+  extractMediaKind,
   extractMentionedJids,
   extractText,
   hasInboundUserContent,
@@ -75,6 +76,49 @@ describe("extractMentionedJids", () => {
       },
     };
     expect(extractMentionedJids(message)).toEqual([botJid]);
+  });
+
+  it.each([
+    {
+      name: "template button replies",
+      message: {
+        templateButtonReplyMessage: {
+          selectedId: "confirm",
+          selectedDisplayText: "Confirm",
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "native interactive responses",
+      message: {
+        interactiveResponseMessage: {
+          body: { text: "Continue" },
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "video notes",
+      message: {
+        ptvMessage: {
+          mimetype: "video/mp4",
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "native polls",
+      message: {
+        pollCreationMessageV3: {
+          name: "Lunch?",
+          options: [{ optionName: "Pizza" }],
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+  ])("preserves direct bot mentions from $name", ({ message }) => {
+    expect(extractMentionedJids(message as proto.IMessage)).toEqual([botJid]);
   });
 
   it("returns undefined for messages with no mentions", () => {
@@ -155,6 +199,37 @@ describe("describeReplyContext", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("preserves a quoted poll encoded through the real Baileys message generator", () => {
+    const userJid = "15555550123@s.whatsapp.net";
+    const generated = generateWAMessageFromContent(
+      "120363000000000000@g.us",
+      { extendedTextMessage: { text: "Choose pizza" } },
+      {
+        userJid,
+        quoted: {
+          key: {
+            id: "original-poll",
+            remoteJid: "120363000000000000@g.us",
+            participant: userJid,
+            fromMe: false,
+          },
+          message: {
+            pollCreationMessageV3: {
+              name: "Lunch?",
+              options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
+            },
+          },
+        },
+      },
+    );
+
+    expect(describeReplyContext(generated.message ?? undefined)).toMatchObject({
+      id: "original-poll",
+      body: "Lunch?\n- Pizza\n- Sushi",
+      sender: { jid: userJid },
+    });
   });
 });
 
@@ -248,6 +323,65 @@ describe("extractText", () => {
       },
       expected: "OK",
     },
+    {
+      name: "native multiple-choice poll",
+      message: {
+        pollCreationMessage: {
+          name: "Lunch?",
+          options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
+        },
+      },
+      expected: "Lunch?\n- Pizza\n- Sushi",
+    },
+    {
+      name: "native announcement-group poll",
+      message: {
+        pollCreationMessageV2: {
+          name: "Lunch?",
+          options: [{ optionName: "Pizza" }],
+        },
+      },
+      expected: "Lunch?\n- Pizza",
+    },
+    {
+      name: "native single-select poll",
+      message: {
+        pollCreationMessageV3: {
+          name: "Lunch?",
+          options: [{ optionName: "Pizza" }],
+        },
+      },
+      expected: "Lunch?\n- Pizza",
+    },
+    {
+      name: "future-proof native poll",
+      message: {
+        pollCreationMessageV4: {
+          message: {
+            pollCreationMessageV3: {
+              name: "Lunch?",
+              options: [{ optionName: "Pizza" }],
+            },
+          },
+        },
+      },
+      expected: "Lunch?\n- Pizza",
+    },
+    {
+      name: "native poll with blank options filtered",
+      message: {
+        pollCreationMessageV5: {
+          name: " Lunch? ",
+          options: [{ optionName: " " }, { optionName: " Pizza " }],
+        },
+      },
+      expected: "Lunch?\n- Pizza",
+    },
+    {
+      name: "video-note caption",
+      message: { ptvMessage: { caption: "Watch this", mimetype: "video/mp4" } },
+      expected: "Watch this",
+    },
   ])("preserves $name as inbound message text", ({ message, expected }) => {
     expect(extractText(message as proto.IMessage)).toBe(expected);
   });
@@ -293,6 +427,26 @@ describe("hasInboundUserContent", () => {
   it("returns true for video message", () => {
     expect(
       hasInboundUserContent({ videoMessage: { mimetype: "video/mp4" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("classifies captionless video notes as user-visible video media", () => {
+    const message = { ptvMessage: { mimetype: "video/mp4" } } as proto.IMessage;
+
+    expect(extractMediaKind(message)).toBe("video");
+    expect(hasInboundUserContent(message)).toBe(true);
+  });
+
+  it.each([
+    "pollCreationMessage",
+    "pollCreationMessageV2",
+    "pollCreationMessageV3",
+    "pollCreationMessageV5",
+  ] as const)("admits populated %s as user-visible content", (pollKey) => {
+    expect(
+      hasInboundUserContent({
+        [pollKey]: { name: "Lunch?", options: [{ optionName: "Pizza" }] },
+      } as proto.IMessage),
     ).toBe(true);
   });
 
@@ -449,5 +603,13 @@ describe("hasInboundUserContent", () => {
     expect(hasInboundUserContent({ extendedTextMessage: { text: "  " } } as proto.IMessage)).toBe(
       false,
     );
+  });
+
+  it("does not admit an empty native poll envelope", () => {
+    expect(
+      hasInboundUserContent({
+        pollCreationMessage: { name: " ", options: [{ optionName: " " }] },
+      } as proto.IMessage),
+    ).toBe(false);
   });
 });
