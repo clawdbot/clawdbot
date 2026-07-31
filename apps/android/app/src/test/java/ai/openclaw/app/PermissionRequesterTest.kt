@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import android.Manifest
+import android.app.Dialog
 import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.Dispatchers
@@ -21,7 +22,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -147,6 +150,8 @@ class PermissionRequesterTest {
         )
         runCurrent()
 
+        cancelDialog(checkNotNull(ShadowDialog.getLatestDialog()))
+        runCurrent()
         assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
       } finally {
         Dispatchers.resetMain()
@@ -275,6 +280,51 @@ class PermissionRequesterTest {
         requester.activate(replacementActivity)
         runCurrent()
 
+        val settingsDialog = checkNotNull(ShadowDialog.getLatestDialog())
+        assertTrue(settingsDialog.isShowing)
+        assertFalse(pending.isCompleted)
+
+        cancelDialog(settingsDialog)
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun permanentDenialPromptMovesToNewActiveActivity() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val originalActivity = activity()
+      val originalRequests = FakePermissionRequests()
+      val requester = requester(originalActivity, originalRequests)
+
+      try {
+        val pending = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+        runCurrent()
+        assertTrue(originalRequests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to false)))
+        runCurrent()
+
+        val originalDialog = checkNotNull(ShadowDialog.getLatestDialog())
+        assertTrue(originalDialog.isShowing)
+        assertFalse(pending.isCompleted)
+
+        val replacementActivity = activity()
+        val replacementRequests = FakePermissionRequests()
+        requester.attach(replacementActivity, replacementRequests::request)
+        requester.activate(replacementActivity)
+        runCurrent()
+
+        val replacementDialog = checkNotNull(ShadowDialog.getLatestDialog())
+        assertFalse(originalDialog.isShowing)
+        assertTrue(replacementDialog !== originalDialog)
+        assertTrue(replacementDialog.isShowing)
+        assertFalse(pending.isCompleted)
+
+        cancelDialog(replacementDialog)
+        runCurrent()
         assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
       } finally {
         Dispatchers.resetMain()
@@ -337,6 +387,10 @@ class PermissionRequesterTest {
       .buildActivity(PermissionRationaleActivity::class.java)
       .setup()
       .get()
+
+  private fun cancelDialog(dialog: Dialog) {
+    checkNotNull(shadowOf(dialog).onCancelListener).onCancel(dialog)
+  }
 
   private fun requester(
     activity: ComponentActivity,

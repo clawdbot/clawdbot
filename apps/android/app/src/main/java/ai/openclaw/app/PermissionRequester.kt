@@ -62,6 +62,11 @@ class PermissionRequester internal constructor(
     HostLost,
   }
 
+  private enum class SettingsResult {
+    Shown,
+    HostLost,
+  }
+
   private val appContext = context.applicationContext
   private val mutex = Mutex()
   private val activityHostLock = Any()
@@ -295,7 +300,10 @@ class PermissionRequester internal constructor(
               }
           } ?: continue
         if (denied.isEmpty()) return@withTimeout
-        if (showSettingsDialog(active, denied)) return@withTimeout
+        when (showSettingsDialog(active, denied)) {
+          SettingsResult.Shown -> return@withTimeout
+          SettingsResult.HostLost -> Unit
+        }
       }
     }
   }
@@ -369,42 +377,75 @@ class PermissionRequester internal constructor(
   private suspend fun showSettingsDialog(
     active: ActiveActivityHost,
     permissions: List<String>,
-  ): Boolean =
+  ): SettingsResult =
     withContext(Dispatchers.Main) {
-      if (!isCurrentActiveHost(active)) return@withContext false
-      val activity = active.host.activity
-      val lifecycle = activity.lifecycle
-      var dialog: AlertDialog? = null
-      var observer: LifecycleEventObserver? = null
-      val removeObserver = {
-        observer?.let(lifecycle::removeObserver)
-        observer = null
+      if (!isCurrentActiveHost(active)) {
+        return@withContext SettingsResult.HostLost
       }
-      val actualObserver =
-        LifecycleEventObserver { _, event ->
-          if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+      val activity = active.host.activity
+      suspendCancellableCoroutine { cont ->
+        val lifecycle = activity.lifecycle
+        var dialog: AlertDialog? = null
+        var observer: LifecycleEventObserver? = null
+        var hostLossJob: Job? = null
+        val finished = AtomicBoolean(false)
+        val removeObserver = {
+          observer?.let(lifecycle::removeObserver)
+          observer = null
+        }
+
+        fun finish(result: SettingsResult?) {
+          if (!finished.compareAndSet(false, true)) return
+          hostLossJob?.cancel()
+          hostLossJob = null
           removeObserver()
           dialog?.dismiss()
+          if (result != null) {
+            cont.resume(result)
+          }
         }
-      observer = actualObserver
-      lifecycle.addObserver(actualObserver)
-      dialog =
-        AlertDialog
-          .Builder(activity)
-          .setTitle(nativeString("Enable permission in Settings"))
-          .setMessage(buildSettingsMessage(permissions))
-          .setPositiveButton(nativeString("Open Settings")) { _, _ ->
-            if (activity.isFinishing || activity.isDestroyed) return@setPositiveButton
-            val intent =
-              Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.fromParts("package", activity.packageName, null),
-              )
-            activity.startActivity(intent)
-          }.setNegativeButton(nativeString("Cancel"), null)
-          .setOnDismissListener { removeObserver() }
-          .show()
-      true
+        val actualObserver =
+          LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+            finish(SettingsResult.HostLost)
+          }
+        observer = actualObserver
+        lifecycle.addObserver(actualObserver)
+        hostLossJob =
+          CoroutineScope(cont.context)
+            .launch(start = CoroutineStart.LAZY) {
+              activeActivityHost.first { current -> current != active }
+              finish(SettingsResult.HostLost)
+            }.also(Job::start)
+        cont.invokeOnCancellation {
+          mainHandler.post {
+            finish(null)
+          }
+        }
+        if (finished.get()) return@suspendCancellableCoroutine
+        dialog =
+          AlertDialog
+            .Builder(activity)
+            .setTitle(nativeString("Enable permission in Settings"))
+            .setMessage(buildSettingsMessage(permissions))
+            .setPositiveButton(nativeString("Open Settings")) { _, _ ->
+              if (!isCurrentActiveHost(active)) {
+                finish(SettingsResult.HostLost)
+                return@setPositiveButton
+              }
+              val intent =
+                Intent(
+                  Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                  Uri.fromParts("package", activity.packageName, null),
+                )
+              activity.startActivity(intent)
+              finish(SettingsResult.Shown)
+            }.setNegativeButton(nativeString("Cancel")) { _, _ ->
+              finish(SettingsResult.Shown)
+            }.setOnCancelListener { finish(SettingsResult.Shown) }
+            .setOnDismissListener { finish(SettingsResult.Shown) }
+            .show()
+      }
     }
 
   private fun buildRationaleMessage(permissions: List<String>): String {
