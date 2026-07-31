@@ -2,6 +2,7 @@
 // delivery metadata, pairing state, and outbound payload lifecycle events.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -266,6 +267,7 @@ function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): Ga
     connId,
     usesSharedGatewayAuth: false,
     socket: {
+      readyState: WebSocket.OPEN,
       send(frame: unknown) {
         if (typeof frame === "string") {
           sent.push(frame);

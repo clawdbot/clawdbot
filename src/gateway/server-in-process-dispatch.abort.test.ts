@@ -1,5 +1,6 @@
 /** Proves in-process Gateway cancellation reaches real paired-node invocation state. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
@@ -29,6 +30,7 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
       connId: "paired-node-connection",
       usesSharedGatewayAuth: false,
       socket: {
+        readyState: WebSocket.OPEN,
         send(frame: unknown) {
           if (typeof frame === "string") {
             frames.push(frame);

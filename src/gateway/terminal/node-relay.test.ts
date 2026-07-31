@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { type NodeInvokeResult, NodeRegistry } from "../node-registry.js";
 import { createNodeRelayBackend } from "./node-relay.js";
@@ -24,6 +25,7 @@ describe("createNodeRelayBackend", () => {
         connId: "conn-validated",
         usesSharedGatewayAuth: false,
         socket: {
+          readyState: WebSocket.OPEN,
           send(frame: unknown) {
             if (typeof frame === "string") {
               frames.push(frame);
