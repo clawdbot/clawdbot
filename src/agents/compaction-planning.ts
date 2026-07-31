@@ -79,11 +79,6 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
   return stripToolResultDetails(stripRuntimeContextCustomMessages(messages));
 }
 
-/** Estimates one message using the same sanitization path as multi-message planning. */
-function estimateCompactionMessageTokens(message: AgentMessage): number {
-  return estimateMessagesTokens([message]);
-}
-
 function estimateCompactionPlanningTokens(message: AgentMessage): number {
   const omittedChars = readCompactionPlanningOmittedChars(message);
   if (omittedChars === 0) {
@@ -277,12 +272,9 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   return BASE_CHUNK_RATIO;
 }
 
-/**
- * Check if a single message is too large to summarize.
- * If single message > 50% of context, it can't be summarized safely.
- */
+/** Returns whether one message exceeds the safe summarization context share. */
 export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateCompactionMessageTokens(msg) * SAFETY_MARGIN;
+  const tokens = estimateMessagesTokens([msg]) * SAFETY_MARGIN;
   return tokens > contextWindow * 0.5;
 }
 
@@ -304,23 +296,30 @@ export function buildOversizedFallbackPlan(params: {
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
-  // Sanitize the full array once and reuse per-message token counts; avoids the
-  // per-message [msg] wrap-and-clone (twice per oversized message) of the prior loop.
+  // Reuse one sanitized token estimate per message across atomic fallback groups.
   const perMessageTokens = estimatePerMessageTokens(params.messages);
   const oversizedThreshold = params.contextWindow * 0.5;
+  let messageIndex = 0;
 
-  for (const [index, msg] of params.messages.entries()) {
-    const tokens = perMessageTokens.at(index);
-    if (tokens === undefined) {
-      throw new Error("Compaction token estimates are out of sync with messages");
+  for (const group of groupCompactionMessages(params.messages, perMessageTokens)) {
+    const retainedMessages: AgentMessage[] = [];
+    let omitToolBatch = false;
+    for (const message of group.messages) {
+      const tokens = perMessageTokens[messageIndex++]!;
+      if (tokens * SAFETY_MARGIN > oversizedThreshold) {
+        oversizedNotes.push(
+          `[Large ${message.role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
+        );
+        omitToolBatch ||= message.role === "assistant" || message.role === "toolResult";
+      } else {
+        retainedMessages.push(message);
+      }
     }
-    if (tokens * SAFETY_MARGIN > oversizedThreshold) {
-      const role = (msg as { role?: string }).role ?? "message";
-      oversizedNotes.push(
-        `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
-      );
-    } else {
-      smallMessages.push(msg);
+    // Displaced real user turns survive even when their surrounding tool batch cannot.
+    for (const message of retainedMessages) {
+      if (!omitToolBatch || (message.role !== "assistant" && message.role !== "toolResult")) {
+        smallMessages.push(message);
+      }
     }
   }
 
