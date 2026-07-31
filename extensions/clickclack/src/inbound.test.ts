@@ -20,6 +20,7 @@ import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from ".
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
 const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
+const THIRD_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fax";
 
 type LlmCompleteMock = ReturnType<
   typeof vi.fn<
