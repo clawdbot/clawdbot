@@ -521,12 +521,20 @@ class ChannelsPage extends OpenClawLightDomElement {
 
       const imported = data.merged ?? data.imported;
       const values = imported
-        ? mergeNostrProfileDraft(imported, currentForm.values, currentForm.original)
+        ? mergeNostrProfileDraft(
+            imported,
+            currentForm.values,
+            currentForm.original,
+            currentForm.importedBaseline,
+          )
         : currentForm.values;
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
         values,
+        importedBaseline: imported
+          ? { ...currentForm.importedBaseline, ...imported }
+          : currentForm.importedBaseline,
         error: null,
         success: t("channels.nostr.notices.importedFromRelays"),
         showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),

@@ -18,6 +18,8 @@ export interface NostrProfileFormState {
   values: NostrProfileType;
   /** Original values for dirty detection */
   original: NostrProfileType;
+  /** Latest imported values used to distinguish relay data from local edits */
+  importedBaseline: Partial<NostrProfileType>;
   /** Whether the form is currently submitting */
   saving: boolean;
   /** Whether import is in progress */
@@ -310,6 +312,7 @@ export function createNostrProfileFormState(
   return {
     values,
     original: { ...values },
+    importedBaseline: {},
     saving: false,
     importing: false,
     error: null,
