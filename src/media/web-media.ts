@@ -35,7 +35,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
+import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
@@ -80,7 +82,7 @@ type WebMediaOptions = {
   inboundRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
-  readFile?: (filePath: string) => Promise<Buffer>;
+  readFile?: OutboundMediaReadFile;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
 };
@@ -1133,16 +1135,17 @@ async function loadWebMediaInternal(
     };
   };
 
+  // Bound source reads before buffering. Optimized images may exceed their
+  // delivery cap because they are compressed before the final size check.
+  const defaultSourceReadCap = maxBytesForKind("document");
+  const sourceReadCap =
+    maxBytes === undefined
+      ? defaultSourceReadCap
+      : optimizeImages
+        ? Math.max(maxBytes, defaultSourceReadCap)
+        : maxBytes;
+
   if (hasHttpUrlPrefix(mediaUrl)) {
-    // Enforce a download cap during fetch to avoid unbounded memory usage.
-    // For optimized images, allow fetching larger payloads before compression.
-    const defaultFetchCap = maxBytesForKind("document");
-    const fetchCap =
-      maxBytes === undefined
-        ? defaultFetchCap
-        : optimizeImages
-          ? Math.max(maxBytes, defaultFetchCap)
-          : maxBytes;
     const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
       ? {
           mode: "explicit-proxy",
@@ -1155,7 +1158,7 @@ async function loadWebMediaInternal(
       fetchImpl,
       requestInit,
       readIdleTimeoutMs,
-      maxBytes: fetchCap,
+      maxBytes: sourceReadCap,
       ssrfPolicy,
       dispatcherPolicy,
       trustExplicitProxyDns,
@@ -1206,12 +1209,22 @@ async function loadWebMediaInternal(
   // Local path
   let data: Buffer;
   if (readFileOverride) {
-    data = await readFileOverride(mediaUrl);
+    data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });
   } else {
     try {
-      data = (await readLocalFileSafely({ filePath: mediaUrl })).buffer;
+      data = (
+        await readLocalFileSafely({
+          filePath: mediaUrl,
+          maxBytes: sourceReadCap,
+        })
+      ).buffer;
     } catch (err) {
       if (err instanceof FsSafeError) {
+        if (err.code === "too-large") {
+          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
+            cause: err,
+          });
+        }
         if (err.code === "not-found") {
           throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
             cause: err,
