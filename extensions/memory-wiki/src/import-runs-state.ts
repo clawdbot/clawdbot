@@ -15,6 +15,7 @@ type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
   contentHash?: string;
+  recoveryPaths?: string[];
 };
 
 export type ChatGptImportRunRecord = {
@@ -56,6 +57,7 @@ type MemoryWikiImportRunPathStateRecord = {
   path: string;
   snapshotPath?: string;
   contentHash?: string;
+  recoveryPaths?: string[];
 };
 
 type MemoryWikiImportRunStateRecord =
@@ -98,8 +100,14 @@ function resolvePathStateEntryKey(params: {
 function cloneImportRunRecord(record: ChatGptImportRunRecord): ChatGptImportRunRecord {
   return {
     ...record,
-    createdPaths: record.createdPaths.map((entry) => ({ ...entry })),
-    updatedPaths: record.updatedPaths.map((entry) => ({ ...entry })),
+    createdPaths: record.createdPaths.map((entry) => ({
+      ...entry,
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
+    updatedPaths: record.updatedPaths.map((entry) => ({
+      ...entry,
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
   };
 }
 
@@ -135,14 +143,30 @@ function normalizeImportRunEntries(value: unknown): ChatGptImportRunEntry[] {
       typeof entry.contentHash === "string" && entry.contentHash.trim()
         ? entry.contentHash.trim()
         : undefined;
+    const recoveryPaths = normalizeStringArray(entry.recoveryPaths);
     return [
       {
         path: entryPath,
         ...(snapshotPath ? { snapshotPath } : {}),
         ...(contentHash ? { contentHash } : {}),
+        ...(recoveryPaths.length > 0 ? { recoveryPaths } : {}),
       },
     ];
   });
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function asNonNegativeInteger(value: unknown): number {
@@ -230,6 +254,7 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     typeof record.contentHash === "string" && record.contentHash.trim()
       ? record.contentHash.trim()
       : undefined;
+  const recoveryPaths = normalizeStringArray(record.recoveryPaths);
   return {
     kind: record.kind,
     vaultRootKey: record.vaultRootKey,
@@ -238,6 +263,7 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     path: record.path,
     ...(snapshotPath ? { snapshotPath } : {}),
     ...(contentHash ? { contentHash } : {}),
+    ...(recoveryPaths.length > 0 ? { recoveryPaths } : {}),
   };
 }
 
@@ -249,6 +275,7 @@ function composeImportRunRecord(
     path: row.path,
     ...(row.snapshotPath ? { snapshotPath: row.snapshotPath } : {}),
     ...(row.contentHash ? { contentHash: row.contentHash } : {}),
+    ...(row.recoveryPaths ? { recoveryPaths: [...row.recoveryPaths] } : {}),
   });
   const createdPaths = pathRows
     .filter((row) => row.kind === "created-path")
@@ -309,6 +336,7 @@ function toPathRecords(
         index,
         path: entry.path,
         ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
       }),
     ),
     ...record.updatedPaths.map(
@@ -320,6 +348,7 @@ function toPathRecords(
         path: entry.path,
         ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
         ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
       }),
     ),
   ];
@@ -384,10 +413,6 @@ export function createMemoryWikiImportRunStateStore(
     async write(vaultRoot, record) {
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
-      await store.register(
-        resolveStateEntryKey(vaultRootKey, record.runId),
-        toMetaRecord(vaultRootKey, record),
-      );
       const nextPathKeys = new Set<string>();
       for (const pathRecord of toPathRecords(vaultRootKey, record)) {
         const key = resolvePathStateEntryKey({
@@ -400,6 +425,12 @@ export function createMemoryWikiImportRunStateStore(
         nextPathKeys.add(key);
         await store.register(key, pathRecord);
       }
+      // Path rows carry rollback recovery evidence. Commit the meta row last
+      // so rolledBackAt can never become visible ahead of those durable facts.
+      await store.register(
+        resolveStateEntryKey(vaultRootKey, record.runId),
+        toMetaRecord(vaultRootKey, record),
+      );
       for (const row of await store.entries()) {
         const pathRecord = normalizePathRecord(row.value);
         if (

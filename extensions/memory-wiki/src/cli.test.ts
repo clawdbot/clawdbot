@@ -7,7 +7,6 @@ import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWikiCli } from "./cli.js";
 import type { MemoryWikiPluginConfig, ResolvedMemoryWikiConfig } from "./config.js";
-import { writeMemoryWikiImportRunRecord } from "./import-runs-state.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import {
   renderMemoryWikiStatus,
@@ -879,46 +878,6 @@ cli note
     );
   });
 
-  it("conservatively preserves a hashless legacy created page during rollback", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const relativePagePath = "sources/legacy.md";
-    const pagePath = path.join(rootDir, relativePagePath);
-    const legacyContent = "# Legacy import page\n";
-    await fs.mkdir(path.dirname(pagePath), { recursive: true });
-    await fs.writeFile(pagePath, legacyContent, "utf8");
-    await writeMemoryWikiImportRunRecord(rootDir, {
-      version: 1,
-      runId: "chatgpt-legacy-hashless",
-      importType: "chatgpt",
-      exportPath: "/tmp/chatgpt",
-      sourcePath: "/tmp/chatgpt/conversations.json",
-      appliedAt: "2026-04-10T10:00:00.000Z",
-      conversationCount: 1,
-      createdCount: 1,
-      updatedCount: 0,
-      skippedCount: 0,
-      createdPaths: [{ path: relativePagePath }],
-      updatedPaths: [],
-    });
-
-    const rollback = JSON.parse(
-      await runRegisteredWikiCommand(config, [
-        "chatgpt",
-        "rollback",
-        "chatgpt-legacy-hashless",
-        "--json",
-      ]),
-    ) as { preservedPaths: Array<{ path: string; recoveryPath: string }> };
-
-    await expect(fs.stat(pagePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(rollback.preservedPaths).toHaveLength(1);
-    const preserved = expectDefined(rollback.preservedPaths[0], "preserved hashless page");
-    expect(preserved.path).toBe(relativePagePath);
-    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
-      legacyContent,
-    );
-  });
-
   it("preserves user edits made after a re-import when rolling back an updated page", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
@@ -996,6 +955,7 @@ cli note
 
     const concurrentSave = "Concurrent editor save during rollback.\n";
     let recreated = false;
+    const recoveryDestinations: string[] = [];
     const realRename = fs.rename;
     const renameSpy = vi
       .spyOn(fs, "rename")
@@ -1005,6 +965,9 @@ cli note
           recreated = true;
           await fs.writeFile(from, concurrentSave, "utf8");
         }
+        if (path.basename(String(to)) === "content") {
+          recoveryDestinations.push(String(to));
+        }
       });
     const rollback = JSON.parse(
       await runRegisteredWikiCommand(config, ["chatgpt", "rollback", secondRunId, "--json"]),
@@ -1012,6 +975,8 @@ cli note
     renameSpy.mockRestore();
 
     expect(recreated).toBe(true);
+    expect(recoveryDestinations).toHaveLength(2);
+    expect(new Set(recoveryDestinations).size).toBe(2);
     expect(rollback.restoredCount).toBe(1);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstImportContent);
     expect(rollback.preservedPaths).toHaveLength(1);

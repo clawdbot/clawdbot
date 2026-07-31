@@ -220,6 +220,9 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
+ChatGPT import rollback records post-import edits before compile and keeps
+their recovery paths in plugin state, so an interrupted rollback can reconcile
+the recovery directory and report the same preserved pages on retry.
 Compiled caches are rebuildable: cache rows from before publication epochs are
 treated as misses and replaced by the next compile; they are not migrated.
 
