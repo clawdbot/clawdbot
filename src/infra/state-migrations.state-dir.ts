@@ -112,6 +112,17 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+// Fail-closed twin of isDirPath: an unreadable marker (EACCES) must not count as
+// proof of an initialized root, or a permission error would silently downgrade a
+// startup-blocking warning to a notice.
+function isFilePath(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 // Mirrors CONFIG_FILENAME / LEGACY_CONFIG_FILENAMES in config/paths.ts (kept local
 // so this internal heuristic does not widen the public config barrel).
 const STATE_ROOT_CONFIG_MARKERS = ["openclaw.json", "clawdbot.json"] as const;
@@ -122,8 +133,14 @@ const STATE_ROOT_CONFIG_MARKERS = ["openclaw.json", "clawdbot.json"] as const;
 // before startup migrations run, so their presence proves nothing about ownership.
 // maybeMigrateLegacyConfig refuses to copy a config out of an unresolved legacy dir,
 // so this marker cannot be planted by future blocked runs.
+//
+// The marker must be a regular FILE. A directory named openclaw.json is not a
+// config and proves nothing, but it would satisfy an existence check and thereby
+// downgrade an unresolved legacy conflict to a non-blocking notice at the
+// targetExistsSkips branch — checkpointing and starting the gateway against a
+// stray directory while the real state is still unmigrated.
 function isInitializedStateRoot(targetDir: string): boolean {
-  return STATE_ROOT_CONFIG_MARKERS.some((name) => fs.existsSync(path.join(targetDir, name)));
+  return STATE_ROOT_CONFIG_MARKERS.some((name) => isFilePath(path.join(targetDir, name)));
 }
 
 function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {

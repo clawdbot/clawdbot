@@ -140,6 +140,35 @@ describe("legacy state dir auto-migration", () => {
     });
   });
 
+  // A marker that is a DIRECTORY is not a config and proves nothing about
+  // ownership, but an existence check accepts it — which would downgrade this
+  // unresolved conflict to a notice and let the gateway checkpoint against a
+  // stray directory while the populated legacy dir is still authoritative.
+  // Both accepted marker names are covered because either one alone satisfies
+  // the predicate.
+  for (const marker of ["openclaw.json", "clawdbot.json"] as const) {
+    it(`keeps skips blocking when the canonical target's ${marker} marker is a directory`, async () => {
+      await withStateDirFixture(async (root) => {
+        const legacyDir = path.join(root, ".clawdbot");
+        const targetDir = path.join(root, ".openclaw");
+        fs.mkdirSync(legacyDir, { recursive: true });
+        fs.writeFileSync(path.join(legacyDir, "openclaw.json"), "{}", "utf-8");
+        fs.mkdirSync(path.join(targetDir, marker), { recursive: true });
+
+        const result = await autoMigrateLegacyStateDir({
+          env: {} as NodeJS.ProcessEnv,
+          homedir: () => root,
+        });
+
+        expect(result.migrated).toBe(false);
+        expect(result.warnings).toEqual([
+          `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+        ]);
+        expect(result.notices ?? []).toStrictEqual([]);
+      });
+    });
+  }
+
   it("skips state-dir migration when OPENCLAW_STATE_DIR is explicitly set", async () => {
     await withStateDirFixture(async (root) => {
       const legacyDir = path.join(root, ".clawdbot");
