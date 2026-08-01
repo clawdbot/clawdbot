@@ -6,7 +6,6 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
-import type { CommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
@@ -14,39 +13,11 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionQueuePriority,
+  shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
-
-/**
- * Whether a run about to enter `lane` is going to wait rather than start now.
- *
- * Called BEFORE enqueue, so it must answer from the lane's current admission
- * state — `queuedCount` is 0 at this point in the common case.
- *
- * `blockedBy` is the only term that can see a GROUP-imposed wait: a member
- * blocked by group budget or a sibling's hard reservation has
- * `activeCount < maxConcurrent` and typically `queuedCount === 0`, so both
- * lane-local terms are false while the task genuinely cannot start.
- *
- * Missing that wait is not merely an observability gap. `cron/service/
- * agent-watchdog.ts` suppresses the cron setup timeout only while
- * `waitingForLane` is true, and that flag is set from this signal via
- * `timer-job-runner.ts` -> `noteLaneWait()`. A group wait that goes unreported
- * therefore produces a FALSE setup timeout for a run that is healthy and simply
- * queued behind capacity.
- *
- * Exported for test: the chain from group-blocked lane to timeout suppression
- * spans three files, and this is the link the capacity-group change introduced.
- */
-export function shouldNoteLaneWait(snapshot: CommandLaneSnapshot): boolean {
-  return (
-    snapshot.queuedCount > 0 ||
-    snapshot.activeCount >= snapshot.maxConcurrent ||
-    snapshot.blockedBy != null
-  );
-}
 
 type LaneParams = RunEmbeddedAgentParams & {
   sessionFile: string;

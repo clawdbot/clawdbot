@@ -20,18 +20,27 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  clearCommandLaneGroup,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
+  publishLaneConfiguration,
   resetAllLanes,
   setCommandLaneConcurrency,
-  setCommandLaneGroup,
 } from "../../../process/command-queue.js";
-import { shouldNoteLaneWait } from "./lane-controller.js";
+import { shouldNoteLaneWait } from "./lane-runtime.js";
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
 const GROUP = "cron-hooks";
+
+type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
+
+function setCommandLaneGroup(group: string, spec: LaneGroupSpec): void {
+  publishLaneConfiguration({ groups: { [group]: spec } });
+}
+
+function clearCommandLaneGroup(group: string): void {
+  publishLaneConfiguration({ clearGroups: [group] });
+}
 
 function gate() {
   let release!: () => void;

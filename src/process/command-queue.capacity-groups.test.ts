@@ -9,18 +9,27 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  clearCommandLaneGroup,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
+  publishLaneConfiguration,
   resetAllLanes,
   resetCommandLane,
   setCommandLaneConcurrency,
-  setCommandLaneGroup,
 } from "./command-queue.js";
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
 const GROUP = "cron-hooks";
+
+type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
+
+function setCommandLaneGroup(group: string, spec: LaneGroupSpec): void {
+  publishLaneConfiguration({ groups: { [group]: spec } });
+}
+
+function clearCommandLaneGroup(group: string): void {
+  publishLaneConfiguration({ clearGroups: [group] });
+}
 
 /** A task that blocks until released, so occupancy is controllable. */
 function gate() {

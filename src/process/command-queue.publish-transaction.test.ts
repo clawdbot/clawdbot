@@ -13,18 +13,26 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   clearCommandLane,
-  clearCommandLaneGroup,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   publishLaneConfiguration,
   resetAllLanes,
   setCommandLaneConcurrency,
-  setCommandLaneGroup,
 } from "./command-queue.js";
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
 const GROUP = "cron-hooks";
+
+type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
+
+function setCommandLaneGroup(group: string, spec: LaneGroupSpec): void {
+  publishLaneConfiguration({ groups: { [group]: spec } });
+}
+
+function clearCommandLaneGroup(group: string): void {
+  publishLaneConfiguration({ clearGroups: [group] });
+}
 
 function gate() {
   let release!: () => void;
@@ -224,10 +232,10 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(HOOK).reservedForLane).toBe(1);
   });
 
-  test("setCommandLaneGroup wakes members when a replacement frees capacity", async () => {
+  test("publication wakes members when a replacement frees capacity", async () => {
     // costaff round-5: the exported primitive's "replace" semantics were not
     // self-waking. publishLaneConfiguration drains at commit, but a direct
-    // setCommandLaneGroup that widens a budget or drops a reservation would
+    // A publication that widens a budget or drops a reservation would
     // leave queued members stuck until some unrelated enqueue poked the lane.
     setCommandLaneConcurrency(CRON, 8);
     setCommandLaneConcurrency(HOOK, 1);

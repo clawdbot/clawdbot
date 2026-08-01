@@ -6,7 +6,7 @@ import { getQueueState, normalizeLane } from "./command-queue.state.js";
 import { CommandLane } from "./lanes.js";
 
 /** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
-export type DrainLaneFn = (lane: string) => void;
+type DrainLaneFn = (lane: string) => void;
 
 /** Why a lane cannot admit, from the narrowest cause outward. */
 export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
@@ -243,48 +243,4 @@ export function drainGroupSiblings(lane: string, drainLane: DrainLaneFn): void {
     [...group.members].filter((member) => member !== lane),
     drainLane,
   );
-}
-
-/** Define or replace a capacity group, then wake everything it may have freed. */
-export function applyCommandLaneGroup(
-  group: string,
-  spec: CommandLaneGroupSpec,
-  drainLane: DrainLaneFn,
-): void {
-  const next = validateCommandLaneGroupSpec(group, spec);
-  const previous = getGroupRegistry().groups.get(group);
-  installCommandLaneGroup(next);
-  // Replacing a group can FREE capacity — a wider budget, a dropped
-  // reservation, or a removed member — and queued work must not sit behind
-  // capacity that is already available. `publishLaneConfiguration` drains at
-  // commit, but this primitive is exported and must be self-waking too, or its
-  // "replace" semantics silently strand members until an unrelated poke.
-  const affected = new Set<string>(next.members);
-  for (const member of previous?.members ?? []) {
-    affected.add(member);
-  }
-  drainMembers(affected, drainLane);
-}
-
-/** Remove a group and release its members back to lane-local admission. */
-export function removeCommandLaneGroup(group: string, drainLane: DrainLaneFn): void {
-  const { groups, groupByLane } = getGroupRegistry();
-  const existing = groups.get(group);
-  if (!existing) {
-    return;
-  }
-  for (const member of existing.members) {
-    groupByLane.delete(member);
-  }
-  groups.delete(group);
-  drainMembers(existing.members, drainLane);
-}
-
-/** Drain every member of a group. Used after a configuration publish. */
-export function drainCommandLaneGroupMembers(group: string, drainLane: DrainLaneFn): void {
-  const existing = getGroupRegistry().groups.get(group);
-  if (!existing) {
-    return;
-  }
-  drainMembers(existing.members, drainLane);
 }

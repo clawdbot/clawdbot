@@ -15,18 +15,15 @@ import {
 } from "./gateway-work-admission.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
 import {
-  applyCommandLaneGroup,
   canAdmitInGroup,
   type CommandLaneBlockReason,
   type CommandLaneGroupSpec,
-  drainCommandLaneGroupMembers,
   drainGroupSiblings,
   getGroupRegistry,
   getLaneGroup,
   getMemberActiveCount,
   installCommandLaneGroup,
   type LaneGroupState,
-  removeCommandLaneGroup,
   resolveLaneBlockReason,
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
@@ -40,10 +37,6 @@ import {
 } from "./command-queue.state.js";
 import { CommandLane } from "./lanes.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
-export type {
-  CommandLaneBlockReason,
-  CommandLaneGroupSpec,
-} from "./command-queue.capacity-groups.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -408,20 +401,6 @@ async function runQueueEntryTask(
     removeAbortListener?.();
     removeReleaseListener?.();
   }
-}
-
-export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): void {
-  applyCommandLaneGroup(group, spec, drainLane);
-}
-
-/** Remove a group and release its members back to lane-local admission. */
-export function clearCommandLaneGroup(group: string): void {
-  removeCommandLaneGroup(group, drainLane);
-}
-
-/** Drain every member of a group. Used after a configuration publish. */
-export function drainCommandLaneGroup(group: string): void {
-  drainCommandLaneGroupMembers(group, drainLane);
 }
 
 function drainLane(lane: string) {

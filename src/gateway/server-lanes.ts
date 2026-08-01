@@ -28,7 +28,7 @@ type GatewayLaneConcurrency = {
 const HOOK_DISPATCH_LANE_RESERVATION = 1;
 
 /** Group bounding cron inner work and hook dispatch to one shared budget. */
-export const CRON_HOOK_LANE_GROUP = "cron-hooks";
+const CRON_HOOK_LANE_GROUP = "cron-hooks";
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   const cron = resolveCronMaxConcurrentRuns();
