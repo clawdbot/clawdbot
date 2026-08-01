@@ -1,7 +1,6 @@
 // Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import type { Usage } from "../llm/types.js";
 
 // Result types
 
@@ -120,8 +119,6 @@ export type CompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
-    /** Provider-reported usage when compaction invoked a model. */
-    usage?: Usage;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
     /** Typed post-compaction live session target; successor when the runtime rotated transcripts. */

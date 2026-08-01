@@ -28,6 +28,7 @@ import {
   delegateCompactionToRuntime,
   prepareMemorySystemPromptAddition,
 } from "./delegate.js";
+import { getInternalCompactionUsage } from "./internal-compaction-usage.js";
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
@@ -297,6 +298,35 @@ describe("Engine contract tests", () => {
         sessionTarget,
       },
     });
+  });
+
+  it("keeps delegated usage on the core-only accounting channel", async () => {
+    const usage = {
+      input: 80,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 100,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        usage,
+      },
+    });
+
+    const result = await delegateCompactionToRuntime({
+      sessionId: "s-usage",
+      tokenBudget: 4096,
+    });
+
+    expect(result.result).not.toHaveProperty("usage");
+    expect(getInternalCompactionUsage(result)).toBe(usage);
   });
 
   it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {

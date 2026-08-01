@@ -14,6 +14,7 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { attachInternalCompactionUsage } from "./internal-compaction-usage.js";
 import type {
   ContextEngine,
   CompactResult,
@@ -197,28 +198,30 @@ export async function delegateCompactionToRuntime(
       })
     : undefined;
 
-  return {
-    ok: result.ok,
-    compacted: result.compacted,
-    reason: result.reason,
-    result: result.result
-      ? {
-          summary: result.result.summary,
-          firstKeptEntryId: result.result.firstKeptEntryId,
-          tokensBefore: result.result.tokensBefore,
-          tokensAfter: result.result.tokensAfter,
-          details: result.result.details,
-          usage: result.result.usage,
-          ...(result.result.sessionId
-            ? { sessionId: resultSessionTarget?.sessionId ?? result.result.sessionId }
-            : {}),
-          // Core reports successors only through the typed sessionTarget; the
-          // deprecated raw sessionFile field is reserved for shipped engines
-          // reporting rotation to core, and post-flip core has no file path.
-          ...(resultSessionTarget ? { sessionTarget: resultSessionTarget } : {}),
-        }
-      : undefined,
-  };
+  return attachInternalCompactionUsage(
+    {
+      ok: result.ok,
+      compacted: result.compacted,
+      reason: result.reason,
+      result: result.result
+        ? {
+            summary: result.result.summary,
+            firstKeptEntryId: result.result.firstKeptEntryId,
+            tokensBefore: result.result.tokensBefore,
+            tokensAfter: result.result.tokensAfter,
+            details: result.result.details,
+            ...(result.result.sessionId
+              ? { sessionId: resultSessionTarget?.sessionId ?? result.result.sessionId }
+              : {}),
+            // Core reports successors only through the typed sessionTarget; the
+            // deprecated raw sessionFile field is reserved for shipped engines
+            // reporting rotation to core, and post-flip core has no file path.
+            ...(resultSessionTarget ? { sessionTarget: resultSessionTarget } : {}),
+          }
+        : undefined,
+    },
+    result.result?.usage,
+  );
 }
 
 /**

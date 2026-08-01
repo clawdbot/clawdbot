@@ -1,3 +1,4 @@
+import { getInternalCompactionUsage } from "../../../context-engine/internal-compaction-usage.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
@@ -174,7 +175,10 @@ export async function compactEmbeddedRunForRecovery(
     runParams.abortSignal,
   );
   if (result.ok && result.compacted) {
-    mergeUsageIntoAccumulator(input.usageAccumulator, normalizeUsage(result.result?.usage));
+    mergeUsageIntoAccumulator(
+      input.usageAccumulator,
+      normalizeUsage(getInternalCompactionUsage(result)),
+    );
   }
   return { result, runtimeContext, runtimeSettings };
 }
