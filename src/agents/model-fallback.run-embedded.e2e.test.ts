@@ -84,8 +84,6 @@ const OVERLOADED_ERROR_PAYLOAD =
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
 const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
-const CREDENTIAL_FILE_ENOENT_MESSAGE =
-  "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
 
 type EmbeddedAttemptParams = {
   provider: string;
@@ -103,7 +101,6 @@ function makeConfig(primaryProvider = "openai"): OpenClawConfig {
           fallbacks: ["groq/mock-2"],
         },
       },
-      list: [{ id: "test", default: true }],
     },
     models: {
       providers: {
@@ -203,15 +200,6 @@ async function readUsageStats(agentDir: string) {
   return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
-function makeSessionTarget(params: { agentDir: string; sessionId: string; sessionKey: string }) {
-  return {
-    agentId: "test",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: path.join(params.agentDir, "openclaw-agent.sqlite"),
-  };
-}
-
 function expectFailureCount(
   usageStats: Record<string, Record<string, unknown> | undefined>,
   profileId: string,
@@ -277,11 +265,7 @@ async function runEmbeddedFallback(params: {
       runEmbeddedAgent({
         sessionId,
         sessionKey: params.sessionKey,
-        sessionTarget: makeSessionTarget({
-          agentDir: params.agentDir,
-          sessionId,
-          sessionKey: params.sessionKey,
-        }),
+        sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         config: cfg,
@@ -459,11 +443,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
-        sessionTarget: makeSessionTarget({
-          agentDir,
-          sessionId: "session:tool-side-effect-terminal",
-          sessionKey: "agent:test:tool-side-effect-terminal",
-        }),
+        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -564,137 +544,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("falls back after replay-safe credential-file ENOENT retries without poisoning auth state", async () => {
-    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeMultiProfileAuthStore(agentDir);
-      mockPrimaryErrorThenFallbackSuccess(CREDENTIAL_FILE_ENOENT_MESSAGE);
-
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:credential-enoent-fallback",
-        runId: "run:credential-enoent-fallback",
-      });
-
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.attempts[0]?.reason).toBe("unknown");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
-      expectProviderAttemptCounts({ openai: 4, groq: 1 });
-      expect(
-        runEmbeddedAttemptMock.mock.calls
-          .filter(([params]) => (params as EmbeddedAttemptParams).provider === "openai")
-          .map(([params]) => (params as EmbeddedAttemptParams).authProfileId),
-      ).toEqual(["openai:p1", "openai:p1", "openai:p1", "openai:p1"]);
-
-      const usageStats = await readUsageStats(agentDir);
-      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-      expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
-      expect(usageStats["openai:p2"]).toEqual({ lastUsed: 2 });
-      expect(usageStats["openai:p3"]).toEqual({ lastUsed: 3 });
-      expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
-    });
-  });
-
-  it("does not fallback credential-file ENOENT after replay-unsafe tool activity", async () => {
-    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeAuthStore(agentDir);
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeEmbeddedRunnerAttempt({
-          assistantTexts: [],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            provider: "openai",
-            model: "mock-1",
-            stopReason: "error",
-            errorMessage: CREDENTIAL_FILE_ENOENT_MESSAGE,
-          }),
-          toolMetas: [{ toolName: "write", replaySafe: false }],
-        }),
-      );
-
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:credential-enoent-side-effect",
-        runId: "run:credential-enoent-side-effect",
-      });
-
-      expect(result.provider).toBe("openai");
-      expect(result.result.payloads?.[0]).toMatchObject({ isError: true });
-      expectProviderAttemptCounts({ openai: 1, groq: 0 });
-    });
-  });
-
-  it("retries a fallback candidate's credential-file ENOENT on the next session turn", async () => {
-    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      const config = makeConfig();
-      config.agents!.defaults!.model = {
-        primary: "openai/mock-1",
-        fallbacks: ["anthropic/mock-1", "groq/mock-2"],
-      };
-      config.models!.providers!.anthropic = {
-        api: "openai-responses",
-        apiKey: "anthropic-test-key", // pragma: allowlist secret
-        baseUrl: "https://example.com/anthropic",
-        models: [
-          {
-            id: "mock-1",
-            name: "Mock 1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          },
-        ],
-      };
-      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
-        const attemptParams = params as EmbeddedAttemptParams;
-        if (attemptParams.provider === "openai") {
-          return makeEmbeddedRunnerAttempt({
-            terminal: {
-              kind: "failed",
-              source: "prompt",
-              error: new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
-                reason: "rate_limit",
-                provider: "openai",
-                model: "mock-1",
-              }),
-            },
-          });
-        }
-        if (attemptParams.provider === "anthropic") {
-          return makeEmbeddedRunnerAttempt({
-            assistantTexts: [],
-            lastAssistant: buildEmbeddedRunnerAssistant({
-              provider: "anthropic",
-              model: "mock-1",
-              stopReason: "error",
-              errorMessage: CREDENTIAL_FILE_ENOENT_MESSAGE,
-            }),
-          });
-        }
-        return makeFallbackSuccessAttempt();
-      });
-
-      for (let turn = 0; turn < 2; turn += 1) {
-        const result = await runEmbeddedFallback({
-          agentDir,
-          workspaceDir,
-          sessionKey: "agent:test:credential-enoent-no-skip",
-          sessionId: "session:credential-enoent-no-skip",
-          runId: `run:credential-enoent-no-skip:${turn}`,
-          config,
-        });
-        expect(result.provider).toBe("groq");
-        expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
-      }
-
-      expect(countProviderAttempts("anthropic")).toBe(8);
-      expect(countProviderAttempts("groq")).toBe(2);
-    });
-  });
-
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -781,11 +630,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         runEmbeddedAgent({
           sessionId,
           sessionKey: "agent:test:direct-embedded-suspension",
-          sessionTarget: makeSessionTarget({
-            agentDir,
-            sessionId,
-            sessionKey: "agent:test:direct-embedded-suspension",
-          }),
+          sessionFile: path.join(workspaceDir, "direct-embedded-suspension.jsonl"),
           workspaceDir,
           agentDir,
           config: {
