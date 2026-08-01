@@ -79,9 +79,13 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
             openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
             break
           else
-            openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
-            openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
-            break
+            case "\${openclaw_system_launchd_plist##*/}" in
+            *"$openclaw_system_launchd_label"*)
+              openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
+              openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
+              break
+              ;;
+            esac
           fi
         done <"$openclaw_system_launchd_entries"
       else
@@ -170,7 +174,12 @@ async function findInstalledSystemLaunchDaemon(
       return { status: "installed", plistPath };
     }
     if (result.status === "unverifiable") {
-      return { status: "unverifiable", detail: `${plistPath}: ${result.detail}` };
+      // Root-only vendor plists (e.g. VPN helpers) are unreadable from this
+      // unprivileged process; fail closed only when the filename could name
+      // this label, otherwise a single locked plist blocks every restart.
+      if (entry.includes(label)) {
+        return { status: "unverifiable", detail: `${plistPath}: ${result.detail}` };
+      }
     }
   }
   return { status: "absent" };

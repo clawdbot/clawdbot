@@ -176,16 +176,42 @@ describe("system LaunchDaemon ownership", () => {
     ]);
   });
 
-  it("fails closed on an unreadable noncanonical vendor plist", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
+  it("skips an unreadable vendor plist whose filename cannot own the gateway label", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.nordvpn.macos.helper.plist";
     state.files.set(unrelated, "<plist/>");
-    state.accessErrors.set(unrelated, "EACCES");
+    state.accessErrors.set(unrelated, "EPERM");
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "absent",
+      serviceTarget: "system/ai.openclaw.gateway",
+    });
+  });
+
+  it("fails closed when an unreadable plist filename matches the gateway label", async () => {
+    const sameLabelName = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
+    state.files.set(sameLabelName, "<plist/>");
+    state.accessErrors.set(sameLabelName, "EACCES");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "unverifiable",
       serviceTarget: "system/ai.openclaw.gateway",
       operation: "filesystem",
-      detail: `${unrelated}: EACCES: ${unrelated}`,
+      detail: `${sameLabelName}: EACCES: ${sameLabelName}`,
+    });
+  });
+
+  it("detects an installed same-label plist after skipping an unreadable vendor plist", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.nordvpn.macos.helper.plist";
+    state.files.set(unrelated, "<plist/>");
+    state.accessErrors.set(unrelated, "EPERM");
+    const plistPath = "/Library/LaunchDaemons/vendor-openclaw.plist";
+    state.files.set(plistPath, "<plist/>");
+    state.plutilLabels.set(plistPath, "ai.openclaw.gateway");
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "installed",
+      serviceTarget: "system/ai.openclaw.gateway",
+      plistPath,
     });
   });
 
@@ -250,5 +276,13 @@ describe("system LaunchDaemon ownership", () => {
       'if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]',
     );
     expect(script).not.toContain("|| true");
+  });
+
+  it("renders a probe that only fails closed on unreadable plists matching the label", () => {
+    const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway");
+
+    expect(script).toContain('case "${openclaw_system_launchd_plist##*/}" in');
+    expect(script).toContain('*"$openclaw_system_launchd_label"*)');
+    expect(script).toContain("could not inspect system LaunchDaemon plist");
   });
 });
