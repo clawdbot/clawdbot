@@ -71,6 +71,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "repeated_failures",
   "missing_proof",
   "orphaned_session",
+  "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
@@ -205,7 +206,15 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind:
+    | "claim"
+    | "unblock"
+    | "promote"
+    | "reclaim"
+    | "reassign"
+    | "add_proof"
+    | "open_session"
+    | "unarchive";
   label: string;
 };
 

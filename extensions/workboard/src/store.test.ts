@@ -2618,6 +2618,33 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("diagnoses archived cards that are still in an active status", async () => {
+    // An archived card with an active status (ready) is silently excluded from
+    // dispatch with no signal. computeCardDiagnostics must surface an
+    // archived_but_active warning so workboard show / store.diagnostics report
+    // it (#116359).
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Archived but ready", status: "ready" });
+    const now = Date.now();
+
+    await store.archive(card.id, true);
+
+    await expect(store.diagnostics(now)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: card.id }),
+          diagnostics: [
+            expect.objectContaining({
+              kind: "archived_but_active",
+              severity: "warning",
+            }),
+          ],
+        }),
+      ],
+      count: 1,
+    });
+  });
+
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
