@@ -3706,6 +3706,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShardRun).not.toContain("check:protocol-coverage");
   });
 
+  it("keeps type-aware oxlint within hosted fork-runner resources", () => {
+    const workflow = readCiWorkflow();
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    ).run;
+
+    expect(checkShardRun).toContain('if [ "$(nproc)" -lt 8 ]; then');
+    expect(checkShardRun).toContain("lint_threads=1");
+    expect(checkShardRun).toContain('pnpm lint --threads="$lint_threads"');
+    expect(checkShardRun).toContain('node scripts/run-oxlint-shards.mjs --threads="$lint_threads"');
+  });
+
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
     const workflow = readCiWorkflow();
     const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
