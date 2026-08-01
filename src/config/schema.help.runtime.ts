@@ -109,6 +109,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
+  "tools.toolSearch.alwaysVisibleTools":
+    "Tool names that remain visible alongside control tools, bypassing the catalog compaction. Use this to keep frequently-used tools directly accessible without requiring search.",
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":

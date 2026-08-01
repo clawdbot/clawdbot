@@ -77,6 +77,8 @@ export type ToolSearchConfig = {
   codeTimeoutMs: number;
   searchDefaultLimit: number;
   maxSearchLimit: number;
+  /** Set of normalized tool names that bypass catalog compaction. */
+  alwaysVisibleTools: Set<string>;
 };
 
 /** Per-run/session context used by Tool Search control tools. */
@@ -143,6 +145,7 @@ export type ToolSearchCatalogApplyResult = {
 export type ToolSearchCatalogCompactionParams = {
   tools: AnyAgentTool[];
   enabled: boolean;
+  config?: OpenClawConfig;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;

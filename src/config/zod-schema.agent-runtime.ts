@@ -581,6 +581,7 @@ const ToolSearchSchema = z
         codeTimeoutMs: z.number().int().positive().optional(),
         searchDefaultLimit: z.number().int().positive().optional(),
         maxSearchLimit: z.number().int().positive().optional(),
+        alwaysVisibleTools: z.array(z.string()).optional(),
       })
       .strict(),
   ])

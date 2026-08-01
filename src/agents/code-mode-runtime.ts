@@ -219,6 +219,7 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
     codeTimeoutMs: config.timeoutMs,
     searchDefaultLimit: config.searchDefaultLimit,
     maxSearchLimit: config.maxSearchLimit,
+    alwaysVisibleTools: new Set(),
   };
 }
 

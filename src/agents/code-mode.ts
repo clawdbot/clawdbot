@@ -274,6 +274,7 @@ export function applyCodeModeCatalog(params: {
   if (config.enabled === false && params.forceEnabled !== true) {
     return applyToolCatalogCompaction({
       ...params,
+      config: params.config,
       enabled: false,
       isVisibleControlTool: isCodeModeControlTool,
     });
@@ -289,6 +290,7 @@ export function applyCodeModeCatalog(params: {
   const directToolNames = new Set(params.directToolNames);
   const compacted = applyToolCatalogCompaction({
     ...params,
+    config: params.config,
     tools,
     enabled: true,
     isVisibleControlTool: isCodeModeControlTool,

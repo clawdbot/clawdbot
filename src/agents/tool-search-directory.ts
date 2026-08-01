@@ -60,6 +60,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
   return applyToolCatalogCompaction({
     ...params,
+    config: params.config,
     enabled: config.enabled,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
     // The unique-name gate defers any cross-source name collision before the

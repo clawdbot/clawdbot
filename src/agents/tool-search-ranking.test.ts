@@ -44,6 +44,7 @@ function runtime(): ToolSearchRuntime {
     codeTimeoutMs: 1000,
     searchDefaultLimit: 10,
     maxSearchLimit: 50,
+    alwaysVisibleTools: new Set(),
   });
 }
 
@@ -222,6 +223,7 @@ describe("untrusted schemas", () => {
       codeTimeoutMs: 1000,
       searchDefaultLimit: 10,
       maxSearchLimit: 50,
+      alwaysVisibleTools: new Set(),
     });
 
     // Reaching the schema at all throws, so surviving the query is the proof.
@@ -265,6 +267,7 @@ describe("ToolSearchRuntime.search", () => {
       codeTimeoutMs: 1000,
       searchDefaultLimit: 10,
       maxSearchLimit: 50,
+      alwaysVisibleTools: new Set(),
     });
 
     // Querying a known name is a request for that tool, not a description of one.
@@ -309,6 +312,7 @@ describe("ToolSearchRuntime.search", () => {
       codeTimeoutMs: 1000,
       searchDefaultLimit: 10,
       maxSearchLimit: 50,
+      alwaysVisibleTools: new Set(),
     });
 
     // "do" tokenizes to nothing, so it never reaches the ranking; naming it

@@ -1,4 +1,5 @@
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -8,6 +9,7 @@ import {
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
@@ -20,6 +22,7 @@ import {
   type ToolSearchCatalogSession,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
+import { normalizeToolName } from "./tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
@@ -406,6 +409,9 @@ export function applyToolCatalogCompaction(
     };
   }
 
+  const toolSearchConfig = resolveToolSearchConfig(params.config);
+  const alwaysVisibleSet = toolSearchConfig.alwaysVisibleTools;
+
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
   const shouldCatalog = (tool: AnyAgentTool) =>
@@ -416,6 +422,11 @@ export function applyToolCatalogCompaction(
       continue;
     }
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
+      continue;
+    }
+    const normalizedName = normalizeToolName(tool.name);
+    if (alwaysVisibleSet.has(normalizedName)) {
+      visible.push(tool);
       continue;
     }
     if (shouldCatalog(tool)) {

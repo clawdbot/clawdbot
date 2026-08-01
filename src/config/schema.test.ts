@@ -854,6 +854,7 @@ describe("config schema", () => {
           codeTimeoutMs: 5000,
           searchDefaultLimit: 4,
           maxSearchLimit: 12,
+          alwaysVisibleTools: ["read_file", "write_file"],
         },
       })?.toolSearch,
     ).toEqual({
@@ -862,6 +863,7 @@ describe("config schema", () => {
       codeTimeoutMs: 5000,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,
+      alwaysVisibleTools: ["read_file", "write_file"],
     });
     expect(
       ToolsSchema.safeParse({

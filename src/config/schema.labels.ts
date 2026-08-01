@@ -240,6 +240,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.toolSearch.codeTimeoutMs": "Tool Search Code Timeout",
   "tools.toolSearch.searchDefaultLimit": "Tool Search Default Results",
   "tools.toolSearch.maxSearchLimit": "Tool Search Max Results",
+  "tools.toolSearch.alwaysVisibleTools": "Tool Search Always Visible Tools",
   "tools.codeMode": "Code Mode",
   "tools.codeMode.enabled": "Enable Code Mode",
   "tools.codeMode.runtime": "Code Mode Runtime",

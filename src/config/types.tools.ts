@@ -175,6 +175,8 @@ export type ToolSearchConfig =
       searchDefaultLimit?: number;
       /** Maximum search result count. Runtime clamps to 1..50. */
       maxSearchLimit?: number;
+      /** Tool names that remain visible alongside control tools, bypassing the catalog compaction. Use this to keep frequently-used tools directly accessible without requiring search. */
+      alwaysVisibleTools?: string[];
     };
 
 export type CodeModeConfig =

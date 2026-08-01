@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolSearchConfig, ToolSearchMode } from "./tool-search-types.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
@@ -24,6 +26,10 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
 
 function readInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readStringArray(value: unknown): string[] {
+  return normalizeTrimmedStringList(value);
 }
 
 let toolSearchCodeModeSupportedForTest: boolean | undefined;
@@ -52,6 +58,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     1,
     Math.min(50, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
+  const alwaysVisibleTools = readStringArray(raw.alwaysVisibleTools);
   return {
     enabled: readBoolean(raw.enabled, configured),
     mode,
@@ -64,6 +71,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
       Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
     ),
     maxSearchLimit,
+    alwaysVisibleTools: new Set(alwaysVisibleTools.map((name) => normalizeToolName(name))),
   };
 }
 
