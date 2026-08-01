@@ -450,16 +450,20 @@ describe("scenario-flow-runner", () => {
           typeof value === "string" ? value.trim().toLowerCase() : "",
       },
       onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
+        const currentInbound = currentState
+          .getSnapshot()
+          .messages.findLast((message) => message.direction === "inbound");
         currentState.addOutboundMessage({
           accountId: "qa-channel",
           to: conversation,
+          replyToId: currentInbound?.id,
           text: waitCount === 1 ? "GOAL-CONTINUANCE-READY" : "GOAL-CONTINUANCE-DONE",
         });
       },
     });
 
     expect(result.status).toBe("pass");
-    expect(sessionListCalls).toEqual(["sessions.list", "sessions.list"]);
+    expect(sessionListCalls).toEqual(["sessions.list", "sessions.list", "sessions.list"]);
     const start = state
       .getSnapshot()
       .messages.find(
@@ -511,9 +515,13 @@ describe("scenario-flow-runner", () => {
           },
         },
         onWaitForOutboundMessage: ({ state: currentState }) => {
+          const currentInbound = currentState
+            .getSnapshot()
+            .messages.findLast((message) => message.direction === "inbound");
           currentState.addOutboundMessage({
             accountId: "qa-channel",
             to: conversation,
+            replyToId: currentInbound?.id,
             text: "GOAL-CONTINUANCE-READY",
           });
         },
@@ -525,6 +533,157 @@ describe("scenario-flow-runner", () => {
         .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
     ).toBe(false);
   });
+
+  it("rejects an artifact written after the ready preview but before the first goal turn settles", async () => {
+    const state = createQaBusState();
+    const artifactFile = "goal-continuance-live-00000000.txt";
+    const conversation = "dm:goal-followthrough-live-00000000";
+    let sessionListCalls = 0;
+
+    await expect(
+      runLoadedScenarioFlow("goal-followthrough-live", {
+        state,
+        api: {
+          env: {
+            providerMode: "live-frontier",
+            gateway: {
+              workspaceDir: "/qa-goal",
+              call: async () => {
+                sessionListCalls += 1;
+                return {
+                  sessions: [
+                    {
+                      key: "agent:qa:main",
+                      hasActiveRun: sessionListCalls === 1,
+                      goal: { status: "active", objective: artifactFile },
+                    },
+                  ],
+                };
+              },
+            },
+          },
+          path: { join: (...parts: string[]) => parts.join("/") },
+          fs: {
+            readFile: async () => {
+              if (sessionListCalls >= 2) {
+                return "Goal continuance advanced the concrete next step.";
+              }
+              throw new Error("goal artifact has not been written");
+            },
+          },
+        },
+        onWaitForOutboundMessage: ({ state: currentState }) => {
+          const currentInbound = currentState
+            .getSnapshot()
+            .messages.findLast((message) => message.direction === "inbound");
+          currentState.addOutboundMessage({
+            accountId: "qa-channel",
+            to: conversation,
+            replyToId: currentInbound?.id,
+            text: "GOAL-CONTINUANCE-READY",
+          });
+        },
+      }),
+    ).rejects.toThrow("goal created the second-step artifact before continue");
+
+    expect(sessionListCalls).toBe(2);
+    expect(
+      state
+        .getSnapshot()
+        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
+    ).toBe(false);
+  });
+
+  it.each(["ready", "done"] as const)(
+    "rejects a %s preview replaced before its goal turn settles",
+    async (replacedMarker) => {
+      const state = createQaBusState();
+      const artifactFile = "goal-continuance-live-00000000.txt";
+      const conversation = "dm:goal-followthrough-live-00000000";
+      let sessionListCalls = 0;
+
+      await expect(
+        runLoadedScenarioFlow("goal-followthrough-live", {
+          state,
+          api: {
+            env: {
+              providerMode: "live-frontier",
+              gateway: {
+                workspaceDir: "/qa-goal",
+                call: async () => {
+                  sessionListCalls += 1;
+                  const shouldReplacePreview =
+                    (replacedMarker === "ready" && sessionListCalls === 2) ||
+                    (replacedMarker === "done" && sessionListCalls === 4);
+                  if (shouldReplacePreview) {
+                    const preview = state
+                      .getSnapshot()
+                      .messages.findLast((message) => message.direction === "outbound");
+                    if (preview) {
+                      state.editMessage({
+                        accountId: "qa-channel",
+                        messageId: preview.id,
+                        text: "a different settled reply",
+                      });
+                    }
+                  }
+                  return {
+                    sessions: [
+                      {
+                        key: "agent:qa:main",
+                        hasActiveRun:
+                          sessionListCalls === 1 ||
+                          (replacedMarker === "done" && sessionListCalls === 3),
+                        goal: { status: "active", objective: artifactFile },
+                      },
+                    ],
+                  };
+                },
+              },
+            },
+            path: { join: (...parts: string[]) => parts.join("/") },
+            fs: {
+              readFile: async () => {
+                if (
+                  state
+                    .getSnapshot()
+                    .messages.some(
+                      (message) => message.direction === "inbound" && message.text === "continue",
+                    )
+                ) {
+                  return "Goal continuance advanced the concrete next step.";
+                }
+                throw new Error("goal artifact has not been written");
+              },
+            },
+          },
+          onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
+            const currentInbound = currentState
+              .getSnapshot()
+              .messages.findLast((message) => message.direction === "inbound");
+            currentState.addOutboundMessage({
+              accountId: "qa-channel",
+              to: conversation,
+              replyToId: currentInbound?.id,
+              text: waitCount === 1 ? "GOAL-CONTINUANCE-READY" : "GOAL-CONTINUANCE-DONE",
+            });
+          },
+        }),
+      ).rejects.toThrow(
+        replacedMarker === "ready"
+          ? "goal ready marker disappeared before the first turn settled"
+          : "goal completion marker disappeared before the continue turn settled",
+      );
+
+      expect(
+        state
+          .getSnapshot()
+          .messages.some(
+            (message) => message.direction === "inbound" && message.text === "continue",
+          ),
+      ).toBe(replacedMarker === "done");
+    },
+  );
 
   it.each(["runtime-first-hour-20-turn", "runtime-soak-100-turn"])(
     "fails %s when no requested outbound marker is delivered",

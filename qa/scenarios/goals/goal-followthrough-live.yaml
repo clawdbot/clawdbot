@@ -85,6 +85,7 @@ flow:
             senderName: QA Goal Operator
             text:
               expr: "`/goal start Reply ${config.readyMarker}; write nothing. On bare continue only, create ${artifactFile} with '${config.artifactText}'; reply ${config.doneMarker}.`"
+          saveAs: goalStartInbound
         - waitForOutbound:
             conversation:
               id:
@@ -99,13 +100,6 @@ flow:
           saveAs: readyReply
     - name: verifies the durable goal stays active before continuation
       actions:
-        - set: artifactBeforeContinue
-          value:
-            expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
-        - assert:
-            expr: "artifactBeforeContinue === undefined"
-            message:
-              expr: "`goal created the second-step artifact before continue: ${String(artifactBeforeContinue)}`"
         - call: waitForCondition
           saveAs: goalSession
           args:
@@ -114,6 +108,19 @@ flow:
                 expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => String(session.goal?.objective ?? '').includes(artifactFile) && session.hasActiveRun === false))"
             - expr: liveTurnTimeoutMs(env, 90000)
             - 100
+        - set: readyReply
+          value:
+            expr: "state.getSnapshot().messages.find((message) => message.direction === 'outbound' && !message.deleted && message.replyToId === goalStartInbound.id && String(message.text ?? '').includes(config.readyMarker))"
+        - assert:
+            expr: "readyReply !== undefined"
+            message: goal ready marker disappeared before the first turn settled
+        - set: artifactBeforeContinue
+          value:
+            expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
+        - assert:
+            expr: "artifactBeforeContinue === undefined"
+            message:
+              expr: "`goal created the second-step artifact before continue: ${String(artifactBeforeContinue)}`"
         - assert:
             expr: "goalSession?.goal?.status === 'active'"
             message:
@@ -132,6 +139,7 @@ flow:
               ref: config.senderId
             senderName: QA Goal Operator
             text: continue
+          saveAs: continueInbound
         - waitForOutbound:
             conversation:
               id:
@@ -139,11 +147,23 @@ flow:
               kind: direct
             sinceIndex:
               ref: continueOutboundIndex
-            textIncludes:
-              ref: config.doneMarker
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 90000)
-          saveAs: doneReply
+          saveAs: streamedDoneReply
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => String(session.goal?.objective ?? '').includes(artifactFile) && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 90000)
+            - 100
+        - set: doneReply
+          value:
+            expr: "state.getSnapshot().messages.findLast((message) => message.direction === 'outbound' && !message.deleted && message.replyToId === continueInbound.id)"
+        - assert:
+            expr: "String(doneReply?.text ?? '').includes(config.doneMarker)"
+            message:
+              expr: "`goal completion marker disappeared before the continue turn settled: ${String(doneReply?.text ?? streamedDoneReply.text)}`"
         - set: artifact
           value:
             expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
