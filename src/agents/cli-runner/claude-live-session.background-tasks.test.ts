@@ -577,6 +577,7 @@ describe("claude live session provisional results", () => {
     const turn = await startLiveTurn({ runId: `run-synthetic-${id}`, useResume: resumed });
     expect(turn.output.text).toBe(result);
     expect(turn.output.retryableSyntheticPlaceholder).toBeUndefined();
+    expect(turn.output.nonReplayableReason).toBeUndefined();
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
@@ -627,7 +628,12 @@ describe("claude live session provisional results", () => {
       status: undefined,
       reason: "completed_mcp_tool",
     },
-    { label: "unknown activity", activity: "unknown", status: undefined, reason: undefined },
+    {
+      label: "unknown activity",
+      activity: "unknown",
+      status: undefined,
+      reason: "replay_unsafe_activity",
+    },
     { label: "cancelled status", activity: undefined, status: "cancelled", reason: "cancelled" },
     { label: "aborted status", activity: undefined, status: "aborted", reason: "aborted" },
     { label: "failed status", activity: undefined, status: "failed", reason: "failed" },

@@ -13,6 +13,14 @@ import { isFailoverError } from "./failover-error.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+const preservedCliSessionAbortErrors = new WeakSet<object>();
+
+/** Preserve only the original caller abort from a bounded same-session retry. */
+export function preserveCliSessionBindingOnRecoveryAbort(error: unknown): void {
+  if (typeof error === "object" && error !== null && readErrorName(error) === "AbortError") {
+    preservedCliSessionAbortErrors.add(error);
+  }
+}
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
 export function hashCliSessionText(value: string | undefined): string | undefined {
@@ -131,6 +139,14 @@ export function shouldClearFailedCliSessionBinding(params: {
   }
   // Detached media delivers back into this run later and still needs the binding.
   if (params.hasNewGeneratedMediaTask === true) {
+    return false;
+  }
+  // A same-process recovery cancellation never invalidates its original binding.
+  if (
+    typeof params.error === "object" &&
+    params.error !== null &&
+    preservedCliSessionAbortErrors.has(params.error)
+  ) {
     return false;
   }
   if (isFailoverError(params.error)) {

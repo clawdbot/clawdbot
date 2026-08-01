@@ -84,6 +84,7 @@ export type CliOutput = {
     | "approved_native_tool"
     | "completed_mcp_tool"
     | "captured_tool_activity"
+    | "replay_unsafe_activity"
     | "synthetic_placeholder"
     | "live_session_changed"
     | "cancelled"

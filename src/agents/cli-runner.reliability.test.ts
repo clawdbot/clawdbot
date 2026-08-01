@@ -65,6 +65,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { shouldClearFailedCliSessionBinding } from "./cli-session.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
@@ -2239,7 +2240,7 @@ describe("runCliAgent reliability", () => {
           classifyEmbeddedAgentRunResultForModelFallback({ result, provider, model }),
       });
       const cancellationAssertion = abortTiming
-        ? expect(resultPromise).rejects.toMatchObject({ name: "AbortError" })
+        ? expect(resultPromise).rejects.toBe(callerAbort)
         : undefined;
       await firstWrite;
       const replacementRun = interleavedReplacement
@@ -2262,6 +2263,12 @@ describe("runCliAgent reliability", () => {
       }
       if (abortTiming) {
         await cancellationAssertion;
+        expect(
+          shouldClearFailedCliSessionBinding({
+            error: callerAbort,
+            binding: { sessionId: "retained-live" },
+          }),
+        ).toBe(false);
         expect(run).toHaveBeenCalledOnce();
         expect(hookRunner.runAgentEnd).not.toHaveBeenCalled();
         expect(writtenPrompts).toHaveLength(abortTiming === "queued" ? 1 : 2);
@@ -2315,6 +2322,9 @@ describe("runCliAgent reliability", () => {
         activity: "captured" as const,
         status: undefined,
       },
+      { label: "an unknown lifecycle event", activity: "unknown" as const, status: undefined },
+      { label: "malformed process output", activity: "malformed" as const, status: undefined },
+      { label: "unexpected process diagnostics", activity: "stderr" as const, status: undefined },
       { label: "a cancelled turn", activity: undefined, status: "cancelled" as const },
       { label: "an aborted turn", activity: undefined, status: "aborted" as const },
       { label: "a failed turn", activity: undefined, status: "failed" as const },
@@ -2359,7 +2369,10 @@ describe("runCliAgent reliability", () => {
       });
 
       supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const input = args[0] as { onStdout?: (chunk: string) => void };
+        const input = args[0] as {
+          onStdout?: (chunk: string) => void;
+          onStderr?: (chunk: string) => void;
+        };
         return {
           runId: "live-synthetic-non-replayable",
           pid: 3311,
@@ -2413,6 +2426,7 @@ describe("runCliAgent reliability", () => {
                         },
                       ]
                     : []),
+                  ...(activity === "unknown" ? [{ type: "unknown_lifecycle_activity" }] : []),
                   {
                     type: "result",
                     subtype: "success",
@@ -2421,7 +2435,15 @@ describe("runCliAgent reliability", () => {
                     result: "",
                   },
                 ];
-                input.onStdout?.(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+                if (activity === "stderr") {
+                  input.onStderr?.("unexpected process diagnostic\n");
+                }
+                const output = lines.map((line, index) =>
+                  activity === "malformed" && index === 2
+                    ? `{malformed\n${JSON.stringify(line)}`
+                    : JSON.stringify(line),
+                );
+                input.onStdout?.(`${output.join("\n")}\n`);
                 firstUserWriteReady?.();
               }
               callback?.();
@@ -2497,7 +2519,9 @@ describe("runCliAgent reliability", () => {
       expect(fallbackResult.result.payloads).toEqual([
         expect.objectContaining({
           text: expect.stringMatching(
-            /review any (?:possible )?tool effects before retrying manually/i,
+            activity === "unknown" || activity === "malformed" || activity === "stderr"
+              ? /unexpected session activity.*check the session before retrying manually/i
+              : /review any (?:possible )?tool effects before retrying manually/i,
           ),
           isError: true,
         }),
@@ -5370,6 +5394,7 @@ describe("runCliAgent reliability", () => {
 
     expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
     expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(result.meta.replayInvalid).toBeUndefined();
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 

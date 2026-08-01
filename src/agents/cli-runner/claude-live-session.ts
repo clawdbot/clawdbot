@@ -485,10 +485,10 @@ function buildClaudeLiveFingerprint(params: {
   });
 }
 
-// Preserve timeout identity and abort reasons so audit terminal outcomes
-// can distinguish timed_out from cancelled runs.
+// Preserve caller abort and timeout identity so cleanup and audit terminal
+// outcomes can distinguish cancelled runs without losing the original error.
 function createAbortError(reason?: unknown): Error {
-  if (reason instanceof Error && isTimeoutError(reason)) {
+  if (reason instanceof Error && (isTimeoutError(reason) || reason.name === "AbortError")) {
     return reason;
   }
   if (reason === undefined) {
@@ -1004,7 +1004,9 @@ function annotateClaudeLiveSyntheticTerminalOutput(
         ? "completed_mcp_tool"
         : session.mcpCaptureKey
           ? "captured_tool_activity"
-          : undefined);
+          : turn.observedSyntheticPlaceholder && turn.hasReplayUnsafeActivity
+            ? "replay_unsafe_activity"
+            : undefined);
   return {
     ...terminalOutput,
     liveSessionGeneration: session.generation,

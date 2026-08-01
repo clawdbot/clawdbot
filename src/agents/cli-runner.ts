@@ -54,6 +54,7 @@ import type {
   PreparedCliRunContext,
   RunCliAgentParams,
 } from "./cli-runner/types.js";
+import { preserveCliSessionBindingOnRecoveryAbort } from "./cli-session.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -133,6 +134,9 @@ function formatCliNonReplayableTurnError(reason: CliNonReplayableReason): string
   }
   if (reason === "captured_tool_activity") {
     return "Claude CLI ended without an assistant response while tool activity could not be verified. Review any possible tool effects before retrying manually.";
+  }
+  if (reason === "replay_unsafe_activity") {
+    return "Claude CLI produced unexpected session activity before its response completed. Check the session before retrying manually.";
   }
   return "Claude CLI ended without an assistant response after a tool action was approved or completed. Review any tool effects before retrying manually.";
 }
@@ -1595,6 +1599,7 @@ export async function runPreparedCliAgent(
             );
           } catch (retryError) {
             if (params.abortSignal?.aborted) {
+              preserveCliSessionBindingOnRecoveryAbort(retryError);
               throw retryError;
             }
             const sessionChanged =

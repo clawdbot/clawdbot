@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { preserveCliSessionBindingOnRecoveryAbort } from "../../agents/cli-session.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -11,6 +12,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  createMockReplyOperation,
   createMockTypingSignaler,
   createFollowupRun,
   createTestUserTurnRecorder,
@@ -558,6 +560,94 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionEntry.claudeCliSessionId).toBeUndefined();
   });
+
+  it.each(
+    [
+      { timing: "queued", syntheticRecovery: true },
+      { timing: "inflight", syntheticRecovery: true },
+      { timing: "ordinary", syntheticRecovery: false },
+    ].flatMap((scenario) => [
+      { ...scenario, allowSilent: false },
+      { ...scenario, allowSilent: true },
+    ]),
+  )(
+    "preserves only $timing recovery cancellation with allowSilent=$allowSilent",
+    async ({ timing, syntheticRecovery, allowSilent }) => {
+      const abortController = new AbortController();
+      const callerAbort = Object.assign(new Error(`${timing} caller cancelled`), {
+        name: "AbortError",
+      });
+      state.isCliProviderMock.mockReturnValue(true);
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          try {
+            return {
+              result: await params.run("claude-cli", "claude-opus-4-8"),
+              provider: "claude-cli",
+              model: "claude-opus-4-8",
+              attempts: [],
+            };
+          } catch (error) {
+            expect(error).toBe(callerAbort);
+            throw error;
+          }
+        },
+      );
+      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        expect(params.abortSignal).toBe(abortController.signal);
+        if (timing === "queued") {
+          await Promise.resolve();
+        }
+        abortController.abort(callerAbort);
+        if (syntheticRecovery) {
+          preserveCliSessionBindingOnRecoveryAbort(callerAbort);
+        }
+        throw callerAbort;
+      });
+
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "claude-opus-4-8";
+      followupRun.run.allowEmptyAssistantReplyAsSilent = allowSilent;
+      const sessionEntry = {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "original-live-session" },
+          "codex-cli": { sessionId: "unrelated-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "original-live-session",
+          "codex-cli": "unrelated-session",
+        },
+        claudeCliSessionId: "original-live-session",
+      } as SessionEntry;
+      const activeSessionStore = { main: sessionEntry };
+      const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun, replyOperation }),
+        activeSessionStore,
+        getActiveSessionEntry: () => sessionEntry,
+      });
+
+      expect(result.kind).toBe("final");
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+      expect(abortController.signal.reason).toBe(callerAbort);
+      expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+        syntheticRecovery ? "original-live-session" : undefined,
+      );
+      expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe(
+        syntheticRecovery ? "original-live-session" : undefined,
+      );
+      expect(sessionEntry.claudeCliSessionId).toBe(
+        syntheticRecovery ? "original-live-session" : undefined,
+      );
+      expect(sessionEntry.cliSessionBindings?.["codex-cli"]?.sessionId).toBe("unrelated-session");
+      expect(sessionEntry.cliSessionIds?.["codex-cli"]).toBe("unrelated-session");
+    },
+  );
 
   it("preserves a reused binding after a channel turn starts detached media", async () => {
     const sessionKey = "agent:main:cron:media-job:run:run-1";
