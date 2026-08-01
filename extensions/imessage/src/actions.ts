@@ -45,6 +45,7 @@ const log = createSubsystemLogger("channels/imessage");
 const providerId = "imessage";
 
 const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
+  "read",
   ...IMESSAGE_ACTION_NAMES,
   "upload-file",
 ]);
@@ -254,6 +255,42 @@ function buildChatContextFromActionParams(params: {
   return target ? chatContextFromIMessageTarget(target, params.service) : {};
 }
 
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function publicMessageFromHistoryRow(row: unknown) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return null;
+  }
+  const record = row as Record<string, unknown>;
+  const attachments = Array.isArray(record.attachments) ? record.attachments : undefined;
+  return {
+    ...(numberValue(record.id) !== undefined ? { id: numberValue(record.id) } : {}),
+    ...(stringValue(record.guid) ? { messageId: stringValue(record.guid) } : {}),
+    ...(stringValue(record.sender) ? { sender: stringValue(record.sender) } : {}),
+    ...(booleanValue(record.is_from_me) !== undefined
+      ? { isFromMe: booleanValue(record.is_from_me) }
+      : {}),
+    ...(stringValue(record.text) ? { text: stringValue(record.text) } : {}),
+    ...(stringValue(record.created_at) ? { createdAt: stringValue(record.created_at) } : {}),
+    ...(numberValue(record.chat_id) !== undefined ? { chatId: numberValue(record.chat_id) } : {}),
+    ...(stringValue(record.chat_guid) ? { chatGuid: stringValue(record.chat_guid) } : {}),
+    ...(stringValue(record.chat_identifier)
+      ? { chatIdentifier: stringValue(record.chat_identifier) }
+      : {}),
+    ...(attachments ? { attachments } : {}),
+  };
+}
+
 function mapTapbackReaction(emoji?: string): string | undefined {
   const value = normalizeOptionalLowercaseString(emoji)?.replace(/\ufe0f/g, "");
   if (!value) {
@@ -413,6 +450,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
     GROUP_MANAGEMENT_ACTIONS.has(action),
   messageActionTargetAliases: {
+    read: createIMessageTargetAliases(),
     react: createIMessageTargetAliases(["messageId"]),
     edit: createIMessageTargetAliases(["messageId"]),
     unsend: createIMessageTargetAliases(["messageId"]),
@@ -453,7 +491,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: accountId ?? undefined,
     });
-    assertActionEnabled(action, account.config.actions);
+    if (action !== "read") {
+      assertActionEnabled(action, account.config.actions);
+    }
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
     const probePrivateApiStatus = async (forceRefresh = false) => {
@@ -539,6 +579,35 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         },
       });
     };
+
+    if (action === "read") {
+      const limit = readPositiveIntegerParam(params, "limit");
+      const includeAttachments = readBooleanParam(params, "attachments") ?? false;
+      const target = resolveIMessageActionTarget({
+        actionParams: params,
+        currentChannelId: toolContext?.currentChannelId,
+      });
+      if (!target) {
+        throw new Error(
+          "iMessage read requires chatGuid, chatId, chatIdentifier, or a chat target.",
+        );
+      }
+      const result = await runtime.readMessages({
+        target,
+        limit,
+        includeAttachments,
+        options: opts,
+      });
+      return jsonResult({
+        ok: true,
+        ...(result.chatId !== undefined ? { chatId: result.chatId } : {}),
+        ...(result.chatGuid ? { chatGuid: result.chatGuid } : {}),
+        ...(result.chatIdentifier ? { chatIdentifier: result.chatIdentifier } : {}),
+        messages: result.messages
+          .map((message) => publicMessageFromHistoryRow(message))
+          .filter((message): message is NonNullable<typeof message> => Boolean(message)),
+      });
+    }
 
     if (action === "react") {
       await assertPrivateApiEnabled();

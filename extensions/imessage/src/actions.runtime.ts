@@ -17,7 +17,7 @@ import {
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import type { IMessageTarget } from "./targets.js";
+import { normalizeIMessageHandle, type IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
   cliPath: string;
@@ -52,7 +52,17 @@ type IMessageChatListResponse = {
   chats?: unknown;
 };
 
+type IMessageHistoryResponse = {
+  messages?: unknown;
+};
+
 function asChatList(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (chat): chat is Record<string, unknown> =>
+        chat != null && typeof chat === "object" && !Array.isArray(chat),
+    );
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return [];
   }
@@ -124,11 +134,12 @@ function chatListCacheSet(
 }
 
 /**
- * Strip the iMessage;-;/SMS;-;/any;-; service prefix that Messages uses
+ * Strip the iMessage;-;/SMS;-;/RCS;-;/any;-; service prefix that Messages uses
  * for direct DM chats. Different layers report direct DMs in different
  * forms — the action surface synthesizes `iMessage;-;<phone>` from a
  * handle target, while imsg's chats.list returns `identifier: <phone>`
- * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
+ * and `guid: any;-;<phone>`. BlueBubbles can also expose Apple Messages RCS
+ * conversations as `RCS;-;<phone>`. Comparing the raw strings would falsely
  * miss the match.
  */
 export function normalizeDirectChatIdentifierForTest(raw: string): string {
@@ -142,6 +153,18 @@ export function findChatGuidForTest(
   return findChatGuid(chats, target);
 }
 
+function directChatIdentifierMatches(candidate: string | undefined, wanted: string): boolean {
+  if (!candidate) {
+    return false;
+  }
+  const normalizedCandidate = normalizeDirectChatIdentifier(candidate);
+  const normalizedWanted = normalizeDirectChatIdentifier(wanted);
+  return (
+    candidate === wanted ||
+    normalizedCandidate === normalizedWanted ||
+    normalizeIMessageHandle(normalizedCandidate) === normalizeIMessageHandle(normalizedWanted)
+  );
+}
 function findChatGuid(
   chats: readonly Record<string, unknown>[],
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
@@ -167,8 +190,8 @@ function findChatGuid(
     if (
       identifier === target.chatIdentifier ||
       guid === target.chatIdentifier ||
-      (identifier && normalizeDirectChatIdentifier(identifier) === wanted) ||
-      normalizeDirectChatIdentifier(guid) === wanted
+      directChatIdentifierMatches(identifier, wanted) ||
+      directChatIdentifierMatches(guid, wanted)
     ) {
       return guid;
     }
@@ -176,6 +199,54 @@ function findChatGuid(
   return null;
 }
 
+function findChat(
+  chats: readonly Record<string, unknown>[],
+  target: IMessageTarget,
+): Record<string, unknown> | null {
+  if (target.kind === "chat_id") {
+    for (const chat of chats) {
+      if (numberFromUnknown(chat.id) === target.chatId) {
+        return chat;
+      }
+    }
+    return null;
+  }
+
+  if (target.kind === "chat_guid") {
+    for (const chat of chats) {
+      if (stringFromUnknown(chat.guid) === target.chatGuid) {
+        return chat;
+      }
+    }
+    return null;
+  }
+
+  const wanted =
+    target.kind === "chat_identifier"
+      ? target.chatIdentifier
+      : `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`;
+  const normalizedWanted = normalizeDirectChatIdentifier(wanted);
+  for (const chat of chats) {
+    const identifier = stringFromUnknown(chat.identifier);
+    const guid = stringFromUnknown(chat.guid);
+    if (
+      identifier === wanted ||
+      guid === wanted ||
+      directChatIdentifierMatches(identifier, normalizedWanted) ||
+      directChatIdentifierMatches(guid, normalizedWanted)
+    ) {
+      return chat;
+    }
+  }
+  return null;
+}
+
+function normalizeHistoryLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    return 10;
+  }
+  return Math.min(Math.max(1, Math.floor(limit)), 50);
+}
 async function runIMessageCliJson(
   args: readonly string[],
   options: CliRunOptions,
@@ -534,6 +605,86 @@ export const imessageActionsRuntime = {
         return { messageId: resolveMessageId(result) };
       },
     );
+  },
+
+  async readMessages(params: {
+    target: IMessageTarget;
+    limit?: number;
+    includeAttachments?: boolean;
+    options: CliRunOptions;
+  }): Promise<{
+    chatId?: number;
+    chatGuid?: string;
+    chatIdentifier?: string;
+    messages: unknown[];
+  }> {
+    const client = await createIMessageRpcClient({
+      cliPath: params.options.cliPath,
+      dbPath: params.options.dbPath,
+    });
+    try {
+      const limit = normalizeHistoryLimit(params.limit);
+      if (params.target.kind === "handle") {
+        try {
+          const result = await client.request<IMessageHistoryResponse & Record<string, unknown>>(
+            "messages.history",
+            {
+              target: params.target.to,
+              to: params.target.to,
+              service: params.target.service,
+              limit,
+              attachments: params.includeAttachments === true,
+            },
+            { timeoutMs: params.options.timeoutMs },
+          );
+          const messages = Array.isArray(result.messages) ? result.messages : [];
+          const chatGuid =
+            stringFromUnknown(result.chatGuid) ?? stringFromUnknown(result.chat_guid);
+          if (chatGuid || messages.length > 0) {
+            return {
+              ...(chatGuid ? { chatGuid } : {}),
+              chatIdentifier: params.target.to,
+              messages,
+            };
+          }
+        } catch {
+          // Native imsg history has historically required chat_id. Fall back to
+          // chats.list resolution for native providers when handle history is
+          // unavailable.
+        }
+      }
+      const list = asChatList(
+        await client.request<IMessageChatListResponse>(
+          "chats.list",
+          { limit: 1000 },
+          { timeoutMs: params.options.timeoutMs },
+        ),
+      );
+      const chat = findChat(list, params.target);
+      const chatId = chat ? numberFromUnknown(chat.id) : undefined;
+      if (!chat || chatId === undefined) {
+        throw new Error("iMessage read failed: chat not found for supplied target.");
+      }
+      const chatGuid = stringFromUnknown(chat.guid);
+      const chatIdentifier = stringFromUnknown(chat.identifier);
+      const result = await client.request<IMessageHistoryResponse>(
+        "messages.history",
+        {
+          chat_id: chatId,
+          limit,
+          attachments: params.includeAttachments === true,
+        },
+        { timeoutMs: params.options.timeoutMs },
+      );
+      return {
+        chatId,
+        ...(chatGuid ? { chatGuid } : {}),
+        ...(chatIdentifier ? { chatIdentifier } : {}),
+        messages: Array.isArray(result.messages) ? result.messages : [],
+      };
+    } finally {
+      await client.stop();
+    }
   },
 };
 

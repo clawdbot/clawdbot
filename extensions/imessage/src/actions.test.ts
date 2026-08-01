@@ -11,6 +11,7 @@ const runtimeMock = vi.hoisted(() => ({
   resolveIMessageMessageId: vi.fn((id: string) => id),
   authorizeMessageReference: vi.fn(),
   resolveChatGuidForTarget: vi.fn(),
+  readMessages: vi.fn(),
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
   editMessage: vi.fn(),
@@ -105,6 +106,7 @@ describe("imessage message actions", () => {
     runtimeMock.resolveIMessageMessageId.mockImplementation((id: string) => id);
     runtimeMock.authorizeMessageReference.mockReset();
     runtimeMock.resolveChatGuidForTarget.mockReset();
+    runtimeMock.readMessages.mockReset();
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.editMessage.mockReset();
@@ -164,7 +166,7 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toStrictEqual([]);
+    expect(described?.actions).toStrictEqual(["read"]);
   });
 
   it("advertises private API actions while private API status is unknown", () => {
@@ -176,6 +178,7 @@ describe("imessage message actions", () => {
     } as never);
 
     expect(described?.actions).toStrictEqual([
+      "read",
       "react",
       "edit",
       "reply",
@@ -207,6 +210,7 @@ describe("imessage message actions", () => {
     } as never);
 
     expect(described?.actions).toStrictEqual([
+      "read",
       "react",
       "edit",
       "unsend",
@@ -593,6 +597,71 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+    expect(described?.actions).toContain("read");
+  });
+
+  it("reads recent messages without requiring the private API bridge", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+    });
+    runtimeMock.readMessages.mockResolvedValue({
+      chatId: 42,
+      chatGuid: "iMessage;-;+15551234567",
+      chatIdentifier: "+15551234567",
+      messages: [
+        {
+          id: 100,
+          guid: "message-guid",
+          sender: "+15551234567",
+          is_from_me: false,
+          text: "hello",
+          created_at: "2026-06-09T20:00:00.000Z",
+          chat_id: 42,
+        },
+      ],
+    });
+
+    const result = await imessageMessageActions.handleAction?.({
+      action: "read",
+      cfg: cfg(),
+      params: {
+        target: "imessage:+15551234567",
+        limit: 5,
+      },
+    } as never);
+
+    expect(runtimeMock.readMessages).toHaveBeenCalledWith({
+      target: {
+        kind: "handle",
+        to: "+15551234567",
+        service: "imessage",
+        serviceExplicit: true,
+      },
+      limit: 5,
+      includeAttachments: false,
+      options: imsgOptions(),
+    });
+    expect(result?.details).toStrictEqual({
+      ok: true,
+      chatId: 42,
+      chatGuid: "iMessage;-;+15551234567",
+      chatIdentifier: "+15551234567",
+      messages: [
+        {
+          id: 100,
+          messageId: "message-guid",
+          sender: "+15551234567",
+          isFromMe: false,
+          text: "hello",
+          createdAt: "2026-06-09T20:00:00.000Z",
+          chatId: 42,
+        },
+      ],
+    });
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("requires a trusted requester for group management from iMessage turns", () => {

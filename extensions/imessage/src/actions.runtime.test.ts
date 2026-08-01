@@ -183,6 +183,48 @@ describe("imessage actions runtime", () => {
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
   });
+
+  it("reads recent messages by resolving an iMessage handle to chat history", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      chatGuid: "iMessage;-;+15551234567",
+      messages: [{ id: 100, guid: "message-guid", text: "hello" }],
+    });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    createIMessageRpcClientMock.mockResolvedValueOnce({ request, stop });
+
+    await expect(
+      imessageActionsRuntime.readMessages({
+        target: {
+          kind: "handle",
+          to: "+15551234567",
+          service: "imessage",
+          serviceExplicit: true,
+        },
+        limit: 5,
+        includeAttachments: false,
+        options: { cliPath: "imsg", dbPath: "/tmp/messages.db", timeoutMs: 8000 },
+      }),
+    ).resolves.toStrictEqual({
+      chatGuid: "iMessage;-;+15551234567",
+      chatIdentifier: "+15551234567",
+      messages: [{ id: 100, guid: "message-guid", text: "hello" }],
+    });
+
+    expect(request.mock.calls).toStrictEqual([
+      [
+        "messages.history",
+        {
+          target: "+15551234567",
+          to: "+15551234567",
+          service: "imessage",
+          limit: 5,
+          attachments: false,
+        },
+        { timeoutMs: 8000 },
+      ],
+    ]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("findChatGuid cross-format identifier resolution", () => {

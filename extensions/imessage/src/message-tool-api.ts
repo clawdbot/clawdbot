@@ -49,6 +49,7 @@ export function describeIMessageMessageTool({
   const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
   const gate = createActionGate(account.config.actions);
   const actions = new Set<ChannelMessageActionName>();
+  actions.add("read");
   for (const action of IMESSAGE_ACTION_NAMES) {
     const spec = IMESSAGE_ACTIONS[action];
     if (!spec?.gate || !gate(spec.gate)) {
