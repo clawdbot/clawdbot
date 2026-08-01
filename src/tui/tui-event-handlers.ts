@@ -61,6 +61,7 @@ type EventHandlerBtwPresenter = {
 };
 
 const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
+const MAX_PLUGIN_STATUS_LENGTH = 180;
 
 function formatAbortDiagnostic(value: string | undefined): string | undefined {
   const diagnostic = sanitizeRenderableText(value ?? "")
@@ -595,6 +596,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (evt.stream === "status" || evt.stream.endsWith(".status")) {
+      // Plugins can project transient run state without writing a system/chat
+      // message. Finalized runs cannot replace the terminal idle/error state.
+      if (!(isActiveRun || isPendingRun || isSessionRun)) {
+        return;
+      }
+      const status = sanitizeRenderableText(asString(evt.data?.text, ""))
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!status) {
+        return;
+      }
+      setActivityStatus(truncateUtf16Safe(status, MAX_PLUGIN_STATUS_LENGTH));
+      tui.requestRender();
       return;
     }
     if (evt.stream === "tool") {

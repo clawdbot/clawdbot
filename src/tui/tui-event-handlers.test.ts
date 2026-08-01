@@ -340,6 +340,48 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("renders sanitized plugin status events without adding chat content", () => {
+    const { chatLog, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-status" },
+    });
+
+    handleAgentEvent({
+      runId: "run-status",
+      stream: "example-plugin.status",
+      data: { text: "◇ Market\u001b[31m   clearing\u0000" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("◇ Market clearing");
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores plugin status events after the owning run is finalized", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-status" },
+      });
+
+    handleChatEvent({
+      runId: "run-status",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-status",
+      stream: "example-plugin.status",
+      data: { text: "late status" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("shows running for a system-injected run that never went through submit", () => {
     const { state, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
