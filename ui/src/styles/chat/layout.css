@@ -2283,6 +2283,24 @@ openclaw-chat-video-player {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+.agent-chat__input--prefill-attention {
+  animation: chat-composer-prefill-attention 700ms ease-out;
+}
+
+@keyframes chat-composer-prefill-attention {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+    box-shadow: 0 0 0 3px var(--accent-subtle);
+  }
+  45% {
+    border-color: color-mix(in srgb, var(--accent) 80%, var(--border));
+    box-shadow:
+      0 0 0 5px color-mix(in srgb, var(--accent) 22%, transparent),
+      0 0 22px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+}
+
 .agent-chat__input--offline,
 .agent-chat__input--offline:focus-within {
   border-color: color-mix(in srgb, var(--warn) 38%, var(--border));

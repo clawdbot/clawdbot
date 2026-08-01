@@ -609,7 +609,20 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     }
   }
 
-  override updated() {
+  override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    if (changedProperties.has("focusComposer") && this.focusComposer) {
+      const textarea = this.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox > textarea",
+      );
+      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+      textarea?.focus({ preventScroll: true });
+      if (input) {
+        input.classList.remove("agent-chat__input--prefill-attention");
+        // Restart the cue when the same mounted composer receives another prefill.
+        void input.offsetWidth;
+        input.classList.add("agent-chat__input--prefill-attention");
+      }
+    }
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();

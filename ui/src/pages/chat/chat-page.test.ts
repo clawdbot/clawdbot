@@ -32,7 +32,8 @@ import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
-import { loadChatRoute } from "./route-loader.ts";
+import { routeDraft } from "./route-draft.ts";
+import { loadChatRoute, type SessionChatRouteData } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
@@ -100,11 +101,11 @@ function setNarrow(page: ChatPage, narrow: boolean) {
 }
 
 function getRouteDraftForActivePane(page: ChatPage): string | undefined {
-  return (
-    page as unknown as {
-      routeDraftForActivePane: () => string | undefined;
-    }
-  ).routeDraftForActivePane();
+  const state = page as unknown as {
+    data: SessionChatRouteData;
+    consumedDraftData: SessionChatRouteData | null;
+  };
+  return routeDraft(state.data, state.consumedDraftData);
 }
 
 function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {

@@ -15,6 +15,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import {
   findUiSessionRow,
+  SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -56,6 +57,7 @@ export type ChatRouteData =
       sessionKey: string;
       agentId?: string;
       draft?: string;
+      focusComposer?: boolean;
       face: BoardFace;
       shortId?: string;
       canonicalLocation?: RouteLocation;
@@ -81,6 +83,7 @@ export type SessionChatRouteData = Omit<
 export function locationWithoutDraft(location: RouteLocation): RouteLocation {
   const params = new URLSearchParams(location.search);
   params.delete("draft");
+  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
   const search = params.toString();
   return { ...location, search: search ? `?${search}` : "" };
 }
@@ -304,6 +307,32 @@ function draftFromLocation(location: RouteLocation): string | undefined {
   return new URLSearchParams(location.search).get("draft") || undefined;
 }
 
+function focusComposerFromLocation(location: RouteLocation): boolean {
+  return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
+}
+
+function draftRouteDataFromLocation(
+  location: RouteLocation,
+): Pick<Extract<ChatRouteData, { kind: "session" }>, "draft" | "focusComposer"> {
+  const draft = draftFromLocation(location);
+  return {
+    draft,
+    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
+  };
+}
+
+function draftSearchFromLocation(location: RouteLocation): string {
+  const search = new URLSearchParams();
+  const draft = draftFromLocation(location);
+  if (draft) {
+    search.set("draft", draft);
+  }
+  if (draft && focusComposerFromLocation(location)) {
+    search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
+  }
+  return search.size > 0 ? `?${search.toString()}` : "";
+}
+
 function isPreferenceDerivedFace(location: RouteLocation): boolean {
   return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
 }
@@ -420,7 +449,7 @@ function candidatesForResolution(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
-  draft: string | undefined,
+  location: RouteLocation,
   preferenceDerived: boolean,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
@@ -445,7 +474,7 @@ function candidatesForResolution(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href: `${href}${draft ? `?${new URLSearchParams({ draft }).toString()}` : ""}`,
+            href: `${href}${draftSearchFromLocation(location)}`,
             idPrefix: prefix,
           },
         ]
@@ -478,7 +507,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
@@ -516,7 +545,7 @@ function resolvedMainSessionRouteData(params: {
     kind: "session",
     sessionKey: params.row.key,
     agentId: params.target.agentId,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
@@ -566,7 +595,7 @@ export async function loadChatRoute(
       kind: "session",
       sessionKey,
       agentId: target.agentId,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
@@ -600,7 +629,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -659,7 +688,7 @@ export async function loadChatRoute(
               context,
               face,
               slugResolution,
-              draftFromLocation(routeLocation),
+              routeLocation,
               preferenceDerived,
             ),
             truncated: slugResolution.truncated,
@@ -698,7 +727,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -717,7 +746,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
       ...(canonicalLocationChanged
@@ -748,7 +777,7 @@ export async function loadChatRoute(
         context,
         face,
         resolution,
-        draftFromLocation(routeLocation),
+        routeLocation,
         preferenceDerived,
       ),
       truncated: resolution.truncated,
