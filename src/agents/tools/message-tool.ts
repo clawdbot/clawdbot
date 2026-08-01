@@ -76,7 +76,10 @@ import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
-import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
+import {
+  createSourceDeliveryPlan,
+  resolveSourceDeliveryOutcome,
+} from "../../infra/outbound/source-delivery-plan.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
@@ -1229,20 +1232,29 @@ function enforceSourceReplyOnlyMessageAction(params: {
   for (const requestedTarget of explicitTargets) {
     if (
       !sourceTargets.some((sourceTarget) =>
-        sourceDeliveryTargetsMatch(
+        resolveSourceDeliveryOutcome(
+          createSourceDeliveryPlan({
+            owner: "message_tool",
+            reason: "subagent_completion",
+            target: {
+              channel: sourceChannel,
+              accountId: sourceAccountId,
+              to: sourceTarget,
+              threadId: sourceThreadId,
+            },
+          }),
           {
-            provider: sourceChannel,
-            accountId: sourceAccountId,
-            to: requestedTarget,
-            threadImplicit: true,
+            didSendViaMessageTool: true,
+            messageToolSentTargets: [
+              {
+                provider: sourceChannel,
+                accountId: sourceAccountId,
+                to: requestedTarget,
+                threadImplicit: true,
+              },
+            ],
           },
-          {
-            channel: sourceChannel,
-            accountId: sourceAccountId,
-            to: sourceTarget,
-            threadId: sourceThreadId,
-          },
-        ),
+        ).verifiedMessageToolDelivery,
       )
     ) {
       throw new Error("Completion source replies cannot target another conversation or thread.");
