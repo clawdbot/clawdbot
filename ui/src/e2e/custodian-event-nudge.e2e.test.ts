@@ -303,7 +303,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
     }
   });
 
-  it("renders rich wizard controls and sends parseable answers", async () => {
+  it("renders rich wizard controls and sends typed answers", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -394,9 +394,23 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
       await page.getByText("Setup complete.").waitFor();
 
       const requests = await gateway.getRequests("openclaw.chat");
+      expect(requests.map((request) => request.params)).toEqual([
+        expect.objectContaining({ sessionId: expect.any(String) }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "channel", value: "twitch" },
+        }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
+        }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+        }),
+      ]);
       expect(
-        requests.map((request) => (request.params as { message?: string } | undefined)?.message),
-      ).toEqual([undefined, "5", "1,3", "fake-client-secret"]);
+        requests
+          .slice(1)
+          .every((request) => !Object.prototype.hasOwnProperty.call(request.params, "message")),
+      ).toBe(true);
       expect(await page.getByText("Sensitive reply sent").count()).toBe(1);
       expect(await page.getByText("fake-client-secret").count()).toBe(0);
       expect(await page.locator(".agent-chat__composer-shell").count()).toBe(1);

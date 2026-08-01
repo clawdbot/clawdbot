@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
+import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -13,7 +13,10 @@ import { WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
  */
 export const SystemAgentChatParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  /** Free-text input for conversational and text-only clients. */
   message: Type.Optional(Type.String()),
+  /** Typed answer from a client rendering the current `WizardStep`. */
+  wizardAnswer: Type.Optional(WizardAnswerSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),

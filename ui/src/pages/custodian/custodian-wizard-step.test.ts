@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
-import { custodianWizardReply, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
+import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
 
 const options = [
   { label: "Discord", value: "discord" },
@@ -13,32 +13,34 @@ function step(patch: Partial<WizardStep>): WizardStep {
 }
 
 describe("Custodian rich wizard answers", () => {
-  it("uses stable option indexes for select and multiselect replies", () => {
-    expect(custodianWizardReply(step({}), "twitch")).toEqual({
-      message: "3",
+  it("preserves typed select and multiselect values", () => {
+    expect(custodianWizardSubmission(step({}), "twitch")).toEqual({
+      answer: { stepId: "step", value: "twitch" },
       display: "Twitch",
     });
-    expect(custodianWizardReply(step({ type: "multiselect" }), ["discord", "twitch"])).toEqual({
-      message: "1,3",
-      display: "Discord, Twitch",
-    });
-    expect(custodianWizardReply(step({ type: "multiselect" }), [])).toEqual({
-      message: "none",
+    expect(custodianWizardSubmission(step({ type: "multiselect" }), ["discord", "twitch"])).toEqual(
+      {
+        answer: { stepId: "step", value: ["discord", "twitch"] },
+        display: "Discord, Twitch",
+      },
+    );
+    expect(custodianWizardSubmission(step({ type: "multiselect" }), [])).toEqual({
+      answer: { stepId: "step", value: [] },
       display: "none",
     });
   });
 
-  it("serializes confirm, text, and continue controls", () => {
-    expect(custodianWizardReply(step({ type: "confirm" }), true)).toEqual({
-      message: "yes",
+  it("builds confirm, text, and continue submissions", () => {
+    expect(custodianWizardSubmission(step({ type: "confirm" }), true)).toEqual({
+      answer: { stepId: "step", value: true },
       display: "Yes",
     });
-    expect(custodianWizardReply(step({ type: "text" }), "secret")).toEqual({
-      message: "secret",
+    expect(custodianWizardSubmission(step({ type: "text" }), "secret")).toEqual({
+      answer: { stepId: "step", value: "secret" },
       display: "secret",
     });
-    expect(custodianWizardReply(step({ type: "action" }), undefined, false)).toEqual({
-      message: "continue",
+    expect(custodianWizardSubmission(step({ type: "action" }), undefined, false)).toEqual({
+      answer: { stepId: "step" },
       display: "Continue",
     });
   });
@@ -51,8 +53,8 @@ describe("Custodian rich wizard answers", () => {
     value.push("twitch");
 
     expect(initialValue).toEqual(["discord"]);
-    expect(custodianWizardReply(step({}), "unknown")).toBeNull();
-    expect(custodianWizardReply(step({ type: "text" }), { secret: true })).toBeNull();
-    expect(custodianWizardReply(step({ type: "multiselect" }), ["unknown"])).toBeNull();
+    expect(custodianWizardSubmission(step({}), "unknown")).toBeNull();
+    expect(custodianWizardSubmission(step({ type: "text" }), { secret: true })).toBeNull();
+    expect(custodianWizardSubmission(step({ type: "multiselect" }), ["unknown"])).toBeNull();
   });
 });

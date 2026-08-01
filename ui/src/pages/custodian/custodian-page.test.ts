@@ -70,7 +70,7 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(request.mock.calls[0]?.[0]).toBe("openclaw.chat");
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
-    // The engine receives the parseable reply text; the transcript shows the label.
+    // LLM-authored option cards remain chat messages; wizard controls use wizardAnswer below.
     expect(request.mock.calls[1]?.[1]).toMatchObject({
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
@@ -152,7 +152,10 @@ describe("custodian page", () => {
         3,
       ),
     );
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "5" });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "channel", value: "twitch" },
+    });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
     page
       .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="checkbox"]')[0]!
       .click();
@@ -169,7 +172,9 @@ describe("custodian page", () => {
       expect(input).not.toBeNull();
       return input!;
     });
-    expect(request.mock.calls[2]?.[1]).toMatchObject({ message: "1,3" });
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
+    });
     expect(secretInput.type).toBe("password");
     const revealSecret = page.querySelector<HTMLButtonElement>(
       '.custodian__wizard-step button[aria-label="Reveal value"]',
@@ -186,7 +191,10 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
     await waitForFast(() => expect(page.textContent).toContain("Setup complete."));
-    expect(request.mock.calls[3]?.[1]).toMatchObject({ message: "fake-client-secret" });
+    expect(request.mock.calls[3]?.[1]).toMatchObject({
+      wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+    });
+    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("message");
     expect(page.textContent).toContain("Twitch");
     expect(page.textContent).toContain("Chat, Announcements");
     expect(page.textContent).toContain("Sensitive reply sent");

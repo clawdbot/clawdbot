@@ -11,7 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
-import { custodianWizardReply, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
+import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   custodianChatParams,
@@ -31,6 +31,10 @@ import {
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+
+function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
+  return params.message !== undefined || params.wizardAnswer !== undefined;
+}
 
 type StoreListener = () => void;
 type ConfiguredInferenceState = "unresolved" | "required" | "ready";
@@ -151,7 +155,7 @@ export class CustodianSessionStore {
   }
 
   canRetry(): boolean {
-    return this.retryParams !== null && this.retryParams.message === undefined;
+    return this.retryParams !== null && !hasCustodianUserInput(this.retryParams);
   }
 
   get setupRequired(): boolean {
@@ -161,7 +165,7 @@ export class CustodianSessionStore {
   retry(): void {
     const client = this.activeClient;
     const params = this.retryParams;
-    if (client && params && params.message === undefined && this.chatAvailable && !this.sending) {
+    if (client && params && !hasCustodianUserInput(params) && this.chatAvailable && !this.sending) {
       void this.initializeSession(client, params);
     }
   }
@@ -174,10 +178,6 @@ export class CustodianSessionStore {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
-    if (questionReply) {
-      this.questionReplyUncertain = true;
-    }
     const allowsEmptyWizardReply = questionReply && this.wizardInputPending;
     if (
       (!message.trim() && !allowsEmptyWizardReply) ||
@@ -190,6 +190,27 @@ export class CustodianSessionStore {
       return "rejected";
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
+    return await this.sendUserTurn(
+      client,
+      {
+        sessionId: this.sessionId,
+        ...custodianChatParams(this.variant, message),
+      },
+      displayText,
+      questionReply,
+    );
+  }
+
+  private async sendUserTurn(
+    client: GatewayBrowserClient,
+    params: SystemAgentChatParams,
+    displayText: string,
+    questionReply: boolean,
+  ): Promise<eventNudgeState.CustodianSendOutcome> {
+    const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
+    if (questionReply) {
+      this.questionReplyUncertain = true;
+    }
     this.abandonedTurnOutcomeUnknown = false;
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.messages = [
@@ -205,10 +226,7 @@ export class CustodianSessionStore {
     ];
     this.input = "";
     this.emit();
-    const reply = this.requestReply(client, {
-      sessionId: this.sessionId,
-      ...custodianChatParams(this.variant, message),
-    });
+    const reply = this.requestReply(client, params);
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
@@ -289,11 +307,19 @@ export class CustodianSessionStore {
     if (!message.step || !this.wizardInputPending) {
       return;
     }
-    const reply = custodianWizardReply(message.step, value, includeValue);
-    if (!reply) {
+    const submission = custodianWizardSubmission(message.step, value, includeValue);
+    const client = this.activeClient;
+    if (!submission || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+      this.emit();
       return;
     }
-    void this.send(reply.message, reply.display, true);
+    const displayText = message.step.sensitive ? t("custodian.sensitiveReply") : submission.display;
+    void this.sendUserTurn(
+      client,
+      { sessionId: this.sessionId, wizardAnswer: submission.answer },
+      displayText,
+      true,
+    );
   }
 
   exitSetup(): void {
@@ -566,7 +592,7 @@ export class CustodianSessionStore {
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
-    if (params.message !== undefined) {
+    if (hasCustodianUserInput(params)) {
       this.setupIssue = null;
     }
     this.retryParams = params;
@@ -634,13 +660,13 @@ export class CustodianSessionStore {
               ? "missing"
               : "unavailable"
             : null;
-        if (params.message !== undefined && isCustodianSessionInvalidatedError(error)) {
+        if (hasCustodianUserInput(params) && isCustodianSessionInvalidatedError(error)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.
           this.rotateVolatileSession(client, this.currentSessionVariant());
           this.error = t("custodian.sessionRestarted", { error: custodianErrorMessage(error) });
         }
       }
-      if (params.message !== undefined && this.retryParams === params) {
+      if (hasCustodianUserInput(params) && this.retryParams === params) {
         // User turns have no idempotency key and are never replayed after an ambiguous failure.
         this.retryParams = null;
       }

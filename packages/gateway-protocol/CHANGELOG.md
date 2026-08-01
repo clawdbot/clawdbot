@@ -127,7 +127,8 @@ Enhancement-only month (no new schema modules):
 - Add cron event triggers via polled condition-watcher scripts (#101195) and native
   mobile Automations parity (#106355).
 - Add system-agent conversational onboarding (#99935); rename `crestodian.*` methods to
-  `openclaw.chat` / `openclaw.setup.*` (2026-07-14, `a6a0716`).
+  `openclaw.chat` / `openclaw.setup.*` (2026-07-14, `a6a0716`); add typed hosted-wizard
+  steps and answers to `openclaw.chat` (#114631).
 - Add typed structured questions / `ask_user` with live option cards (#109922, #110242)
   and the questions schema module.
 - Add ui-command / screen-tool Control UI layout control and capability-gated

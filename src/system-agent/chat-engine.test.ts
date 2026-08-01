@@ -17,6 +17,7 @@ import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
+  SystemAgentWizardAnswerError,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -3451,6 +3452,101 @@ describe("OpenClaw chat wizard step payload", () => {
     const done = await engine.handle("123:abc");
     expect(done.text).toContain("telegram is configured");
     expect(done.step).toBeUndefined();
+  });
+
+  it("submits a typed answer directly and records the server-owned option label", async () => {
+    useTempStateDir();
+    let selected: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        selected = await prompter.select({
+          message: "Choose one",
+          options: [
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ],
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await engine.answerWizard({ stepId, value: "beta" });
+
+    expect(selected).toBe("beta");
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
+  });
+
+  it("rejects a stale structured answer without changing the active step", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    await expect(
+      engine.answerWizard({ stepId: "stale-step", value: "ignored" }),
+    ).rejects.toBeInstanceOf(SystemAgentWizardAnswerError);
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const done = await engine.answerWizard({ stepId, value: "123:abc" });
+
+    expect(done.step).toBeUndefined();
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("ignored");
+  });
+
+  it("redacts a sensitive structured answer from engine history", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await engine.answerWizard({ stepId, value: "raw-secret-value" });
+
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "<redacted secret>" });
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("raw-secret-value");
+  });
+
+  it("keeps the numbered text grammar for text-only wizard clients", async () => {
+    useTempStateDir();
+    let selected: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        selected = await prompter.select({
+          message: "Choose one",
+          options: [
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ],
+        });
+      },
+    });
+
+    await engine.handle("connect telegram");
+    await engine.handle("2");
+
+    expect(selected).toBe("beta");
   });
 });
 
