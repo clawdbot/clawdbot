@@ -317,7 +317,7 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-trail" id=${metaId ?? nothing}
           >${session.isChild && session.runtimeMs != null
-            ? session.hasActiveRun || session.status === "running"
+            ? session.hasActiveRun
               ? html`<openclaw-elapsed-time
                   .startMs=${session.runtimeSampledAt! - session.runtimeMs}
                 ></openclaw-elapsed-time>`

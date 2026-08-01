@@ -1,3 +1,4 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
 import type {
@@ -203,36 +204,40 @@ export function createSubagentRegistryLifecycleRequesterWake(
       return;
     }
     scheduledRequesterSettleWakeRuns.add(runId);
-    void runWithGatewayIndependentRootWorkContinuation(() =>
-      params.maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey,
-        requesterOrigin: entry.requesterOrigin,
-        settledEntry: entry,
-        transitionBatch: transitionRequesterSettleWakeBatch,
-        completeBatch: completeRequesterSettleWakeBatch,
-      }),
-    )
-      .catch((error: unknown) => {
-        params.warn("requester settle wake failed", {
-          error: buildSafeLifecycleErrorMeta(error),
-          runId: maskRunId(runId),
-          requesterSessionKey: maskSessionKey(requesterSessionKey),
-        });
-      })
-      .finally(() => {
-        scheduledRequesterSettleWakeRuns.delete(runId);
-        const wasRearmedWhileRunning = pendingRequesterSettleWakeRearms.delete(runId);
-        const current = params.runs.get(runId);
-        if (current === entry && current.requesterSettleWake) {
-          if (wasRearmedWhileRunning) {
-            // A requester yield can freeze a delivered batch while this run is
-            // resolving its earlier no-wake decision. Admit that durable update now.
-            scheduleRequesterSettleWake(runId, current);
-          } else {
-            scheduleRequesterSettleWakeRetry(runId, current);
+    // Wake turns outlive their spawning attempt; clear its owner before both
+    // dispatch and chained re-arms so transcript writes acquire a fresh lock.
+    runWithoutOwnedSessionTranscriptWrites(() => {
+      void runWithGatewayIndependentRootWorkContinuation(() =>
+        params.maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: entry.requesterOrigin,
+          settledEntry: entry,
+          transitionBatch: transitionRequesterSettleWakeBatch,
+          completeBatch: completeRequesterSettleWakeBatch,
+        }),
+      )
+        .catch((error: unknown) => {
+          params.warn("requester settle wake failed", {
+            error: buildSafeLifecycleErrorMeta(error),
+            runId: maskRunId(runId),
+            requesterSessionKey: maskSessionKey(requesterSessionKey),
+          });
+        })
+        .finally(() => {
+          scheduledRequesterSettleWakeRuns.delete(runId);
+          const wasRearmedWhileRunning = pendingRequesterSettleWakeRearms.delete(runId);
+          const current = params.runs.get(runId);
+          if (current === entry && current.requesterSettleWake) {
+            if (wasRearmedWhileRunning) {
+              // A requester yield can freeze a delivered batch while this run is
+              // resolving its earlier no-wake decision. Admit that durable update now.
+              scheduleRequesterSettleWake(runId, current);
+            } else {
+              scheduleRequesterSettleWakeRetry(runId, current);
+            }
           }
-        }
-      });
+        });
+    });
   }
 
   return {

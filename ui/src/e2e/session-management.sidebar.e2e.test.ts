@@ -26,6 +26,8 @@ suite.define(() => {
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
     const childTwoKey = "agent:main:verify-tests";
+    const staleRunningChildKey = "agent:main:stale-running";
+    const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -52,12 +54,34 @@ suite.define(() => {
                   startedAt: baseTime - 62_000,
                   status: "done",
                 }),
+                {
+                  ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
+                    hasActiveRun: false,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "running",
+                  }),
+                  runtimeMs: 61_000,
+                  runtimeSampledAt: baseTime,
+                },
+                {
+                  ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
+                    endedAt: baseTime - 4_000,
+                    hasActiveRun: true,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "failed",
+                  }),
+                  lastReadAt: baseTime,
+                  runtimeMs: 60_000,
+                  runtimeSampledAt: baseTime,
+                },
               ]),
             },
             {
               response: sessionsListResponse([
                 sessionRow(parentKey, "Plan release", baseTime, {
-                  childSessions: [childOneKey, childTwoKey],
+                  childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
                 }),
               ]),
             },
@@ -74,9 +98,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 2 child threads for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 4 child threads for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Failed checks", { exact: true }).waitFor({ state: "visible" });
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -86,11 +112,28 @@ suite.define(() => {
         .toBe(true);
 
       const childRows = page.locator(".sidebar-recent-session--child");
-      await expect.poll(() => childRows.count()).toBe(2);
+      await expect.poll(() => childRows.count()).toBe(4);
       expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+
+      const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
+      const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
+      expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
+
+      const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
+      expect(await childToggle.getAttribute("class")).toContain(
+        "sidebar-child-session-toggle--running",
+      );
+      for (const child of [staleRunningChild, failedChild]) {
+        expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+      }
       await captureUiProof(page, "child-sessions-expanded.png");
+      await captureUiProof(page, "child-sessions-run-state-precedence.png");
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
