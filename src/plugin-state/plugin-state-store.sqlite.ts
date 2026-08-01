@@ -399,6 +399,14 @@ function openPluginStateDatabase(
   }
 }
 
+function isMissingPluginStateTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
+    error.message === "no such table: plugin_state_entries"
+  );
+}
+
 /** Read plugin state without joining the shared writable database lifecycle. */
 function withPluginStateDatabaseReadOnly<T>(
   operationName: PluginStateStoreOperation,
@@ -421,6 +429,11 @@ function withPluginStateDatabaseReadOnly<T>(
         "Failed to open the plugin state database.",
         pathname,
       );
+    }
+    if (isMissingPluginStateTableError(error)) {
+      // Startup leases create the shared file before the first plugin-state write.
+      // Read-only callers cannot ensure the lazy table, so its absence means no data yet.
+      return undefined;
     }
     throw error;
   }
