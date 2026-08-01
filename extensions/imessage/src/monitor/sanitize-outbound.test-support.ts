@@ -63,6 +63,27 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
   });
 
+  it("keeps a bare 'user:' mapping key inside a fenced code block", () => {
+    const text =
+      "```yaml\n- name: ensure account\n  user:\n    name: alice\n    state: present\n```";
+    // The role-turn stripper must not treat a YAML mapping key as a leaked turn
+    // boundary; deleting `user:` silently reparents its children under the item.
+    expect(sanitizeOutboundText(text)).toBe(text);
+  });
+
+  it("keeps bare 'system:'/'assistant:' mapping keys inside a fenced code block", () => {
+    const text = "```yaml\nsystem:\n  role: primary\nassistant:\n  role: helper\n```";
+    expect(sanitizeOutboundText(text)).toBe(text);
+  });
+
+  it("still strips a leaked role marker outside a code block while keeping the fenced one", () => {
+    const text = "assistant:\n```yaml\nuser:\n  name: alice\n```";
+    const result = sanitizeOutboundText(text);
+    // Leaked standalone marker in prose is removed; the fenced key survives.
+    expect(result).not.toMatch(/^assistant:$/m);
+    expect(result).toContain("```yaml\nuser:\n  name: alice\n```");
+  });
+
   it("handles combined internal markers in one message", () => {
     const text = "<thinking>step 1</thinking>NO_REPLY +#+#+#+# assistant to=final\n\nActual reply";
     const result = sanitizeOutboundText(text);
