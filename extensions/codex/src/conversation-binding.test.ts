@@ -2141,6 +2141,64 @@ describe("codex conversation binding", () => {
     await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
   });
 
+  it("retains a pre-start final after a saturated commentary stream", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        for (let index = 0; index < 100; index += 1) {
+          notificationHandler?.({
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                type: "agentMessage",
+                id: `commentary-${index}`,
+                text: `progress ${index}`,
+                phase: "commentary",
+              },
+            },
+          });
+        }
+        notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id: "answer", text: "authoritative answer" },
+          },
+        });
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "completed", error: null, items: [] },
+          },
+        });
+        return { turn: { id: "turn-1" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+      handled: true,
+      reply: { text: "authoritative answer" },
+    });
+  });
+
   it("reports an interrupted bound turn as cancellation instead of a partial reply", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {
