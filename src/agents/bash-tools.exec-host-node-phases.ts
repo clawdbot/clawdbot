@@ -37,6 +37,10 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import {
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -424,13 +428,23 @@ export async function invokeNodeSystemRunDirect(params: {
     notifyOnExit: params.request.notifyOnExit,
   });
   params.request.signal?.throwIfAborted();
-  const raw = params.request.signal
-    ? await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeWaitMs }, invoke, {
-        signal: params.request.signal,
-      })
-    : await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeWaitMs }, invoke);
+  const result = await invokeNodeSystemRun({
+    invokeWaitMs: params.target.invokeWaitMs,
+    invoke,
+    signal: params.request.signal,
+  });
+  if (!result.ok) {
+    return formatNodeInvokeFailureToolResult({
+      failure: result.failure,
+      nodeId: params.target.nodeId,
+      command: params.request.command,
+      startedAt,
+      cwd: params.request.workdir,
+      warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+    });
+  }
   return formatNodeRunToolResult({
-    raw,
+    raw: result.raw,
     startedAt,
     cwd: params.request.workdir,
     warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],

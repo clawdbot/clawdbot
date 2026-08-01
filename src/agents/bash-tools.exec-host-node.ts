@@ -26,6 +26,11 @@ import {
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
+  formatNodeInvokeFailureFollowup,
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
+import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
   formatNodeRunToolResult,
@@ -572,10 +577,9 @@ export async function executeNodeHostCommand(
             }
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
             nodeInvocationStarted = true;
-            const raw = await callGatewayTool(
-              "node.invoke",
-              { timeoutMs: target.invokeWaitMs },
-              buildNodeSystemRunInvoke({
+            const invocation = await invokeNodeSystemRun({
+              invokeWaitMs: target.invokeWaitMs,
+              invoke: buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
                 rawCommand: prepared.transportRawCommand,
@@ -598,11 +602,22 @@ export async function executeNodeHostCommand(
                 notifyOnExit: params.notifyOnExit,
                 systemRunPlan: prepared.plan,
               }),
-              {
-                scopes: APPROVED_NODE_INVOKE_SCOPES,
-                ...(params.signal ? { signal: params.signal } : {}),
-              },
-            );
+              scopes: APPROVED_NODE_INVOKE_SCOPES,
+              signal: params.signal,
+            });
+            if (!invocation.ok) {
+              await execHostShared.sendExecApprovalFollowupResult(
+                followupTarget,
+                formatNodeInvokeFailureFollowup({
+                  failure: invocation.failure,
+                  nodeId: target.nodeId,
+                  approvalId,
+                  command: params.command,
+                }),
+              );
+              return;
+            }
+            const raw = invocation.raw as { payload?: unknown };
             nodeInvocationCompleted = true;
             const payload =
               raw?.payload && typeof raw.payload === "object"
@@ -694,19 +709,26 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval,
   });
   params.signal?.throwIfAborted();
-  const raw =
-    (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
-      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke, {
-          scopes: APPROVED_NODE_INVOKE_SCOPES,
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-      : params.signal
-        ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke, {
-            signal: params.signal,
-          })
-        : await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke);
+  const invocation = await invokeNodeSystemRun({
+    invokeWaitMs: target.invokeWaitMs,
+    invoke,
+    signal: params.signal,
+    ...((inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
+      ? { scopes: APPROVED_NODE_INVOKE_SCOPES }
+      : {}),
+  });
+  if (!invocation.ok) {
+    return formatNodeInvokeFailureToolResult({
+      failure: invocation.failure,
+      nodeId: target.nodeId,
+      command: params.command,
+      startedAt,
+      cwd: params.workdir,
+      warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
+    });
+  }
   return formatNodeRunToolResult({
-    raw,
+    raw: invocation.raw,
     startedAt,
     cwd: params.workdir,
     warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],

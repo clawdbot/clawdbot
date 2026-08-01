@@ -22,6 +22,18 @@ type ExecApprovalResult =
       body: string;
     }
   | {
+      kind: "outcome-unknown";
+      raw: string;
+      metadata: string;
+      body: string;
+    }
+  | {
+      kind: "not-dispatched";
+      raw: string;
+      metadata: string;
+      body: string;
+    }
+  | {
       kind: "other";
       raw: string;
     };
@@ -121,6 +133,34 @@ export function parseExecApprovalResultText(resultText: string): ExecApprovalRes
     };
   }
 
+  const outcomeUnknownResult = parseExecApprovalResultWithMetadata(
+    raw,
+    "Exec outcome unknown (",
+    "\n",
+  );
+  if (outcomeUnknownResult) {
+    return {
+      kind: "outcome-unknown",
+      raw,
+      metadata: outcomeUnknownResult.metadata,
+      body: outcomeUnknownResult.body,
+    };
+  }
+
+  const notDispatchedResult = parseExecApprovalResultWithMetadata(
+    raw,
+    "Exec not dispatched (",
+    "\n",
+  );
+  if (notDispatchedResult) {
+    return {
+      kind: "not-dispatched",
+      raw,
+      metadata: notDispatchedResult.metadata,
+      body: notDispatchedResult.body,
+    };
+  }
+
   const completedMatch = EXEC_COMPLETED_RE.exec(raw);
   if (completedMatch) {
     return {
@@ -135,6 +175,10 @@ export function parseExecApprovalResultText(resultText: string): ExecApprovalRes
 
 export function isExecDeniedResultText(resultText: string): boolean {
   return parseExecApprovalResultText(resultText).kind === "denied";
+}
+
+export function isExecOutcomeUnknownResultText(resultText: string): boolean {
+  return parseExecApprovalResultText(resultText).kind === "outcome-unknown";
 }
 
 export function formatExecDeniedUserMessage(resultText: string): string | null {

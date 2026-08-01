@@ -28,6 +28,7 @@ import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-f
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
+  isExecOutcomeUnknownResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -69,6 +70,36 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function buildExecOutcomeUnknownFollowupPrompt(resultText: string): string {
+  return [
+    "An approved async command has an unknown execution outcome.",
+    "The command may have executed.",
+    "Do not run the command again automatically.",
+    "There is no authoritative command output.",
+    "",
+    "Exact completion details:",
+    resultText.trim(),
+    "",
+    "Reply to the user in a helpful way.",
+    "Clearly explain that the command may have executed and its outcome is unknown.",
+    "Do not claim it was denied, not dispatched, or safe to retry.",
+  ].join("\n");
+}
+
+function buildExecNotDispatchedFollowupPrompt(resultText: string): string {
+  return [
+    "An approved async command was not dispatched and did not run.",
+    "There is no new command output.",
+    "Retry only after resolving the connection failure described below.",
+    "",
+    "Exact completion details:",
+    resultText.trim(),
+    "",
+    "Continue the task if the connection can be restored safely, then reply to the user.",
+    "Do not claim the command completed, was denied, or may have executed.",
+  ].join("\n");
+}
+
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -88,6 +119,12 @@ function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
+  }
+  if (isExecOutcomeUnknownResultText(trimmed)) {
+    return buildExecOutcomeUnknownFollowupPrompt(trimmed);
+  }
+  if (parseExecApprovalResultText(trimmed).kind === "not-dispatched") {
+    return buildExecNotDispatchedFollowupPrompt(trimmed);
   }
   return [
     "An async command the user already approved has completed.",
@@ -180,6 +217,10 @@ function formatDirectExecApprovalFollowupText(
   if (parsed.kind === "completed") {
     const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
     return body || "Background command finished.";
+  }
+
+  if (parsed.kind === "outcome-unknown" || parsed.kind === "not-dispatched") {
+    return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
   }
 
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
