@@ -7,6 +7,9 @@ export type CliCommandPluginLoadPolicy =
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
+type CliConfigGuardBypassPolicy =
+  | boolean
+  | ((ctx: { argv: string[]; commandPath: string[] }) => boolean);
 export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
@@ -33,7 +36,7 @@ type CliRoutedCommandId =
   | "plugins-list";
 
 export type CliCommandPathPolicy = {
-  bypassConfigGuard: boolean;
+  bypassConfigGuard: CliConfigGuardBypassPolicy;
   routeConfigGuard: CliRouteConfigGuardPolicy;
   loadPlugins: CliCommandPluginLoadPolicy;
   pluginRegistry: CliPluginRegistryPolicy;
@@ -84,7 +87,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["agent"],
     policy: {
-      loadPlugins: ({ argv, jsonOutputMode }) => hasFlag(argv, "--local") || !jsonOutputMode,
+      bypassConfigGuard: ({ argv }) => !hasFlag(argv, "--local"),
+      loadPlugins: ({ argv }) => hasFlag(argv, "--local"),
       pluginRegistry: { scope: "all" },
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
@@ -481,6 +485,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "status"],
     exact: true,
     policy: {
+      bypassConfigGuard: true,
       loadPlugins: "never",
       networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
     },

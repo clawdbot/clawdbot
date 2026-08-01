@@ -120,7 +120,7 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi"],
         jsonOutputMode: false,
       }).startupPolicy.loadPlugins,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("uses the resolved action command path for every execution startup decision", () => {

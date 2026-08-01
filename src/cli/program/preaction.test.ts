@@ -682,10 +682,7 @@ describe("registerPreActionHooks", () => {
 
     await parseProgram.parseAsync(process.argv);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      commandPath: ["agent"],
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -778,10 +775,7 @@ describe("registerPreActionHooks", () => {
 
     await parseProgram.parseAsync(process.argv);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      commandPath: ["agent"],
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
@@ -949,6 +943,17 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config and plugin bootstrap for remote agent text output", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--message", "hi"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
