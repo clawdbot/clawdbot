@@ -229,6 +229,36 @@ function spawnCommandSync(command, args, options) {
   return spawnSync(command, args, options);
 }
 
+/** @internal Directly tested release-script implementation detail. */
+export function runPluginNpmCiWithRetry(args, options, params = {}) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 180_000;
+  const spawn = params.spawn ?? spawnNpmSync;
+  const cleanupAttempt = params.cleanupAttempt ?? (() => {});
+  const pluginDir = params.pluginDir ?? "plugin";
+
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = spawn(args, { ...options, timeout: timeoutMs });
+    if (result.error?.code !== "ETIMEDOUT") {
+      return result;
+    }
+
+    // A timed-out npm process can leave a partial tree that makes the next
+    // package attempt nondeterministic. Restore the staging invariant even
+    // when the retry budget is exhausted.
+    cleanupAttempt();
+    if (attempt === attempts) {
+      return result;
+    }
+    console.error(
+      `[plugin-npm-publish] bundled dependency install timed out for ${pluginDir} ` +
+        `(attempt ${attempt}/${attempts}); retrying`,
+    );
+  }
+  return result;
+}
+
 function resolveInstalledPackageDir(packageDir, packageName) {
   return path.join(packageDir, "node_modules", ...packageName.split("/"));
 }
@@ -433,7 +463,7 @@ function installPackageLocalBundledDependencies(params) {
       generateNpmPackageLock(params.packageDir, { installStrategy: "shallow" }),
       "utf8",
     );
-    const result = spawnNpmSync(
+    const result = runPluginNpmCiWithRetry(
       [
         "ci",
         "--install-strategy=shallow",
@@ -450,6 +480,10 @@ function installPackageLocalBundledDependencies(params) {
         cwd: params.packageDir,
         env: process.env,
         stdio: ["ignore", "ignore", "inherit"],
+      },
+      {
+        cleanupAttempt: () => fs.rmSync(nodeModulesPath, { recursive: true, force: true }),
+        pluginDir: params.pluginDir,
       },
     );
     if (result.error) {

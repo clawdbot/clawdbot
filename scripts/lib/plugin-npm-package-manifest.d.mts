@@ -9,6 +9,12 @@ export function resolvePluginNpmCommand(
   shell: boolean;
   windowsVerbatimArguments?: boolean;
 };
+/** Run package-local npm ci with bounded retries for registry timeouts. */
+export function runPluginNpmCiWithRetry(
+  args: unknown,
+  options: Record<string, unknown>,
+  params?: Record<string, unknown>,
+): unknown;
 /** Build the package.json that should be used while packaging a plugin for npm. */
 export function resolveAugmentedPluginNpmPackageJson(params: unknown):
   | {
