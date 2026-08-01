@@ -529,6 +529,26 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("honors host operator scopes when connecting with bootstrap token auth", async () => {
+    const hostScopes = ["operator.read", "operator.write"];
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-1",
+      operatorScopes: hostScopes,
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-1");
+    expect(connectFrame.params?.scopes).toEqual(hostScopes);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: hostScopes,
+      token: "boot-1",
+      nonce: "nonce-1",
+    });
+  });
+
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",

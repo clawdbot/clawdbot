@@ -1472,6 +1472,45 @@ describe("sessions view", () => {
     expect(onSelectPage).not.toHaveBeenCalled();
   });
 
+  it("disables delete selection affordances when the host blocks session deletion", async () => {
+    const container = document.createElement("div");
+    const onToggleSelect = vi.fn();
+    const onDeleteSelected = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 10,
+            },
+          ]),
+        ),
+        canDeleteSessions: false,
+        selectedKeys: new Set(["agent:main:main"]),
+        onToggleSelect,
+        onDeleteSelected,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
+    const rowCheckbox = container.querySelector<HTMLInputElement>("tbody input[type=checkbox]");
+    const deleteButton = container.querySelector<HTMLButtonElement>(".data-table-bulk-bar .danger");
+
+    expect(headerCheckbox?.disabled).toBe(true);
+    expect(rowCheckbox?.disabled).toBe(true);
+    expect(deleteButton).toBeInstanceOf(HTMLButtonElement);
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
+
+    rowCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleSelect).not.toHaveBeenCalled();
+    expect(onDeleteSelected).not.toHaveBeenCalled();
+  });
+
   it("shows a reset action when filters hide every session", async () => {
     const container = document.createElement("div");
     const onClearFilters = vi.fn();

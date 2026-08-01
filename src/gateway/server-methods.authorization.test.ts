@@ -7,6 +7,8 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { HostGatewayPolicy } from "./host-gateway-policy.js";
+import { resolveHostPolicyDecision } from "./host-gateway-policy.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptor,
@@ -39,7 +41,13 @@ afterEach(() => {
 });
 
 describe("gateway method authorization", () => {
-  async function dispatch(scopes: string[]) {
+  async function dispatch(
+    scopes: string[],
+    opts: {
+      hostGatewayPolicy?: HostGatewayPolicy;
+      syntheticClient?: boolean;
+    } = {},
+  ) {
     const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
     const methodRegistry = createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({
@@ -65,11 +73,13 @@ describe("gateway method authorization", () => {
           minProtocol: 1,
           maxProtocol: 1,
         },
+        ...(opts.syntheticClient ? { internal: { syntheticClient: true } } : {}),
       } as Parameters<typeof handleGatewayRequest>[0]["client"],
       isWebchatConnect: () => false,
-      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
+      context: {
+        logGateway: { warn: vi.fn() },
+        ...(opts.hostGatewayPolicy ? { hostGatewayPolicy: opts.hostGatewayPolicy } : {}),
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       methodRegistry,
     });
     return respond;
@@ -89,6 +99,95 @@ describe("gateway method authorization", () => {
         requiredScopes: ["operator.write"],
       },
     });
+  });
+
+  it("applies host gateway policy after normal scope authorization", async () => {
+    const respond = await dispatch(["operator.write"], {
+      hostGatewayPolicy: {
+        version: 1,
+        actions: {
+          [METHOD]: { state: "disabled", reason: "Host owns workboard changes" },
+        },
+      },
+    });
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "FORBIDDEN",
+      message: `host policy blocks gateway method: ${METHOD}`,
+      details: {
+        code: "HOST_GATEWAY_POLICY_BLOCKED",
+        method: METHOD,
+        state: "disabled",
+        reason: "Host owns workboard changes",
+      },
+    });
+  });
+
+  it("keeps host gateway policy authoritative for admin-scoped operator clients", async () => {
+    const respond = await dispatch(["operator.admin"], {
+      hostGatewayPolicy: {
+        version: 1,
+        actions: {
+          "workboard.*": {
+            state: "brokered",
+            broker: "lobster.policy.apply",
+            source: "lobster",
+          },
+        },
+      },
+    });
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "FORBIDDEN",
+      message: `host policy requires brokered gateway method: ${METHOD}`,
+      details: {
+        code: "HOST_GATEWAY_POLICY_BLOCKED",
+        method: METHOD,
+        state: "brokered",
+        broker: "lobster.policy.apply",
+        source: "lobster",
+      },
+    });
+  });
+
+  it("uses the same host policy matcher for future settings decisions", () => {
+    const policy: HostGatewayPolicy = {
+      version: 1,
+      settings: {
+        "gateway.bind": {
+          state: "disabled",
+          reason: "Active policy requires loopback-only gateway bind.",
+          source: "policy",
+        },
+        "channels.*.groupPolicy": {
+          state: "readOnly",
+          reason: "Ingress policy is managed centrally.",
+        },
+      },
+    };
+
+    expect(resolveHostPolicyDecision(policy.settings, "gateway.bind")).toEqual({
+      state: "disabled",
+      reason: "Active policy requires loopback-only gateway bind.",
+      source: "policy",
+    });
+    expect(resolveHostPolicyDecision(policy.settings, "channels.telegram.groupPolicy")).toEqual({
+      state: "readOnly",
+      reason: "Ingress policy is managed centrally.",
+    });
+    expect(resolveHostPolicyDecision(policy.settings, "models.default")).toBeUndefined();
+  });
+
+  it("leaves in-process synthetic dispatch outside host gateway policy", async () => {
+    const respond = await dispatch(["operator.admin"], {
+      syntheticClient: true,
+      hostGatewayPolicy: {
+        version: 1,
+        defaults: { action: "disabled" },
+      },
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {

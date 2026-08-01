@@ -150,6 +150,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
   const rows = batchRows ?? [session];
   const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
+  const deleteAllowed = context?.hostPolicy.canInvokeAction("sessions.delete") ?? true;
   const allUnread = rows.every((row) => row.unread);
   const allArchived = rows.every((row) => row.archived === true);
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
@@ -174,6 +175,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .disabled=${!host.connected}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
+        .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${Boolean(
           !batchRows &&
           session.cloudWorkerActive &&
@@ -191,6 +193,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           }
         }}
         .onAction=${(action: SessionMenuAction) => {
+          if (action.kind === "delete" && !deleteAllowed) {
+            return;
+          }
           if (batchRows) {
             void host.sessionOrganizer.runBatchSessionAction(action, batchRows, allUnread);
             return;

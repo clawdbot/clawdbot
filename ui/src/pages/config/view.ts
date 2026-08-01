@@ -32,9 +32,15 @@ import {
   resetConfigEphemeralState,
   toggleSensitivePathReveal,
 } from "./view-state.ts";
+import {
+  renderBusyButtonContent,
+  renderConfigApplyBanner,
+  renderConfigAutoSaveStatus,
+} from "./view-status.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export { createConfigViewState } from "./view-state.ts";
+export { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view-status.ts";
 export type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
 // The config editor is where JSON5 text first appears; warm the parser with
@@ -290,7 +296,13 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
-  const canRawSave = props.connected && !configBusy && hasRawChanges;
+  const readOnly = props.readOnly === true;
+  const canRawSave = props.connected && !configBusy && !readOnly && hasRawChanges;
+  const autoSaveStatus = renderConfigAutoSaveStatus({
+    status: props.autoSaveStatus,
+    onRetry: props.onSave,
+    onReload: props.onRawDiscard,
+  });
   const showAppearanceOnRoot =
     includeVirtualSections &&
     formMode === "form" &&
@@ -369,9 +381,27 @@ export function renderConfig(props: ConfigProps) {
         },
       })
     : nothing;
-  const showToolbar = showModeToggle || showSectionTabs;
+  const showToolbar = showModeToggle || showSectionTabs || autoSaveStatus !== nothing;
+  const applyBanner = renderConfigApplyBanner({
+    needsApply: props.needsApply,
+    applying: props.applying,
+    // Applying mid-save/mid-load would race the write that made the banner
+    // appear (or a stale snapshot); a dirty raw draft blocks apply outright
+    // (raw is explicit-save-only); restarting mid-update can corrupt the
+    // install. Wait for quiet.
+    busy:
+      props.saving ||
+      props.loading ||
+      props.updating ||
+      props.autoSaveStatus === "saving" ||
+      readOnly ||
+      hasRawChanges,
+    connected: props.connected,
+    onApply: props.onApply,
+  });
   const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
-  const showLead = showToolbar || settingsLayout === "accordion" || showValidityWarning;
+  const showLead =
+    showToolbar || settingsLayout === "accordion" || applyBanner !== nothing || showValidityWarning;
 
   const lead = html`<div class="config-lead">
     ${showToolbar
@@ -403,9 +433,12 @@ export function renderConfig(props: ConfigProps) {
               </div>`
             : nothing}
           ${sectionTabs}
+          <div class="config-toolbar__status" role="status" aria-live="polite">
+            ${autoSaveStatus}
+          </div>
         </div>`
       : nothing}
-    ${settingsLayout === "accordion" ? renderAccordionNav() : nothing}
+    ${settingsLayout === "accordion" ? renderAccordionNav() : nothing} ${applyBanner}
     ${showValidityWarning
       ? html`<div class="config-validity-warning">
           <svg
@@ -443,7 +476,7 @@ export function renderConfig(props: ConfigProps) {
     ${showLead ? lead : nothing}
     <div
       id="config-section-panel"
-      class="config-content"
+      class=${`config-content ${readOnly ? "config-layout--host-readonly" : ""}`}
       role="region"
       aria-label=${t("common.settingsSections")}
     >
@@ -483,7 +516,7 @@ export function renderConfig(props: ConfigProps) {
                       value: props.formValue,
                       embedded: props.embeddedEditor === true,
                       rawAvailable,
-                      disabled: configBusy || !props.formValue,
+                      disabled: readOnly || configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
                       onPatch: props.onFormPatch,
                       onRemove: props.onFormRemove,
@@ -534,13 +567,17 @@ export function renderConfig(props: ConfigProps) {
                     <div class="settings-row settings-row--stacked">
                       <div class="config-raw-actions">
                         ${props.onOpenFile
-                          ? html`<button class="btn btn--sm" @click=${props.onOpenFile}>
+                          ? html`<button
+                              class="btn btn--sm"
+                              ?disabled=${readOnly}
+                              @click=${props.onOpenFile}
+                            >
                               ${icons.fileText} ${t("configView.open")}
                             </button>`
                           : nothing}
                         <button
                           class="btn btn--sm"
-                          ?disabled=${configBusy || !hasRawChanges}
+                          ?disabled=${readOnly || configBusy || !hasRawChanges}
                           @click=${props.onRawDiscard}
                         >
                           ${t("configView.rawDiscard")}
@@ -606,7 +643,7 @@ export function renderConfig(props: ConfigProps) {
                           : html`<textarea
                               placeholder=${t("configView.rawConfig")}
                               .value=${props.raw}
-                              ?disabled=${configBusy}
+                              ?disabled=${readOnly || configBusy}
                               @input=${(event: Event) => {
                                 props.onRawChange((event.target as HTMLTextAreaElement).value);
                               }}

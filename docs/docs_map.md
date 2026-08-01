@@ -10988,6 +10988,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: MCP apps on the board
   - H2: Good to know
 
+## web/host-control-policy.md
+
+- Route: /web/host-control-policy
+- Headings:
+  - H2: Enablement path
+  - H2: Runtime config shape
+  - H2: Policy fields
+  - H2: Required enforcement
+  - H2: Versioning and rollout
+
 ## web/index.md
 
 - Route: /web

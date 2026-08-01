@@ -186,6 +186,10 @@ export type GatewayBrowserClientOptions = {
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
   onRecoveryScopeChange?: () => void;
+  // Browser-side presentation preflight only; server and hosted gateways must
+  // still enforce authorization.
+  requestPreflight?: (method: string) => { ok: true } | ({ ok: false } & GatewayErrorInfo);
+  operatorScopes?: readonly string[];
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -459,9 +463,11 @@ export class GatewayBrowserClient {
       });
     }
     const scopes = resolveGatewayConnectScopes({
-      requestedScopes: selectedAuth.authBootstrapToken
-        ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
-        : undefined,
+      requestedScopes: this.opts.operatorScopes?.length
+        ? [...this.opts.operatorScopes]
+        : selectedAuth.authBootstrapToken
+          ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
+          : undefined,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
@@ -641,6 +647,11 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    const preflight = this.opts.requestPreflight?.(method);
+    if (preflight && !preflight.ok) {
+      const { ok: _ok, ...error } = preflight;
+      return Promise.reject(new GatewayRequestError(error));
+    }
     return this.client.request<T>(method, params, options);
   }
 

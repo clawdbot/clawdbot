@@ -37,6 +37,7 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createHostPolicyCapability } from "./host-policy.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
@@ -239,6 +240,22 @@ type PendingRouterStartNavigation = {
   mode: "push" | "replace";
 };
 
+function resolveHostedGatewayUrl(path: string, basePath: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const pageLocation = globalThis.location?.href ?? "http://127.0.0.1/";
+  const baseUrl = new URL(basePath.replace(/\/$/, "") || "/", pageLocation);
+  const url = new URL(trimmed, baseUrl);
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
+  return url.toString();
+}
+
 export function bootstrapApplication(
   dependencies: BootstrapApplicationDependencies = {},
 ): ApplicationRuntime {
@@ -274,12 +291,25 @@ export function bootstrapApplication(
         }));
 
   const settings = startup.settings;
+  const hostPolicy = createHostPolicyCapability();
   const gateway = createApplicationGateway(
     settings,
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null },
+    {
+      persistDefaultConnectionSettings: documentMode === null,
+      requestPreflight: hostPolicy.preflightAction,
+      hostedGatewayConfig: () => {
+        const url = resolveHostedGatewayUrl(hostPolicy.snapshot.gateway.path, basePath);
+        return url
+          ? {
+              url,
+              scopes: hostPolicy.snapshot.gateway.scopes,
+            }
+          : null;
+      },
+    },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
@@ -328,7 +358,7 @@ export function bootstrapApplication(
   });
   const sessions = createSessionCapability(gateway);
   const workboard = createWorkboardCapability();
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway, hostPolicy);
   const overlays = createApplicationOverlays(gateway, {
     drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
   });
@@ -429,6 +459,7 @@ export function bootstrapApplication(
     agentSelection,
     channels,
     config,
+    hostPolicy,
     runtimeConfig,
     sessions,
     workboard,
@@ -441,6 +472,9 @@ export function bootstrapApplication(
     skillWorkshopRevision,
     initialUserMessage,
     navigate: (routeId, options) => {
+      if (!hostPolicy.isRouteEnabled(routeId)) {
+        return;
+      }
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
         pendingRouterStartNavigation = { routeId, location, mode: "push" };
@@ -452,6 +486,9 @@ export function bootstrapApplication(
         });
     },
     replace: (routeId, options) => {
+      if (!hostPolicy.isRouteEnabled(routeId)) {
+        return;
+      }
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
         pendingRouterStartNavigation = { routeId, location, mode: "replace" };
@@ -462,8 +499,12 @@ export function bootstrapApplication(
           console.error("[openclaw] route replacement failed", error);
         });
     },
-    revalidate: (routeId) => router.revalidate(context, routeId),
-    preload: (routeId) => router.preloadRoute(routeId, context),
+    revalidate: (routeId) =>
+      routeId && !hostPolicy.isRouteEnabled(routeId)
+        ? Promise.resolve()
+        : router.revalidate(context, routeId),
+    preload: (routeId) =>
+      hostPolicy.isRouteEnabled(routeId) ? router.preloadRoute(routeId, context) : Promise.resolve(),
   };
   return {
     context,
@@ -480,6 +521,7 @@ export function bootstrapApplication(
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
+        () => hostPolicy.refresh(basePath),
         () => {
           gateway.start();
           return () => gateway.stop();

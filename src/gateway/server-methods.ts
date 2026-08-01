@@ -20,6 +20,7 @@ import {
   CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
+import { authorizeHostGatewayPolicyForMethod } from "./host-gateway-policy.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -968,6 +969,15 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  const hostPolicyError = authorizeHostGatewayPolicyForMethod({
+    policy: context.hostGatewayPolicy,
+    client: client ?? null,
+    method: req.method,
+  });
+  if (hostPolicyError) {
+    respond(false, undefined, hostPolicyError);
     return;
   }
   const sessionMutation = resolveSessionMutationAuthorization({
