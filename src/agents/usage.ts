@@ -74,7 +74,7 @@ export type OpenAiChatCompletionsUsage = {
 };
 
 /** OpenAI Responses compatible usage shape. */
-export type OpenAiResponsesUsage = {
+type OpenAiResponsesUsage = {
   input_tokens: number;
   input_tokens_details: {
     cached_tokens: number;
