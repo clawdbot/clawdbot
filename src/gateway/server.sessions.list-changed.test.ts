@@ -341,7 +341,7 @@ async function expectListedSessionActiveRun(
   expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
 }
 
-test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
+test("sessions.list backfills bounded transcript usage", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     models: {
@@ -414,12 +414,12 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   );
   expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
   expect(child?.parentSessionKey).toBe("agent:main:main");
-  expect(child?.totalTokens).toBeUndefined();
-  expect(child?.totalTokensFresh).toBe(false);
-  expect(child?.contextTokens).toBeUndefined();
-  expect(child?.estimatedCostUsd).toBeUndefined();
+  expect(child?.totalTokens).toBe(3000);
+  expect(child?.totalTokensFresh).toBe(true);
+  expect(child?.contextTokens).toBe(1_000_000);
+  expect(child?.estimatedCostUsd).toBeCloseTo(0.0042, 8);
   expect(child?.modelProvider).toBe("anthropic");
-  expect(child?.model).toBe("test-model-without-catalog-context");
+  expect(child?.model).toBe("claude-sonnet-4-6");
   expect(child?.modelSelectionLocked).toBe(true);
 
   ws.close();

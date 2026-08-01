@@ -23,30 +23,48 @@ async function prewarmGatewaySessionListData(
   cfg: OpenClawConfig,
   agentId: string,
 ): Promise<number> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
-    await Promise.all([
-      import("../config/sessions/combined-store-gateway.js"),
-      import("./session-utils-list.js"),
-    ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+  const [
+    { loadCombinedSessionStoreForGateway },
+    { buildSessionListSqlQuery, listSessionsFromStoreAsync },
+  ] = await Promise.all([
+    import("../config/sessions/combined-store-gateway.js"),
+    import("./session-utils-list.js"),
+  ]);
+  const opts = {
     agentId,
+    configuredAgentsOnly: true,
+    includeDerivedTitles: true,
+    includeGlobal: true,
+    includeUnknown: true,
+    limit: SIDEBAR_SESSION_LIST_LIMIT,
+  } as const;
+  const { lineage, query } = buildSessionListSqlQuery(opts, {
+    bounded: true,
+    includeCreatorFilter: true,
+    mainKey: cfg.session?.mainKey,
+    now: Date.now(),
+  });
+  const loaded = loadCombinedSessionStoreForGateway(cfg, {
+    agentId,
+    includeRowContext: true,
     projection: "list",
+    query,
   });
   await listSessionsFromStoreAsync({
     cfg,
-    durableStorePath,
-    storePath,
-    store,
-    opts: {
-      agentId,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-      includeGlobal: true,
-      includeUnknown: true,
-      limit: SIDEBAR_SESSION_LIST_LIMIT,
+    storePath: loaded.storePath,
+    store: loaded.store,
+    opts,
+    ...(loaded.rowContextStore ? { rowContextStore: loaded.rowContextStore } : {}),
+    sqlSelection: {
+      creatorActors: loaded.creatorActors,
+      creatorFilterApplied: true,
+      ...(loaded.selectionExact ? { totalCount: loaded.totalCount } : {}),
+      lineage,
+      ordered: loaded.selectionExact === true,
     },
   });
-  return Object.keys(store).length;
+  return loaded.totalCount ?? Object.keys(loaded.store).length;
 }
 
 function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {

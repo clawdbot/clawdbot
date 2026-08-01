@@ -1,3 +1,10 @@
+import type { DatabaseSync } from "node:sqlite";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
@@ -7,9 +14,85 @@ import {
   normalizeSqliteText,
 } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
-import { normalizeSqliteStatus } from "./session-accessor.sqlite-status.js";
+import {
+  normalizeSqliteStatus,
+  parseSqliteSessionEntryJson,
+} from "./session-accessor.sqlite-status.js";
+import { deriveSessionTitle, deriveSqliteSessionTitle } from "./session-title-projection.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
+
+type SessionTitleDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_nodes" | "session_transcript_active_events" | "transcript_events"
+>;
+
+export function refreshSqliteSessionTitleProjection(
+  database: DatabaseSync,
+  sessionId: string,
+): void {
+  const db = getNodeSqliteKysely<SessionTitleDatabase>(database);
+  const rows = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id", "entry_json", "updated_at", "display_name"])
+      .where("current_session_id", "=", sessionId),
+  ).rows;
+  for (const row of rows) {
+    const entry = parseSqliteSessionEntryJson(row);
+    if (!entry) {
+      continue;
+    }
+    const title = deriveSqliteSessionTitle(database, entry);
+    if (row.display_name !== title) {
+      executeSqliteQuerySync(
+        database,
+        db
+          .updateTable("session_nodes")
+          .set({ display_name: title })
+          .where("session_key", "=", row.session_key),
+      );
+    }
+  }
+}
+
+export function resolveSqliteSessionTitleProjection(params: {
+  database: DatabaseSync;
+  entry: SessionEntry;
+  previousEntry?: SessionEntry;
+  previousRow?: { current_session_id: string; display_name: string | null };
+  sessionKey: string;
+}): string | null {
+  const db = getNodeSqliteKysely<SessionTitleDatabase>(params.database);
+  const stored =
+    params.previousRow ??
+    executeSqliteQueryTakeFirstSync(
+      params.database,
+      db
+        .selectFrom("session_nodes")
+        .select(["current_session_id", "display_name"])
+        .where("session_key", "=", params.sessionKey),
+    );
+  const metadataUnchanged = Boolean(
+    params.previousEntry &&
+    params.previousEntry.label === params.entry.label &&
+    params.previousEntry.displayName === params.entry.displayName &&
+    params.previousEntry.subject === params.entry.subject &&
+    params.previousEntry.groupId === params.entry.groupId,
+  );
+  const fallbackTitleChanged = Boolean(
+    params.previousEntry &&
+    stored?.display_name === deriveSessionTitle(params.previousEntry) &&
+    deriveSessionTitle(params.previousEntry) !== deriveSessionTitle(params.entry),
+  );
+  // Transcript mutations refresh content-derived titles; metadata-only writes reuse that value.
+  return stored?.current_session_id === params.entry.sessionId &&
+    metadataUnchanged &&
+    !fallbackTitleChanged
+    ? stored.display_name
+    : deriveSqliteSessionTitle(params.database, params.entry);
+}
 
 export function normalizeSqliteSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
   const raw = entry as unknown as Record<string, unknown>;
@@ -83,6 +166,7 @@ export function bindSqliteSessionWindowEntryProjection(params: {
 /** Project the canonical entry blob into the logical-node query columns. */
 export function bindSqliteSessionNode(params: {
   entry: SessionEntry;
+  projectedTitle: string | null;
   sessionKey: string;
   updatedAt: number;
 }) {
@@ -113,13 +197,13 @@ export function bindSqliteSessionNode(params: {
     fork_source_session_id: normalizeSqliteText(params.entry.forkSource?.sessionId),
     fork_source_entry_id: normalizeSqliteText(params.entry.forkSource?.entryId),
     label: normalizeSqliteText(params.entry.label),
-    display_name: normalizeSqliteText(params.entry.displayName),
+    display_name: params.projectedTitle,
     category: normalizeSqliteText(params.entry.category),
     icon: normalizeSqliteText(params.entry.icon),
-    pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
+    pinned_at: positiveSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
-    last_interaction_at: finiteSqliteNumber(params.entry.lastInteractionAt),
+    last_interaction_at: positiveSqliteNumber(params.entry.lastInteractionAt),
     last_activity_at: finiteSqliteNumber(params.entry.lastActivityAt),
   };
 }
@@ -167,6 +251,10 @@ function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): 
 
 function finiteSqliteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function positiveSqliteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function resolveSqliteSessionChannel(entry: SessionEntry): string | null {

@@ -3030,6 +3030,9 @@ describe("openclaw agent database", () => {
         DROP TRIGGER session_nodes_entry_valid_after_insert;
         DROP TRIGGER session_nodes_entry_valid_after_entry_update;
         DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP INDEX idx_agent_session_nodes_canonical_updated_at;
+        DROP INDEX idx_agent_session_nodes_canonical_last_interaction_at;
+        DROP INDEX idx_agent_session_nodes_canonical_creator;
         DROP INDEX idx_agent_session_nodes_entry_valid_pending;
         DROP TABLE session_key_contract;
         ALTER TABLE session_nodes DROP COLUMN entry_valid;

@@ -63,9 +63,10 @@ describe("resolveSessionKeyForRun", () => {
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it("uses the requested agent scope for run lookups", () => {
@@ -79,9 +80,10 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "retired",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "retired" }),
+    );
   });
 
   it("defaults run id lookups without explicit agent scope to the default agent", () => {
@@ -95,9 +97,10 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it("filters same-run matches by requested agent for shared stores", () => {
@@ -115,9 +118,10 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it("allows literal global session keys for scoped lookups when session scope is global", () => {
@@ -131,9 +135,10 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-global", { agentId: "work" })).toBe("global");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "work",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "work" }),
+    );
   });
 
   it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {
@@ -176,9 +181,7 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenNthCalledWith(
       2,
       {},
-      {
-        agentId: "main",
-      },
+      expect.objectContaining({ agentId: "main" }),
     );
   });
 
@@ -221,9 +224,10 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-legacy-default")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "work",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "work" }),
+    );
   });
 
   it("lets active run context override a cached miss", () => {

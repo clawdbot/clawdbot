@@ -18,7 +18,6 @@ import {
   readExactSessionEntryJsonForCanonicalRepair,
   readExactSessionEntryRow,
   readSqliteSessionEntryStore,
-  sqliteSessionEntriesEqual,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
   SqliteLifecycleArtifactCleanupPlan,
@@ -30,6 +29,7 @@ import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlit
 import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import { sqliteSessionEntriesEqual } from "./session-entry-json.js";
 import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";

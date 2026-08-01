@@ -32,7 +32,6 @@ import {
   deleteLegacySessionEntryRows,
   readSqliteLifecycleTargetSnapshot,
   rehomeSqliteSessionWindows,
-  sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -57,6 +56,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { sqliteSessionEntriesEqual } from "./session-entry-json.js";
 import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,

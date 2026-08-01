@@ -23,12 +23,14 @@ import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-
 import {
   cloneSessionEntry,
   getSessionKysely,
+  isRetainedSessionWindowTombstone,
   normalizeSqliteSessionKey,
 } from "./session-accessor.sqlite-scope.js";
 import {
   bindSqliteSessionNode,
   bindSqliteSessionRoot,
   normalizeSqliteSessionEntryTimestamp,
+  resolveSqliteSessionTitleProjection,
 } from "./session-accessor.sqlite-session-row.js";
 import {
   hasValidSqliteSessionEntryIdentity,
@@ -41,7 +43,8 @@ import {
   assertCanonicalSessionKeyWriteMatchesDatabase,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { parseSqliteSessionEntryRecord, sqliteSessionEntriesEqual } from "./session-entry-json.js";
+import { setSessionProjectedTitle } from "./session-title-projection.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   collectSessionEntryLookupKeys,
@@ -68,11 +71,15 @@ type SqliteLifecycleTargetSnapshot = {
 
 function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
-  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at">,
+  row: Pick<
+    SessionEntryRow,
+    "current_session_id" | "display_name" | "entry_json" | "session_key" | "updated_at"
+  >,
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
   if (record) {
     const entry = projectCanonicalSessionEntryShape(record);
+    setSessionProjectedTitle(entry, row.display_name);
     if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${row.session_key}`,
@@ -80,18 +87,7 @@ function parseReadableSqliteSessionEntryRow(
     }
     return entry;
   }
-  const retainedWindow =
-    row.entry_json === "{}"
-      ? executeSqliteQueryTakeFirstSync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("session_windows")
-            .select("session_id")
-            .where("session_id", "=", row.current_session_id)
-            .where("session_key", "=", row.session_key),
-        )
-      : undefined;
-  if (retainedWindow) {
+  if (isRetainedSessionWindowTombstone(database, row)) {
     return null;
   }
   throw canonicalSessionKeyMigrationRequiredError(
@@ -481,16 +477,6 @@ export function deleteSqliteLifecycleTargetRows(
   }
 }
 
-export function sqliteSessionEntriesEqual(
-  left: SessionEntry | undefined,
-  right: SessionEntry | undefined,
-): boolean {
-  if (!left || !right) {
-    return left === right;
-  }
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function sqliteSessionSnapshotRowsEqual(
   left: Array<{ entry: SessionEntry; sessionKey: string }>,
   right: Array<{ entry: SessionEntry; sessionKey: string }>,
@@ -659,6 +645,13 @@ export function writeSessionEntry(
   });
   const sessionNode = bindSqliteSessionNode({
     entry: normalizedEntry,
+    projectedTitle: resolveSqliteSessionTitleProjection({
+      database: database.db,
+      entry: normalizedEntry,
+      previousEntry,
+      previousRow: canonicalPreviousRow?.row,
+      sessionKey,
+    }),
     sessionKey,
     updatedAt,
   });

@@ -32,6 +32,10 @@ vi.mock("../agents/subagent-registry-read.js", () => ({
   buildLatestSubagentRunReadIndex: () => buildLatestSubagentRunReadIndexMock(),
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadExactSessionEntryReadOnly: (scope: { sessionKey: string }) => {
+    const entry = loadSessionEntryMock(scope);
+    return entry ? { entry, sessionKey: scope.sessionKey } : undefined;
+  },
   loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
   loadSessionEntryReadOnly: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
 }));

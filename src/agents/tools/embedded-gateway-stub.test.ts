@@ -50,6 +50,7 @@ const runtime = vi.hoisted(() => ({
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
   enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
+  buildSessionListSqlQuery: vi.fn(() => ({ lineage: {}, query: { archived: false } })),
   loadCombinedSessionStoreForGateway: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -77,6 +78,7 @@ describe("embedded gateway stub", () => {
     runtime.searchSessionTranscripts.mockClear();
     runtime.loadCombinedSessionStoreForGateway.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
+    runtime.buildSessionListSqlQuery.mockClear();
   });
 
   it("scopes embedded session lists to the requested agent", async () => {
@@ -88,13 +90,19 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
       { agents: { list: [{ id: "main", default: true }] } },
-      { agentId: "work", projection: "list" },
+      {
+        agentId: "work",
+        includeRowContext: true,
+        projection: "list",
+        query: { archived: false },
+      },
     );
     expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
       opts: { agentId: "work", includeGlobal: true, search: "global" },
+      sqlSelection: { creatorFilterApplied: false, lineage: {} },
     });
   });
 

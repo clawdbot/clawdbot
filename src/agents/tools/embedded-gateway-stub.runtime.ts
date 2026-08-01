@@ -32,6 +32,7 @@ export {
   readSessionMessagesAsync,
 } from "../../gateway/session-transcript-readers.js";
 export {
+  buildSessionListSqlQuery,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntryReadOnly as loadSessionEntry,

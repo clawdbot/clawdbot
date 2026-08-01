@@ -144,7 +144,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titlePageSpy).toHaveBeenCalled();
+    expect(titlePageSpy).not.toHaveBeenCalled();
     titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({

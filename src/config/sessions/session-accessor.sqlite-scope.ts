@@ -1,5 +1,6 @@
 import path from "node:path";
-import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   isIncognitoSessionKey,
@@ -74,8 +75,27 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
-export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
+export function getSessionKysely(database: DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
+}
+
+export function isRetainedSessionWindowTombstone(
+  database: { db: DatabaseSync },
+  row: { current_session_id: string; entry_json: string; session_key: string },
+): boolean {
+  if (row.entry_json !== "{}") {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_windows")
+        .select("session_id")
+        .where("session_id", "=", row.current_session_id)
+        .where("session_key", "=", row.session_key),
+    ),
+  );
 }
 
 export async function runExclusiveSqliteSessionWrite<T>(

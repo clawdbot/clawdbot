@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Gateway sessions.resolve implementation helper.
 // Resolves key/sessionId/label selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,13 +8,17 @@ import {
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+import { shouldKeepStoreOnlyChildLink } from "./session-utils-core.js";
 import {
-  filterAndSortSessionEntries,
-  listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
+  resolveSessionListLineageSqlQuery,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
@@ -24,15 +27,6 @@ export type SessionsResolveResult =
   | { ok: true; key: string }
   | { ok: true; missing: true }
   | { ok: false; error: ErrorShape };
-
-function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
-  return {
-    includeGlobal: p.includeGlobal === true,
-    includeUnknown: p.includeUnknown === true,
-    spawnedBy: p.spawnedBy,
-    agentId: p.agentId,
-  };
-}
 
 function noSessionFoundResult(params: { p: SessionsResolveParams; message: string }) {
   if (params.p.allowMissing) {
@@ -65,38 +59,82 @@ function validateSessionAgentExists(
 }
 
 function isResolvedSessionKeyVisible(params: {
+  canonicalKey?: string;
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
   store: Record<string, SessionEntry>;
   key: string;
 }) {
-  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
+  const entry = params.store[params.key];
+  if (!entry) {
+    return false;
+  }
+  const effectiveKey = params.canonicalKey ?? params.key;
+  const specialKey = effectiveKey === "global" || effectiveKey === "unknown";
+  if (effectiveKey === "global" && params.p.includeGlobal !== true) {
+    return false;
+  }
+  if (effectiveKey === "unknown" && (params.p.agentId || params.p.includeUnknown !== true)) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(effectiveKey);
+  if (
+    !specialKey &&
+    params.p.agentId &&
+    (!parsed || normalizeAgentId(parsed.agentId) !== normalizeAgentId(params.p.agentId))
+  ) {
+    return false;
+  }
+  if (
+    parsed?.rest === "sessions" &&
+    !normalizeOptionalString(entry.sessionId) &&
+    entry.updatedAt == null
+  ) {
+    return false;
+  }
+  if (isCronRunSessionKey(effectiveKey)) {
+    return false;
+  }
+  const spawnedBy = normalizeOptionalString(params.p.spawnedBy);
+  if (!spawnedBy) {
     return true;
   }
-  return filterAndSortSessionEntries({
-    cfg: params.cfg,
-    store: params.store,
-    now: Date.now(),
-    opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).some(([key]) => key === params.key);
+  if (specialKey) {
+    return false;
+  }
+  if (entry.archivedAt !== undefined) {
+    return false;
+  }
+  const lineage = resolveSessionListLineageSqlQuery(spawnedBy, Date.now());
+  if (lineage.includeLineageSessionKeys?.includes(params.key)) {
+    return true;
+  }
+  if (lineage.excludeLineageSessionKeys?.includes(params.key)) {
+    return false;
+  }
+  return (
+    shouldKeepStoreOnlyChildLink(entry, Date.now()) &&
+    (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
+  );
 }
 
-function findVisibleSessionIdMatches(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  p: SessionsResolveParams;
-  sessionId: string;
-}): Array<[string, SessionEntry]> {
-  const now = Date.now();
-  const entries = filterAndSortSessionEntries({
-    cfg: params.cfg,
-    store: params.store,
-    now,
-    opts: resolveSessionVisibilityFilterOptions(params.p),
-  });
-  return entries.filter(
-    ([key, entry]) => entry?.sessionId === params.sessionId || key === params.sessionId,
-  );
+function assertCanonicalResolveMatches(
+  cfg: OpenClawConfig,
+  matches: readonly [string, SessionEntry][],
+): void {
+  const canonicalKeys = new Set<string>();
+  for (const [sessionKey, entry] of matches) {
+    if (resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry) !== null) {
+      continue;
+    }
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
+    if (canonicalKey !== sessionKey || canonicalKeys.has(canonicalKey)) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `non-canonical persisted row resolves to session key ${canonicalKey}`,
+      );
+    }
+    canonicalKeys.add(canonicalKey);
+  }
 }
 
 export async function resolveSessionKeyFromResolveParams(params: {
@@ -128,7 +166,14 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
-    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      clone: false,
+      // Hidden rows must stay indistinguishable from missing rows; surface the
+      // canonical repair diagnostic only after the requested row is visible.
+      deferCanonicalValidation: true,
+    });
     const store = target.store;
     if (store[target.canonicalKey]) {
       if (
@@ -141,16 +186,50 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ) {
         return noSessionFoundResult({ p, message: `No session found: ${key}` });
       }
-      const agentCheck = validateSessionAgentExists(
-        cfg,
-        target.canonicalKey,
-        store[target.canonicalKey],
-        { acpMetadataSessionKey: target.canonicalKey },
-      );
-      if (agentCheck) {
-        return agentCheck;
+      if (target.canonicalValidationError) {
+        throw target.canonicalValidationError;
       }
-      return { ok: true, key: target.canonicalKey };
+      const legacyKey = target.storeKeys.find(
+        (candidate) => candidate !== target.canonicalKey && store[candidate],
+      );
+      if (legacyKey) {
+        // The canonical row is visible, so any coexisting alias is a session-integrity
+        // failure even when the alias carries different lineage metadata.
+        throw canonicalSessionKeyMigrationRequiredError(
+          `duplicate rows resolve to canonical session key ${target.canonicalKey}`,
+        );
+      }
+      return (
+        validateSessionAgentExists(cfg, target.canonicalKey, store[target.canonicalKey], {
+          acpMetadataSessionKey: target.canonicalKey,
+        }) ?? { ok: true, key: target.canonicalKey }
+      );
+    }
+    const legacyKey = target.storeKeys.find(
+      (candidate) => candidate !== target.canonicalKey && store[candidate],
+    );
+    if (legacyKey) {
+      if (
+        !isResolvedSessionKeyVisible({
+          canonicalKey: target.canonicalKey,
+          cfg,
+          p,
+          store,
+          key: legacyKey,
+        })
+      ) {
+        // With no canonical row, a hidden alias must not reveal that repair state exists.
+        return noSessionFoundResult({ p, message: `No session found: ${key}` });
+      }
+      if (target.canonicalValidationError) {
+        throw target.canonicalValidationError;
+      }
+      throw canonicalSessionKeyMigrationRequiredError(
+        `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
+      );
+    }
+    if (!store[target.canonicalKey]) {
+      return noSessionFoundResult({ p, message: `No session found: ${key}` });
     }
     return noSessionFoundResult({ p, message: `No session found: ${key}` });
   }
@@ -158,8 +237,40 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasSessionId) {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
-    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
+    const lineageQuery = resolveSessionListLineageSqlQuery(p.spawnedBy, Date.now());
+    const spawnedBy = normalizeOptionalString(p.spawnedBy);
+    const lineageSqlQuery =
+      (lineageQuery.excludeLineageSessionKeys?.length ?? 0) > 400
+        ? { selectionResidual: true as const }
+        : { ...lineageQuery, ...(spawnedBy ? { spawnedBy } : {}) };
+    const { store } = loadCombinedSessionStoreForGateway(cfg, {
+      agentId: p.agentId,
+      projection: "list",
+      query: {
+        archived: false,
+        includeGlobal: p.includeGlobal === true,
+        includeUnknown: !p.agentId && p.includeUnknown === true,
+        ...lineageSqlQuery,
+        // The SQLite selector matches current_session_id OR exact session_key.
+        sessionId,
+      },
+    });
+    const matches = Object.entries(store).filter(
+      ([matchKey, entry]) =>
+        (entry.sessionId === sessionId || matchKey === sessionId) &&
+        isResolvedSessionKeyVisible({
+          canonicalKey: resolveSessionStoreKey({
+            cfg,
+            sessionKey: matchKey,
+            ...(p.agentId ? { storeAgentId: p.agentId } : {}),
+          }),
+          cfg,
+          key: matchKey,
+          p,
+          store,
+        }),
+    );
+    assertCanonicalResolveMatches(cfg, matches);
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
@@ -175,15 +286,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
       };
     }
     const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
-    const agentCheckSessionId = validateSessionAgentExists(
-      cfg,
-      selection.sessionKey,
-      selectedEntry,
+    return (
+      validateSessionAgentExists(cfg, selection.sessionKey, selectedEntry) ?? {
+        ok: true,
+        key: selection.sessionKey,
+      }
     );
-    if (agentCheckSessionId) {
-      return agentCheckSessionId;
-    }
-    return { ok: true, key: selection.sessionKey };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -194,28 +302,47 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-  const list = listSessionsFromStore({
-    cfg,
-    storePath,
-    store,
-    opts: {
+  const labelLineageQuery = resolveSessionListLineageSqlQuery(p.spawnedBy, Date.now());
+  const labelSpawnedBy = normalizeOptionalString(p.spawnedBy);
+  const labelLineageSqlQuery =
+    (labelLineageQuery.excludeLineageSessionKeys?.length ?? 0) > 400
+      ? { selectionResidual: true as const }
+      : { ...labelLineageQuery, ...(labelSpawnedBy ? { spawnedBy: labelSpawnedBy } : {}) };
+  const { store } = loadCombinedSessionStoreForGateway(cfg, {
+    agentId: p.agentId,
+    projection: "list",
+    query: {
+      archived: false,
       includeGlobal: p.includeGlobal === true,
-      includeUnknown: p.includeUnknown === true,
+      includeUnknown: !p.agentId && p.includeUnknown === true,
       label: parsedLabel.label,
-      agentId: p.agentId,
-      spawnedBy: p.spawnedBy,
-      limit: 2,
+      ...labelLineageSqlQuery,
     },
   });
-  if (list.sessions.length === 0) {
+  const matches = Object.entries(store).filter(
+    ([matchKey, entry]) =>
+      entry.label === parsedLabel.label &&
+      isResolvedSessionKeyVisible({
+        canonicalKey: resolveSessionStoreKey({
+          cfg,
+          sessionKey: matchKey,
+          ...(p.agentId ? { storeAgentId: p.agentId } : {}),
+        }),
+        cfg,
+        key: matchKey,
+        p,
+        store,
+      }),
+  );
+  assertCanonicalResolveMatches(cfg, matches);
+  if (matches.length === 0) {
     return noSessionFoundResult({
       p,
       message: `No session found with label: ${parsedLabel.label}`,
     });
   }
-  if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+  if (matches.length > 1) {
+    const keys = matches.map(([matchKey]) => matchKey).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -225,13 +352,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
-  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
-  if (agentCheckLabel) {
-    return agentCheckLabel;
-  }
-  return {
-    ok: true,
-    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
-  };
+  const [labelKey, labelEntry] = matches[0] as [string, SessionEntry];
+  return validateSessionAgentExists(cfg, labelKey, labelEntry) ?? { ok: true, key: labelKey };
 }

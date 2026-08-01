@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
@@ -62,6 +63,8 @@ import {
   readSqliteSessionEntryCount,
   readSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
+import { querySqliteSessionEntriesReadOnly } from "./session-accessor.sqlite-entry.js";
+import { querySqliteSessionEntries } from "./session-accessor.sqlite-status.js";
 import {
   applySqliteSessionEntryLifecycleMutation,
   appendSqliteTranscriptEventSync,
@@ -73,6 +76,7 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { getSessionProjectedTitle } from "./session-title-projection.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -129,6 +133,7 @@ describe("session accessor seam", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -173,6 +178,286 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("pushes promoted list filters and ordering into SQLite", async () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:child", storePath },
+      {
+        sessionId: "child-session",
+        updatedAt: 30,
+        lastInteractionAt: 40,
+        spawnedBy: "agent:main:parent",
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:older-child", storePath },
+      {
+        sessionId: "older-child-session",
+        updatedAt: 20,
+        lastInteractionAt: 25,
+        parentSessionKey: "agent:main:parent",
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:archived-child", storePath },
+      {
+        archivedAt: 50,
+        sessionId: "archived-child-session",
+        updatedAt: 50,
+        spawnedBy: "agent:main:parent",
+      },
+    );
+
+    expect(listSessionEntries({ storePath })).toHaveLength(3);
+    expect(
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        projection: "list",
+        query: { archived: "all", includeGlobal: true, includeUnknown: true },
+        storePath,
+      }).totalCount,
+    ).toBe(3);
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      projection: "list",
+      query: {
+        archived: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        requireLastInteraction: true,
+        sortBy: "lastInteractionAt",
+        spawnedBy: "agent:main:parent",
+      },
+      storePath,
+    });
+
+    expect(result.totalCount).toBe(2);
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:child",
+      "agent:main:older-child",
+    ]);
+  });
+
+  it("chooses creator facet labels deterministically when locale collation ties", () => {
+    const labels = ["é", "e\u0301"];
+    for (const [actorId, orderedLabels] of [
+      ["composed-first", labels],
+      ["decomposed-first", labels.toReversed()],
+    ] as const) {
+      for (const [index, label] of orderedLabels.entries()) {
+        replaceSqliteSessionEntrySync(
+          { agentId: "main", sessionKey: `agent:main:${actorId}-${index}`, storePath },
+          {
+            createdActor: { type: "agent", id: actorId, label },
+            sessionId: `${actorId}-${index}`,
+            updatedAt: index + 1,
+          },
+        );
+      }
+    }
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      query: { archived: "all", includeGlobal: true, includeUnknown: true },
+      storePath,
+    });
+    expect(
+      result.creatorActors.toSorted((left, right) => left.id!.localeCompare(right.id!)),
+    ).toEqual([
+      { type: "agent", id: "composed-first", label: "e\u0301" },
+      { type: "agent", id: "decomposed-first", label: "e\u0301" },
+    ]);
+  });
+
+  it("orders zero-valued promoted timestamps like absent values", () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:z-zero", storePath },
+      {
+        lastInteractionAt: 0,
+        pinnedAt: 0,
+        sessionId: "zero-session",
+        updatedAt: 10,
+      },
+    );
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:a-unpinned", storePath },
+      { sessionId: "unpinned-session", updatedAt: 20 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare("UPDATE session_nodes SET pinned_at = 0 WHERE session_key = ?")
+      .run("agent:main:z-zero");
+
+    const query = (sortBy: "lastInteractionAt" | "updatedAt") =>
+      querySqliteSessionEntriesReadOnly({
+        agentId: "main",
+        query: {
+          archived: false,
+          includeGlobal: true,
+          includeUnknown: true,
+          limit: 2,
+          sortBy,
+        },
+        storePath,
+      }).entries.map(({ sessionKey }) => sessionKey);
+    expect(query("updatedAt")).toEqual(["agent:main:a-unpinned", "agent:main:z-zero"]);
+    expect(query("lastInteractionAt")).toEqual(["agent:main:a-unpinned", "agent:main:z-zero"]);
+  });
+
+  it("excludes pending rows from bounded list pages", () => {
+    replaceSqliteSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:valid", storePath },
+      { sessionId: "valid-session", updatedAt: 10 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        "agent:main:pending",
+        "pending-session",
+        JSON.stringify({ sessionId: "pending-session", updatedAt: 20 }),
+        20,
+      );
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:pending"),
+    ).toEqual({ entry_valid: 0 });
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      query: {
+        archived: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 1,
+        sortBy: "updatedAt",
+      },
+      storePath,
+    });
+    expect(result.totalCount).toBe(1);
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:main:valid"]);
+  });
+
+  it("reports an unmigrated entry-validity column with the typed doctor diagnostic", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec("CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY) STRICT");
+    expect(() =>
+      querySqliteSessionEntries(
+        { agentId: "main", db: database },
+        { archived: false, includeGlobal: true, includeUnknown: true },
+        { setProjectedTitle: () => {} },
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "SESSION_ENTRY_VALIDITY_MIGRATION_REQUIRED",
+        message: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    );
+    database.close();
+  });
+
+  it("refreshes the projected title when the first visible user message is written", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "title-session",
+      sessionKey: "agent:main:title",
+      storePath,
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    expect(getSessionProjectedTitle(loadSessionEntry({ ...scope, clone: false }))).toBe(
+      "title-se (1970-01-01)",
+    );
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Investigate the session list query" },
+    });
+    expect(getSessionProjectedTitle(loadSessionEntry({ ...scope, clone: false }))).toBe(
+      "Investigate the session list query",
+    );
+
+    const result = querySqliteSessionEntriesReadOnly({
+      agentId: "main",
+      projection: "list",
+      query: {
+        archived: "all",
+        includeGlobal: true,
+        includeUnknown: true,
+        sessionId: scope.sessionId,
+      },
+      storePath,
+    });
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual([scope.sessionKey]);
+    expect(getSessionProjectedTitle(result.entries[0]?.entry)).toBe(
+      "Investigate the session list query",
+    );
+  });
+
+  it("refreshes a fallback projected title when its date changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 6, 31, 12));
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:fallback-title",
+      storePath,
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: "fallback-title-session",
+      updatedAt: Date.UTC(2026, 6, 30),
+    });
+    await upsertSessionEntry(scope, { updatedAt: Date.UTC(2026, 6, 31) });
+
+    const result = querySqliteSessionEntriesReadOnly({
+      ...scope,
+      projection: "list",
+      query: { archived: "all", includeGlobal: true, includeUnknown: true },
+    });
+    expect(getSessionProjectedTitle(result.entries[0]?.entry)).toBe("fallback (2026-07-31)");
+  });
+
+  it("backfills titles written before the projection existed", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "legacy-title-session",
+      sessionKey: "agent:main:legacy-title",
+      storePath,
+    };
+    replaceSqliteSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Recover the existing session title" },
+    });
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    database.db
+      .prepare("UPDATE session_nodes SET display_name = NULL WHERE session_key = ?")
+      .run(scope.sessionKey);
+    database.db
+      .prepare("DELETE FROM schema_meta WHERE meta_key = 'session-title-projection-v1'")
+      .run();
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopened = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+
+    expect(
+      reopened.db
+        .prepare("SELECT display_name FROM session_nodes WHERE session_key = ?")
+        .get(scope.sessionKey),
+    ).toEqual({ display_name: "Recover the existing session title" });
+    closeOpenClawAgentDatabasesForTest();
   });
 
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {

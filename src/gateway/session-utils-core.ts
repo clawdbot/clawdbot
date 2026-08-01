@@ -9,11 +9,10 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
+export { deriveSessionTitle } from "../config/sessions/session-title-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { truncateUtf16Safe } from "../utils.js";
 import {
   estimateUsageCost,
   type ModelCostConfig,
@@ -24,71 +23,6 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-
-const DERIVED_TITLE_MAX_LEN = 60;
-
-function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
-  const prefix = sessionId.slice(0, 8);
-  if (updatedAt && updatedAt > 0) {
-    const d = new Date(updatedAt);
-    const date = d.toISOString().slice(0, 10);
-    return `${prefix} (${date})`;
-  }
-  return prefix;
-}
-
-function truncateTitle(text: string, maxLen: number): string {
-  if (text.length <= maxLen) {
-    return text;
-  }
-  const cut = truncateUtf16Safe(text, maxLen - 1);
-  const lastSpace = cut.lastIndexOf(" ");
-  if (lastSpace > maxLen * 0.6) {
-    return cut.slice(0, lastSpace) + "…";
-  }
-  return cut + "…";
-}
-
-export function deriveSessionTitle(
-  entry: SessionEntry | undefined,
-  firstUserMessage?: string | null,
-  externalDisplayName?: string | null,
-): string | undefined {
-  if (!entry) {
-    return undefined;
-  }
-
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
-  }
-
-  const displayName =
-    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
-  if (displayName) {
-    return displayName;
-  }
-
-  const subject = normalizeOptionalString(entry.subject);
-  if (subject) {
-    return subject;
-  }
-
-  // Transcript metadata is model-only; sanitize at the shared title boundary so
-  // SQLite, file-backed sessions, and every session-list client stay consistent.
-  const normalized = firstUserMessage
-    ? stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim()
-    : "";
-  if (normalized) {
-    return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
-  }
-
-  if (entry.sessionId) {
-    return formatSessionIdPrefix(entry.sessionId, entry.updatedAt);
-  }
-
-  return undefined;
-}
 
 export function resolveSessionRuntimeMs(
   run: { startedAt?: number; endedAt?: number; accumulatedRuntimeMs?: number } | null,
@@ -257,7 +191,7 @@ const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
 
 const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
-export function isFinitePositiveTimestamp(value: unknown): value is number {
+function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
@@ -418,17 +352,16 @@ function addChildSessionKey(
   childSessionsByKey.set(parentKey, [childKey]);
 }
 
-export function isCurrentSessionChildOwner(params: {
+function isCurrentSessionChildOwner(params: {
   entry: Pick<SessionEntry, "parentSessionKey">;
   ownerSessionKey: string;
   controllerSessionKey: string | undefined;
 }): boolean {
-  // Live control supersedes stale spawnedBy, but explicit navigation lineage
-  // remains authoritative so dashboard parents can discover controlled children.
-  return (
-    params.controllerSessionKey === params.ownerSessionKey ||
-    normalizeOptionalString(params.entry.parentSessionKey) === params.ownerSessionKey
-  );
+  // Runtime control supersedes stored lineage after a move; explicit navigation lineage
+  // remains authoritative only when the registry has no current controller.
+  return params.controllerSessionKey
+    ? params.controllerSessionKey === params.ownerSessionKey
+    : normalizeOptionalString(params.entry.parentSessionKey) === params.ownerSessionKey;
 }
 
 export function buildStoreChildSessionIndex(

@@ -6,6 +6,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { setSessionProjectedTitle } from "./session-title-projection.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -18,13 +19,13 @@ export type SqliteSessionEntryCacheSnapshot = {
 
 type SqliteSessionEntryCache = SqliteSessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
-  updatedAtByKey: Map<string, number>;
+  projectionVersionByKey: Map<string, { displayName: string | null; updatedAt: number }>;
   validityToken: SqliteSessionEntryCacheValidityToken;
 };
 
 type LoadedSessionEntrySnapshot = SqliteSessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
-  updatedAtByKey: Map<string, number>;
+  projectionVersionByKey: Map<string, { displayName: string | null; updatedAt: number }>;
 };
 
 type SqliteSessionEntryCacheValidityToken = {
@@ -108,7 +109,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "updated_at"])
+      .select(["session_key", "current_session_id", "display_name", "entry_json", "updated_at"])
       .orderBy("session_key"),
   ).rows;
   const entries = new Map<string, SessionEntry>();
@@ -117,6 +118,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
     if (!entry) {
       continue;
     }
+    setSessionProjectedTitle(entry, row.display_name);
     entries.set(row.session_key, entry);
   }
   const listProjections = new Map<string, SessionEntry>();
@@ -125,7 +127,12 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
     keys: rows.map((row) => row.session_key),
     listEntries: createLazyListProjections(entries, listProjections),
     listProjections,
-    updatedAtByKey: new Map(rows.map((row) => [row.session_key, row.updated_at])),
+    projectionVersionByKey: new Map(
+      rows.map((row) => [
+        row.session_key,
+        { displayName: row.display_name, updatedAt: row.updated_at },
+      ]),
+    ),
   };
 }
 
@@ -137,13 +144,25 @@ function incrementallyRevalidateSessionEntrySnapshot(
   const db = getSessionKysely(database.db);
   const versions = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(["session_key", "updated_at"]),
+    db.selectFrom("session_nodes").select(["session_key", "display_name", "updated_at"]),
   ).rows;
-  const updatedAtByKey = new Map(versions.map((row) => [row.session_key, row.updated_at]));
+  const projectionVersionByKey = new Map(
+    versions.map((row) => [
+      row.session_key,
+      { displayName: row.display_name, updatedAt: row.updated_at },
+    ]),
+  );
   const changedKeys = versions
-    .filter((row) => cached.updatedAtByKey.get(row.session_key) !== row.updated_at)
+    .filter((row) => {
+      const cachedVersion = cached.projectionVersionByKey.get(row.session_key);
+      return (
+        !cachedVersion ||
+        cachedVersion.updatedAt !== row.updated_at ||
+        cachedVersion.displayName !== row.display_name
+      );
+    })
     .map((row) => row.session_key);
-  const removedKeys = cached.keys.filter((sessionKey) => !updatedAtByKey.has(sessionKey));
+  const removedKeys = cached.keys.filter((sessionKey) => !projectionVersionByKey.has(sessionKey));
 
   if (changedKeys.length === 0 && removedKeys.length === 0) {
     cached.validityToken = validityToken;
@@ -168,12 +187,13 @@ function incrementallyRevalidateSessionEntrySnapshot(
       database.db,
       db
         .selectFrom("session_nodes")
-        .select(["session_key", "entry_json"])
+        .select(["session_key", "current_session_id", "display_name", "entry_json", "updated_at"])
         .where("session_key", "in", changedKeys),
     ).rows;
     for (const row of changedRows) {
       const entry = parseSqliteSessionEntryJson(row);
       if (entry) {
+        setSessionProjectedTitle(entry, row.display_name);
         entries.set(row.session_key, entry);
       }
     }
@@ -183,7 +203,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
     keys: versions.map((row) => row.session_key).toSorted(),
     listEntries: createLazyListProjections(entries, listProjections),
     listProjections,
-    updatedAtByKey,
+    projectionVersionByKey,
     validityToken,
   };
 }

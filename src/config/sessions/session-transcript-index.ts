@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { refreshSqliteSessionTitleProjection } from "./session-accessor.sqlite-session-row.js";
 import {
   buildSessionTranscriptProjection,
   extractTranscriptIndexEntry,
@@ -392,6 +393,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
       createdAt: row.created_at,
     })),
   );
+  refreshSqliteSessionTitleProjection(db, sessionId);
   return true;
 }
 

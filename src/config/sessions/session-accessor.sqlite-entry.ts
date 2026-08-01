@@ -63,8 +63,12 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  querySqliteSessionEntries as querySqliteSessionEntriesFromDatabase,
+  readSqliteSessionEntriesByStatus,
+  type SqliteSessionEntryListQueryResult,
+} from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListQuery, SessionEntryListScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -74,6 +78,7 @@ import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lin
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import { setSessionProjectedTitle } from "./session-title-projection.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
@@ -279,6 +284,36 @@ export function listSqliteSessionEntriesReadOnly(
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
+}
+
+/** Queries a bounded promoted-column list on the writable process-held database. */
+export function querySqliteSessionEntries(
+  scope: SessionEntryListScope & { query: SessionEntryListQuery },
+): SqliteSessionEntryListQueryResult {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return querySqliteSessionEntriesFromDatabase(database, scope.query, {
+    ...(resolved.databaseAgentId ? {} : { expectedAgentId: resolved.agentId }),
+    projection: scope.projection,
+    setProjectedTitle: setSessionProjectedTitle,
+  });
+}
+
+/** Queries a bounded promoted-column list without opening the database writable. */
+export function querySqliteSessionEntriesReadOnly(
+  scope: SessionEntryListScope & { query: SessionEntryListQuery },
+): SqliteSessionEntryListQueryResult {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      querySqliteSessionEntriesFromDatabase(database, scope.query, {
+        ...(resolved.databaseAgentId ? {} : { expectedAgentId: resolved.agentId }),
+        projection: scope.projection,
+        setProjectedTitle: setSessionProjectedTitle,
+      }),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : { creatorActors: [], entries: [], totalCount: 0 };
 }
 
 function listSqliteSessionEntriesFromDatabase(

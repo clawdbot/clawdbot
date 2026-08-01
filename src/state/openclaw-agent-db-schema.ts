@@ -5,6 +5,8 @@ import {
   hasLegacyMemoryRecallMetadataColumns,
   migrateMemoryIndexSourcesIdentity,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { deriveSqliteSessionTitle } from "../config/sessions/session-title-projection.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -55,6 +57,7 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type MigratedSessionEntry = Record<string, unknown>;
 const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
 const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
+const SESSION_TITLE_PROJECTION_META_KEY = "session-title-projection-v1";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
@@ -422,6 +425,46 @@ function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
   );
 }
 
+function backfillSessionTitleProjection(db: DatabaseSync): void {
+  if (
+    db
+      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
+      .get(SESSION_TITLE_PROJECTION_META_KEY)
+  ) {
+    return;
+  }
+  const rows = db
+    .prepare("SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes")
+    .iterate() as Iterable<{
+    current_session_id: string;
+    entry_json: string;
+    session_key: string;
+    updated_at: number;
+  }>;
+  const update = db.prepare("UPDATE session_nodes SET display_name = ? WHERE session_key = ?");
+  for (const row of rows) {
+    const parsed = parseMigratedSessionEntry(row.entry_json);
+    if (!parsed) {
+      continue;
+    }
+    const entry = {
+      ...parsed,
+      sessionId: migratedText(parsed.sessionId) ?? row.current_session_id,
+      updatedAt: migratedNumber(parsed.updatedAt) ?? row.updated_at,
+    } as SessionEntry;
+    update.run(deriveSqliteSessionTitle(db, entry), row.session_key);
+  }
+  db.exec(`
+    UPDATE session_nodes SET pinned_at = NULL WHERE pinned_at <= 0;
+    UPDATE session_nodes SET last_interaction_at = NULL WHERE last_interaction_at <= 0;
+  `);
+  db.prepare(
+    `INSERT INTO schema_meta
+     SELECT ?, role, schema_version, agent_id, app_version, created_at, updated_at
+       FROM schema_meta WHERE meta_key = 'primary'`,
+  ).run(SESSION_TITLE_PROJECTION_META_KEY);
+}
+
 function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 2) {
     return;
@@ -598,6 +641,7 @@ function ensureAgentSchema(
           verifyPhysicalIntegrity: false,
         });
         ensureSessionKeyContractSchemaInTransaction(db);
+        backfillSessionTitleProjection(db);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
         return;
       } else if (previousVersion === 14) {
@@ -662,6 +706,7 @@ function ensureAgentSchema(
             }),
           ),
       );
+      backfillSessionTitleProjection(db);
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
     });
   } finally {

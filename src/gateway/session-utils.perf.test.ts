@@ -17,7 +17,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import { listSessionsFromStoreForTest as listSessionsFromStore } from "./session-utils-list.test-support.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -40,7 +40,7 @@ describe("listSessionsFromStore resolver cache", () => {
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
-      listSessionsFromStore({
+      await listSessionsFromStore({
         cfg,
         storePath: path.join(stateDir, "sessions.json"),
         store: {
@@ -114,7 +114,7 @@ describe("listSessionsFromStore resolver cache", () => {
       const thinkingSpy = vi.spyOn(thinking, "listThinkingLevelOptions");
       const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
       try {
-        const result = listSessionsFromStore({
+        const result = await listSessionsFromStore({
           cfg,
           storePath: path.join(stateDir, "sessions.json"),
           store,
@@ -246,7 +246,7 @@ describe("listSessionsFromStore resolver cache", () => {
         return originalPrepare(sql);
       });
       try {
-        const result = listSessionsFromStore({
+        const result = await listSessionsFromStore({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
           store: {

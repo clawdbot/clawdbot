@@ -8,6 +8,7 @@ import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionEntryListQuery } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
@@ -24,6 +25,7 @@ type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOption
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
 interface EmbeddedGatewayRuntime {
+  buildSessionListSqlQuery: typeof import("../../gateway/session-utils-list.js").buildSessionListSqlQuery;
   resolveSessionAgentId: (opts: {
     sessionKey: string;
     config: OpenClawConfig;
@@ -78,11 +80,19 @@ interface EmbeddedGatewayRuntime {
     storePath: string;
     store: unknown;
     opts: SessionsListParams;
+    rowContextStore?: unknown;
+    sqlSelection: unknown;
   }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGateway: (
     cfg: OpenClawConfig,
-    opts?: { agentId?: string; projection?: "full" | "list" },
+    opts?: {
+      agentId?: string;
+      includeRowContext?: boolean;
+      projection?: "full" | "list";
+      query?: SessionEntryListQuery;
+    },
   ) => {
+    rowContextStore?: unknown;
     storePath: string;
     store: unknown;
   };
@@ -198,15 +208,25 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+  const { lineage, query } = rt.buildSessionListSqlQuery(opts, {
+    bounded: false,
+    includeCreatorFilter: false,
+    mainKey: cfg.session?.mainKey,
+    now: Date.now(),
+  });
+  const { rowContextStore, storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
     agentId: opts.agentId,
+    includeRowContext: true,
     projection: "list",
+    query,
   });
   return rt.listSessionsFromStoreAsync({
     cfg,
     storePath,
     store,
     opts,
+    ...(rowContextStore ? { rowContextStore } : {}),
+    sqlSelection: { creatorFilterApplied: false, lineage },
   });
 }
 

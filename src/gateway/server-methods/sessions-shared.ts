@@ -5,21 +5,31 @@ import {
   errorShape,
   type SessionOperationEvent,
   type SessionPlacement,
+  type SessionSharingRole,
+  type SessionVisibility,
+  type SessionsListParams,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
+import {
+  isPerAgentSessionStoreConfig,
+  listConfiguredSessionStoreAgentIds,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
 import {
   resolvePluginSessionOwnershipError,
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
+  buildSessionListSqlQuery,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
@@ -27,9 +37,124 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
+
+const sessionListsByContext = new WeakMap<
+  GatewayRequestContext,
+  { config: OpenClawConfig; inFlight: Map<string, Promise<unknown>> }
+>();
+
+export function getSessionListOperationState(
+  client: GatewayClient | null,
+  config: OpenClawConfig,
+  context: GatewayRequestContext,
+  list: SessionsListParams,
+) {
+  const profileId = gatewayClientSessionCreator(client)?.id;
+  const viewer = isGatewayAdmin(client)
+    ? "admin"
+    : profileId
+      ? `profile:${profileId}`
+      : "anonymous";
+  const workKey = JSON.stringify([
+    viewer,
+    Object.entries(list).toSorted(([left], [right]) => left.localeCompare(right)),
+  ]);
+  let state = sessionListsByContext.get(context);
+  if (!state || state.config !== config) {
+    state = { config, inFlight: new Map() };
+    sessionListsByContext.set(context, state);
+  }
+  return { inFlight: state.inFlight, pending: state.inFlight.get(workKey), workKey };
+}
+
+export async function runSessionListOperation<T>(params: {
+  inFlight: Map<string, Promise<unknown>>;
+  run: () => Promise<T>;
+  workKey: string;
+}): Promise<T> {
+  // Only the pre-start socket burst may share. Once loading begins, an intervening session
+  // mutation must make the next request build a fresh projection instead of joining this one.
+  const operation = new Promise<void>((done) => {
+    setImmediate(done);
+  }).then(() => {
+    params.inFlight.delete(params.workKey);
+    return params.run();
+  });
+  params.inFlight.set(params.workKey, operation);
+  try {
+    return await operation;
+  } finally {
+    if (params.inFlight.get(params.workKey) === operation) {
+      params.inFlight.delete(params.workKey);
+    }
+  }
+}
+
+export function createSessionListVisibilityFilter(client: GatewayClient | null) {
+  return createSessionListEntryFilter({ client });
+}
+
+export function filterVisibleSessionListRows<
+  T extends {
+    incognito?: boolean;
+    key: string;
+    sharingRole?: SessionSharingRole;
+    visibility?: SessionVisibility;
+  },
+>(sessions: T[], canSeeDrafts: boolean) {
+  if (canSeeDrafts) {
+    return sessions;
+  }
+  return sessions.filter(
+    (session) =>
+      !session.incognito && (session.visibility !== "draft" || session.sharingRole === "owner"),
+  );
+}
+
+export function prepareGatewaySessionListQuery(params: {
+  client: GatewayClient | null;
+  config: OpenClawConfig;
+  configuredAgentsOnly: boolean;
+  list: SessionsListParams;
+}) {
+  const identity = gatewayClientSessionCreator(params.client);
+  const requestedAgentId = normalizeOptionalString(params.list.agentId);
+  const allowedIncognitoAgentIds = requestedAgentId
+    ? new Set([normalizeAgentId(requestedAgentId)])
+    : params.configuredAgentsOnly
+      ? new Set(listConfiguredSessionStoreAgentIds(params.config))
+      : undefined;
+  const hasOpenIncognito = listOpenIncognitoAgentDatabases().some(
+    ({ agentId }) => !allowedIncognitoAgentIds || allowedIncognitoAgentIds.has(agentId),
+  );
+  // Only identified non-admin clients receive the visibility entryFilter (including retries),
+  // so it is always paired with an unbounded candidate query here.
+  const requiresClientVisibilityFilter = !isGatewayAdmin(params.client) && Boolean(identity);
+  const hasFacetResidualFilters =
+    Boolean(normalizeOptionalString(params.list.search)) ||
+    Boolean(params.list.boardFace) ||
+    Boolean(normalizeOptionalString(params.list.spawnedBy)) ||
+    params.list.requireLastInteraction === true ||
+    params.configuredAgentsOnly ||
+    hasOpenIncognito ||
+    !params.list.agentId ||
+    !isPerAgentSessionStoreConfig(params.config.session?.store) ||
+    requiresClientVisibilityFilter;
+  return {
+    ...buildSessionListSqlQuery(params.list, {
+      bounded: !hasFacetResidualFilters,
+      includeCreatorFilter: !hasFacetResidualFilters,
+      mainKey: params.config.session?.mainKey,
+      now: Date.now(),
+    }),
+    hasFacetResidualFilters,
+    identity,
+  };
+}
 
 export class SessionWorkerPlacementMutationError extends Error {
   constructor(

@@ -26,6 +26,7 @@ import {
   appendTranscriptEventsInTransaction,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
@@ -422,7 +423,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
 }): SessionEntry {
   const hasTotalTokens =
     typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens);
-  return {
+  const entry = {
     ...params.currentEntry,
     sessionId: params.nextSessionId,
     updatedAt: Date.now(),
@@ -445,6 +446,9 @@ function cloneSqliteCheckpointSessionEntry(params: {
       ? params.currentEntry.compactionCheckpoints
       : undefined,
   };
+  // JSON serialization matches the persisted blob by dropping undefined and symbol projections.
+  const serializedEntry = JSON.stringify(entry);
+  return projectCanonicalSessionEntryShape(JSON.parse(serializedEntry));
 }
 
 function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | undefined {

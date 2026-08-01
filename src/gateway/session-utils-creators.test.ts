@@ -15,92 +15,86 @@ const getUserProfileListItem = vi.hoisted(() =>
 );
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
-vi.mock("./session-utils-row.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-utils-row.js")>();
-  return {
-    ...actual,
-    projectSessionActor: (
-      actor: Parameters<typeof actual.projectSessionActor>[0],
-      identities: Parameters<typeof actual.projectSessionActor>[1],
-    ) => {
-      if (actor?.id === "shared-id") {
-        return actor.type === "human"
-          ? { type: actor.type, id: actor.id, label: "Alpha" }
-          : { type: actor.type, id: actor.id, label: "Zulu", avatarUrl: "/avatar" };
-      }
-      if (actor?.id === "unicode-id") {
-        return {
-          type: actor.type,
-          id: actor.id,
-          label: actor.type === "human" ? "é" : "e\u0301",
-        };
-      }
-      return actual.projectSessionActor(actor, identities);
-    },
-  };
-});
 
-import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
+import { listSessionsFromStoreAsync } from "./session-utils-list.js";
+import { listSessionsFromStoreForTest as listSessionsFromStore } from "./session-utils-list.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   getUserProfileListItem.mockClear();
 });
 
-it("keeps creator labels and avatars stable across actor order", () => {
-  const actorOrders = [
-    ["human", "agent"],
-    ["agent", "human"],
-  ] as const;
-  for (const actorOrder of actorOrders) {
-    const store = Object.fromEntries(
-      actorOrder.map((type, index) => [
-        `agent:main:${index}`,
-        {
-          createdActor: { type, id: "shared-id" },
-          sessionId: `session-${index}`,
-          updatedAt: 2 - index,
-        } satisfies SessionEntry,
-      ]),
-    );
-    const result = listSessionsFromStore({
-      cfg: {} as OpenClawConfig,
-      storePath: "/tmp/openclaw-session-creator-order",
-      store,
-      opts: { archived: "all" },
-    });
+it("selects creator labels deterministically across actor types", async () => {
+  const result = await listSessionsFromStoreAsync({
+    cfg: {} as OpenClawConfig,
+    opts: { archived: "all" },
+    sqlSelection: {
+      creatorActors: [
+        { type: "human", id: "shared-id" },
+        { type: "agent", id: "shared-id" },
+      ],
+      ordered: true,
+      totalCount: 0,
+    },
+    store: {},
+    storePath: "/tmp/openclaw-session-creator-labels",
+  });
 
-    expect(result.creators).toEqual([{ id: "shared-id", label: "Alpha", avatarUrl: "/avatar" }]);
+  expect(result.creators).toEqual([{ id: "shared-id", label: "Bob" }]);
+});
+
+it("keeps creator label and avatar selection stable across actor order", async () => {
+  const orders = [
+    [
+      { type: "human" as const, id: "profile-ada" },
+      { type: "agent" as const, id: "profile-ada" },
+    ],
+    [
+      { type: "agent" as const, id: "profile-ada" },
+      { type: "human" as const, id: "profile-ada" },
+    ],
+  ];
+  for (const creatorActors of orders) {
+    const result = await listSessionsFromStoreAsync({
+      cfg: {} as OpenClawConfig,
+      opts: { archived: "all" },
+      sqlSelection: { creatorActors, ordered: true, totalCount: 0 },
+      store: {},
+      storePath: "/tmp/openclaw-session-creator-avatar-order",
+    });
+    expect(result.creators).toEqual([
+      {
+        avatarUrl: "/api/users/profile-ada/avatar?v=42",
+        id: "profile-ada",
+        label: "Ada",
+      },
+    ]);
   }
 });
 
-it("breaks locale-equivalent creator label ties deterministically", () => {
-  for (const actorOrder of [
-    ["human", "agent"],
-    ["agent", "human"],
-  ] as const) {
-    const store = Object.fromEntries(
-      actorOrder.map((type, index) => [
-        `agent:main:unicode-${index}`,
-        {
-          createdActor: { type, id: "unicode-id" },
-          sessionId: `unicode-session-${index}`,
-          updatedAt: 2 - index,
-        } satisfies SessionEntry,
-      ]),
-    );
-    const result = listSessionsFromStore({
-      cfg: {} as OpenClawConfig,
-      storePath: "/tmp/openclaw-session-creator-unicode-order",
-      store,
-      opts: { archived: "all" },
-    });
+it("keeps complete creator facets independent of paginated row snapshots", async () => {
+  const result = await listSessionsFromStoreAsync({
+    cfg: {} as OpenClawConfig,
+    opts: { archived: "all" },
+    sqlSelection: {
+      creatorActors: [{ type: "agent", id: "profile-ada" }],
+      ordered: true,
+      totalCount: 1,
+    },
+    store: {
+      "agent:main:ada": {
+        createdActor: { type: "human", id: "profile-ada" },
+        sessionId: "session-ada",
+        updatedAt: 1,
+      },
+    },
+    storePath: "/tmp/openclaw-session-creator-pagination",
+  });
 
-    expect(result.creators).toEqual([{ id: "unicode-id", label: "e\u0301" }]);
-  }
+  expect(result.creators).toEqual([{ id: "profile-ada" }]);
 });
 
-it("returns the complete deterministic creator facet independently of pagination", () => {
+it("returns the complete deterministic creator facet independently of pagination", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:ada": {
       archivedAt: 3,
@@ -116,7 +110,7 @@ it("returns the complete deterministic creator facet independently of pagination
     },
   };
 
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
@@ -146,7 +140,7 @@ it("returns the complete deterministic creator facet independently of pagination
   });
   expect(getUserProfileListItem).toHaveBeenCalledTimes(2);
 
-  const filtered = listSessionsFromStore({
+  const filtered = await listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
@@ -250,7 +244,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   const configuredStore = filterSessionStoreToConfiguredAgents(cfg, store);
 
   const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionsFromStore({
       cfg,
       ...(entryFilter ? { entryFilter } : {}),
       opts,
@@ -317,9 +311,9 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   );
 });
 
-it("keeps the serialized list response byte-identical to the legacy filter path", () => {
+it("keeps the serialized list response byte-identical to the legacy filter path", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStore({
     cfg: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },

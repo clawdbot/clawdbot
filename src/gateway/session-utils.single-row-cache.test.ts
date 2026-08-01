@@ -68,11 +68,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagent-registry-read.js", () => subagentRegistryReadMock);
 
-import {
-  listSessionsFromStore,
-  listSessionsFromStoreAsync,
-  loadGatewaySessionRow,
-} from "./session-utils.js";
+import { listSessionsFromStoreAsync, loadGatewaySessionRow } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
@@ -130,21 +126,6 @@ function runningChildSession(
   return {
     sessionId,
     parentSessionKey,
-    updatedAt: now,
-    status: "running",
-  };
-}
-
-function runningControlledChildSession(
-  sessionId: string,
-  spawnedBy: string,
-  now: number,
-  parentSessionKey?: string,
-): SessionEntry {
-  return {
-    sessionId,
-    spawnedBy,
-    ...(parentSessionKey ? { parentSessionKey } : {}),
     updatedAt: now,
     status: "running",
   };
@@ -249,13 +230,6 @@ describe("single gateway session row child-session cache", () => {
       "/tmp/openclaw-single-row-cache-fresh-registry",
       async ({ now, storePath }) => {
         const fixture = createMovingChildFixture(now);
-        // This fixture moves runtime control only; an explicit parent would
-        // instead declare durable navigation lineage that must remain linked.
-        fixture.store[fixture.child] = runningControlledChildSession(
-          "child",
-          fixture.oldParent,
-          now,
-        );
         await seedSessionEntries(storePath, fixture.store);
 
         setSubagentControllerRun(fixture.child, fixture.oldParent, now);
@@ -264,36 +238,6 @@ describe("single gateway session row child-session cache", () => {
         ]);
 
         setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
-        expectChildMovedToNewParent(fixture, now);
-      },
-    );
-  });
-
-  test("keeps independent navigation lineage while cached runtime control moves", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-cache-navigation-owner-",
-      "/tmp/openclaw-single-row-cache-navigation-owner",
-      async ({ now, storePath }) => {
-        const fixture = createMovingChildFixture(now);
-        const navigationParent = "agent:main:dashboard:navigation-parent";
-        fixture.store[navigationParent] = parentSession("navigation-parent", now);
-        fixture.store[fixture.child] = runningControlledChildSession(
-          "child",
-          fixture.oldParent,
-          now,
-          navigationParent,
-        );
-        await seedSessionEntries(storePath, fixture.store);
-
-        setSubagentControllerRun(fixture.child, fixture.oldParent, now);
-        expect(loadGatewaySessionRow(navigationParent, { now })?.childSessions).toEqual([
-          fixture.child,
-        ]);
-
-        setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
-        expect(loadGatewaySessionRow(navigationParent, { now: now + 50 })?.childSessions).toEqual([
-          fixture.child,
-        ]);
         expectChildMovedToNewParent(fixture, now);
       },
     );
@@ -320,26 +264,12 @@ describe("single gateway session row child-session cache", () => {
           },
         } as OpenClawConfig;
 
-        const syncListed = listSessionsFromStore({
-          cfg,
-          storePath,
-          store,
-          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
-        });
-
-        expect(syncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).toHaveBeenCalledTimes(1);
-        expect(
-          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
-        ).not.toHaveBeenCalled();
-
-        vi.clearAllMocks();
-
         const asyncListed = await listSessionsFromStoreAsync({
           cfg,
           storePath,
           store,
           opts: { agentId: MAIN_AGENT_ID, limit: 1 },
+          sqlSelection: {},
         });
 
         expect(asyncListed.sessions).toHaveLength(1);

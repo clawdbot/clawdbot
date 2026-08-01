@@ -343,8 +343,7 @@ export const SessionsListParamsSchema = closedObject({
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
-   * Read first 8KB of each session transcript to derive title from first user message.
-   * Performs a file read per session - use `limit` to bound result set on large stores.
+   * Include the write-time title projected from session metadata and the first user message.
    */
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   /**

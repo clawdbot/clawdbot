@@ -67,6 +67,27 @@ export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey
   projection?: "full" | "list";
 };
 
+export type SessionEntryListQuery = {
+  activeAfter?: number;
+  archived?: boolean | "all";
+  createdActorId?: string;
+  excludeLineageSessionKeys?: readonly string[];
+  includeGlobal?: boolean;
+  includeHidden?: boolean;
+  includeLineageSessionKeys?: readonly string[];
+  includeUnknown?: boolean;
+  label?: string;
+  lineageKeys?: readonly string[];
+  limit?: number;
+  mainKey?: string;
+  ownerAgentId?: string;
+  requireLastInteraction?: boolean;
+  selectionResidual?: boolean;
+  sessionId?: string;
+  sortBy?: "updatedAt" | "lastInteractionAt";
+  spawnedBy?: string;
+};
+
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */
   agentId: string;

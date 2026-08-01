@@ -34,7 +34,6 @@ import {
   readSqliteSessionEntryCount,
   readSqliteSessionEntryStore,
   rehomeSqliteSessionWindows,
-  sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -71,6 +70,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { sqliteSessionEntriesEqual } from "./session-entry-json.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";

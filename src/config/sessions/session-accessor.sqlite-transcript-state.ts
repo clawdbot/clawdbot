@@ -7,7 +7,11 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  isRetainedSessionWindowTombstone,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -100,18 +104,7 @@ export function ensureTranscriptSessionRoot(
     for (const candidate of candidates) {
       const entry = parseSqliteSessionEntryJson(candidate);
       if (!entry) {
-        const retainedWindow =
-          candidate.entry_json === "{}"
-            ? executeSqliteQueryTakeFirstSync(
-                database.db,
-                db
-                  .selectFrom("session_windows")
-                  .select("session_id")
-                  .where("session_id", "=", candidate.current_session_id)
-                  .where("session_key", "=", candidate.session_key),
-              )
-            : undefined;
-        if (!retainedWindow) {
+        if (!isRetainedSessionWindowTombstone(database, candidate)) {
           throw canonicalSessionKeyMigrationRequiredError(
             `invalid persisted session row requires repair for ${candidate.session_key}`,
           );
@@ -129,18 +122,7 @@ export function ensureTranscriptSessionRoot(
     }
     const existing = candidates.find((candidate) => candidate.session_key === scope.sessionKey);
     if (existing && existing.entry_valid !== 1) {
-      const retainedWindow =
-        existing.entry_json === "{}"
-          ? executeSqliteQueryTakeFirstSync(
-              database.db,
-              db
-                .selectFrom("session_windows")
-                .select("session_id")
-                .where("session_id", "=", existing.current_session_id)
-                .where("session_key", "=", scope.sessionKey),
-            )
-          : undefined;
-      if (!retainedWindow) {
+      if (!isRetainedSessionWindowTombstone(database, existing)) {
         throw canonicalSessionKeyMigrationRequiredError(
           `invalid persisted session row requires repair for ${scope.sessionKey}`,
         );

@@ -1,3 +1,12 @@
+import type { SessionEntry } from "./types.js";
+
+export function sqliteSessionEntriesEqual(
+  left: SessionEntry | undefined,
+  right: SessionEntry | undefined,
+): boolean {
+  return left && right ? JSON.stringify(left) === JSON.stringify(right) : left === right;
+}
+
 export function hasValidSqliteSessionEntryIdentity(entry: {
   sessionId?: unknown;
   updatedAt?: unknown;

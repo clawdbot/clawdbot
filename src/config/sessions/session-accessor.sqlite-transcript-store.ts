@@ -18,6 +18,7 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { refreshSqliteSessionTitleProjection } from "./session-accessor.sqlite-session-row.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteSqliteTranscriptEventsInTransaction,
@@ -96,6 +97,10 @@ export function appendTranscriptEventInTransaction(
     eventId: identity?.eventId ?? null,
     createdAt,
   });
+  const message = readTranscriptEventMessage(persistedEvent) as { role?: unknown } | undefined;
+  if (!projectionNeedsRebuild && message?.role === "user") {
+    refreshSqliteSessionTitleProjection(database.db, scope.sessionId);
+  }
   if (projectionNeedsRebuild) {
     options.onProjectionReconcileNeeded?.();
   }

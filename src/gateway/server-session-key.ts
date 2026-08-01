@@ -119,7 +119,17 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
     }
     resolvedSessionKeyByRunId.delete(cacheKey);
   }
-  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: requestedAgentId });
+  const { store } = loadCombinedSessionStoreForGateway(cfg, {
+    agentId: requestedAgentId,
+    projection: "list",
+    query: {
+      archived: "all",
+      includeGlobal: true,
+      includeHidden: true,
+      includeUnknown: !requestedAgentId,
+      sessionId: runId,
+    },
+  });
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] =>
       entry[1]?.sessionId === runId && sessionKeyMatchesAgent(entry[0], requestedAgentId, cfg),

@@ -50,6 +50,7 @@ describe("gateway session list plugin runtime normalization", () => {
       storePath: "",
       store,
       opts: {},
+      sqlSelection: {},
     });
 
     expect(listed.sessions.map((session) => session.model)).toEqual([

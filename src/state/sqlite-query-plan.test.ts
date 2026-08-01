@@ -183,6 +183,45 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
+      indexName: "idx_agent_session_nodes_canonical_updated_at",
+      sql: `
+        SELECT session_key
+          FROM session_nodes
+         WHERE entry_valid = 1 AND pinned_at IS NULL
+         ORDER BY updated_at DESC, session_key ASC
+         LIMIT 100
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_canonical_last_interaction_at",
+      sql: `
+        SELECT session_key
+          FROM session_nodes
+         WHERE entry_valid = 1 AND last_interaction_at IS NOT NULL
+         ORDER BY last_interaction_at DESC, session_key ASC
+         LIMIT 100
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_parent_session_key",
+      params: ["agent:main:parent"],
+      sql: "SELECT session_key FROM session_nodes WHERE parent_session_key = ?",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_spawned_by",
+      params: ["agent:main:parent"],
+      sql: "SELECT session_key FROM session_nodes WHERE spawned_by = ?",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_archived_at",
+      sql: "SELECT session_key FROM session_nodes WHERE archived_at IS NOT NULL",
+    });
+    expectPlanUsesIndex({
+      db: database.db,
       indexName: "idx_agent_session_nodes_status",
       params: ["running"],
       sql: `

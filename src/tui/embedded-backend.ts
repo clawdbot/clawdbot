@@ -78,6 +78,7 @@ import {
 } from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
+  buildSessionListSqlQuery,
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
@@ -721,15 +722,26 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const listOpts = opts ?? {};
+    const { lineage, query } = buildSessionListSqlQuery(listOpts, {
+      bounded: false,
+      includeCreatorFilter: false,
+      mainKey: cfg.session?.mainKey,
+      now: Date.now(),
+    });
+    const { rowContextStore, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      includeRowContext: true,
       projection: "list",
+      query,
     });
     return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
-      opts: opts ?? {},
+      opts: listOpts,
+      ...(rowContextStore ? { rowContextStore } : {}),
+      sqlSelection: { creatorFilterApplied: false, lineage },
     })) as TuiSessionList;
   }
 
