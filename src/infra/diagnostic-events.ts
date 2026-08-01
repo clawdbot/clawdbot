@@ -554,6 +554,14 @@ export type DiagnosticExecApprovalFollowupSuppressedEvent = DiagnosticBaseEvent 
   phase: "direct_delivery" | "gateway_preflight";
 };
 
+export type DiagnosticExecApprovalFollowupObservationEndedEvent = DiagnosticBaseEvent & {
+  type: "exec.approval.followup_observation_ended";
+  approvalId: string;
+  runId: string;
+  reason: "deadline";
+  transportErrors: number;
+};
+
 type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
   runId: string;
   sessionKey?: string;
@@ -813,6 +821,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSkillUsedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticExecApprovalFollowupSuppressedEvent
+  | DiagnosticExecApprovalFollowupObservationEndedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticHarnessRunStartedEvent
@@ -937,6 +946,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "skill.used",
   "exec.process.completed",
   "exec.approval.followup_suppressed",
+  "exec.approval.followup_observation_ended",
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",

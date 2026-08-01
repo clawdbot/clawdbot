@@ -581,6 +581,53 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("ends observation after its deadline without competing direct delivery", async () => {
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
+    const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
+        status: "accepted",
+      })
+      .mockImplementationOnce(async () => {
+        dateNow.mockReturnValue(startedAt + 10 * 60_000);
+        throw new Error("gateway permanently unreachable");
+      });
+
+    try {
+      await expect(
+        sendExecApprovalFollowup({
+          approvalId: "req-observer-deadline",
+          sessionKey: "agent:main:telegram:direct:123",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "123",
+          resultText: "Exec finished (gateway id=req-observer-deadline, code 0)\nall good",
+          internalRuntimeHandoffId: "handoff-observer-deadline",
+          idempotencyKey: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    await waitForDiagnosticEventsDrained();
+    expect(callGatewayTool).toHaveBeenCalledTimes(2);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_observation_ended",
+        approvalId: "req-observer-deadline",
+        runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
+        reason: "deadline",
+        transportErrors: 1,
+      }),
+    );
+  });
+
   it("direct-falls back after terminal resume failure with a capped UTF-16-safe tail", async () => {
     const tailSentinel = "TAIL_SENTINEL_\u{1F680}";
     vi.mocked(callGatewayTool)

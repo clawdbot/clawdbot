@@ -50,6 +50,8 @@ const DIRECT_FOLLOWUP_COMPLETION_RETENTION = {
 const AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS = 5 * 60;
 const AGENT_FOLLOWUP_WAIT_TIMEOUT_MS = 60_000;
 const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
+const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
+  AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
 
 type ExecApprovalFollowupParams = {
   approvalId: string;
@@ -242,26 +244,44 @@ function hasTerminalFollowupEvidence(value: unknown): boolean {
 async function waitForAgentFollowupRun(params: {
   runId: string;
   timeoutMs: number;
-}): Promise<{ status: "completed" }> {
+}): Promise<
+  | { status: "completed" }
+  | { status: "observation_ended"; reason: "deadline"; transportErrors: number }
+> {
+  const observationDeadline = Date.now() + AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS;
   let consecutiveTransportErrors = 0;
+  let transportErrors = 0;
   for (;;) {
+    const remainingMs = observationDeadline - Date.now();
+    if (remainingMs <= 0) {
+      return { status: "observation_ended", reason: "deadline", transportErrors };
+    }
+    const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, remainingMs));
     let wait: Record<string, unknown>;
     try {
       wait = await callGatewayTool(
         "agent.wait",
-        { timeoutMs: params.timeoutMs + 2_000 },
+        { timeoutMs: waitTimeoutMs + 2_000 },
         {
           runId: params.runId,
-          timeoutMs: params.timeoutMs,
+          timeoutMs: waitTimeoutMs,
         },
       );
     } catch {
       // The accepted run remains the sole delivery owner. Keep observing
-      // across gateway reconnects instead of racing it with direct delivery.
+      // across bounded gateway reconnects instead of racing it with direct delivery.
       consecutiveTransportErrors += 1;
+      transportErrors += 1;
+      const retryDelayMs = Math.min(
+        AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS,
+        observationDeadline - Date.now(),
+      );
+      if (retryDelayMs <= 0) {
+        return { status: "observation_ended", reason: "deadline", transportErrors };
+      }
       if (consecutiveTransportErrors > 1) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS);
+          const timer = setTimeout(resolve, retryDelayMs);
           timer.unref?.();
         });
       }
@@ -463,10 +483,22 @@ export async function sendExecApprovalFollowup(
         if (!runId) {
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }
-        await waitForAgentFollowupRun({
+        const waitResult = await waitForAgentFollowupRun({
           runId,
           timeoutMs: AGENT_FOLLOWUP_WAIT_TIMEOUT_MS,
         });
+        if (waitResult.status === "observation_ended") {
+          emitDiagnosticEvent({
+            type: "exec.approval.followup_observation_ended",
+            approvalId: params.approvalId,
+            runId,
+            reason: waitResult.reason,
+            transportErrors: waitResult.transportErrors,
+          });
+          log.warn(
+            `Stopped observing accepted exec approval followup ${params.approvalId} after its bounded wait window; run ${runId} remains the sole delivery owner`,
+          );
+        }
         return true;
       }
       throw buildFollowupWaitError({ status, error: accepted.error });
