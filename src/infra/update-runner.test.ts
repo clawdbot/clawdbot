@@ -3302,6 +3302,103 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
+  it("rebuilds and verifies the original runtime before allowing restart after rollback", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const beforeSha = "a".repeat(40);
+    const targetSha = "b".repeat(40);
+    const stableTag = "v1.0.1-1";
+    let currentHead = beforeSha;
+    let buildCount = 0;
+    const calls: string[] = [];
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const writeRuntime = async (head: string) => {
+      const distRoot = path.join(tempDir, "dist");
+      await fs.mkdir(path.join(distRoot, "control-ui"), { recursive: true });
+      await Promise.all([
+        fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
+        fs.writeFile(
+          path.join(distRoot, "build-info.json"),
+          `${JSON.stringify({ commit: head })}\n`,
+          "utf8",
+        ),
+        fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
+        fs.writeFile(
+          path.join(distRoot, ".runtime-postbuildstamp"),
+          `${JSON.stringify({ head })}\n`,
+          "utf8",
+        ),
+        fs.writeFile(path.join(distRoot, "control-ui", "index.html"), "<html></html>", "utf8"),
+      ]);
+    };
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return toCommandResult({ stdout: tempDir });
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return toCommandResult({ stdout: `${currentHead}\n` });
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return toCommandResult({ stdout: "main\n" });
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+        return toCommandResult({ stdout: `${stableTag}\n` });
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
+        currentHead = targetSha;
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} checkout --force main`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} reset --hard ${beforeSha}`) {
+        currentHead = beforeSha;
+        return toCommandResult();
+      }
+      if (key === "pnpm install") {
+        return toCommandResult();
+      }
+      if (key === "pnpm build") {
+        buildCount += 1;
+        await writeRuntime(currentHead);
+        return toCommandResult();
+      }
+      if (key === doctorCommand) {
+        return toCommandResult({ code: 1, stderr: "doctor failed after build" });
+      }
+      return toCommandResult();
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "doctor-failed",
+      recovery: { serviceRestartSafe: true },
+    });
+    expect(buildCount).toBe(2);
+    expect(currentHead).toBe(beforeSha);
+    expect(
+      JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
+    ).toMatchObject({ commit: beforeSha });
+    expect(result.steps.at(-1)).toMatchObject({
+      name: "git rollback runtime verify",
+      exitCode: 0,
+    });
+    expect(calls.indexOf(doctorCommand)).toBeLessThan(
+      calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
+    );
+    expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+  });
+
   it("repairs UI assets when doctor run removes control-ui files", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const uiIndexPath = await setupUiIndex();
