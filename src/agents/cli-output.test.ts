@@ -2106,6 +2106,7 @@ describe("createCliJsonlStreamingParser", () => {
 
   it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
     const visible = createClaudeTaggedReasoningHarness();
+    const mixed = createClaudeTaggedReasoningHarness();
     const tagged = createClaudeTaggedReasoningHarness();
     const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
       parser.push(
@@ -2118,9 +2119,14 @@ describe("createCliJsonlStreamingParser", () => {
         })}\n`,
       );
 
-    pushText(visible.parser, "<div>Visible answer.</div>");
-    expect(visible.assistant.at(-1)?.text).toBe("<div>Visible answer.</div>");
-    expect(visible.parser.getOutput()?.text).toBe("<div>Visible answer.</div>");
+    pushText(visible.parser, "<div>Visible prefix <thi");
+    expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(mixed.parser, "<div>Visible prefix ");
+    pushText(mixed.parser, "<thi");
+    expect(mixed.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(mixed.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
 
     pushText(tagged.parser, "<thi");
     pushText(tagged.parser, "nking>Private analysis.");

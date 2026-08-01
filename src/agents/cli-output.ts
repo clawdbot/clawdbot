@@ -1270,7 +1270,9 @@ function partitionLeadingTaggedReasoning(
   const pendingTagAfterBlock =
     end !== -1 && scan.pendingStart !== undefined && !text.slice(end, scan.pendingStart).trim();
   if (end === -1) {
-    return !final && (depth > 0 || scan.pendingStart !== undefined)
+    const pendingLeadingTag =
+      scan.pendingStart !== undefined && !text.slice(first, scan.pendingStart).trim();
+    return !final && (depth > 0 || pendingLeadingTag)
       ? { pending: true }
       : { pending: false, reasoningText: "", visibleText: text };
   }
