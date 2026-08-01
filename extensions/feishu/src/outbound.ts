@@ -876,13 +876,27 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       accountId,
       mediaLocalRoots,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       onDeliveryResult,
     }) => {
-      const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
+      const { normalizedReplyToId } = resolveFeishuReplyMode({
         replyToId,
         threadId,
       });
+      const nextReplyToId = createReplyToFanout({
+        replyToId: normalizedReplyToId,
+        replyToIdSource,
+        replyToMode,
+      });
+      const nextReplyMode = () => {
+        const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
+          replyToId: nextReplyToId(),
+          threadId,
+        });
+        return { replyToMessageId, replyInThread };
+      };
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
         const commentText = mediaUrl?.trim()
@@ -897,8 +911,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text: commentText,
           accountId: accountId ?? undefined,
-          replyToMessageId,
-          replyInThread,
+          ...nextReplyMode(),
         });
       }
 
@@ -920,8 +933,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text,
           accountId: accountId ?? undefined,
-          replyToMessageId,
-          replyInThread,
+          ...nextReplyMode(),
         });
         textSent = true;
         await reportDelivery(textResult);
@@ -930,6 +942,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       // Upload and send media if URL or local path provided
       if (mediaUrl) {
         let mediaResult: Awaited<ReturnType<typeof sendMediaFeishu>>;
+        const mediaReplyMode = nextReplyMode();
         try {
           mediaResult = await sendMediaFeishu({
             cfg,
@@ -937,8 +950,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaUrl,
             accountId: accountId ?? undefined,
             mediaLocalRoots,
-            replyToMessageId,
-            replyInThread,
+            ...mediaReplyMode,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
         } catch (err) {
@@ -957,8 +969,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             to,
             text: fallbackText,
             accountId: accountId ?? undefined,
-            replyToMessageId,
-            replyInThread,
+            // A rejected upload never delivered its attempted reply target.
+            ...(textSent ? nextReplyMode() : mediaReplyMode),
           });
           await reportDelivery(fallbackResult);
           return fallbackResult;
@@ -973,8 +985,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             to,
             text,
             accountId: accountId ?? undefined,
-            replyToMessageId,
-            replyInThread,
+            ...nextReplyMode(),
           });
           await reportDelivery(textResult);
         }
@@ -987,8 +998,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         to,
         text: text ?? "",
         accountId: accountId ?? undefined,
-        replyToMessageId,
-        replyInThread,
+        ...nextReplyMode(),
       });
     },
   }),

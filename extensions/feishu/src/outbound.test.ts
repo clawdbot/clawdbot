@@ -2394,6 +2394,118 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expect(sendMediaCall()?.replyInThread).toBe(false);
   });
 
+  it("consumes an implicit first-reply target on the caption before sending its attachment", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMediaCall()?.replyToMessageId).toBeUndefined();
+  });
+
+  it("does not reuse an implicit first-reply target for the upload-failure fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.replyToMessageId).toBeUndefined();
+  });
+
+  it("preserves an unconsumed implicit reply target when the first media upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  it("consumes an implicit first-reply target on degraded voice media before its text", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      messageId: "file_msg",
+      voiceIntentDegradedToFile: true,
+    });
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageCall()?.replyToMessageId).toBeUndefined();
+  });
+
+  it("keeps explicit first-mode reply targets sticky across captions and media", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  it("keeps native topic roots sticky across captions, attachments, and fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_topic_root",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_topic_root");
+    expect(sendMediaCall()?.replyInThread).toBe(true);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_topic_root");
+      expect(params.replyInThread).toBe(true);
+    }
+  });
+
   it("forwards threadId as replyInThread=true to sendMediaFeishu", async () => {
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
