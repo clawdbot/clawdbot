@@ -758,7 +758,10 @@ describe("voice-call plugin", () => {
     expect(error?.message).not.toContain("endedAt=");
   });
 
-  it("freezes the invoking agent and session context on tool-created calls", async () => {
+  it.each([
+    { action: "initiate_call", message: "Hello" },
+    { message: "Hello" },
+  ])("freezes invocation context for tool-created calls ($action)", async (params) => {
     const { tools } = setup(
       { provider: "mock" },
       { agentId: "support", sessionKey: "agent:support:discord:channel:general" },
@@ -768,9 +771,8 @@ describe("voice-call plugin", () => {
     };
 
     await tool.execute("id", {
-      action: "initiate_call",
+      ...params,
       to: "+15550001234",
-      message: "Hello",
       requesterSessionKey: "agent:spoofed:requester",
       sessionKey: "agent:support:voice:call-1",
     });
@@ -784,6 +786,13 @@ describe("voice-call plugin", () => {
         requesterSessionKey: "agent:support:discord:channel:general",
       }),
     );
+  });
+
+  it("does not expose requester session identity to the model", () => {
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as { parameters: unknown };
+
+    expect(JSON.stringify(tool.parameters)).not.toContain("requesterSessionKey");
   });
 
   it("tool get_status returns json payload", async () => {

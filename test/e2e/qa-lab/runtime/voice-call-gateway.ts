@@ -222,7 +222,6 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
         message: "Agent tool fixture",
         mode: "conversation",
         sessionKey: "agent:qa:voice-consult",
-        requesterSessionKey: "agent:qa:requester",
       },
     });
     const toolCallId = findStringByKey(tool, "callId");

@@ -189,9 +189,6 @@ const VoiceCallToolSchema = Type.Union([
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    requesterSessionKey: Type.Optional(
-      Type.String({ description: "OpenClaw session key that initiated the call" }),
-    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
   Type.Object({
@@ -223,9 +220,6 @@ const VoiceCallToolSchema = Type.Union([
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    requesterSessionKey: Type.Optional(
-      Type.String({ description: "OpenClaw session key that initiated the call" }),
-    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
@@ -724,6 +718,8 @@ export default definePluginEntry({
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
         const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
+        // Agent ownership and requester lineage come from trusted tool context.
+        // Some harnesses omit agentId but retain its canonical session key.
         const contextAgentId =
           normalizeOptionalString(toolContext.agentId) ??
           parseAgentSessionKey(requesterSessionKey)?.agentId;
@@ -842,9 +838,7 @@ export default definePluginEntry({
               dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
               message: normalizeOptionalString(rawParams.message),
               ...(agentId ? { agentId } : {}),
-              ...(normalizeOptionalString(rawParams.requesterSessionKey)
-                ? { requesterSessionKey: normalizeOptionalString(rawParams.requesterSessionKey) }
-                : {}),
+              ...(requesterSessionKey ? { requesterSessionKey } : {}),
             },
           );
           if (!result.success) {
