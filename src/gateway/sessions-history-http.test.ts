@@ -302,14 +302,6 @@ async function readSessionHistoryBody(
   return (await res.json()) as SessionHistoryBody;
 }
 
-async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
-  await withGatewayHarness(async (harness) => {
-    const body = await readSessionHistoryBody(harness.port, params.sessionKey);
-    expect(body.sessionKey).toBe(params.sessionKey);
-    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
-  });
-}
-
 async function readSseEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   state: { buffer: string },
