@@ -24,7 +24,7 @@ type FormatTimeAgoOptions = {
  * With suffix (default):  "just now", "5m ago", "3h ago", "2d ago"
  * Without suffix:         "0s", "5m", "3h", "2d"
  */
-export type TimeAgoBucket =
+type TimeAgoBucket =
   | { kind: "invalid" }
   | { kind: "seconds"; count: number }
   | { kind: "minutes"; count: number }
