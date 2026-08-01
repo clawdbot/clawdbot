@@ -1876,6 +1876,43 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
   });
 
+  it("marks startup main-session orphans before propagating model runtime failure", async () => {
+    const modelRuntimeError = new Error("model runtime unavailable");
+    const startChannels = vi.fn(async () => {});
+    const prewarmPrimaryModel = vi.fn(async () => {
+      throw modelRuntimeError;
+    });
+    hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValueOnce({
+      marked: 1,
+      skipped: 0,
+    });
+
+    await expect(
+      startGatewaySidecars({
+        cfg: { hooks: { internal: { enabled: false } } } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels,
+        prewarmPrimaryModel,
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      }),
+    ).rejects.toBe(modelRuntimeError);
+
+    expect(hoisted.markStartupOrphanedMainSessionsForRecovery).toHaveBeenCalledTimes(1);
+    expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
+    expect(startChannels).not.toHaveBeenCalled();
+  });
+
   it("logs startup main-session marker failures and still starts channels", async () => {
     const log = { warn: vi.fn() };
     const startChannels = vi.fn(async () => {});

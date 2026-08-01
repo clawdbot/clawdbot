@@ -662,6 +662,8 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  // These runs were orphaned by the previous Gateway lifecycle. Record that fact
+  // even if this process later fails model preparation and never starts channels.
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
       const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
