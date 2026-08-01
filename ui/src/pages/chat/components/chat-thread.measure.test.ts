@@ -365,7 +365,7 @@ describe("chat transcript row measurement", () => {
     expect(observedElements.size).toBe(0);
   });
 
-  it("updates rendered row offsets from freshly wrapped heights after a width change", async () => {
+  it("updates rendered row offsets from freshly wrapped heights while scrolling", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const props = threadProps("pane-width-remeasure");
@@ -380,9 +380,20 @@ describe("chat transcript row measurement", () => {
     await renderTranscript();
     expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
 
-    measuredRowHeight = 180;
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
+    scrollElement!.scrollTop = 40;
+    scrollElement!.dispatchEvent(new Event("scroll"));
+    const virtualizer = (
+      transcript as unknown as {
+        sessionVirtualizer: {
+          virtualizerController: { getVirtualizer: () => { isScrolling: boolean } };
+        };
+      }
+    ).sessionVirtualizer.virtualizerController.getVirtualizer();
+    expect(virtualizer.isScrolling).toBe(true);
+
+    measuredRowHeight = 180;
     for (const observer of resizeObservers) {
       if (scrollElement && observer.observes(scrollElement)) {
         observer.emit(640, 600);
