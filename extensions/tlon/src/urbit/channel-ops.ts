@@ -43,18 +43,14 @@ async function putUrbitChannel(
 const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 async function releaseChannelResponse(response: Response, release: () => Promise<void>) {
-  try {
-    // Guard release closes the dispatcher, not an unread response stream. Error
-    // branches that throw without reading the body must cancel it first so the
-    // connection cannot dangle (mirrors releaseUploadResponse in tlon-api.ts).
-    if (!response.bodyUsed) {
-      await response.body?.cancel();
-    }
-  } catch {
-    // Response cancellation is best-effort; dispatcher release must still run.
-  } finally {
-    await release();
+  // Guard release closes the dispatcher, not an unread response stream. Error
+  // branches that throw without reading the body must cancel it first so the
+  // connection cannot dangle. Start cancellation without awaiting it: awaiting
+  // can deadlock when debug capture tees the stream (same shape as #115873).
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined);
   }
+  await release();
 }
 
 export async function pokeUrbitChannel(

@@ -87,4 +87,29 @@ describe("Urbit channel operations", () => {
     ).rejects.toThrow("Channel activation");
     expect(wakeState.bodyUsedAtRelease).toBe(true);
   });
+
+  it("releases promptly when error body cancellation never settles", async () => {
+    const response = new Response("ship exploded", { status: 500 });
+    const body = response.body;
+    if (!body) {
+      throw new Error("expected a readable error body");
+    }
+    // Debug-proxy capture can tee the stream so cancel() never resolves; release
+    // must still run promptly instead of awaiting the cancellation.
+    vi.spyOn(body, "cancel").mockImplementation(() => new Promise<void>(() => {}));
+    let released = false;
+    const release = vi.fn(async () => {
+      released = true;
+    });
+    vi.mocked(urbitFetch).mockResolvedValueOnce({
+      response,
+      finalUrl: "https://example.com/~/scry/chat/inbox.json",
+      release,
+    });
+
+    await expect(
+      scryUrbitPath(CHANNEL_DEPS, { path: "/chat/inbox.json", auditContext: "test" }),
+    ).rejects.toThrow("Scry for path /chat/inbox.json");
+    expect(released).toBe(true);
+  });
 });
