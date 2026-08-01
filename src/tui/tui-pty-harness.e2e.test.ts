@@ -181,6 +181,15 @@ describe.sequential("TUI PTY harness", () => {
             entry.method === "sendChat" && objectFieldEquals(entry, "message", "delivery proof"),
         );
         expect(sent.payload).toMatchObject({ deliver: true });
+        console.log(
+          `[behavior-evidence] tui-session-footer ${JSON.stringify({
+            terminal: "real PTY",
+            sourceModesVisible: true,
+            targetModesCleared: true,
+            traceTransitionVisible: true,
+            fixedDeliveryPropagated: true,
+          })}`,
+        );
       } finally {
         await modeFixture.cleanup();
       }
