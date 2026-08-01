@@ -1,7 +1,11 @@
 // Chat-owned message thread presentation and thread-local interaction state.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
+import {
+  defaultRangeExtractor,
+  measureElement as measureVirtualElement,
+  observeElementRect,
+} from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -264,12 +268,37 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
+  private pendingRowMeasureFrame: number | null = null;
+  private measureRow(element: HTMLElement): void {
+    const instance = this.virtualizerController.getVirtualizer();
+    instance.measureElement(element);
+    const index = instance.indexFromElement(element);
+    // TanStack skips synchronous measurement while the user is scrolling.
+    // Pane toggles can replace or resize rows inside that window, so seed the
+    // cache directly after registering the ResizeObserver.
+    instance.resizeItem(index, instance.options.measureElement(element, undefined, instance));
+  }
+  private measureConnectedRows(): void {
+    for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-virtual-row") ??
+      []) {
+      this.measureRow(row);
+    }
+  }
+  private queueConnectedRowMeasure(): void {
+    if (this.pendingRowMeasureFrame !== null) {
+      return;
+    }
+    this.pendingRowMeasureFrame = requestAnimationFrame(() => {
+      this.pendingRowMeasureFrame = null;
+      this.measureConnectedRows();
+    });
+  }
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
       callback = (element?: Element) => {
         if (element instanceof HTMLElement) {
-          this.virtualizerController.getVirtualizer().measureElement(element);
+          this.measureRow(element);
           return;
         }
         // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
@@ -309,6 +338,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       getScrollElement: () => this.scrollElement,
       estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       getItemKey: () => "",
+      // Ref callbacks and explicit pane-width resets need the current wrapped
+      // height immediately. TanStack's default no-entry path reuses its cache,
+      // which still contains the pre-reset estimate and can overlap rows.
+      measureElement: (element, entry, instance) =>
+        entry
+          ? measureVirtualElement(element, entry, instance)
+          : element[instance.options.horizontal ? "offsetWidth" : "offsetHeight"],
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       scrollMargin: initialTranscriptScrollMargin(host),
@@ -322,13 +358,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
           callback(rect);
           if (widthChanged) {
             // Cached offscreen sizes belong to the old wrapping width. Reset
-            // them and synchronously seed connected rows to avoid stale overlap.
+            // them, seed current rows, then repeat after any same-commit
+            // re-stamp has attached and completed layout.
             instance.measure();
-            for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(
-              ".chat-virtual-row",
-            ) ?? []) {
-              instance.measureElement(row);
-            }
+            this.measureConnectedRows();
+            this.queueConnectedRowMeasure();
           }
         }),
       rangeExtractor: (range) => {
@@ -399,6 +433,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
 
   disconnect(): void {
+    if (this.pendingRowMeasureFrame !== null) {
+      cancelAnimationFrame(this.pendingRowMeasureFrame);
+      this.pendingRowMeasureFrame = null;
+    }
     if (this.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.pendingScrollFrame);
       this.pendingScrollFrame = null;
