@@ -456,9 +456,7 @@ enum TalkModeGatewayConfigParser {
     }
 
     private static func requiresForcedAgentConsultRelay(_ realtime: [String: AnyCodable]?) -> Bool {
-        Self.firstString(realtime, keys: ["mode"])?.lowercased() == "realtime"
-            && Self.firstString(realtime, keys: ["brain"])?.lowercased() == "agent-consult"
-            && Self.firstString(realtime, keys: ["consultRouting"])?.lowercased() == "force-agent-consult"
+        Self.firstString(realtime, keys: ["consultRouting"])?.lowercased() == "force-agent-consult"
     }
 
     private static func resolvedExecutionMode(

@@ -681,6 +681,33 @@ struct TalkModeManagerTests {
         #expect(openAIRouting.route == .realtimeRelay)
     }
 
+    @Test func `routes forced agent consultation through gateway relay without mode or brain`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "openai",
+                    "consultRouting": "force-agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+        let routing = TalkModeRoutingResolver.resolve(
+            parsed: parsed,
+            providerSelection: .openAIRealtime,
+            defaultProvider: "elevenlabs",
+            defaultRealtimeModelId: "gpt-realtime-2")
+
+        #expect(parsed.requiresGatewayRealtimeTransport)
+        #expect(parsed.openAIRequiresGatewayRealtimeTransport)
+        #expect(routing.route == .realtimeRelay)
+    }
+
     @Test func `keeps Azure open AI realtime on gateway relay`() {
         for providerConfig in [
             ["azureEndpoint": "https://example.openai.azure.com"],
