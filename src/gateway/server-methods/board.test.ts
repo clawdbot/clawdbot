@@ -298,6 +298,7 @@ describe("board gateway methods", () => {
     expect(put).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
+        resolvedWidgetName: "weather",
         widgets: [expect.objectContaining({ name: "weather", grantState: "pending" })],
       }),
     );
