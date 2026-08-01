@@ -58,7 +58,7 @@ export function rawDataText(data: RawData): string {
 }
 
 export async function assertCopilotStaleRunIsolation(params: {
-  expect: typeof vitestExpect;
+  expect: typeof VitestExpect;
   gateway: CopilotTurnIsolationGateway;
   panel: CopilotTurnIsolationPanel;
 }): Promise<void> {
@@ -135,7 +135,7 @@ export async function assertCopilotStaleRunIsolation(params: {
     .toContain("Isolated reply: next normal turn marker");
 }
 
-export function isSidePanelTarget(target: { url: string }): boolean {
+function isSidePanelTarget(target: { url: string }): boolean {
   try {
     return new URL(target.url).pathname.endsWith("/sidepanel.html");
   } catch {
