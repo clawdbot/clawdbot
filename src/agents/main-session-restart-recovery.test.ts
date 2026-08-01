@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -52,8 +51,6 @@ import { deliverAgentCommandResult } from "./command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "./embedded-agent-runner/runs.js";
@@ -113,21 +110,6 @@ type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRun
 const recoverRestartAbortedMainSessions = (
   params: RecoveryParams<Parameters<typeof recoverRestartAbortedMainSessionsBase>[0]>,
 ) => recoverRestartAbortedMainSessionsBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
-const recoverStartupOrphanedMainSessions = async (
-  params: RecoveryParams<Parameters<typeof recoverRestartAbortedMainSessionsBase>[0]> & {
-    updatedBeforeMs?: number;
-  },
-) => {
-  if (params.shouldContinue?.() === false) {
-    return { marked: 0, recovered: 0, failed: 0, skipped: 0 };
-  }
-  const marked = await markStartupOrphanedMainSessionsForRecovery(params);
-  if (params.shouldContinue?.() === false) {
-    return { marked: marked.marked, recovered: 0, failed: 0, skipped: marked.skipped };
-  }
-  const recovered = await recoverRestartAbortedMainSessions(params);
-  return { ...recovered, marked: marked.marked, skipped: marked.skipped + recovered.skipped };
-};
 const retryRestartAbortedMainSessionRecovery = (
   params: RecoveryParams<Parameters<typeof retryRestartAbortedMainSessionRecoveryBase>[0]>,
 ) => retryRestartAbortedMainSessionRecoveryBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
@@ -2023,7 +2005,16 @@ describe("main-session-restart-recovery", () => {
         updatedAt: cutoff - 10_000,
         status: "running",
       },
+      "agent:main:control": {
+        sessionId: "control-session",
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
     });
+    await writeTranscript(sessionsDir, "control-session", [
+      { role: "user", content: "resume the control session" },
+      { role: "toolResult", content: "done" },
+    ]);
 
     const createHandle = (runId: string): EmbeddedAgentQueueHandle => ({
       kind: "embedded",
@@ -2047,138 +2038,108 @@ describe("main-session-restart-recovery", () => {
       setActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
     }
 
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
     try {
-      await expect(
-        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
-      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({
-          sessionKey,
-          storePath: path.join(sessionsDir, "sessions.json"),
-        }),
-      ).toMatchObject({ status: "running" });
+      await waitForFast(() =>
+        expect(
+          loadSessionEntry({
+            sessionKey: "agent:main:control",
+            storePath: path.join(sessionsDir, "sessions.json"),
+          }),
+        ).toMatchObject({ abortedLastRun: false }),
+      );
+      await recovery.stop();
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      const activeEntry = loadSessionEntry({
+        sessionKey,
+        storePath: path.join(sessionsDir, "sessions.json"),
+      });
+      expect(activeEntry).toMatchObject({ status: "running" });
+      expect(activeEntry?.abortedLastRun).toBeUndefined();
     } finally {
+      await recovery.stop();
       clearActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
       clearActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
     }
   });
 
-  it("reconciles only prior-lifecycle running sessions after an in-process restart", async () => {
+  it("cancels a stale startup owner after a mid-scan lifecycle rotation", async () => {
     const sessionsDir = await makeSessionsDir();
-    const cutoff = Date.now();
-    const abandonedKey = "agent:main:abandoned-client";
-    const liveKey = "agent:main:live-client";
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:generation-race";
+    const sessionId = "generation-race-session";
     await writeStore(sessionsDir, {
-      [abandonedKey]: {
-        sessionId: "abandoned-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-      },
-      [liveKey]: {
-        sessionId: "live-session",
-        updatedAt: cutoff - 10_000,
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now() - 10_000,
         status: "running",
       },
     });
-    await writeTranscript(sessionsDir, "abandoned-session", [
-      { role: "system", content: "the client disappeared before the turn became resumable" },
-    ]);
 
-    const createHandle = (
-      runId: string,
-      queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async () => {},
-      abort: EmbeddedAgentQueueHandle["abort"] = () => {},
-    ): EmbeddedAgentQueueHandle => ({
+    const originalApply = sessionAccessor.applySessionEntryReplacements;
+    const markerEntered = createDeferred();
+    const releaseMarker = createDeferred();
+    let pausedMarker = false;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        if (params.requireWriteSuccess === true && !pausedMarker) {
+          pausedMarker = true;
+          markerEntered.resolve();
+          await releaseMarker.promise;
+        }
+        return await originalApply(params);
+      });
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    await markerEntered.promise;
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    // Rotate while the production scheduler owns the startup scan. Its marker
+    // must re-read the replacement generation's owner before writing, while
+    // stop waits for that in-flight root-work admission to leave cleanly.
+    rotateAgentEventLifecycleGeneration();
+    const liveAbort = vi.fn();
+    const liveHandle: EmbeddedAgentQueueHandle = {
       kind: "embedded",
-      runId,
-      queueMessage,
+      runId: "live-run",
+      queueMessage: async () => {},
       isStreaming: () => true,
       isCompacting: () => false,
-      abort,
+      abort: liveAbort,
+    };
+    setActiveEmbeddedRun(sessionId, liveHandle, sessionKey);
+    let stopSettled = false;
+    const stopping = recovery.stop().then(() => {
+      stopSettled = true;
     });
-    const abandonedReply = createReplyOperation({
-      sessionKey: abandonedKey,
-      sessionId: "abandoned-session",
-      resetTriggered: false,
-    });
-    const abandonedReplyQueue = vi.fn(async () => {});
-    const abandonedReplyCancel = vi.fn();
-    abandonedReply.setPhase("running");
-    abandonedReply.attachBackend({
-      kind: "embedded",
-      cancel: abandonedReplyCancel,
-      isStreaming: () => true,
-      queueMessage: abandonedReplyQueue,
-    });
-    const abandonedEmbeddedQueue = vi.fn(async () => {});
-    const abandonedEmbeddedAbort = vi.fn();
-    const abandonedHandle = createHandle(
-      "abandoned-run",
-      abandonedEmbeddedQueue,
-      abandonedEmbeddedAbort,
-    );
-    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
-
-    const firstRecovery = recoverStartupOrphanedMainSessions({
-      stateDir: tmpDir,
-      updatedBeforeMs: cutoff,
-    });
-    // Advance ownership while the async store discovery above is pending. The
-    // older scan must drop the stale owner without overlooking this new live one.
-    rotateAgentEventLifecycleGeneration();
-    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
-
-    await expect(
-      queueEmbeddedAgentMessageWithOutcomeAsync("abandoned-session", "do not route stale"),
-    ).resolves.toMatchObject({ queued: false, reason: "no_active_run" });
-    expect(abandonedEmbeddedQueue).not.toHaveBeenCalled();
-    expect(abandonedEmbeddedAbort).toHaveBeenCalledWith("restart");
-    expect(abandonedReplyQueue).not.toHaveBeenCalled();
-    expect(abandonedReplyCancel).toHaveBeenCalledWith("restart");
-    expect(resolveActiveEmbeddedRunHandleSessionId(abandonedKey)).toBeUndefined();
-
-    const liveReply = createReplyOperation({
-      sessionKey: liveKey,
-      sessionId: "live-session",
-      resetTriggered: false,
-    });
-    const liveAbort = vi.fn();
-    const liveHandle = createHandle("live-run", undefined, liveAbort);
-    setActiveEmbeddedRun("live-session", liveHandle, liveKey);
     try {
-      const first = await firstRecovery;
+      await Promise.resolve();
+      expect(stopSettled).toBe(false);
 
-      expect(first).toEqual({ marked: 1, recovered: 0, failed: 1, skipped: 0 });
+      releaseMarker.resolve();
+      await stopping;
+
       expect(callGateway).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({
-          sessionKey: abandonedKey,
-          storePath: path.join(sessionsDir, "sessions.json"),
-        }),
-      ).toMatchObject({
-        status: "failed",
-        abortedLastRun: true,
-      });
-      expect(
-        loadSessionEntry({
-          sessionKey: liveKey,
-          storePath: path.join(sessionsDir, "sessions.json"),
-        }),
-      ).toMatchObject({
-        status: "running",
-      });
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry).toMatchObject({ status: "running" });
+      expect(entry?.abortedLastRun).toBeUndefined();
+      expect(entry?.mainRestartRecovery).toBeUndefined();
       expect(liveAbort).not.toHaveBeenCalled();
-      expect(liveReply.abortSignal.aborted).toBe(false);
-
-      await expect(
-        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
-      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      clearActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
-      clearActiveEmbeddedRun("live-session", liveHandle, liveKey);
-      abandonedReply.complete();
-      liveReply.complete();
+      releaseMarker.resolve();
+      await stopping;
+      replacementSpy.mockRestore();
+      clearActiveEmbeddedRun(sessionId, liveHandle, sessionKey);
     }
   });
 
@@ -2210,16 +2171,22 @@ describe("main-session-restart-recovery", () => {
       { role: "toolResult", content: "custom result" },
     ]);
 
-    const result = await recoverStartupOrphanedMainSessions({
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
       cfg: { session: { store: customStorePath } },
+      delayMs: 0,
       stateDir: tmpDir,
-      updatedBeforeMs: cutoff,
     });
+    try {
+      await waitForFast(() =>
+        expect(
+          loadSessionEntry({ sessionKey: "agent:main:main", storePath: customStorePath }),
+        ).toMatchObject({ abortedLastRun: false }),
+      );
+      await recovery.stop();
+    } finally {
+      await recovery.stop();
+    }
 
-    expect(result).toMatchObject({ marked: 2, recovered: 1, failed: 0 });
-    // Discovery can revisit the non-routable default store through a canonical path alias.
-    expect(result.skipped).toBeGreaterThanOrEqual(1);
-    expect(result.skipped).toBeLessThanOrEqual(2);
     expect(callGateway).toHaveBeenCalledOnce();
     const defaultStore = readStore(path.join(defaultSessionsDir, "sessions.json"));
     const customStore = readStore(customStorePath);
@@ -2605,12 +2572,32 @@ describe("main-session-restart-recovery", () => {
       await retryScheduled.promise;
       expect(countAgentDispatches()).toBe(1);
 
+      await writeStore(sessionsDir, {
+        "agent:main:late-startup-row": {
+          sessionId: "late-startup-session",
+          updatedAt: 1,
+          status: "running",
+        },
+      });
+      await writeTranscript(sessionsDir, "late-startup-session", [
+        { role: "user", content: "this row appeared after startup marking" },
+        { role: "toolResult", content: "done" },
+      ]);
+
       await vi.advanceTimersByTimeAsync(4_999);
       expect(countAgentDispatches()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(1);
       await secondDispatch.promise;
+      await recovery.stop();
+
       expect(countAgentDispatches()).toBe(2);
+      const lateEntry = loadSessionEntry({
+        sessionKey: "agent:main:late-startup-row",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      });
+      expect(lateEntry).toMatchObject({ status: "running" });
+      expect(lateEntry?.abortedLastRun).toBeUndefined();
     } finally {
       await recovery?.stop();
       setTimeoutSpy.mockRestore();

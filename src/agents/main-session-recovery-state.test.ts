@@ -702,7 +702,6 @@ describe("main session recovery state", () => {
     expect(observe(entry, "generation-1")).toEqual({ status: "tombstoned" });
 
     entry.abortedLastRun = true;
-    expect(entry.abortedLastRun).toBe(true);
     expect(transitionMainSessionRecovery(entry, { kind: "doctor_repair", now: 500 })).toEqual({
       kind: "doctor_repaired",
     });
