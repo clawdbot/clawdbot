@@ -257,7 +257,7 @@ describe("OpenClaw performance workflow", () => {
   it("measures warmed and first-device gateway health separately", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
 
-    expect(run).toContain("--case gatewayHealthJson \\");
+    expect(run).toContain("--case gatewayHealthJsonConnected \\");
     expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
   });
 

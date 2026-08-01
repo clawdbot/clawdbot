@@ -807,7 +807,7 @@ jobs:
 
           OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
             node --import tsx scripts/bench-cli-startup.ts \
-            --case gatewayHealthJson \
+            --case gatewayHealthJsonConnected \
             --case gatewayHealthJsonFirstDevice \
             --case configGetGatewayPort \
             --runs "$source_runs" \
