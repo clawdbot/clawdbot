@@ -147,7 +147,7 @@ describe("provider failover hook structured signals", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
     const carriers = [
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
-      "ValidationException: invalid signature on thinking block in message history",
+      'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
     ];
 
     for (const errorMessage of carriers) {

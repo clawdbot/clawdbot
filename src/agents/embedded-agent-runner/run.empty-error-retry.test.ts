@@ -154,7 +154,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
       label: "flattened Bedrock",
       provider: "amazon-bedrock",
       model: "anthropic.claude-sonnet-4-6",
-      errorMessage: "ValidationException: invalid signature on thinking block in message history",
+      errorMessage:
+        'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
     },
   ])("surfaces /new without retrying a $label thinking-signature rejection", async (testCase) => {
     mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
