@@ -358,7 +358,6 @@ export function resolveGatewayScopedTools(params: {
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-          sessionsSendCallerSessionKey: params.sessionsSendCallerSessionKey,
           inboundEventKind: params.inboundEventKind,
           requireExplicitMessageTarget: params.requireExplicitMessageTarget,
           runtimeToolAllowlist: [...mediatedToolNames],

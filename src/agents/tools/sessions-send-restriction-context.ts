@@ -11,7 +11,14 @@ export function withSessionsSendRestrictionContext<T>(
   context: SessionsSendRestrictionContext,
   run: () => T,
 ): T {
-  return activeContext.run({ ...activeContext.getStore(), ...context }, run);
+  const nextContext = { ...activeContext.getStore() };
+  if (context.agentSessionId) {
+    nextContext.agentSessionId = context.agentSessionId;
+  }
+  if (context.callerSessionKey) {
+    nextContext.callerSessionKey = context.callerSessionKey;
+  }
+  return activeContext.run(nextContext, run);
 }
 
 export function captureSessionsSendRestrictionContext(): SessionsSendRestrictionContext {
