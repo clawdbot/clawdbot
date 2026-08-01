@@ -1,12 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
 import {
-  restoreAdmittedRecoveryWithRetries,
-  scheduleAdmittedRecoveryRestore,
-} from "../../agents/main-session-recovery-restore.js";
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+  releaseExecApprovalFollowupRuntimeHandoff,
+} from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  buildExecApprovalContinuationPrompt,
+  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+  type ExecApprovalContinuationPromptRange,
+} from "../../agents/bash-tools.exec-approval-output.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
@@ -117,6 +124,8 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    const execApprovalFollowupHandoffClaimId = randomUUID();
+    let claimedExecApprovalFollowupHandoffId: string | undefined;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -145,11 +154,58 @@ export function startAgentRunExecution(params: {
         return;
       }
 
+      let execApprovalFollowupRuntimeHandoff =
+        params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
+          ? claimExecApprovalFollowupRuntimeHandoff({
+              handoffId: params.request.internalRuntimeHandoffId,
+              approvalId: params.execApprovalFollowupApprovalId,
+              idempotencyKey: params.idempotencyKey,
+              sessionKey: params.resolvedSessionKey,
+              claimId: execApprovalFollowupHandoffClaimId,
+            })
+          : undefined;
+      if (
+        !execApprovalFollowupRuntimeHandoff &&
+        params.canUseInternalRuntimeHandoff &&
+        params.execApprovalFollowupApprovalId &&
+        params.requestedSessionKeyRaw &&
+        params.requestedSessionKeyRaw !== params.resolvedSessionKey
+      ) {
+        execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
+          handoffId: params.request.internalRuntimeHandoffId,
+          approvalId: params.execApprovalFollowupApprovalId,
+          idempotencyKey: params.idempotencyKey,
+          sessionKey: params.requestedSessionKeyRaw,
+          claimId: execApprovalFollowupHandoffClaimId,
+        });
+      }
+      if (execApprovalFollowupRuntimeHandoff) {
+        claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
+      }
+
+      let message = params.message;
+      let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
+      let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
+      let execApprovalContinuationTranscriptPromptRange:
+        | ExecApprovalContinuationPromptRange
+        | undefined;
+      if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
+        const continuation = buildExecApprovalContinuationPrompt(
+          execApprovalFollowupRuntimeHandoff.resultText,
+        );
+        message = continuation.message;
+        effectiveTranscriptInputText = continuation.message;
+        execApprovalContinuationPromptRange = continuation.resultRange;
+        execApprovalContinuationTranscriptPromptRange = continuation.resultRange;
+      } else if (message === EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE) {
+        throw new Error("exec approval followup runtime handoff is unavailable");
+      }
+
       if (!params.isOneShotModelRun && params.resolvedSessionKey) {
         await reactivateCompletedSubagentSession({
           sessionKey: params.resolvedSessionKey,
           runId: params.runId,
-          task: params.message,
+          task: message,
         });
       }
       if (
@@ -176,9 +232,19 @@ export function startAgentRunExecution(params: {
         });
       }
 
-      let message = params.message;
       if (!params.isRawModelRun) {
-        message = annotateInterSessionPromptText(message, params.inputProvenance);
+        const unannotatedMessage = message;
+        message = annotateInterSessionPromptText(unannotatedMessage, params.inputProvenance);
+        if (execApprovalContinuationPromptRange) {
+          if (!message.endsWith(unannotatedMessage)) {
+            throw new Error("exec approval continuation prompt range could not be annotated");
+          }
+          const offset = message.length - unannotatedMessage.length;
+          execApprovalContinuationPromptRange = {
+            start: offset + execApprovalContinuationPromptRange.start,
+            end: offset + execApprovalContinuationPromptRange.end,
+          };
+        }
       }
       const userTurnTranscriptRecorder =
         params.resolvedSessionKey &&
@@ -188,7 +254,7 @@ export function startAgentRunExecution(params: {
         params.imageOrder.length === 0
           ? createUserTurnTranscriptRecorder({
               input: {
-                text: params.effectiveTranscriptInputText,
+                text: effectiveTranscriptInputText,
                 timestamp: Date.now(),
                 idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
                 ...gatewayClientSenderFields(params.client),
@@ -247,29 +313,6 @@ export function startAgentRunExecution(params: {
                 resolveAgentIdFromSessionKey(params.resolvedSessionKey) === params.agentId)
             ? params.agentId
             : undefined;
-      let execApprovalFollowupRuntimeHandoff =
-        params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-          ? consumeExecApprovalFollowupRuntimeHandoff({
-              handoffId: params.request.internalRuntimeHandoffId,
-              approvalId: params.execApprovalFollowupApprovalId,
-              idempotencyKey: params.idempotencyKey,
-              sessionKey: params.resolvedSessionKey,
-            })
-          : undefined;
-      if (
-        !execApprovalFollowupRuntimeHandoff &&
-        params.canUseInternalRuntimeHandoff &&
-        params.execApprovalFollowupApprovalId &&
-        params.requestedSessionKeyRaw &&
-        params.requestedSessionKeyRaw !== params.resolvedSessionKey
-      ) {
-        execApprovalFollowupRuntimeHandoff = consumeExecApprovalFollowupRuntimeHandoff({
-          handoffId: params.request.internalRuntimeHandoffId,
-          approvalId: params.execApprovalFollowupApprovalId,
-          idempotencyKey: params.idempotencyKey,
-          sessionKey: params.requestedSessionKeyRaw,
-        });
-      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -278,11 +321,6 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
-      const trustedInternalHandoff =
-        params.client?.internal?.delegatedToolPolicyHandoff === true &&
-        params.inputProvenance?.kind === "inter_session" &&
-        params.inputProvenance.sourceTool === "subagent_announce";
-
       const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
@@ -332,6 +370,10 @@ export function startAgentRunExecution(params: {
           ...(execApprovalFollowupRuntimeHandoff?.bashElevated
             ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
             : {}),
+          ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
+          ...(execApprovalContinuationTranscriptPromptRange
+            ? { execApprovalContinuationTranscriptPromptRange }
+            : {}),
           groupId: params.groupId,
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
@@ -348,7 +390,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
           runtimePluginToolGrant,
-          trustedInternalHandoff,
+          trustedInternalHandoff: prepared.trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
           scheduledToolPolicy: params.restoredCronContinuation
             ? resolveScheduledToolPolicyContext({
@@ -438,6 +480,10 @@ export function startAgentRunExecution(params: {
         restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: claimedExecApprovalFollowupHandoffId,
+        claimId: execApprovalFollowupHandoffClaimId,
+      });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
       const payload = {
@@ -456,18 +502,21 @@ export function startAgentRunExecution(params: {
       });
     } finally {
       if (!dispatched) {
+        releaseExecApprovalFollowupRuntimeHandoff({
+          handoffId: claimedExecApprovalFollowupHandoffId,
+          claimId: execApprovalFollowupHandoffClaimId,
+        });
         try {
-          if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
-            try {
-              pendingRecovery ??= await restoreAdmittedRecoveryWithRetries(
-                prepared.restoreAdmittedRestartRecoveryInterrupted,
-              );
-            } catch (err) {
-              params.context.logGateway.warn(
-                `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
-              );
-              scheduleAdmittedRecoveryRestore(prepared.restoreAdmittedRestartRecoveryInterrupted);
-            }
+          const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
+          if (restoreAdmittedRecovery) {
+            pendingRecovery ??= await repairMainSessionRecoveryMutation({
+              mutation: restoreAdmittedRecovery,
+              onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+              onError: (err) =>
+                params.context.logGateway.warn(
+                  `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+                ),
+            });
           }
         } finally {
           try {

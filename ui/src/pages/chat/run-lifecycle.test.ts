@@ -6,6 +6,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  handleAbortChat,
   hasAbortableSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -61,6 +62,52 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     ...over,
   };
 }
+
+describe("handleAbortChat", () => {
+  it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      connected: false,
+      chatMessage: "keep this draft",
+      sessionsResult: makeSessionsResult([
+        { key: "agent:main", hasActiveRun: true, status: "running" },
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.chatError).toBe("Not connected. Try again after reconnecting.");
+    expect(host.lastError).toBe(host.chatError);
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps offline exact-run stops safely queued for reconnect", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "keep this draft",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      sessionKey: "agent:main",
+      runId: "run-main",
+    });
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatError ?? null).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+});
 
 describe("replayPendingChatAbort", () => {
   it("dispatches a queued exact browser run stop through chat.abort", async () => {

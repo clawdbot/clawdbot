@@ -47,11 +47,11 @@ export async function retireSupersededSubagentRun(params: {
   runs: Map<string, SubagentRunRecord>;
   clearPendingLifecycleError: (runId: string) => void;
 }): Promise<void> {
-  const transcriptTarget = params.entry.execution?.transcriptTarget;
+  const transcriptTarget = params.entry.execution.transcriptTarget;
   params.clearPendingLifecycleError(params.runId);
   params.runs.delete(params.runId);
   const transcriptStillOwned = Array.from(params.runs.values()).some((candidate) => {
-    const candidateTarget = candidate.execution?.transcriptTarget;
+    const candidateTarget = candidate.execution.transcriptTarget;
     return (
       candidateTarget?.sessionId === transcriptTarget?.sessionId &&
       candidateTarget?.sessionKey === transcriptTarget?.sessionKey &&
@@ -88,6 +88,11 @@ export function createSubagentRegistrySweeper(params: {
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
+  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  getRunsForCollectorGroup: (
+    requesterSessionKey: string,
+    groupId: string,
+  ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { runs, resumedRuns } = params;
@@ -145,7 +150,7 @@ export function createSubagentRegistrySweeper(params: {
   });
 
   function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
-    return typeof entry.endedAt === "number" && isDeliverySuspended(entry);
+    return typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry);
   }
 
   function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
@@ -172,8 +177,8 @@ export function createSubagentRegistrySweeper(params: {
       requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
       childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
       childRunId: payload?.childRunId ?? entry.runId,
-      endedAt: payload?.endedAt ?? entry.endedAt,
-      status: payload?.outcome?.status ?? entry.outcome?.status,
+      endedAt: payload?.endedAt ?? entry.execution.endedAt,
+      status: payload?.outcome?.status ?? entry.execution.outcome?.status,
       lastError: getDeliveryLastError(entry) ?? null,
     };
     delivery.payload = undefined;
@@ -202,7 +207,7 @@ export function createSubagentRegistrySweeper(params: {
     if (shouldDeleteAttachments) {
       await safeRemoveAttachmentsDir(entry);
     }
-    await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
+    await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
     const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
     params.completeCleanupBookkeeping({
       runId,
@@ -234,10 +239,17 @@ export function createSubagentRegistrySweeper(params: {
       const storeCache: SubagentSessionStoreCache = new Map();
       let mutated = false;
       const mutatedRunIds = new Set<string>();
-      const archivedCollectorGroups = new Set<string>();
-      const suspendedEntries = [...runs.entries()].filter(([, entry]) =>
-        isSuspendedPendingFinalDelivery(entry),
-      );
+      const collectorArchiveCandidates = new Map<
+        string,
+        { requesterSessionKey: string; groupId: string }
+      >();
+      const suspendedEntries: Array<[string, SubagentRunRecord]> = [];
+      for (const pair of runs.entries()) {
+        const [, entry] = pair;
+        if (isSuspendedPendingFinalDelivery(entry)) {
+          suspendedEntries.push(pair);
+        }
+      }
       const pressureDiscardRunIds = new Set<string>();
       if (suspendedEntries.length > SUSPENDED_DELIVERY_HARD_CAP) {
         const pressureCount = Math.max(
@@ -277,9 +289,9 @@ export function createSubagentRegistrySweeper(params: {
           }
           continue;
         }
-        if (typeof entry.endedAt !== "number") {
+        if (typeof entry.execution.endedAt !== "number") {
           const hasLiveRunContext = Boolean(getAgentRunContext(runId));
-          const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
+          const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
             if (orphanReason) {
@@ -304,7 +316,7 @@ export function createSubagentRegistrySweeper(params: {
               storeCache,
             });
             const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-              notBeforeMs: entry.startedAt ?? entry.createdAt,
+              notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
             if (completion) {
               await params.completeSubagentRunWithRecovery(
@@ -357,6 +369,7 @@ export function createSubagentRegistrySweeper(params: {
             completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
             retireSupersededRun: params.retireSupersededRun,
             startSubagentAnnounceCleanupFlow: params.startSubagentAnnounceCleanupFlow,
+            getRunsForChildSession: params.getRunsForChildSession,
             warn: params.warn,
           });
           if (reconciled) {
@@ -396,97 +409,12 @@ export function createSubagentRegistrySweeper(params: {
           const groupKey = groupId
             ? JSON.stringify([swarmRequesterSessionKey, groupId])
             : undefined;
-          if (!groupKey || archivedCollectorGroups.has(groupKey)) {
-            continue;
-          }
-          const groupEntries = [...runs.entries()].filter(
-            ([, candidate]) =>
-              candidate.collect === true &&
-              (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-                swarmRequesterSessionKey &&
-              candidate.groupId === groupId,
-          );
-          if (
-            groupEntries.some(
-              ([, candidate]) =>
-                !candidate.collectorCompletion ||
-                candidate.collectorLaunchCleanupPending === true ||
-                candidate.archiveAtMs === undefined ||
-                candidate.archiveAtMs > now,
-            )
-          ) {
-            continue;
-          }
-          let deleteFailed = false;
-          for (const [candidateRunId, candidate] of groupEntries) {
-            try {
-              await deleteSession(candidate.childSessionKey);
-            } catch (error) {
-              params.warn("sessions.delete failed during collector group sweep; keeping group", {
-                runId: candidateRunId,
-                childSessionKey: candidate.childSessionKey,
-                groupId,
-                error,
-              });
-              deleteFailed = true;
-              break;
-            }
-          }
-          if (deleteFailed) {
-            continue;
-          }
-          let attachmentCleanupFailed = false;
-          for (const [candidateRunId, candidate] of groupEntries) {
-            if (await safeRemoveAttachmentsDir(candidate)) {
-              continue;
-            }
-            params.warn("attachment cleanup failed during collector group sweep; keeping group", {
-              runId: candidateRunId,
-              childSessionKey: candidate.childSessionKey,
+          if (groupKey && groupId) {
+            collectorArchiveCandidates.set(groupKey, {
+              requesterSessionKey: swarmRequesterSessionKey,
               groupId,
             });
-            attachmentCleanupFailed = true;
-            break;
           }
-          if (attachmentCleanupFailed) {
-            continue;
-          }
-          let contextCleanupFailed = false;
-          for (const [candidateRunId, candidate] of groupEntries) {
-            if (
-              candidate.cleanup === "delete" ||
-              typeof candidate.contextEngineCleanupCompletedAt === "number"
-            ) {
-              continue;
-            }
-            try {
-              await params.runContextEngineSubagentEnded(sweptContext(candidate));
-              candidate.contextEngineCleanupCompletedAt = Date.now();
-              params.persist(candidateRunId);
-            } catch (error) {
-              params.warn(
-                "context-engine cleanup failed during collector group sweep; keeping group",
-                {
-                  runId: candidateRunId,
-                  childSessionKey: candidate.childSessionKey,
-                  groupId,
-                  error,
-                },
-              );
-              contextCleanupFailed = true;
-              break;
-            }
-          }
-          if (contextCleanupFailed) {
-            continue;
-          }
-          for (const [candidateRunId] of groupEntries) {
-            params.clearPendingLifecycleError(candidateRunId);
-            runs.delete(candidateRunId);
-            mutatedRunIds.add(candidateRunId);
-          }
-          archivedCollectorGroups.add(groupKey);
-          mutated = true;
           continue;
         }
         if (!entry.archiveAtMs && entry.cleanup === "keep" && entry.spawnMode !== "session") {
@@ -531,6 +459,108 @@ export function createSubagentRegistrySweeper(params: {
         runCleanupTail(runId, "context-engine cleanup", async () => {
           await params.notifyContextEngineSubagentEnded(sweptContext(entry));
         });
+      }
+      for (const { requesterSessionKey, groupId } of collectorArchiveCandidates.values()) {
+        // Earlier sweep work may await while group membership changes. Read the
+        // mutation-owned index once, after per-run collector cleanup has settled.
+        const groupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+        if (
+          groupEntries.some(
+            ([, candidate]) =>
+              !candidate.collectorCompletion ||
+              candidate.collectorLaunchCleanupPending === true ||
+              candidate.archiveAtMs === undefined ||
+              candidate.archiveAtMs > now,
+          )
+        ) {
+          continue;
+        }
+        let deleteFailed = false;
+        for (const [candidateRunId, candidate] of groupEntries) {
+          try {
+            await deleteSession(candidate.childSessionKey);
+          } catch (error) {
+            params.warn("sessions.delete failed during collector group sweep; keeping group", {
+              runId: candidateRunId,
+              childSessionKey: candidate.childSessionKey,
+              groupId,
+              error,
+            });
+            deleteFailed = true;
+            break;
+          }
+        }
+        if (deleteFailed) {
+          continue;
+        }
+        let attachmentCleanupFailed = false;
+        for (const [candidateRunId, candidate] of groupEntries) {
+          if (await safeRemoveAttachmentsDir(candidate)) {
+            continue;
+          }
+          params.warn("attachment cleanup failed during collector group sweep; keeping group", {
+            runId: candidateRunId,
+            childSessionKey: candidate.childSessionKey,
+            groupId,
+          });
+          attachmentCleanupFailed = true;
+          break;
+        }
+        if (attachmentCleanupFailed) {
+          continue;
+        }
+        let contextCleanupFailed = false;
+        for (const [candidateRunId, candidate] of groupEntries) {
+          if (
+            candidate.cleanup === "delete" ||
+            typeof candidate.contextEngineCleanupCompletedAt === "number"
+          ) {
+            continue;
+          }
+          try {
+            await params.runContextEngineSubagentEnded(sweptContext(candidate));
+            candidate.contextEngineCleanupCompletedAt = Date.now();
+            params.persist(candidateRunId);
+          } catch (error) {
+            params.warn(
+              "context-engine cleanup failed during collector group sweep; keeping group",
+              {
+                runId: candidateRunId,
+                childSessionKey: candidate.childSessionKey,
+                groupId,
+                error,
+              },
+            );
+            contextCleanupFailed = true;
+            break;
+          }
+        }
+        if (contextCleanupFailed) {
+          continue;
+        }
+        // Cleanup awaits can admit a new collector or replace an existing run.
+        // Delete only the exact group snapshot whose resources were cleaned.
+        const expectedGroupEntries = new Map(groupEntries);
+        const liveGroupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+        if (
+          liveGroupEntries.length !== groupEntries.length ||
+          liveGroupEntries.some(
+            ([candidateRunId, candidate]) =>
+              expectedGroupEntries.get(candidateRunId) !== candidate ||
+              !candidate.collectorCompletion ||
+              candidate.collectorLaunchCleanupPending === true ||
+              candidate.archiveAtMs === undefined ||
+              candidate.archiveAtMs > now,
+          )
+        ) {
+          continue;
+        }
+        for (const [candidateRunId] of liveGroupEntries) {
+          params.clearPendingLifecycleError(candidateRunId);
+          runs.delete(candidateRunId);
+          mutatedRunIds.add(candidateRunId);
+        }
+        mutated = true;
       }
       params.sweepPendingLifecycle(now);
 

@@ -520,6 +520,62 @@ describe("createGatewayPluginRequestHandler", () => {
     }
   });
 
+  it.each([
+    {
+      label: "setHeader",
+      setContentLength: (res: ServerResponse) => res.setHeader("Content-Length", "10"),
+    },
+    {
+      label: "writeHead",
+      setContentLength: (res: ServerResponse) => res.writeHead(200, { "Content-Length": "10" }),
+    },
+  ])(
+    "closes an incomplete plugin $label fixed-length response after its route throws",
+    async ({ setContentLength }) => {
+      const log = createPluginLog();
+      const handler = createGatewayPluginRequestHandler({
+        registry: createTestRegistry({
+          httpRoutes: [
+            createRoute({
+              path: "/incomplete",
+              handler: async (_req, res) => {
+                setContentLength(res);
+                res.write("partial");
+                throw new Error("boom");
+              },
+            }),
+          ],
+        }),
+        log,
+      });
+      const server = createServer((req, res) => {
+        void handler(req, res);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("server did not bind to a TCP port");
+      }
+
+      try {
+        await expect(
+          fetch(`http://127.0.0.1:${address.port}/incomplete`, {
+            signal: AbortSignal.timeout(500),
+          }).then(async (response) => await response.text()),
+        ).rejects.toMatchObject({ name: "TypeError" });
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
   it("does not end a response the plugin already destroyed before throwing", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({

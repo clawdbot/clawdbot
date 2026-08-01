@@ -43,9 +43,18 @@ type SlackThreadContextData = {
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
 
-type SlackSessionResetFreshness = {
-  state: "missing" | "fresh" | "stale";
-};
+type SlackSessionResetFreshness =
+  | {
+      state: "missing";
+      entry: undefined;
+    }
+  | {
+      state: "fresh" | "stale";
+      entry: {
+        lastInteractionAt?: number;
+        updatedAt?: number;
+      };
+    };
 
 type SlackSessionFreshnessRuntime = {
   session?: {
@@ -146,6 +155,7 @@ export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
+  isGroupDm: boolean;
   isThreadReply: boolean;
   threadTs: string | undefined;
   threadStarter: SlackThreadStarter | null;
@@ -188,11 +198,21 @@ export async function resolveSlackThreadContextData(params: {
           sessionKey: params.sessionKey,
         })
       : undefined;
+  const isMissingThreadSession = threadSessionFreshness
+    ? threadSessionFreshness.state === "missing"
+    : threadSessionPreviousTimestamp === undefined;
+  // A zero updatedAt is an explicit reset tombstone, not an outbound-created row.
+  // Rehydrating it would resurrect history that the reset intentionally discarded.
+  const isOutboundOnlyThreadSession =
+    threadSessionFreshness !== undefined &&
+    threadSessionFreshness.state !== "missing" &&
+    threadSessionFreshness.entry.lastInteractionAt === undefined &&
+    threadSessionFreshness.entry.updatedAt !== 0;
   const shouldSeedInitialThreadContext = Boolean(
     params.isThreadReply &&
     params.threadTs &&
     (threadSessionFreshness
-      ? threadSessionFreshness.state !== "fresh"
+      ? threadSessionFreshness.state !== "fresh" || isOutboundOnlyThreadSession
       : threadSessionPreviousTimestamp === undefined),
   );
   const shouldLoadInitialThreadHistory =
@@ -309,6 +329,11 @@ export async function resolveSlackThreadContextData(params: {
       const historyFilterPolicy = resolveSlackThreadHistoryFilterPolicy({
         includeBotStarterAsRootContext,
         starterTs: currentBotRootTs,
+        // MPIM roots intentionally stay on the flat group session. Outbound
+        // delivery may create the reply-thread session before its first inbound
+        // turn, so recover those assistant replies when hydrating that session.
+        retainCurrentBotHistory:
+          params.isGroupDm && (isMissingThreadSession || isOutboundOnlyThreadSession),
       });
       const {
         kept: threadHistoryWithoutCurrentBot,

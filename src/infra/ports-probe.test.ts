@@ -3,15 +3,21 @@ import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
-async function withListeningServer(cb: (address: net.AddressInfo) => Promise<void>): Promise<void> {
+async function withListeningServer(
+  cb: (address: net.AddressInfo) => Promise<void>,
+  host = "127.0.0.1",
+): Promise<void> {
   const server = net.createServer();
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
+      server.listen(0, host, () => resolve());
     });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+    if (
+      (err as NodeJS.ErrnoException).code === "EPERM" ||
+      (err as NodeJS.ErrnoException).code === "EADDRNOTAVAIL"
+    ) {
       return;
     }
     throw err;
@@ -71,5 +77,12 @@ describe("probePortUsage", () => {
     await withListeningServer(async (address) => {
       await expect(probePortUsage(address.port)).resolves.toBe("busy");
     });
+  });
+
+  it("can scope a probe to a free loopback address when another address owns the port", async () => {
+    await withListeningServer(async (address) => {
+      await expect(probePortUsage(address.port)).resolves.toBe("busy");
+      await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
+    }, "127.0.0.2");
   });
 });

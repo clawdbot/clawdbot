@@ -14,6 +14,7 @@ describe("cron failure alert account routing", () => {
         channel: "telegram",
         to: "telegram:19098680",
         accountId: "telegram-bot",
+        threadId: 42,
       },
     },
     {
@@ -24,6 +25,7 @@ describe("cron failure alert account routing", () => {
         channel: "telegram",
         to: "telegram:19098680",
         accountId: "alert-bot",
+        threadId: undefined,
       },
     },
     {
@@ -73,6 +75,7 @@ describe("cron failure alert account routing", () => {
         channel: "telegram",
         to: "telegram:19098680",
         accountId: "telegram-bot",
+        threadId: 42,
       },
       ...(jobAlert ? { failureAlert: jobAlert } : {}),
       state: {},
@@ -119,5 +122,54 @@ describe("cron failure alert account routing", () => {
 
     expect(sendCronFailureAlert).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
     expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
+  });
+
+  it("keeps the primary topic on same-account failure alerts", () => {
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const state = createCronServiceState({
+      storePath: "/tmp/openclaw-cron-failure-alert-thread-routing.json",
+      cronEnabled: true,
+      cronConfig: { failureAlert: { enabled: true, after: 1 } },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      id: "topic-routed-job",
+      name: "Topic-routed job",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:19098680",
+        accountId: "telegram-bot",
+        threadId: 42,
+      },
+      state: {},
+    };
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "provider unavailable",
+      startedAt: 1,
+      endedAt: 2,
+    });
+
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:19098680",
+        accountId: "telegram-bot",
+        threadId: 42,
+      }),
+    );
   });
 });

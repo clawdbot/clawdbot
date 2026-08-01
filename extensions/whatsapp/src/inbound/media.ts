@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import { identitiesOverlap } from "../identity.js";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
@@ -32,6 +33,7 @@ export async function downloadInboundMedia(
   if (
     !message.imageMessage &&
     !message.videoMessage &&
+    !message.ptvMessage &&
     !message.documentMessage &&
     !message.audioMessage &&
     !message.stickerMessage
@@ -73,13 +75,19 @@ export async function downloadQuotedInboundMedia(
     return undefined;
   }
   const quotedMessage = contextInfo.quotedMessage;
+  const self = sock.user;
+  // Baileys copies fromMe into the media-reupload receipt; own quoted media must retain its author.
+  const quotedFromMe = identitiesOverlap(
+    { jid: contextInfo.participant },
+    { jid: self?.id, lid: self?.lid, e164: self?.phoneNumber },
+  );
   return downloadInboundMedia(
     {
       key: {
         id: contextInfo?.stanzaId || undefined,
         remoteJid: contextInfo.remoteJid ?? msg.key?.remoteJid ?? undefined,
         participant: contextInfo?.participant ?? undefined,
-        fromMe: false,
+        fromMe: quotedFromMe,
       },
       message: quotedMessage,
       messageTimestamp: msg.messageTimestamp,

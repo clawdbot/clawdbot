@@ -1,12 +1,14 @@
 // File Transfer tests cover file write tool plugin behavior.
+import crypto from "node:crypto";
 import {
   callGatewayTool,
   listNodes,
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { humanSize } from "../shared/params.js";
-import { FILE_WRITE_HARD_MAX_BYTES } from "./descriptors.js";
+import { FILE_TRANSFER_SUBDIR, FILE_WRITE_HARD_MAX_BYTES } from "./descriptors.js";
 import { createFileWriteTool } from "./file-write-tool.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
@@ -100,5 +102,39 @@ describe("file_write tool", () => {
     ).resolves.toMatchObject({ details: { size: FILE_WRITE_HARD_MAX_BYTES } });
 
     expect(callGatewayTool).toHaveBeenCalledOnce();
+  });
+
+  it("reads file_fetch media from the shared managed tool namespace", async () => {
+    const buffer = Buffer.from("copied");
+    vi.mocked(readMediaBuffer).mockResolvedValue({
+      id: "media-1",
+      buffer,
+      path: "/gateway/media/tool-file-transfer/media-1.bin",
+      size: buffer.byteLength,
+    });
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: {
+        ok: true,
+        path: "/tmp/out.bin",
+        size: buffer.byteLength,
+        sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+        overwritten: false,
+      },
+    });
+
+    const result = await createFileWriteTool().execute("tool-call-1", {
+      node: "node-1",
+      path: "/tmp/out.bin",
+      sourceMediaId: "media-1",
+    });
+
+    expect(readMediaBuffer).toHaveBeenCalledWith(
+      "media-1",
+      FILE_TRANSFER_SUBDIR,
+      FILE_WRITE_HARD_MAX_BYTES,
+    );
+    expect(result.details).toMatchObject({ source: "media", size: buffer.byteLength });
   });
 });

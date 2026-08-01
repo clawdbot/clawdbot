@@ -4,7 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isOpenClawOrgNpmSpec } from "../infra/npm-registry-spec.js";
 import {
   installedPackageNeedsOpenClawPeerLinkRepair,
-  readInstalledPackagePeerDependencies,
+  readInstalledPackageOpenClawLinkDependencies,
 } from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
@@ -419,8 +419,8 @@ export async function repairOpenClawPeerLinksForNpmInstalls(params: {
       continue;
     }
 
-    const peerDependencies = readInstalledPackagePeerDependencies(installPath);
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    const linkDependencies = readInstalledPackageOpenClawLinkDependencies(installPath);
+    if (!Object.hasOwn(linkDependencies, "openclaw")) {
       continue;
     }
 
@@ -428,7 +428,7 @@ export async function repairOpenClawPeerLinksForNpmInstalls(params: {
       const warnings: string[] = [];
       const peerLinkRepair = await linkOpenClawPeerDependencies({
         installedDir: installPath,
-        peerDependencies,
+        peerDependencies: linkDependencies,
         logger: {
           info: (message) => params.logger.info?.(message),
           warn: (message) => warnings.push(message),

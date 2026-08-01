@@ -70,7 +70,7 @@ export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
-  private rejectedProviderCallIds = new Set<string>();
+  private rejectedProviderCallIds = new Map<string, symbol>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
   private coreSession: VoiceCallCoreSessionConfig | undefined;
@@ -117,7 +117,7 @@ export class CallManager {
 
     const persisted = loadActiveCallsFromStore(this.storePath);
     this.processedEventIds = persisted.processedEventIds;
-    this.rejectedProviderCallIds = persisted.rejectedProviderCallIds;
+    this.rejectedProviderCallIds = new Map();
 
     const verified = await this.verifyRestoredCalls(provider, persisted.activeCalls);
     this.activeCalls = verified;

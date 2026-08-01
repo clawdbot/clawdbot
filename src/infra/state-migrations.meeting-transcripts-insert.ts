@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -6,7 +5,6 @@ import {
   transcriptSessionExportKey,
   transcriptSessionSelector,
 } from "../transcripts/store.js";
-import { sha256Hex } from "./crypto-digest.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
 import {
@@ -14,10 +12,11 @@ import {
   readStagedMeetingTranscriptUtterances,
   type LegacyMeetingTranscriptSnapshot,
 } from "./state-migrations.meeting-transcripts-files.js";
-
-function sourceKey(sourceDir: string): string {
-  return `meeting-transcripts:${sha256Hex(path.resolve(sourceDir))}`;
-}
+import {
+  recordLegacyMigrationRun,
+  recordLegacyMigrationSource,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
 
 export function insertMeetingTranscriptSnapshots(params: {
   snapshots: LegacyMeetingTranscriptSnapshot[];
@@ -34,25 +33,22 @@ export function insertMeetingTranscriptSnapshots(params: {
       const db = migrationDb(database);
       // Run-wide metadata is stored once here; per-source receipts below keep
       // only their selector so large migrations remain linear in session count.
-      executeSqliteQuerySync(
-        database,
-        db.insertInto("migration_runs").values({
-          id: params.runId,
-          started_at: params.now,
-          finished_at: null,
-          status: "imported",
-          report_json: JSON.stringify({
-            format: "meeting-transcripts-files-v1",
-            sessions: params.snapshots.length,
-            utterances: params.snapshots.reduce(
-              (total, snapshot) => total + snapshot.utteranceCount,
-              0,
-            ),
-            archiveRoot: params.archiveRoot,
-            canonicalRelativeDirs: params.canonicalRelativeDirs,
-          }),
+      recordLegacyMigrationRun(database, {
+        runId: params.runId,
+        startedAt: params.now,
+        finishedAt: null,
+        status: "imported",
+        reportJson: JSON.stringify({
+          format: "meeting-transcripts-files-v1",
+          sessions: params.snapshots.length,
+          utterances: params.snapshots.reduce(
+            (total, snapshot) => total + snapshot.utteranceCount,
+            0,
+          ),
+          archiveRoot: params.archiveRoot,
+          canonicalRelativeDirs: params.canonicalRelativeDirs,
         }),
-      );
+      });
       for (const snapshot of params.snapshots) {
         executeSqliteQuerySync(
           database,
@@ -121,38 +117,23 @@ export function insertMeetingTranscriptSnapshots(params: {
             }),
           );
         }
-        executeSqliteQuerySync(
-          database,
-          db
-            .insertInto("migration_sources")
-            .values({
-              source_key: sourceKey(snapshot.sourceDir),
-              migration_kind: "meeting-transcripts-files-v1",
-              source_path: snapshot.sourceDir,
-              target_table: "meeting_transcript_sessions",
-              source_sha256: snapshot.sourceHash,
-              source_size_bytes: snapshot.sourceSizeBytes,
-              source_record_count: snapshot.utteranceCount,
-              last_run_id: params.runId,
-              status: "imported",
-              imported_at: params.now,
-              removed_source: 0,
-              report_json: JSON.stringify({
-                selector: transcriptSessionSelector(snapshot.session),
-              }),
-            })
-            .onConflict((conflict) =>
-              conflict.column("source_key").doUpdateSet({
-                source_sha256: snapshot.sourceHash,
-                source_size_bytes: snapshot.sourceSizeBytes,
-                source_record_count: snapshot.utteranceCount,
-                last_run_id: params.runId,
-                status: "imported",
-                imported_at: params.now,
-                removed_source: 0,
-              }),
-            ),
-        );
+        recordLegacyMigrationSource(database, {
+          sourceKey: resolveLegacyMigrationSourceKey("meeting-transcripts", snapshot.sourceDir),
+          migrationKind: "meeting-transcripts-files-v1",
+          sourcePath: snapshot.sourceDir,
+          targetTable: "meeting_transcript_sessions",
+          sourceSha256: snapshot.sourceHash,
+          sourceSizeBytes: snapshot.sourceSizeBytes,
+          sourceRecordCount: snapshot.utteranceCount,
+          runId: params.runId,
+          status: "imported",
+          importedAt: params.now,
+          reportJson: JSON.stringify({
+            selector: transcriptSessionSelector(snapshot.session),
+          }),
+          upsert: true,
+          updateReportOnConflict: false,
+        });
       }
     },
     { env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir } },

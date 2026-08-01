@@ -152,16 +152,6 @@ function buildActivationMetadataHash(params: {
     .digest("hex");
 }
 
-function redactPluginConfigForCacheKey(plugins: NormalizedPluginsConfig): NormalizedPluginsConfig {
-  const entries = Object.fromEntries(
-    Object.entries(plugins.entries).map(([pluginId, entry]) => [
-      pluginId,
-      "config" in entry ? { ...entry, config: "<plugin-config>" } : entry,
-    ]),
-  );
-  return { ...plugins, entries };
-}
-
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
@@ -227,15 +217,18 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
-  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
-    bundledPackage,
-    devSourceRoot: params.devSourceRoot ?? "",
-    discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
-    ...params.plugins,
-    installs,
-    loadPaths,
-    activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
+    {
+      bundledPackage,
+      devSourceRoot: params.devSourceRoot ?? "",
+      discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
+      ...params.plugins,
+      installs,
+      loadPaths,
+      activationMetadataKey: params.activationMetadataKey ?? "",
+    },
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
 export function resolveRuntimeSubagentMode(
@@ -384,9 +377,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
-    plugins: shouldResolveRawConfigEnvVars
-      ? redactPluginConfigForCacheKey(trustNormalized)
-      : trustNormalized,
+    plugins: trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},

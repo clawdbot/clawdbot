@@ -97,11 +97,16 @@ export function createSubagentRunParams(
 }
 
 export type SubagentRunRecordOverrides = Pick<SubagentRunRecord, "runId"> &
-  Partial<Omit<SubagentRunRecord, "delivery">> & {
+  Partial<Omit<SubagentRunRecord, "delivery" | "execution">> & {
     delivery?: unknown;
+    execution?: SubagentRunRecord["execution"];
+    startedAt?: number;
+    endedAt?: number;
+    outcome?: SubagentRunRecord["execution"]["outcome"];
   };
 
 export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): SubagentRunRecord {
+  const { startedAt, endedAt, outcome, execution, ...record } = overrides;
   return {
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
@@ -109,7 +114,12 @@ export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): 
     task: overrides.runId,
     cleanup: "keep",
     createdAt: Date.now(),
-    ...overrides,
+    ...record,
+    execution:
+      execution ??
+      (typeof endedAt === "number"
+        ? { status: "terminal", startedAt, endedAt, outcome }
+        : { status: "running", startedAt }),
   } as SubagentRunRecord;
 }
 

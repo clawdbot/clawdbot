@@ -29,6 +29,8 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
+import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
+import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
   isAgentRunDirectAbortReason,
@@ -37,6 +39,8 @@ import {
 } from "../run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -99,7 +103,6 @@ export async function runEmbeddedAgentAttempt(params: {
     storedProviderOverride,
     hasStoredAutoFallbackProvenance,
     autoFallbackPrimaryProbe,
-    thinkingCatalog,
     immutableThinkLevel,
     sessionFile,
   } = params.modelSelection;
@@ -112,6 +115,8 @@ export async function runEmbeddedAgentAttempt(params: {
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
   } = params.modelSelection;
+  let thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let attemptedThinkingCatalogHydration = false;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -361,8 +366,51 @@ export async function runEmbeddedAgentAttempt(params: {
             sessionKey,
             sessionEntry: attemptSessionEntry,
           });
-          const candidateRequestedThinkLevel =
+          const candidateConfiguredThinkLevel =
             immutableThinkLevel ??
+            resolveConfiguredThinkingDefault({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+            });
+          if (
+            pluginsEnabled &&
+            candidateConfiguredThinkLevel !== "off" &&
+            !attemptedThinkingCatalogHydration &&
+            !hasResolvedThinkingCatalogEntry({
+              catalog: thinkingCatalog,
+              provider: providerOverride,
+              model: modelOverride,
+            })
+          ) {
+            attemptedThinkingCatalogHydration = true;
+            const { loadPreparedModelCatalogSnapshot } =
+              await import("../model-catalog.runtime.js");
+            const runtimeCatalog = normalizeThinkingCatalogProviders(
+              (
+                await loadPreparedModelCatalogSnapshot({
+                  config: cfg,
+                  agentId: sessionAgentId,
+                  workspaceDir,
+                })
+              ).entries,
+            );
+            const allowedRuntimeCatalog = createModelVisibilityPolicy({
+              cfg,
+              catalog: runtimeCatalog,
+              defaultProvider,
+              defaultModel,
+              agentId: sessionAgentId,
+              allowManifestNormalization: true,
+              allowPluginNormalization: true,
+              ...modelManifestContext,
+            }).allowedCatalog;
+            if (allowedRuntimeCatalog.length > 0) {
+              thinkingCatalog = allowedRuntimeCatalog;
+            }
+          }
+          const candidateRequestedThinkLevel =
+            candidateConfiguredThinkLevel ??
             resolveThinkingDefault({
               cfg,
               provider: providerOverride,

@@ -21,7 +21,10 @@ import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import "../../../components/tooltip.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
@@ -1796,7 +1799,14 @@ function renderChatThreadContents(
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
       @scroll=${props.onChatScroll}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
-      @keydown=${props.onHistoryIntent}
+      @keydown=${(event: KeyboardEvent) => {
+        const target = markdownFileLinkFromKeyboardEvent(event);
+        if (target) {
+          props.onOpenWorkspaceFile?.(target);
+          return;
+        }
+        props.onHistoryIntent?.(event);
+      }}
       @touchstart=${props.onHistoryIntent
         ? { handleEvent: props.onHistoryIntent, passive: true }
         : null}

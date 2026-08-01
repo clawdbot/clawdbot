@@ -3,17 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import {
-  clearActivatedPluginRuntimeState,
-  clearPluginRegistryLoadCache,
-  loadOpenClawPlugins,
-} from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
-import { pinActivePluginChannelRegistry } from "./runtime.js";
+import { getActivePluginChannelRegistry, pinActivePluginChannelRegistry } from "./runtime.js";
 
 const tempDirs: string[] = [];
 
@@ -130,14 +126,14 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(setup.source).toBe(fs.realpathSync(setupSource));
   });
 
-  it("re-resolves after activated runtime state is cleared", () => {
+  it("re-resolves after the active registry memo is cleared", () => {
     const fixture = createBundledPluginFixture();
     const sourceResolution = resolveFixture({
       ...fixture,
       preferBuiltPluginArtifacts: false,
     });
 
-    clearActivatedPluginRuntimeState();
+    clearPluginRuntimeArtifactResolutionMemo();
 
     const builtResolution = resolveFixture({
       ...fixture,
@@ -164,7 +160,7 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(builtResolution.source).toBe(fixture.builtSource);
   });
 
-  it("keeps one physical entry across activating registry assemblies", () => {
+  it("resolves replacement artifacts independently while pinned consumers keep their registry", () => {
     const fixture = createBundledPluginFixture();
     const config = {
       plugins: {
@@ -197,8 +193,13 @@ describe("resolvePluginRuntimeArtifact", () => {
       },
     );
 
-    expect(first.plugins.find((plugin) => plugin.id === "fixture")?.source).toBe(fixture.source);
-    expect(second.plugins.find((plugin) => plugin.id === "fixture")?.source).toBe(fixture.source);
+    expect([...first.pluginRuntimeArtifacts.values()].map((entry) => entry.source)).toEqual([
+      fixture.source,
+    ]);
+    expect([...second.pluginRuntimeArtifacts.values()].map((entry) => entry.source)).toEqual([
+      fixture.builtSource,
+    ]);
+    expect(getActivePluginChannelRegistry()).toBe(first);
   });
 
   it("leaves dist-only installs unchanged because both preferences resolve the built entry", () => {

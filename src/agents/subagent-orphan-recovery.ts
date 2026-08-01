@@ -50,14 +50,14 @@ function isLegacyRestartInterruptedTimeout(
 ): boolean {
   return (
     entry?.abortedLastRun === true &&
-    runRecord.outcome?.status === "timeout" &&
-    typeof runRecord.endedAt === "number" &&
-    runRecord.endedAt > 0
+    runRecord.execution.outcome?.status === "timeout" &&
+    typeof runRecord.execution.endedAt === "number" &&
+    runRecord.execution.endedAt > 0
   );
 }
 
 function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): void {
-  const interruptedAt = runRecord.endedAt;
+  const interruptedAt = runRecord.execution.endedAt;
   runRecord.execution = {
     ...runRecord.execution,
     status: "interrupted",
@@ -66,9 +66,7 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
     endedAt: undefined,
     outcome: undefined,
   };
-  runRecord.endedAt = undefined;
   runRecord.endedReason = undefined;
-  runRecord.outcome = undefined;
   runRecord.terminalOwner = undefined;
 }
 
@@ -289,20 +287,20 @@ export async function recoverOrphanedSubagentSessions(params: {
       const now = scanNow;
       if (
         runRecord.terminalOwner === "interrupted-recovery" &&
-        Number.isFinite(runRecord.endedAt) &&
-        runRecord.outcome?.status === "error" &&
+        Number.isFinite(runRecord.execution.endedAt) &&
+        runRecord.execution.outcome?.status === "error" &&
         runRecord.endedReason === "subagent-error" &&
         runRecord.pauseReason !== "sessions_yield"
       ) {
         const recoveryError =
-          runRecord.outcome?.status === "error"
-            ? (runRecord.outcome.error ?? "subagent run interrupted by gateway restart")
+          runRecord.execution.outcome?.status === "error"
+            ? (runRecord.execution.outcome.error ?? "subagent run interrupted by gateway restart")
             : "subagent run interrupted by gateway restart";
         try {
           const updated = await finalizeInterruptedSubagentRun({
             runId,
             error: recoveryError,
-            endedAt: runRecord.endedAt,
+            endedAt: runRecord.execution.endedAt,
           });
           if (updated === 0) {
             result.failed++;
@@ -362,7 +360,7 @@ export async function recoverOrphanedSubagentSessions(params: {
         // Terminal child outcomes are immutable. Restart resume only applies to
         // non-terminal interrupted execution; delivery retry handles terminal
         // child results separately.
-        if (typeof runRecord.endedAt === "number" && runRecord.endedAt > 0) {
+        if (typeof runRecord.execution.endedAt === "number" && runRecord.execution.endedAt > 0) {
           result.skipped++;
           continue;
         }

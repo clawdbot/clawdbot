@@ -102,6 +102,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
     scope: "session",
     workspaceAccess: "rw" as const,
     workspaceRoot: "~/.openclaw/sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "img",
       containerPrefix: "prefix-",
@@ -414,6 +415,7 @@ describe("ssh sandbox backend", () => {
         scope: "session",
         workspaceAccess: "rw",
         workspaceRoot: "~/.openclaw/sandboxes",
+        dockerTmpfsSource: "configured",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

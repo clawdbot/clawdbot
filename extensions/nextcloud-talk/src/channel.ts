@@ -34,7 +34,7 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
-import { nextcloudTalkSetupAdapter, nextcloudTalkSetupContract } from "./setup-core.js";
+import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 
 const meta = {
@@ -122,7 +122,6 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
       },
-      setup: nextcloudTalkSetupAdapter,
       setupContract: nextcloudTalkSetupContract,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),

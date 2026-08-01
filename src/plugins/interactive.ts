@@ -1,13 +1,12 @@
 // Resolves interactive plugin entries from registry metadata.
 import {
-  resolvePluginInteractiveNamespaceMatch,
   resolvePluginInteractiveRegistrationsMatch,
+  type RegisteredInteractiveHandler,
 } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
   releasePluginInteractiveCallbackDedupe,
-  type RegisteredInteractiveHandler,
 } from "./interactive-state.js";
 import { collectLivePluginRegistries } from "./runtime.js";
 
@@ -33,11 +32,6 @@ export {
 } from "./interactive-registry.js";
 
 function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
-  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
-  if (existing && existing.registration.registryOwned !== true) {
-    return existing;
-  }
-
   // Registry membership is lifecycle-owned. Resolve registry registrations only
   // through live owners so a replaced or released registry cannot keep executing.
   for (const registry of collectLivePluginRegistries()) {

@@ -15,9 +15,13 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  waitForActiveGatewayRootWork,
+} from "../process/gateway-work-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -205,9 +209,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, unknown>;
-      expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
-        "invalid_request_error",
-      );
+      const error = json.error as Record<string, unknown> | undefined;
+      expect(error?.type).toBe("invalid_request_error");
+      expect(error?.message).toBe("Invalid image_url content in `messages`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
     };
     const postSyncUserMessage = async (message: string) => {
@@ -561,6 +565,48 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
       ]);
 
+      const malformedImageParts = [
+        { type: "image_url" },
+        { type: "image_url", image_url: null },
+        { type: "image_url", image_url: {} },
+        { type: "image_url", image_url: { url: "   " } },
+        { type: "image_url", image_url: { url: 123 } },
+        { type: "image_url", image_url: { url: null } },
+        { type: "image_url", image_url: "   " },
+        { type: "image_url", image_url: 123 },
+      ];
+      const validImagePart = {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUJDRA==" },
+      };
+      for (const imagePart of malformedImageParts) {
+        for (const content of [
+          [imagePart],
+          [{ type: "text", text: "describe this" }, imagePart],
+          [validImagePart, imagePart],
+        ]) {
+          await expectInvalidRequestNoDispatch([{ role: "user", content }]);
+        }
+      }
+
+      for (const malformedDataUri of [
+        "data:image/png,QUJDRA==",
+        "data:image/png;base64,",
+        "data:image/png;base64,%%%",
+        "data:image/svg+xml;base64,PHN2Zz4=",
+        "data:image/png;base64,JVBERi0xLjQK",
+      ]) {
+        await expectInvalidRequestNoDispatch([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "image_url", image_url: { url: malformedDataUri } },
+            ],
+          },
+        ]);
+      }
+
       {
         mockAgentOnce([{ text: "I can see the image" }]);
         const res = await postChatCompletions(port, {
@@ -608,6 +654,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(firstCall?.images).toBeUndefined();
         expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
         await res.text();
+      }
+
+      for (const historicalImageParts of [
+        [{ type: "image_url", image_url: { url: "   " } }],
+        [validImagePart, { type: "image_url", image_url: { url: "   " } }],
+      ]) {
+        for (const followup of [
+          { role: "user", content: "What color was it?" },
+          { role: "tool", content: "Vision tool says it is blue." },
+        ]) {
+          mockAgentOnce([{ text: "follow up answer" }]);
+          const res = await postChatCompletions(port, {
+            model: "openclaw",
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "look at this" }, ...historicalImageParts],
+              },
+              { role: "assistant", content: "Checking the image." },
+              followup,
+            ],
+          });
+          expect(res.status).toBe(200);
+          expect(getFirstAgentCall()?.images).toBeUndefined();
+          expect(getFirstAgentMessage()).toContain("User: look at this");
+          await res.text();
+        }
       }
 
       {
@@ -2099,40 +2172,99 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   ])(
     "separates streamed content from the terminal finish for an official SDK $name",
     async ({ fail, expected }) => {
-      agentCommand.mockClear();
-      if (fail) {
-        agentCommand.mockRejectedValueOnce(new Error("private upstream failure"));
-      } else {
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
-            opts,
-            emit: emitAgentEvent,
-            deltas: ["he", "llo"],
-            text: expected,
-          })) as never);
-      }
-
-      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
-        model: "openclaw",
-        messages: [{ role: "user", content: "Return a complete streamed response." }],
-        stream: true,
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      const terminalAdmission = createDeferred<{
+        active: number;
+        drained: { drained: boolean; active: number };
+      }>();
+      const wireResponse = createDeferred<string>();
+      const continueAgent = createDeferred();
+      let activeRunId: string | undefined;
+      const unsubscribe = onAgentEvent((event) => {
+        if (
+          event.runId !== activeRunId ||
+          event.stream !== "lifecycle" ||
+          event.data?.phase !== "end"
+        ) {
+          return;
+        }
+        // Agent settlement schedules the terminal in a later microtask. The
+        // request must remain admitted until Node finishes the actual stream.
+        const active = getActiveGatewayRootWorkCount();
+        void waitForActiveGatewayRootWork(0).then((drained) => {
+          terminalAdmission.resolve({ active, drained });
+        });
       });
-      const choices: Array<{
-        delta: { content?: string | null };
-        finish_reason: string | null;
-      }> = [];
-      for await (const chunk of stream) {
-        choices.push(...chunk.choices);
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        activeRunId = (opts as { runId?: string }).runId;
+        if (!activeRunId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        await continueAgent.promise;
+        if (fail) {
+          throw new Error("private upstream failure");
+        }
+        return buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: expected,
+        });
+      }) as never);
+
+      try {
+        const client = new OpenAI({
+          apiKey: "test",
+          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+          maxRetries: 0,
+          fetch: async (input, init) => {
+            const response = await fetch(input, init);
+            void response.clone().text().then(wireResponse.resolve, wireResponse.reject);
+            return response;
+          },
+        });
+        const stream = await client.chat.completions.create({
+          model: "openclaw",
+          messages: [{ role: "user", content: "Return a complete streamed response." }],
+          stream: true,
+        });
+        await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        continueAgent.resolve();
+
+        const choices: Array<{
+          delta: { content?: string | null };
+          finish_reason: string | null;
+        }> = [];
+        for await (const chunk of stream) {
+          choices.push(...chunk.choices);
+        }
+
+        const [admission, wire] = await Promise.all([
+          terminalAdmission.promise,
+          wireResponse.promise,
+        ]);
+        expect(admission.active).toBe(idleRootCount + 1);
+        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
+        expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
+
+        const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
+        expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+
+        const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
+        expect(terminalChoices).toHaveLength(1);
+        expect(terminalChoices[0]?.delta).toEqual({});
+        expect(choices.at(-1)).toEqual(terminalChoices[0]);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+      } finally {
+        continueAgent.resolve();
+        unsubscribe();
       }
-
-      const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
-      expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
-      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
-
-      const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
-      expect(terminalChoices).toHaveLength(1);
-      expect(terminalChoices[0]?.delta).toEqual({});
-      expect(choices.at(-1)).toEqual(terminalChoices[0]);
     },
   );
 
@@ -3170,21 +3302,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
     const port = enabledPort;
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const agentAborted = createDeferred();
+    const finishAgentCleanup = createDeferred();
+    const cleanupAdmissionClosed = createDeferred<boolean>();
     let serverAbortSignal: AbortSignal | undefined;
 
     agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(
-      (opts: unknown) =>
-        new Promise<undefined>((resolve) => {
-          const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          serverAbortSignal = signal;
-          if (signal?.aborted) {
-            resolve(undefined);
-            return;
-          }
-          signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-        }),
-    );
+    agentCommand.mockImplementationOnce(async (opts: unknown) => {
+      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      serverAbortSignal = signal;
+      if (signal?.aborted) {
+        agentAborted.resolve();
+      } else {
+        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
+      }
+      await agentAborted.promise;
+      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
+      await finishAgentCleanup.promise;
+      return undefined;
+    });
 
     const clientReq = http.request({
       hostname: "127.0.0.1",
@@ -3209,14 +3346,27 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
     });
 
-    clientReq.destroy();
+    try {
+      clientReq.destroy();
 
-    await vi.waitFor(
-      () => {
-        expect(serverAbortSignal?.aborted).toBe(true);
-      },
-      { timeout: 5_000, interval: 50 },
-    );
+      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+        timeout: 5_000,
+        interval: 50,
+      });
+      expect(await cleanupAdmissionClosed.promise).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+      expect(await waitForActiveGatewayRootWork(0)).toEqual({
+        drained: false,
+        active: idleRootCount + 1,
+      });
+    } finally {
+      finishAgentCleanup.resolve();
+    }
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
+      timeout: 5_000,
+      interval: 50,
+    });
   });
 
   it(

@@ -1,12 +1,14 @@
 // Plugin npm manifest tests validate generated plugin package manifests.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
   resolvePluginNpmCommand,
+  runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mjs";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
@@ -186,6 +188,146 @@ describe("plugin npm package manifest staging", () => {
         platform: "win32",
       }),
     ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
+  });
+
+  it("retries timed-out bundled dependency installs after cleaning partial output", () => {
+    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    const spawnResults = [
+      { error: timeoutError, status: null },
+      { error: undefined, status: 0 },
+    ];
+    const spawnOptions: Array<Record<string, unknown>> = [];
+    let cleanupCalls = 0;
+
+    const result = runPluginNpmCiWithRetry(
+      ["ci"],
+      { cwd: "/tmp/plugin" },
+      {
+        cleanupAttempt: () => {
+          cleanupCalls += 1;
+        },
+        pluginDir: "whatsapp",
+        spawn: (_args: string[], options: Record<string, unknown>) => {
+          spawnOptions.push(options);
+          return spawnResults.shift();
+        },
+        timeoutMs: 1234,
+      },
+    ) as { status: number | null };
+
+    expect(result.status).toBe(0);
+    expect(cleanupCalls).toBe(1);
+    expect(spawnOptions).toEqual([
+      { cwd: "/tmp/plugin", timeout: 1234 },
+      { cwd: "/tmp/plugin", timeout: 1234 },
+    ]);
+  });
+
+  it("does not retry ordinary bundled dependency install failures", () => {
+    let spawnCalls = 0;
+    const result = runPluginNpmCiWithRetry(
+      ["ci"],
+      {},
+      {
+        cleanupAttempt: () => {
+          throw new Error("cleanup should not run");
+        },
+        spawn: () => {
+          spawnCalls += 1;
+          return { error: undefined, status: 1 };
+        },
+      },
+    ) as { status: number | null };
+
+    expect(result.status).toBe(1);
+    expect(spawnCalls).toBe(1);
+  });
+
+  it("cleans an exhausted timeout before reusing the same package directory", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-timeout-");
+    const packageDir = join(repoDir, "extensions", "whatsapp");
+    const nodeModulesPath = join(packageDir, "node_modules");
+    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    mkdirSync(packageDir, { recursive: true });
+
+    const firstResult = runPluginNpmCiWithRetry(
+      ["ci"],
+      { cwd: packageDir },
+      {
+        attempts: 3,
+        cleanupAttempt: () => rmSync(nodeModulesPath, { recursive: true, force: true }),
+        pluginDir: "whatsapp",
+        spawn: () => {
+          mkdirSync(nodeModulesPath, { recursive: true });
+          return { error: timeoutError, status: null };
+        },
+      },
+    ) as { error?: NodeJS.ErrnoException };
+
+    expect(firstResult.error?.code).toBe("ETIMEDOUT");
+    expect(existsSync(nodeModulesPath)).toBe(false);
+
+    const secondResult = runPluginNpmCiWithRetry(
+      ["ci"],
+      { cwd: packageDir },
+      {
+        cleanupAttempt: () => rmSync(nodeModulesPath, { recursive: true, force: true }),
+        pluginDir: "whatsapp",
+        spawn: () => {
+          expect(existsSync(nodeModulesPath)).toBe(false);
+          return { error: undefined, status: 0 };
+        },
+      },
+    ) as { status: number | null };
+
+    expect(secondResult.status).toBe(0);
+  });
+
+  it("retries timed-out package-lock generation with a bounded command timeout", () => {
+    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    const generateOptions: Array<Record<string, unknown>> = [];
+    let generateCalls = 0;
+
+    const lock = generatePluginNpmPackageLockWithRetry(
+      "/tmp/plugin",
+      { installStrategy: "shallow" },
+      {
+        generate: (_packageDir: string, options: Record<string, unknown>) => {
+          generateCalls += 1;
+          generateOptions.push(options);
+          if (generateCalls === 1) {
+            throw timeoutError;
+          }
+          return '{"lockfileVersion":3}\n';
+        },
+        pluginDir: "whatsapp",
+      },
+    );
+
+    expect(lock).toBe('{"lockfileVersion":3}\n');
+    expect(generateOptions).toHaveLength(2);
+    expect(generateOptions[0]).toMatchObject({
+      env: { OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: "180000" },
+      installStrategy: "shallow",
+    });
+    expect(generateOptions[1]).toEqual(generateOptions[0]);
+  });
+
+  it("does not retry ordinary package-lock generation failures", () => {
+    let generateCalls = 0;
+    expect(() =>
+      generatePluginNpmPackageLockWithRetry(
+        "/tmp/plugin",
+        { installStrategy: "shallow" },
+        {
+          generate: () => {
+            generateCalls += 1;
+            throw new Error("invalid dependency");
+          },
+        },
+      ),
+    ).toThrow("invalid dependency");
+    expect(generateCalls).toBe(1);
   });
 
   it("overlays generated channel configs while packing and restores source manifest", () => {

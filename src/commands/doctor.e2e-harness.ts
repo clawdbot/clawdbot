@@ -6,6 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
 import {
   readEmbeddedGatewayTokenForTest,
   testServiceAuditCodes,
@@ -370,17 +371,6 @@ const runLegacyStateMigrations = vi.fn().mockResolvedValue({
   warnings: [],
 }) as unknown as MockFn;
 
-const DEFAULT_CONFIG_SNAPSHOT = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  parsed: {},
-  valid: true,
-  config: {},
-  issues: [],
-  legacyIssues: [],
-} as const;
-
 vi.mock("@clack/prompts", () => ({
   confirm,
   intro: vi.fn(),
@@ -624,14 +614,7 @@ export function mockDoctorConfigSnapshot(
     legacyIssues?: Array<{ path: string; message: string }>;
   } = {},
 ) {
-  readConfigFileSnapshot.mockResolvedValue({
-    ...DEFAULT_CONFIG_SNAPSHOT,
-    config: params.config ?? DEFAULT_CONFIG_SNAPSHOT.config,
-    parsed: params.parsed ?? DEFAULT_CONFIG_SNAPSHOT.parsed,
-    valid: params.valid ?? DEFAULT_CONFIG_SNAPSHOT.valid,
-    issues: params.issues ?? DEFAULT_CONFIG_SNAPSHOT.issues,
-    legacyIssues: params.legacyIssues ?? DEFAULT_CONFIG_SNAPSHOT.legacyIssues,
-  });
+  readConfigFileSnapshot.mockResolvedValue(createDoctorConfigSnapshot(params));
 }
 
 /** Creates a runtime mock that captures doctor command output and exits. */

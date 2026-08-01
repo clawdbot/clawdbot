@@ -13,13 +13,7 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import {
-  hasNonzeroUsage,
-  normalizeUsage,
-  toOpenAiChatCompletionsUsage,
-  type NormalizedUsage,
-  type OpenAiChatCompletionsUsage,
-} from "../agents/usage.js";
+import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
@@ -67,6 +61,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -520,11 +515,13 @@ function resolveImageUrlPart(part: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractImageUrls(content: unknown): string[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
+type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
+
+function extractImageUrls(content: unknown): ExtractedImageUrls {
   const urls: string[] = [];
+  if (!Array.isArray(content)) {
+    return { kind: "valid", urls };
+  }
   for (const part of content) {
     if (!part || typeof part !== "object") {
       continue;
@@ -533,17 +530,18 @@ function extractImageUrls(content: unknown): string[] {
       continue;
     }
     const url = resolveImageUrlPart(part);
-    if (url) {
-      urls.push(url);
+    if (!url) {
+      return { kind: "invalid" };
     }
+    urls.push(url);
   }
-  return urls;
+  return { kind: "valid", urls };
 }
 
 type ActiveTurnContext = {
   activeTurnIndex: number;
   activeUserMessageIndex: number;
-  urls: string[];
+  imageUrls: ExtractedImageUrls;
 };
 
 function parseImageUrlToSource(url: string): InputImageSource {
@@ -586,20 +584,29 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
+    const imageUrls: ExtractedImageUrls =
+      normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
       activeTurnIndex: i,
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
-      urls: normalizedRole === "user" ? extractImageUrls(msg.content) : [],
+      imageUrls,
     };
   }
-  return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
+  return {
+    activeTurnIndex: -1,
+    activeUserMessageIndex: -1,
+    imageUrls: { kind: "valid", urls: [] },
+  };
 }
 
 async function resolveImagesForRequest(
-  activeTurnContext: Pick<ActiveTurnContext, "urls">,
+  activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
-  const urls = activeTurnContext.urls;
+  if (activeTurnContext.imageUrls.kind === "invalid") {
+    throw new Error("image_url part is missing a valid URL");
+  }
+  const urls = activeTurnContext.imageUrls.urls;
   if (urls.length === 0) {
     return [];
   }
@@ -640,12 +647,14 @@ export const testOnlyOpenAiHttp = {
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  activeUserMessageIndex: number,
+  activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
 ): {
   message: string;
   extraSystemPrompt?: string;
 } {
   const messages = asMessages(messagesUnknown);
+  const hasActiveTurnImage =
+    activeTurnContext.imageUrls.kind === "valid" && activeTurnContext.imageUrls.urls.length > 0;
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
@@ -656,7 +665,6 @@ function buildAgentPrompt(
     }
     const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
-    const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
       continue;
     }
@@ -679,7 +687,10 @@ function buildAgentPrompt(
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
     const baseMessageContent =
-      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
+      normalizedRole === "user" &&
+      !content &&
+      hasActiveTurnImage &&
+      i === activeTurnContext.activeUserMessageIndex
         ? IMAGE_ONLY_USER_MESSAGE
         : content;
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
@@ -750,41 +761,11 @@ function resolveAgentResponseCommentary(result: unknown): string {
     .join("\n\n");
 }
 
-type AgentUsageMeta = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
 type PendingToolCall = {
   id?: unknown;
   name?: unknown;
   arguments?: unknown;
 };
-
-function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
-  const agentMeta = (
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: AgentUsageMeta;
-          lastCallUsage?: AgentUsageMeta;
-        };
-      };
-    } | null
-  )?.meta?.agentMeta;
-  const primary = normalizeUsage(agentMeta?.usage);
-  if (hasNonzeroUsage(primary)) {
-    return primary;
-  }
-  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
-  if (hasNonzeroUsage(fallback)) {
-    return fallback;
-  }
-  return primary ?? fallback;
-}
 
 function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   stopReason: string | undefined;
@@ -1037,7 +1018,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
   let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
@@ -1324,18 +1305,27 @@ export async function handleOpenAiHttpRequest(
     }
   });
 
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
@@ -1466,7 +1456,7 @@ export async function handleOpenAiHttpRequest(
       });
       requestFinalize();
     } finally {
-      releaseRootWork?.();
+      releaseAgentRootWork?.();
       if (!closed) {
         emitAgentEvent({
           runId,

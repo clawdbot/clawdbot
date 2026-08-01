@@ -180,7 +180,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);',
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
     );
     expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
@@ -446,7 +446,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
-    expect(normalCiScript).not.toContain("full_release_validation=true");
+    const normalCiDispatchCase = normalCiScript.match(/^\s*ci\)\n([\s\S]*?)^\s*;;$/mu)?.[1];
+    expect(normalCiDispatchCase).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
       'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")',
     );
@@ -667,9 +669,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
-    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
-    );
+    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(240);
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
@@ -678,10 +678,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       default: false,
       type: "boolean",
     });
-    expect(
-      fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
-    ).toBeGreaterThanOrEqual(3);
-    expect(fullReleaseSource.match(/if \[\[ "\$FAIL_FAST" != "true" \]\]; then/gu)?.length).toBe(4);
+    for (const [jobName, kind] of [
+      ["normal_ci", "ci"],
+      ["plugin_prerelease", "plugin-prerelease"],
+      ["release_checks", "release-checks"],
+      ["npm_telegram", "npm-telegram"],
+    ] as const) {
+      const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
+      expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
+      expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
+      expect(dispatch.run).toContain('if [[ "$FAIL_FAST" != "true" ]]; then');
+      expect(dispatch.run).toContain("has failed child jobs before the workflow completed");
+    }
+    expect(fullReleaseWorkflow.jobs.performance.steps[0].env).not.toHaveProperty("FAIL_FAST");
     expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
     expect(fullReleaseSource).toContain(
       "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",

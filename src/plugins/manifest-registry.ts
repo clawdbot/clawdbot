@@ -760,7 +760,13 @@ function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnos
   const seen = new Set<string>();
   const deduped: PluginDiagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    const key = JSON.stringify([diagnostic.level, diagnostic.pluginId ?? "", diagnostic.message]);
+    // Errors belong to their failed source; equivalent compatibility warnings remain owner-deduped.
+    const key = JSON.stringify([
+      diagnostic.level,
+      diagnostic.pluginId ?? "",
+      diagnostic.message,
+      diagnostic.level === "error" ? (diagnostic.source ?? "") : "",
+    ]);
     if (seen.has(key)) {
       continue;
     }
@@ -1079,6 +1085,7 @@ export function loadPluginManifestRegistry(
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
+        pluginId: candidate.diagnosticIdHint ?? candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
       });

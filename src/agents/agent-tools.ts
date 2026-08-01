@@ -91,9 +91,13 @@ import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.j
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
-import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import {
+  resolveReadOnlyWorkspaceSkillMounts,
+  type ReadOnlyWorkspaceSkillMount,
+} from "./sandbox/workspace-mounts.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -131,6 +135,7 @@ type GuardContainerMount = {
 
 function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
+  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): GuardContainerMount[] | undefined {
   if (!sandbox) {
     return undefined;
@@ -144,13 +149,7 @@ function readOnlySandboxReadMounts(
   }
   if (sandbox.workspaceAccess === "rw") {
     mounts.push(
-      ...resolveReadOnlyWorkspaceSkillMounts({
-        workspaceDir: sandbox.workspaceDir,
-        agentWorkspaceDir: sandbox.agentWorkspaceDir,
-        skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
-        workdir: sandbox.containerWorkdir,
-        workspaceAccess: sandbox.workspaceAccess,
-      }).map((mount) => ({
+      ...readOnlyWorkspaceSkillMounts.map((mount) => ({
         containerRoot: mount.containerPath,
         hostRoot: mount.hostPath,
       })),
@@ -470,8 +469,8 @@ type OpenClawCodingToolsOptions = {
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process completion handoff; never derived from model-facing input. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process completion capability; never derived from model-facing input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -560,6 +559,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     const normalized = normalizeToolName(toolName);
     return normalized === "*" || normalized === "message";
   });
+  // The verified requester profile owns completion authority; its delivery grant
+  // stays source-bound even when parent tools remain available to the turn.
+  const sourceReplyOnly =
+    capabilityProfile.policy.requesterPolicySource === "completion-handoff" &&
+    options?.sourceReplyDeliveryMode === "message_tool_only";
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
@@ -637,6 +641,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
+  const needsReadOnlyWorkspaceSkillMounts =
+    includeShellTools || (includeBaseCodingTools && workspaceOnly);
+  const readOnlyWorkspaceSkillMounts =
+    sandbox && needsReadOnlyWorkspaceSkillMounts
+      ? resolveReadOnlyWorkspaceSkillMounts({
+          workspaceDir: sandbox.workspaceDir,
+          agentWorkspaceDir: sandbox.agentWorkspaceDir,
+          skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+          workdir: sandbox.containerWorkdir,
+          workspaceAccess: sandbox.workspaceAccess,
+        })
+      : [];
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -668,7 +684,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           });
           const guarded = workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                additionalContainerMounts: readOnlySandboxReadMounts(
+                  sandbox,
+                  readOnlyWorkspaceSkillMounts,
+                ),
                 containerWorkdir: sandbox.containerWorkdir,
               })
             : sandboxed;
@@ -789,6 +808,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
                 sandbox.backend,
               ),
               workdirRoots: sandbox.backend?.workdirRoots,
+              readOnlyWorkspaceSkillMounts,
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
@@ -1021,6 +1041,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             computerContextEpoch: options?.computerContextEpoch,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            sourceReplyOnly,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,

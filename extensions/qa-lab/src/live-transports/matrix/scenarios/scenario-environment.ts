@@ -18,6 +18,8 @@ type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
 type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
+const MATRIX_QA_CANARY_TIMEOUT_MS = 60_000;
+
 type MatrixQaScenarioEnvironmentParams = {
   accountId: string;
   harness: MatrixQaHarness;
@@ -396,7 +398,12 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         }),
     } satisfies MatrixQaScenarioContext;
     if (input.config.matrixRequireCanary === true && !canary) {
-      canary = await runMatrixQaCanary(scenarioContext);
+      canary = await runMatrixQaCanary({
+        ...scenarioContext,
+        // The scenario timeout can intentionally be a short no-reply window.
+        // A live model round trip needs its own bounded preparation budget.
+        timeoutMs: Math.max(input.timeoutMs, MATRIX_QA_CANARY_TIMEOUT_MS),
+      });
     }
     scenarioContext.canary = canary;
     return { scenarioContext };

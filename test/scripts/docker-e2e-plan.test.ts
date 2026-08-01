@@ -54,6 +54,12 @@ function planFor(
   }).plan;
 }
 
+function writeCandidatePackage(scripts: Record<string, string>): string {
+  const root = tempDirs.make("openclaw-docker-plan-candidate-");
+  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }));
+  return root;
+}
+
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
   if (!lane) {
@@ -120,6 +126,47 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("omits a package-script lane unavailable from the candidate", () => {
+    const plan = planFor({
+      candidatePackageRoot: writeCandidatePackage({}),
+      selectedLaneNames: ["update-run-package-self-upgrade"],
+    });
+
+    expect(plan.lanes).toEqual([]);
+  });
+
+  it("keeps a package-script lane available from the candidate", () => {
+    const plan = planFor({
+      candidatePackageRoot: writeCandidatePackage({
+        "test:docker:update-run-package-self-upgrade": "node test.mjs",
+      }),
+      selectedLaneNames: ["update-run-package-self-upgrade"],
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-run-package-self-upgrade"]);
+  });
+
+  it("fails when the selected candidate package manifest is missing", () => {
+    expect(() =>
+      planFor({
+        candidatePackageRoot: tempDirs.make("openclaw-docker-plan-missing-package-"),
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(/package\.json/);
+  });
+
+  it("fails when the selected candidate package manifest is malformed", () => {
+    const root = tempDirs.make("openclaw-docker-plan-malformed-package-");
+    writeFileSync(join(root, "package.json"), "{");
+
+    expect(() =>
+      planFor({
+        candidatePackageRoot: root,
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(SyntaxError);
+  });
+
   it("finds a named lane through the expanded catalog", () => {
     expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
       "plugin-binding-command-escape",
@@ -543,7 +590,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
-          'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash .release-harness/scripts/e2e/upgrade-survivor-docker.sh',
+          'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/upgrade-survivor-docker.sh"\'',
         imageKind: "bare",
         live: false,
         name: "update-restart-auth",

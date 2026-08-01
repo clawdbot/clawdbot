@@ -13,7 +13,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
 import { CommandLane } from "../process/lanes.js";
@@ -28,14 +27,14 @@ import {
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import {
+  repairMainSessionRecoveryMutation,
+  retryMainSessionRecoveryMutation,
+  scheduleMainSessionRecoveryMutation,
+} from "./main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
-  restoreAdmittedRecoveryWithRetries,
-  scheduleAdmittedRecoveryRestore,
-  type RestoreAdmittedRecovery,
-} from "./main-session-recovery-restore.js";
-import {
-  isMainRestartRecoveryCandidate,
+  isMainSessionRecoveryPending,
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
@@ -43,8 +42,6 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
-const RESERVATION_ROLLBACK_RETRY_DELAY_MS = 1_000;
-const RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS = 30_000;
 const RESTART_RECOVERY_RESUME_MESSAGE =
   "[System] Your previous turn was interrupted by a gateway restart while " +
   "OpenClaw was waiting on tool/model work. Continue from the existing " +
@@ -282,6 +279,56 @@ function isExactRestartRecoveryDispatchAdmission(params: {
   );
 }
 
+async function settleAcceptedRestartRecovery(params: {
+  expectedRecoveryRunId: string;
+  expectedRecoverySourceRunId?: string;
+  expectedSessionId: string;
+  lifecycleGeneration: string;
+  reservation?: MainSessionRecoveryReservation;
+  sessionKey: string;
+  sessionKeys: readonly string[];
+  shouldContinue?: () => boolean;
+  storePath: string;
+  terminalStatus?: RestartRecoveryTerminalStatus;
+}): Promise<boolean> {
+  const admission = await commitMainSessionRecovery({
+    command: {
+      kind: "admit_recovery",
+      lifecycleGeneration: params.lifecycleGeneration,
+      now: Date.now(),
+      runId: params.expectedRecoveryRunId,
+      sessionId: params.expectedSessionId,
+    },
+    shouldContinue: params.shouldContinue,
+    target: { sessionKey: params.sessionKey, storePath: params.storePath },
+  });
+  if (
+    admission.transition.kind !== "admitted_recovery" &&
+    !isExactRestartRecoveryDispatchAdmission({
+      admission,
+      lifecycleGeneration: params.lifecycleGeneration,
+      recoveryRunId: params.expectedRecoveryRunId,
+      sessionId: params.expectedSessionId,
+      terminalStatus: params.terminalStatus,
+    })
+  ) {
+    return false;
+  }
+  if (params.shouldContinue?.() === false) {
+    return true;
+  }
+  if (params.reservation) {
+    await commitMainSessionRecovery({
+      command: { kind: "abandon_reservation", reservation: params.reservation },
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    });
+  }
+  if (params.shouldContinue?.() !== false) {
+    await settleRestartRecoveryDispatch(params);
+  }
+  return true;
+}
+
 type MainSessionResumeResult = "resumed" | "skipped" | "failed";
 
 async function rollbackRestartRecoveryReservation(params: {
@@ -290,57 +337,41 @@ async function rollbackRestartRecoveryReservation(params: {
   sessionKey: string;
   storePath: string;
 }) {
-  return await retryAsync(
-    async () =>
-      await commitMainSessionRecovery({
-        command: { kind: params.kind, reservation: params.reservation },
-        requireWriteSuccess: true,
-        target: { sessionKey: params.sessionKey, storePath: params.storePath },
-      }),
-    3,
-    25,
+  return await retryMainSessionRecoveryMutation(async () =>
+    commitMainSessionRecovery({
+      command: { kind: params.kind, reservation: params.reservation },
+      requireWriteSuccess: true,
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    }),
   );
 }
 
 function scheduleRestartRecoveryReservationRollback(
   params: Parameters<typeof rollbackRestartRecoveryReservation>[0],
-  delayMs = RESERVATION_ROLLBACK_RETRY_DELAY_MS,
 ): void {
   // Keep the exact reservation token alive after transient store outages.
   // A Gateway restart safely retires the timer and its stale-generation slot.
-  setTimeout(() => {
-    void rollbackRestartRecoveryReservation(params).then(
-      ({ entry, sessionKey }) => {
-        const state = entry?.mainRestartRecovery;
-        if (
-          entry?.sessionId === params.reservation.sessionId &&
-          sessionKey &&
-          entry.status === "running" &&
-          entry.abortedLastRun === true &&
-          isMainRestartRecoveryCandidate(entry, sessionKey) &&
-          state &&
-          !state.foregroundClaims &&
-          !state.reservation &&
-          !state.tombstone
-        ) {
-          scheduleMainSessionRecoveryPendingTarget({
-            sessionId: entry.sessionId,
-            sessionKey,
-            storePath: params.storePath,
-          });
-        }
-      },
-      (error: unknown) => {
-        log.warn(
-          `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
-        );
-        scheduleRestartRecoveryReservationRollback(
-          params,
-          Math.min(delayMs * 2, RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS),
-        );
-      },
-    );
-  }, delayMs).unref?.();
+  scheduleMainSessionRecoveryMutation({
+    mutation: () => rollbackRestartRecoveryReservation(params),
+    onError: (error) => {
+      log.warn(
+        `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
+      );
+    },
+    onSuccess: ({ entry, sessionKey }) => {
+      if (
+        entry?.sessionId === params.reservation.sessionId &&
+        sessionKey &&
+        isMainSessionRecoveryPending(entry, sessionKey)
+      ) {
+        scheduleMainSessionRecoveryPendingTarget({
+          sessionId: entry.sessionId,
+          sessionKey,
+          storePath: params.storePath,
+        });
+      }
+    },
+  });
 }
 
 export async function resumeMainSession(params: {
@@ -387,6 +418,20 @@ export async function resumeMainSession(params: {
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   let reservation: MainSessionRecoveryReservation | undefined;
   let dispatchStarted = false;
+  const rollbackReservation = async (kind: "abandon_reservation" | "cancel_reservation") => {
+    if (!reservation) {
+      return undefined;
+    }
+    const current = reservation;
+    const result = await rollbackRestartRecoveryReservation({
+      kind,
+      reservation: current,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    reservation = undefined;
+    return { current, result };
+  };
   try {
     const reserved = await commitMainSessionRecovery({
       command: {
@@ -406,13 +451,7 @@ export async function resumeMainSession(params: {
     }
     reservation = reserved.transition.reservation;
     if (params.shouldContinue?.() === false) {
-      await rollbackRestartRecoveryReservation({
-        kind: "cancel_reservation",
-        reservation,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
-      reservation = undefined;
+      await rollbackReservation("cancel_reservation");
       return "skipped";
     }
     // Persist one stable RPC id before dispatch. A transport rejection is
@@ -448,17 +487,11 @@ export async function resumeMainSession(params: {
       },
     });
     if (!recoveryStatePrepared) {
-      const rollback = await rollbackRestartRecoveryReservation({
-        kind: "cancel_reservation",
-        reservation,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
-      reservation = undefined;
+      const rollback = await rollbackReservation("cancel_reservation");
       if (params.shouldContinue?.() === false) {
         return "skipped";
       }
-      const current = rollback.entry;
+      const current = rollback?.result.entry;
       return current?.sessionId === params.entry.sessionId &&
         current.status === "running" &&
         current.abortedLastRun === true &&
@@ -502,13 +535,7 @@ export async function resumeMainSession(params: {
       }
     }
     if (params.shouldContinue?.() === false) {
-      await rollbackRestartRecoveryReservation({
-        kind: "cancel_reservation",
-        reservation,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
-      reservation = undefined;
+      await rollbackReservation("cancel_reservation");
       return "skipped";
     }
     if (params.forceRestartSafeTools) {
@@ -537,41 +564,21 @@ export async function resumeMainSession(params: {
     if (params.shouldContinue?.() === false) {
       return "skipped";
     }
-    const admission = await commitMainSessionRecovery({
-      command: {
-        kind: "admit_recovery",
-        lifecycleGeneration,
-        now: Date.now(),
-        runId: recoveryRunId,
-        sessionId: params.entry.sessionId,
-      },
-      shouldContinue: params.shouldContinue,
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
-    });
     if (
-      admission.transition.kind !== "admitted_recovery" &&
-      !isExactRestartRecoveryDispatchAdmission({
-        admission,
+      !(await settleAcceptedRestartRecovery({
+        expectedRecoveryRunId: recoveryRunId,
+        expectedRecoverySourceRunId: sourceRunId,
+        expectedSessionId: params.entry.sessionId,
         lifecycleGeneration,
-        recoveryRunId,
-        sessionId: params.entry.sessionId,
+        sessionKey: params.sessionKey,
+        sessionKeys: recoverySessionKeys,
+        shouldContinue: params.shouldContinue,
+        storePath: params.storePath,
         terminalStatus,
-      })
+      }))
     ) {
       throw new Error(`restart recovery admission changed before settlement: ${params.sessionKey}`);
     }
-    if (params.shouldContinue?.() === false) {
-      return "skipped";
-    }
-    await settleRestartRecoveryDispatch({
-      expectedRecoveryRunId: recoveryRunId,
-      expectedRecoverySourceRunId: sourceRunId,
-      expectedSessionId: params.entry.sessionId,
-      sessionKeys: recoverySessionKeys,
-      shouldContinue: params.shouldContinue,
-      storePath: params.storePath,
-      terminalStatus,
-    });
     if (params.shouldContinue?.() === false) {
       return "skipped";
     }
@@ -590,52 +597,23 @@ export async function resumeMainSession(params: {
           params.gatewayRuntime,
         );
         if (terminalStatus && params.shouldContinue?.() !== false) {
-          const admission = await commitMainSessionRecovery({
-            command: {
-              kind: "admit_recovery",
-              lifecycleGeneration,
-              now: Date.now(),
-              runId: recoveryRunId,
-              sessionId: params.entry.sessionId,
-            },
-            shouldContinue: params.shouldContinue,
-            target: { sessionKey: params.sessionKey, storePath: params.storePath },
-          });
-          const exactRunAlreadyAdmitted = isExactRestartRecoveryDispatchAdmission({
-            admission,
+          const settled = await settleAcceptedRestartRecovery({
+            expectedRecoveryRunId: recoveryRunId,
+            expectedRecoverySourceRunId: sourceRunId,
+            expectedSessionId: params.entry.sessionId,
             lifecycleGeneration,
-            recoveryRunId,
-            sessionId: params.entry.sessionId,
+            reservation,
+            sessionKey: params.sessionKey,
+            sessionKeys: recoverySessionKeys,
+            shouldContinue: params.shouldContinue,
+            storePath: params.storePath,
             terminalStatus,
           });
-          if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
-            if (params.shouldContinue?.() !== false) {
-              log.warn(
-                `restart recovery admission changed before settlement: ${params.sessionKey}`,
-              );
-            }
+          if (!settled) {
+            log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
           } else if (params.shouldContinue?.() !== false) {
-            if (reservation) {
-              await commitMainSessionRecovery({
-                command: { kind: "abandon_reservation", reservation },
-                target: { sessionKey: params.sessionKey, storePath: params.storePath },
-              });
-            }
-            if (params.shouldContinue?.() !== false) {
-              await settleRestartRecoveryDispatch({
-                expectedRecoveryRunId: recoveryRunId,
-                expectedRecoverySourceRunId: sourceRunId,
-                expectedSessionId: params.entry.sessionId,
-                sessionKeys: recoverySessionKeys,
-                shouldContinue: params.shouldContinue,
-                storePath: params.storePath,
-                terminalStatus,
-              });
-              if (params.shouldContinue?.() !== false) {
-                log.info(`settled completed restart recovery for ${params.sessionKey}`);
-                return "resumed";
-              }
-            }
+            log.info(`settled completed restart recovery for ${params.sessionKey}`);
+            return "resumed";
           }
         }
       }
@@ -644,7 +622,7 @@ export async function resumeMainSession(params: {
         log.warn(
           `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
         );
-        const restoreAdmittedRecovery: RestoreAdmittedRecovery = async () => {
+        const restoreAdmittedRecovery = async () => {
           if (params.shouldContinue?.() === false) {
             return undefined;
           }
@@ -671,36 +649,32 @@ export async function resumeMainSession(params: {
               }
             : undefined;
         };
-        try {
-          const restored = await restoreAdmittedRecoveryWithRetries(restoreAdmittedRecovery);
-          if (params.shouldContinue?.() !== false) {
-            scheduleMainSessionRecoveryPendingTarget(restored);
-          }
-        } catch (restoreError) {
-          if (params.shouldContinue?.() !== false) {
-            log.warn(
-              `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
-            );
-            scheduleAdmittedRecoveryRestore(restoreAdmittedRecovery);
-          }
+        const restored = await repairMainSessionRecoveryMutation({
+          mutation: restoreAdmittedRecovery,
+          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+          onError: (restoreError) => {
+            if (params.shouldContinue?.() !== false) {
+              log.warn(
+                `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+              );
+            }
+          },
+        });
+        if (params.shouldContinue?.() !== false) {
+          scheduleMainSessionRecoveryPendingTarget(restored);
         }
       }
     }
     if (reservation) {
-      const rollbackReservation = reservation;
-      await rollbackRestartRecoveryReservation({
-        kind: dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation",
-        reservation: rollbackReservation,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }).catch((rollbackError: unknown) => {
+      const rollbackKind =
+        dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation";
+      await rollbackReservation(rollbackKind).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
         scheduleRestartRecoveryReservationRollback({
-          kind:
-            dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation",
-          reservation: rollbackReservation,
+          kind: rollbackKind,
+          reservation: reservation!,
           sessionKey: params.sessionKey,
           storePath: params.storePath,
         });

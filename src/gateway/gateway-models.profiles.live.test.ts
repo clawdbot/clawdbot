@@ -3213,7 +3213,10 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   let run = listSubagentRunsForRequester(params.sessionKey).find(
     (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
   );
-  while ((!run?.endedAt || run.delivery?.status !== "delivered") && Date.now() < deadline) {
+  while (
+    (!run?.execution.endedAt || run.delivery?.status !== "delivered") &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
@@ -3230,7 +3233,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   ).toHaveLength(1);
   run = matchingRuns[0];
   expect(run, `expected sessions_spawn child for ${params.modelKey}`).toBeDefined();
-  expect(run?.outcome?.status).toBe("ok");
+  expect(run?.execution.outcome?.status).toBe("ok");
   expect(run?.completion?.resultText).toContain(childToken);
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");

@@ -29,7 +29,7 @@ import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
-import type { SlackInstallationIdentity } from "./enterprise-install.js";
+import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
@@ -122,6 +122,7 @@ export type SlackMonitorContext = {
 
   botUserId: string;
   botId?: string;
+  identityHealth: SlackIdentityHealth;
   teamId: string;
   apiAppId: string;
   installationIdentity: SlackInstallationIdentity;
@@ -219,6 +220,7 @@ export function createSlackMonitorContext(params: {
 
   botUserId: string;
   botId?: string;
+  identityHealth: SlackIdentityHealth;
   teamId: string;
   apiAppId: string;
   installationIdentity?: SlackInstallationIdentity;
@@ -683,6 +685,7 @@ export function createSlackMonitorContext(params: {
     channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,
     botId: params.botId,
+    identityHealth: params.identityHealth,
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     installationIdentity: params.installationIdentity ?? {

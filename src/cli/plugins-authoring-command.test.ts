@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -14,6 +15,7 @@ import {
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
+  runPluginsValidateCommand,
   validateToolPluginProject,
 } from "./plugins-authoring-command.js";
 
@@ -270,6 +272,230 @@ describe("plugin authoring commands", () => {
         packageManifest,
       }),
     ).toEqual([]);
+  });
+
+  it.each(["validate", "build --check"] as const)(
+    "accepts reordered JSON object keys without rewriting files in %s",
+    async (command) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-reordered-json-");
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-reordered-json",
+        pluginId: "reordered-json",
+        toolName: "reordered_json_echo",
+      });
+      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+
+      const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      const configSchema = manifest.configSchema as Record<string, unknown>;
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify(
+          {
+            ...manifest,
+            configSchema: {
+              properties: configSchema.properties,
+              additionalProperties: configSchema.additionalProperties,
+              type: configSchema.type,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const packagePath = path.join(tmpDir, "package.json");
+      const manifestBefore = fs.readFileSync(manifestPath, "utf8");
+      const packageBefore = fs.readFileSync(packagePath, "utf8");
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected runtime exit ${code}`);
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+      try {
+        if (command === "validate") {
+          await runPluginsValidateCommand({ root: tmpDir, entry: entryPath });
+          expect(log).toHaveBeenCalledWith("Plugin reordered-json is valid.");
+        } else {
+          await runPluginsBuildCommand({ root: tmpDir, entry: entryPath, check: true });
+          expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        }
+        expect(exit).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+        expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBefore);
+      } finally {
+        exit.mockRestore();
+        log.mockRestore();
+        error.mockRestore();
+      }
+    },
+  );
+
+  it("keeps generated contract arrays ordered", () => {
+    const metadata = createDemoMetadata();
+    const extraTool = {
+      ...expectDefined(metadata.tools[0], "demo tool metadata"),
+      name: "demo_extra",
+    };
+    const metadataWithTools = { ...metadata, tools: [...metadata.tools, extraTool] };
+    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
+    const generated = buildToolPluginManifest({ metadata: metadataWithTools, packageManifest });
+    const manifest = {
+      ...generated,
+      contracts: { tools: ["demo_extra", "demo_echo"] },
+    };
+
+    expect(
+      validateToolPluginProject({
+        metadata: metadataWithTools,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest,
+      }),
+    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
+  });
+
+  it("projects undefined TypeBox options into the persisted manifest shape", () => {
+    const entry = defineToolPlugin({
+      id: "undefined-schema-options",
+      name: "Undefined Schema Options",
+      description: "Plugin with optional TypeBox schema metadata.",
+      configSchema: Type.Object(
+        { value: Type.Optional(Type.String({ description: undefined })) },
+        { description: undefined },
+      ),
+      tools: (tool) => [
+        tool({
+          name: "undefined_schema_echo",
+          description: "Echo input.",
+          parameters: Type.Object({ input: Type.String() }),
+          execute: ({ input }) => ({ input }),
+        }),
+      ],
+    });
+    const metadata = getToolPluginMetadata(entry);
+    if (!metadata) {
+      throw new Error("missing metadata");
+    }
+    const runtimeSchema = metadata.configSchema;
+    const runtimeProperties = runtimeSchema.properties as Record<string, unknown>;
+    expect(Object.hasOwn(runtimeSchema, "description")).toBe(true);
+    expect(Object.hasOwn(runtimeProperties.value as object, "description")).toBe(true);
+
+    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
+    const manifest = buildToolPluginManifest({ metadata, packageManifest });
+    const persistedSchema = manifest.configSchema as Record<string, unknown>;
+    const persistedProperties = persistedSchema.properties as Record<string, unknown>;
+    expect(Object.hasOwn(persistedSchema, "description")).toBe(false);
+    expect(Object.hasOwn(persistedProperties.value as object, "description")).toBe(false);
+    expect(
+      validateToolPluginProject({
+        metadata,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest,
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "own prototype key versus different own key",
+      expected: '{"__proto__":{}}',
+      actual: '{"safe":{}}',
+      stale: true,
+    },
+    {
+      label: "different own key versus own prototype key",
+      expected: '{"safe":{}}',
+      actual: '{"__proto__":{}}',
+      stale: true,
+    },
+    {
+      label: "matching own prototype keys",
+      expected: '{"__proto__":{}}',
+      actual: '{"__proto__":{}}',
+      stale: false,
+    },
+  ])("compares $label in generated schemas", ({ expected, actual, stale }) => {
+    const metadata = createDemoMetadata();
+    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
+    const metadataWithSchema = {
+      ...metadata,
+      configSchema: { type: "object", properties: JSON.parse(expected) as Record<string, unknown> },
+    };
+    const generated = buildToolPluginManifest({ metadata: metadataWithSchema, packageManifest });
+    const manifest = {
+      ...generated,
+      configSchema: { type: "object", properties: JSON.parse(actual) as Record<string, unknown> },
+    };
+
+    expect(
+      validateToolPluginProject({
+        metadata: metadataWithSchema,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest,
+      }),
+    ).toEqual(
+      stale
+        ? ["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]
+        : [],
+    );
+  });
+
+  it("still rejects a changed generated config schema", () => {
+    const metadata = createDemoMetadata();
+    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
+    const generated = buildToolPluginManifest({ metadata, packageManifest });
+    const manifest = {
+      ...generated,
+      configSchema: {
+        ...(generated.configSchema as Record<string, unknown>),
+        additionalProperties: true,
+      },
+    };
+
+    expect(
+      validateToolPluginProject({
+        metadata,
+        entry: "./src/index.ts",
+        manifest,
+        packageManifest,
+      }),
+    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
+  });
+
+  it("rejects a missing generated manifest without changing package metadata", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-missing-generated-manifest-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-missing-generated-manifest",
+      pluginId: "missing-generated-manifest",
+      toolName: "missing_generated_manifest_echo",
+    });
+    const packagePath = path.join(tmpDir, "package.json");
+    const packageBefore = fs.readFileSync(packagePath, "utf8");
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`runtime exit ${code}`);
+    });
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: tmpDir, entry: entryPath, check: true }),
+      ).rejects.toThrow("runtime exit 1");
+      expect(error).toHaveBeenCalledWith(
+        "Generated plugin metadata is out of date. Run openclaw plugins build.",
+      );
+      expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBefore);
+      expect(fs.existsSync(path.join(tmpDir, "openclaw.plugin.json"))).toBe(false);
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it("reports stale manifest contracts", () => {
