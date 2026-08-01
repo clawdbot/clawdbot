@@ -472,4 +472,41 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
   });
+  it("includes configured mediaLocalRoots only when host reads are allowed", () => {
+    const extraRoot = process.platform === "win32" ? "C:\data\snapshots" : "/data/snapshots";
+    const cfg = {
+      tools: { allow: ["read"] },
+      agents: { defaults: { mediaLocalRoots: [extraRoot] } },
+    } as OpenClawConfig;
+
+    const allowed = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      messageProvider: "telegram",
+      requesterSenderId: "trusted-user",
+    });
+    expect(allowed.localRoots).toContain(extraRoot);
+    expect(allowed.readFile).toBeTypeOf("function");
+
+    const denied = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        ...cfg,
+        channels: {
+          telegram: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:attacker": { deny: ["read"] },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:ops",
+      requesterSenderId: "attacker",
+    });
+    expect(denied.readFile).toBeUndefined();
+    expect(denied.localRoots).not.toContain(extraRoot);
+  });
+
 });

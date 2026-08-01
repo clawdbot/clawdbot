@@ -76,6 +76,7 @@ export { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 export type { OutboundMediaAccess, OutboundMediaReadFile } from "../media/load-options.js";
 export { fetchRemoteMedia, saveRemoteMedia } from "../media/fetch.js";
 export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+export { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
 export { getMediaDir, saveMediaBuffer } from "../media/store.js";
 export { kindFromMime } from "@openclaw/media-core/mime";
 export {

@@ -226,6 +226,16 @@ Local-path behavior follows the same file-read trust model as the agent:
 
 Keep sensitive files outside the agent-readable filesystem, or keep `tools.fs.workspaceOnly: true` for stricter local-path sends.
 
+### `agents.defaults.mediaLocalRoots`
+
+Optional absolute (or `~/…`) directories that policy-gated outbound local-media delivery may read in addition to managed OpenClaw roots and the agent workspace.
+
+- Scope: all agents under `agents.defaults` (not a per-channel allowlist).
+- Security model: roots are merged only when the effective host/group filesystem policy already allows `read` (same gate as action-based outbound media). Direct channel reply paths use that same resolver, so a messaging/group profile that denies `read` cannot send `MEDIA:` files from these directories.
+- Relationship to `tools.fs.workspaceOnly`: when workspace-only / host-root expansion is refused, configured roots are not added. Prefer keeping secrets outside these directories.
+- Relative paths and filesystem-root entries (`/` or drive roots) are rejected by config validation.
+
+
 ## Operations checklist
 
 ```bash

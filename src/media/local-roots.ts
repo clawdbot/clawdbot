@@ -60,7 +60,7 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
 }
 
 /** Normalizes configured media roots; skips empty / relative / unresolved `~` prefixes. */
-function appendConfiguredMediaLocalRoots(
+export function appendConfiguredMediaLocalRoots(
   roots: string[],
   configuredRoots: readonly string[] | undefined,
 ): string[] {
@@ -96,11 +96,12 @@ export function getAgentScopedMediaLocalRoots(
   agentId?: string,
   sessionWorkspaceDir?: string,
 ): readonly string[] {
+  // Configured roots belong to the policy-gated outbound resolver, never this
+  // managed-root helper whose callers may have no requester identity.
   const stateDir = resolveStateDir();
   const roots = buildMediaLocalRoots(stateDir, resolveConfigDir()).filter(
     (root) => !sessionWorkspaceDir || root !== path.join(path.resolve(stateDir), "workspace"),
   );
-  appendConfiguredMediaLocalRoots(roots, cfg.agents?.defaults?.mediaLocalRoots);
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;

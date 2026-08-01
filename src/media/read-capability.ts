@@ -14,7 +14,10 @@ import { resolveConfigDir } from "../utils.js";
 import { createBoundedOutboundMediaReadFile, readOutboundMediaFile } from "./bounded-read-file.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import { readLocalMediaFile } from "./local-media-access.js";
-import { getAgentScopedMediaLocalRootsForSources } from "./local-roots.js";
+import {
+  appendConfiguredMediaLocalRoots,
+  getAgentScopedMediaLocalRootsForSources,
+} from "./local-roots.js";
 
 type OutboundHostMediaPolicyContext = {
   sessionKey?: string;
@@ -170,13 +173,21 @@ export function resolveAgentScopedOutboundMediaAccess(
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const mediaReadAllowed = isAgentScopedMediaReadAllowedByToolPolicy(params);
   const managedLocalRoots = getManagedMediaLocalRoots(params.mediaSources);
-  const hostLocalRoots =
+  let hostLocalRoots =
     params.mediaAccess?.localRoots ??
     getAgentScopedMediaLocalRootsForSources({
       cfg: params.cfg,
       agentId: params.agentId,
       mediaSources: params.mediaSources,
     });
+  // Configured operator roots are not an ambient grant. Append them only when
+  // host/group read is already allowed and the caller did not supply roots.
+  if (mediaReadAllowed && !params.mediaAccess?.localRoots) {
+    hostLocalRoots = appendConfiguredMediaLocalRoots(
+      [...hostLocalRoots],
+      params.cfg.agents?.defaults?.mediaLocalRoots,
+    );
+  }
   const workspaceLocalRoots = params.workspaceMediaAccess?.localRoots ?? [];
   const baseLocalRoots = mediaReadAllowed
     ? workspaceLocalRoots.length > 0
