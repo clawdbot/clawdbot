@@ -350,6 +350,67 @@ async function terminatePids(
   return terminated;
 }
 
+/** Verify that a PID currently maps to a live, OpenClaw-owned ACPX wrapper
+ * process matching the expected wrapper root, stored command, and lease
+ * identity. Any dead, mismatched, or unverifiable PID returns false so callers
+ * can treat the stored session as fresh (#109285 PID-reuse hardening). */
+export async function isLiveOpenClawOwnedAcpxWrapper(params: {
+  pid: number;
+  wrapperRoot?: string;
+  expectedCommand?: string;
+  expectedLeaseId?: string;
+  expectedGatewayInstanceId?: string;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<boolean> {
+  if (!params.pid || params.pid <= 0 || params.pid === process.pid) {
+    return false;
+  }
+  let processes: AcpxProcessInfo[];
+  try {
+    processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
+  } catch {
+    return false;
+  }
+  const proc = processes.find((processInfo) => processInfo.pid === params.pid);
+  if (!proc) {
+    return false;
+  }
+  const liveCommand = proc.command;
+  const liveCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
+    normalizePathLike(liveCommand),
+  );
+  const storedCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
+    normalizePathLike(params.expectedCommand ?? ""),
+  );
+  if (!liveCommandWasGeneratedWrapper && storedCommandWasGeneratedWrapper) {
+    return false;
+  }
+  if (
+    !liveCommandWasGeneratedWrapper &&
+    !commandsReferToSameRootCommand(liveCommand, params.expectedCommand)
+  ) {
+    return false;
+  }
+  if (
+    !isOpenClawOwnedAcpxProcessCommand({
+      command: liveCommand,
+      wrapperRoot: params.wrapperRoot,
+    })
+  ) {
+    return false;
+  }
+  if (
+    !liveCommandMatchesLeaseIdentity({
+      command: liveCommand,
+      expectedLeaseId: params.expectedLeaseId,
+      expectedGatewayInstanceId: params.expectedGatewayInstanceId,
+    })
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Terminate one validated OpenClaw-owned ACPX wrapper process tree. */
 export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   rootPid?: number;
