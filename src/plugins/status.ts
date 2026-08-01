@@ -318,11 +318,14 @@ function buildPluginReport(
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
-          buildPluginDependencyStatus({
-            rootDir: plugin.rootDir,
-            dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-            optionalDependencies: manifestByPluginId.get(plugin.id)?.packageOptionalDependencies,
-          }),
+          (plugin.origin === "bundled"
+            ? undefined
+            : buildPluginDependencyStatus({
+                rootDir: plugin.rootDir,
+                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+                optionalDependencies: manifestByPluginId.get(plugin.id)
+                  ?.packageOptionalDependencies,
+              })),
       }),
     ),
   });

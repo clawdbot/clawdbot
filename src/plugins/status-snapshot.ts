@@ -123,11 +123,14 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
-    dependencyStatus: buildPluginDependencyStatus({
-      rootDir: plugin.rootDir,
-      dependencies: manifest?.packageDependencies,
-      optionalDependencies: manifest?.packageOptionalDependencies,
-    }),
+    dependencyStatus:
+      plugin.origin === "bundled"
+        ? undefined
+        : buildPluginDependencyStatus({
+            rootDir: plugin.rootDir,
+            dependencies: manifest?.packageDependencies,
+            optionalDependencies: manifest?.packageOptionalDependencies,
+          }),
   };
 }
 
