@@ -83,10 +83,12 @@ describe("CLI startup benchmark script spawners", () => {
       expect(new Set(warmedHomes).size).toBe(1);
       expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
 
-      const firstDeviceHomes = runCase("gatewayHealthJsonFirstDevice");
-      expect(firstDeviceHomes).toHaveLength(3);
-      expect(new Set(firstDeviceHomes).size).toBe(3);
-      expect(firstDeviceHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
+        const sampleHomes = runCase(caseId);
+        expect(sampleHomes).toHaveLength(3);
+        expect(new Set(sampleHomes).size).toBe(3);
+        expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

@@ -442,7 +442,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     name: "gateway health --json",
     args: ["gateway", "health", "--json"],
     presets: ["real"],
-    stateScope: "case",
     expectedExitCodes: [0, 1],
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
