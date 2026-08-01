@@ -611,9 +611,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
     if (changedProperties.has("focusComposer") && this.focusComposer) {
-      const textarea = this.querySelector<HTMLTextAreaElement>(
-        ".agent-chat__composer-combobox > textarea",
-      );
+      const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
       if (input) {

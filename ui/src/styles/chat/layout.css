@@ -2301,6 +2301,14 @@ openclaw-chat-video-player {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__input--prefill-attention {
+    animation: none;
+    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+    box-shadow: var(--focus-ring);
+  }
+}
+
 .agent-chat__input--offline,
 .agent-chat__input--offline:focus-within {
   border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
