@@ -171,26 +171,28 @@ describe("MCP App UI resources", () => {
     expect(result).toBeUndefined();
   });
 
-  it("keeps an empty blob as a valid zero-byte resource", async () => {
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          blob: "",
-        },
-      ],
-    }));
-    const result = await fetchMcpAppView({
-      runtime: sessionRuntime,
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolInput: {},
-      toolResult: { content: [] },
-    });
-    expect(result?.viewId).toMatch(/^mcp-app-/u);
-    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toMatchObject({ html: "" });
+  it("keeps empty and whitespace-only blobs as valid zero-byte resources", async () => {
+    for (const blob of ["", " \n\t"]) {
+      const sessionRuntime = runtime(async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            blob,
+          },
+        ],
+      }));
+      const result = await fetchMcpAppView({
+        runtime: sessionRuntime,
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolInput: {},
+        toolResult: { content: [] },
+      });
+      expect(result?.viewId).toMatch(/^mcp-app-/u);
+      expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toMatchObject({ html: "" });
+    }
   });
 
   it("bounds concurrent app bridge requests", () => {
