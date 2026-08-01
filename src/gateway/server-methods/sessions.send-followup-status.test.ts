@@ -4,7 +4,9 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { errorShape, ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -19,6 +21,7 @@ const abortEmbeddedAgentRunMock = vi.fn();
 const waitForEmbeddedAgentRunEndMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
 const chatSendWithAdmissionOwnedMock = vi.fn();
+const handleChatAbortRequestWithLifecycleMock = vi.fn();
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
@@ -86,6 +89,11 @@ vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
+vi.mock("./chat-abort-handler.js", () => ({
+  handleChatAbortRequestWithLifecycle: (...args: unknown[]) =>
+    handleChatAbortRequestWithLifecycleMock(...args),
+}));
+
 import { sessionsHandlers } from "./sessions.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
@@ -113,6 +121,11 @@ describe("sessions.send completed subagent follow-up status", () => {
     abortEmbeddedAgentRunMock.mockReset();
     waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     clearSessionQueuesMock.mockReset();
+    handleChatAbortRequestWithLifecycleMock
+      .mockReset()
+      .mockImplementation(async (options: { respond: RespondFn }) => {
+        options.respond(true, { ok: true, aborted: true, runIds: ["run-old"] });
+      });
     chatSendWithAdmissionOwnedMock
       .mockReset()
       .mockImplementation(
@@ -501,6 +514,163 @@ describe("sessions.send completed subagent follow-up status", () => {
     expect(clearSessionQueuesMock).not.toHaveBeenCalled();
     expect(readSessionMessageCountAsyncMock).toHaveBeenCalledTimes(1);
     expect(respondMock.mock.calls.at(0)?.[3]).toMatchObject({ cached: true });
+  });
+
+  it("sessions.steer makes a concurrent retry wait for successful interruption", async () => {
+    const sessionKey = "agent:main:main";
+    const idempotencyKey = "steer-concurrent-success";
+    const abortEntered = createDeferred();
+    const releaseAbort = createDeferred();
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-concurrent-success" },
+    });
+    handleChatAbortRequestWithLifecycleMock.mockImplementationOnce(
+      async (options: { respond: RespondFn }, lifecycle: { excludeRunIds?: Set<string> }) => {
+        expect(lifecycle.excludeRunIds).toEqual(new Set([idempotencyKey]));
+        abortEntered.resolve(undefined);
+        await releaseAbort.promise;
+        options.respond(true, { ok: true, aborted: true, runIds: ["run-old"] });
+      },
+    );
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: idempotencyKey, status: "started" });
+    });
+    const context = createRequestContext({
+      chatAbortControllers: new Map([
+        [
+          "run-old",
+          {
+            sessionKey,
+            sessionId: "sess-concurrent-success",
+            controlUiVisible: true,
+            projectSessionActive: true,
+          },
+        ],
+      ]),
+    });
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
+      expectDefined(
+        sessionsHandlers["sessions.steer"],
+        'sessionsHandlers["sessions.steer"] test invariant',
+      )({
+        req: { id: reqId } as never,
+        params: {
+          key: sessionKey,
+          message: "replacement turn",
+          idempotencyKey,
+        },
+        respond: respond as unknown as RespondFn,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+
+    const first = invoke("req-concurrent-success-1", firstRespond);
+    await abortEntered.promise;
+    const second = invoke("req-concurrent-success-2", secondRespond);
+    await Promise.resolve();
+
+    expect(secondRespond).not.toHaveBeenCalled();
+    expect(handleChatAbortRequestWithLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(chatSendMock).not.toHaveBeenCalled();
+
+    releaseAbort.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(firstRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: idempotencyKey,
+        status: "started",
+        interruptedActiveRun: true,
+      }),
+      undefined,
+    );
+    expect(secondRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: idempotencyKey,
+        status: "started",
+        interruptedActiveRun: true,
+      }),
+      undefined,
+      { cached: true },
+    );
+    expect(chatSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sessions.steer replays interruption failure to a concurrent retry", async () => {
+    const sessionKey = "agent:main:main";
+    const idempotencyKey = "steer-concurrent-failure";
+    const abortEntered = createDeferred();
+    const releaseAbort = createDeferred();
+    const interruptError = errorShape(ErrorCodes.UNAVAILABLE, "interrupt failed");
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-concurrent-failure" },
+    });
+    handleChatAbortRequestWithLifecycleMock.mockImplementationOnce(
+      async (options: { respond: RespondFn }) => {
+        abortEntered.resolve(undefined);
+        await releaseAbort.promise;
+        options.respond(false, undefined, interruptError);
+      },
+    );
+    const context = createRequestContext({
+      chatAbortControllers: new Map([
+        [
+          "run-old",
+          {
+            sessionKey,
+            sessionId: "sess-concurrent-failure",
+            controlUiVisible: true,
+            projectSessionActive: true,
+          },
+        ],
+      ]),
+    });
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
+      expectDefined(
+        sessionsHandlers["sessions.steer"],
+        'sessionsHandlers["sessions.steer"] test invariant',
+      )({
+        req: { id: reqId } as never,
+        params: {
+          key: sessionKey,
+          message: "replacement turn",
+          idempotencyKey,
+        },
+        respond: respond as unknown as RespondFn,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+
+    const first = invoke("req-concurrent-failure-1", firstRespond);
+    await abortEntered.promise;
+    const second = invoke("req-concurrent-failure-2", secondRespond);
+    await Promise.resolve();
+
+    expect(secondRespond).not.toHaveBeenCalled();
+    expect(handleChatAbortRequestWithLifecycleMock).toHaveBeenCalledTimes(1);
+
+    releaseAbort.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(firstRespond).toHaveBeenCalledWith(false, undefined, interruptError);
+    expect(secondRespond).toHaveBeenCalledWith(false, undefined, interruptError, {
+      cached: true,
+    });
+    expect(chatSendMock).not.toHaveBeenCalled();
   });
 
   for (const method of ["sessions.send", "sessions.steer"] as const) {

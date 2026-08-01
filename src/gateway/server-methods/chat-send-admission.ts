@@ -381,28 +381,13 @@ export async function admitChatSend(params: {
     return { ok: false as const };
   }
   if (params.onAdmissionOwned) {
-    const activeEntry = activeRunAbort.entry;
-    const previousVisibility = activeEntry?.controlUiVisible;
-    if (activeEntry) {
-      // Keep the winning replacement visible to idempotency checks but outside
-      // the session-wide abort that clears the run it is replacing.
-      activeEntry.controlUiVisible = false;
-    }
-    let proceed = false;
+    let proceed: boolean;
     try {
       proceed = await params.onAdmissionOwned();
     } catch (error) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
       throw error;
-    } finally {
-      if (activeEntry) {
-        if (previousVisibility === undefined) {
-          delete activeEntry.controlUiVisible;
-        } else {
-          activeEntry.controlUiVisible = previousVisibility;
-        }
-      }
     }
     if (!proceed) {
       activeRunAbort.cleanup({ force: true });

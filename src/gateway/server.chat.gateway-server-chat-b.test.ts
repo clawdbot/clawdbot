@@ -2841,7 +2841,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
       const freshAdmission = vi.fn(async () => {
-        expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).toBe(false);
+        expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).not.toBe(false);
         return true;
       });
 
@@ -2952,6 +2952,94 @@ describe("gateway server chat", () => {
       );
     } finally {
       dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+    }
+  });
+
+  test("chat.abort still sees a replacement while its admission callback is running", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const callbackEntered = createDeferred();
+    const releaseCallback = createDeferred();
+    const runId = "idem-visible-during-admission-callback";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext({ chatQueuedTurns: new Map() });
+      const sendResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const sendPromise = sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "remain publicly abortable",
+        onAdmissionOwned: async () => {
+          callbackEntered.resolve(undefined);
+          await releaseCallback.promise;
+          return true;
+        },
+        respond: ((ok, payload) => sendResponses.push({ ok, payload })) as RespondFn,
+      });
+      await callbackEntered.promise;
+      expect(context.chatAbortControllers.get(runId)?.controlUiVisible).not.toBe(false);
+
+      const abortResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "abort-visible-replacement",
+          method: "chat.abort",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload) => abortResponses.push({ ok, payload })) as RespondFn,
+        context,
+      });
+
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+        },
+      ]);
+      releaseCallback.resolve(undefined);
+      await sendPromise;
+
+      expect(sendResponses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+          }),
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      releaseCallback.resolve(undefined);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
