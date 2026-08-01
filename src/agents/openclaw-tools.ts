@@ -81,6 +81,7 @@ import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
+import { withSessionsSendRestrictionContext } from "./tools/sessions-send-restriction-context.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
@@ -177,8 +178,6 @@ export function createOpenClawTools(
     /** Action sink available for model-proposed follow-up tasks. */
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
-    /** Requester session that a sessions_send target turn may not call back. */
-    sessionsSendCallerSessionKey?: string;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -648,14 +647,14 @@ export function createOpenClawTools(
           // caller, and an injected override would disable the trusted creation
           // stamp for materialized agent roots (opts.callGateway === undefined
           // is the gate in ensureConfiguredAgentMainSession).
-          createSessionsSendTool({
-            agentSessionKey: options?.agentSessionKey,
-            agentSessionId: options?.sessionId,
-            agentChannel: options?.agentChannel,
-            sandboxed: options?.sandboxed,
-            config: resolvedConfig,
-            sessionsSendCallerSessionKey: options?.sessionsSendCallerSessionKey,
-          }),
+          withSessionsSendRestrictionContext({ agentSessionId: options?.sessionId }, () =>
+            createSessionsSendTool({
+              agentSessionKey: options?.agentSessionKey,
+              agentChannel: options?.agentChannel,
+              sandboxed: options?.sandboxed,
+              config: resolvedConfig,
+            }),
+          ),
         ]),
     ...(includeSubagentSpawnTool
       ? [

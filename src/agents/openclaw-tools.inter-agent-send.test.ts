@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { withSessionsSendRestrictionContext } from "./tools/sessions-send-restriction-context.js";
 
 const BASE_OPTIONS = {
   agentSessionKey: "agent:main:discord:channel:target-room",
@@ -26,10 +27,10 @@ describe("createOpenClawTools sessions_send A2A gate", () => {
   });
 
   it("keeps sessions_send available on an A2A target turn", () => {
-    const names = toolNames({
-      ...BASE_OPTIONS,
-      sessionsSendCallerSessionKey: "agent:requester:discord:channel:source-room",
-    });
+    const names = withSessionsSendRestrictionContext(
+      { callerSessionKey: "agent:requester:discord:channel:source-room" },
+      () => toolNames(BASE_OPTIONS),
+    );
     expect(names).toContain("sessions_send");
     expect(names).toContain("sessions_list");
     expect(names).toContain("sessions_history");

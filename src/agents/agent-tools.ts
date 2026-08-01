@@ -26,10 +26,8 @@ import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
-import {
-  type InputProvenance,
-  resolveAgentToAgentSendSourceSessionKey,
-} from "../sessions/input-provenance.js";
+import { resolveAgentToAgentSendSourceSessionKey } from "../sessions/input-provenance.a2a.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -128,6 +126,7 @@ import {
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { withSessionsSendRestrictionContext } from "./tools/sessions-send-restriction-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -425,8 +424,6 @@ type OpenClawCodingToolsOptions = {
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
-  /** Requester session that a sessions_send target turn may not call back. */
-  sessionsSendCallerSessionKey?: string;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Collector runs never open operator approval flows. */
@@ -989,89 +986,92 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...(includeOpenClawTools
       ? mergeAgentRingZeroTools(
           ringZeroTools,
-          createOpenClawTools({
-            ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
-            sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
-            allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-            agentSessionKey: options?.sessionKey,
-            runId: options?.runId,
-            runSessionKey: options?.runSessionKey,
-            agentChannel: resolveGatewayMessageChannel(
-              options?.messageChannel ?? options?.messageProvider,
-            ),
-            agentAccountId: options?.agentAccountId,
-            gatewayCallerAccountId,
-            agentTo: options?.messageTo,
-            agentThreadId: options?.messageThreadId,
-            nativeChannelId: options?.nativeChannelId,
-            messageActionTurnCapability: options?.messageActionTurnCapability,
-            agentGroupId: options?.groupId ?? null,
-            agentGroupChannel: options?.groupChannel ?? null,
-            agentGroupSpace: options?.groupSpace ?? null,
-            agentMemberRoleIds: options?.memberRoleIds,
-            agentDir: options?.agentDir,
-            preparedModelRuntime: options?.preparedModelRuntime,
-            sandboxRoot,
-            sandboxContainerWorkdir: sandbox?.containerWorkdir,
-            sandboxFsBridge,
-            fsPolicy,
-            workspaceDir: workspaceRoot,
-            spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
-            // Sandboxes execute against copied roots, but accepted suggestions create host
-            // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
-            cwd: sandbox
-              ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
-              : runtimeRoot,
-            sandboxed: Boolean(sandbox),
-            config: options?.config,
-            webSearchEnabled: options?.webSearchEnabled,
-            clientCaps: options?.clientCaps,
-            toolBindings: options?.toolBindings,
-            pluginToolAllowlist,
-            pluginToolDenylist,
-            cronCreatorToolAllowlist,
-            currentChannelId: options?.currentChannelId,
-            currentChatType: options?.chatType,
-            currentMessagingTarget: options?.currentMessagingTarget,
-            currentThreadTs: options?.currentThreadTs,
-            currentMessageId: options?.currentMessageId,
-            currentInboundAudio: options?.currentInboundAudio,
-            hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
-            modelProvider: options?.modelProvider,
-            modelId: options?.modelId,
-            skillWorkshop: options?.skillWorkshop,
-            replyToMode: options?.replyToMode,
-            hasRepliedRef: options?.hasRepliedRef,
-            modelHasVision: options?.modelHasVision,
-            computerContextEpoch: options?.computerContextEpoch,
-            requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-            sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-            sourceReplyOnly,
-            taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
-            inboundEventKind: options?.inboundEventKind,
-            sessionsSendCallerSessionKey:
-              options?.sessionsSendCallerSessionKey ??
-              resolveAgentToAgentSendSourceSessionKey(options?.inputProvenance),
-            disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
-            swarmCollector: options?.swarmCollector,
-            swarmOutputSchema: options?.swarmOutputSchema,
-            enableHeartbeatTool,
-            disablePluginTools: !includePluginTools,
-            wrapBeforeToolCallHook: false,
-            ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
-            requesterAgentIdOverride: agentId,
-            requesterSenderId: options?.senderId,
-            senderIsOwner: options?.senderIsOwner,
-            authProfileStore: options?.authProfileStore,
-            sessionId: options?.sessionId,
-            conversationRecall: options?.conversationRecall,
-            oneShotCliRun: options?.oneShotCliRun,
-            inheritedToolAllowlist,
-            inheritedToolDenylist,
-            onYield: options?.onYield,
-            allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
-            recordToolPrepStage: options?.recordToolPrepStage,
-          }),
+          withSessionsSendRestrictionContext(
+            {
+              callerSessionKey: resolveAgentToAgentSendSourceSessionKey(options?.inputProvenance),
+            },
+            () =>
+              createOpenClawTools({
+                ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
+                sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+                allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+                agentSessionKey: options?.sessionKey,
+                runId: options?.runId,
+                runSessionKey: options?.runSessionKey,
+                agentChannel: resolveGatewayMessageChannel(
+                  options?.messageChannel ?? options?.messageProvider,
+                ),
+                agentAccountId: options?.agentAccountId,
+                gatewayCallerAccountId,
+                agentTo: options?.messageTo,
+                agentThreadId: options?.messageThreadId,
+                nativeChannelId: options?.nativeChannelId,
+                messageActionTurnCapability: options?.messageActionTurnCapability,
+                agentGroupId: options?.groupId ?? null,
+                agentGroupChannel: options?.groupChannel ?? null,
+                agentGroupSpace: options?.groupSpace ?? null,
+                agentMemberRoleIds: options?.memberRoleIds,
+                agentDir: options?.agentDir,
+                preparedModelRuntime: options?.preparedModelRuntime,
+                sandboxRoot,
+                sandboxContainerWorkdir: sandbox?.containerWorkdir,
+                sandboxFsBridge,
+                fsPolicy,
+                workspaceDir: workspaceRoot,
+                spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
+                // Sandboxes execute against copied roots, but accepted suggestions create host
+                // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
+                cwd: sandbox
+                  ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
+                  : runtimeRoot,
+                sandboxed: Boolean(sandbox),
+                config: options?.config,
+                webSearchEnabled: options?.webSearchEnabled,
+                clientCaps: options?.clientCaps,
+                toolBindings: options?.toolBindings,
+                pluginToolAllowlist,
+                pluginToolDenylist,
+                cronCreatorToolAllowlist,
+                currentChannelId: options?.currentChannelId,
+                currentChatType: options?.chatType,
+                currentMessagingTarget: options?.currentMessagingTarget,
+                currentThreadTs: options?.currentThreadTs,
+                currentMessageId: options?.currentMessageId,
+                currentInboundAudio: options?.currentInboundAudio,
+                hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
+                modelProvider: options?.modelProvider,
+                modelId: options?.modelId,
+                skillWorkshop: options?.skillWorkshop,
+                replyToMode: options?.replyToMode,
+                hasRepliedRef: options?.hasRepliedRef,
+                modelHasVision: options?.modelHasVision,
+                computerContextEpoch: options?.computerContextEpoch,
+                requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+                sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+                sourceReplyOnly,
+                taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
+                inboundEventKind: options?.inboundEventKind,
+                disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
+                swarmCollector: options?.swarmCollector,
+                swarmOutputSchema: options?.swarmOutputSchema,
+                enableHeartbeatTool,
+                disablePluginTools: !includePluginTools,
+                wrapBeforeToolCallHook: false,
+                ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
+                requesterAgentIdOverride: agentId,
+                requesterSenderId: options?.senderId,
+                senderIsOwner: options?.senderIsOwner,
+                authProfileStore: options?.authProfileStore,
+                sessionId: options?.sessionId,
+                conversationRecall: options?.conversationRecall,
+                oneShotCliRun: options?.oneShotCliRun,
+                inheritedToolAllowlist,
+                inheritedToolDenylist,
+                onYield: options?.onYield,
+                allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+                recordToolPrepStage: options?.recordToolPrepStage,
+              }),
+          ),
         )
       : pluginToolsOnly),
     ...toolSearchTools,

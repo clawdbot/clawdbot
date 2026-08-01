@@ -2,10 +2,7 @@
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import {
-  isSessionsSendHandoffInputProvenance,
-  type InputProvenance,
-} from "../../sessions/input-provenance.js";
+import { isSessionsSendHandoffInputProvenance } from "../../sessions/input-provenance.a2a.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,

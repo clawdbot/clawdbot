@@ -9,6 +9,7 @@ import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { withSessionsSendRestrictionContext } from "./sessions-send-restriction-context.js";
 
 const callGatewayMock = vi.fn();
 const inProcessCreationMock = vi.fn(
@@ -822,11 +823,12 @@ describe("sessions_send gating", () => {
       }
       return {};
     });
-    const tool = createSessionsSendTool({
-      agentSessionKey: "agent:target:main",
-      agentChannel: "telegram",
-      sessionsSendCallerSessionKey: requesterKey,
-    });
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: requesterKey }, () =>
+      createSessionsSendTool({
+        agentSessionKey: "agent:target:main",
+        agentChannel: "telegram",
+      }),
+    );
 
     const reverseResult = await tool.execute("call-reverse", {
       sessionKey: requesterKey,

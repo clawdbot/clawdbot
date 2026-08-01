@@ -137,30 +137,24 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
 
-  it("carries the sessions_send requester key into destination-aware tool guards", () => {
+  it("carries input provenance into destination-aware tool guards", () => {
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:requester:discord:source",
+      sourceTool: "sessions_send",
+    };
     const context = buildEmbeddedAttemptToolRunContext({
       trigger: "manual",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:requester:discord:source",
-        sourceTool: "sessions_send",
-      },
+      inputProvenance,
     });
-    expect(context.sessionsSendCallerSessionKey).toBe("agent:requester:discord:source");
+    expect(context.inputProvenance).toEqual(inputProvenance);
   });
 
-  it("does not restrict normal user turns or non-send inter-session handoffs", () => {
+  it("omits input provenance when none is provided", () => {
     expect(
       buildEmbeddedAttemptToolRunContext({
         trigger: "manual",
-        inputProvenance: { kind: "external_user", sourceChannel: "discord" },
-      }).sessionsSendCallerSessionKey,
-    ).toBeUndefined();
-    expect(
-      buildEmbeddedAttemptToolRunContext({
-        trigger: "manual",
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      }).sessionsSendCallerSessionKey,
+      }).inputProvenance,
     ).toBeUndefined();
   });
 });

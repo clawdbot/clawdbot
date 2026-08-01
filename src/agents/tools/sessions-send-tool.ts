@@ -76,6 +76,7 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import { captureSessionsSendRestrictionContext } from "./sessions-send-restriction-context.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -440,13 +441,12 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentSessionId?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
-  sessionsSendCallerSessionKey?: string;
 }): AnyAgentTool {
+  const restrictionContext = captureSessionsSendRestrictionContext();
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -611,12 +611,12 @@ export function createSessionsSendTool(opts?: {
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
       const sessionsSendCallerSessionKey = normalizeOptionalString(
-        opts?.sessionsSendCallerSessionKey,
+        restrictionContext.callerSessionKey,
       );
       if (
         resolvedKey === sessionsSendCallerSessionKey ||
         isSessionsSendTargetBlockedForActiveRun({
-          sessionId: opts?.agentSessionId,
+          sessionId: restrictionContext.agentSessionId,
           targetSessionKey: resolvedKey,
         })
       ) {

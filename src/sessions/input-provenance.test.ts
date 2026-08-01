@@ -1,11 +1,12 @@
 // Input provenance tests cover source metadata attached to session inputs.
 import { describe, expect, it } from "vitest";
 import {
-  annotateInterSessionPromptText,
-  isAgentMediatedCompletionSourceTool,
-  isAgentToAgentSendInputProvenance,
   isSessionsSendHandoffInputProvenance,
   resolveAgentToAgentSendSourceSessionKey,
+} from "./input-provenance.a2a.js";
+import {
+  annotateInterSessionPromptText,
+  isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -100,34 +101,6 @@ describe("isAgentMediatedCompletionSourceTool", () => {
   );
 });
 
-describe("isAgentToAgentSendInputProvenance", () => {
-  it("identifies an inter-session sessions_send turn", () => {
-    expect(
-      isAgentToAgentSendInputProvenance({
-        kind: "inter_session",
-        sourceSessionKey: "agent:other:discord:source",
-        sourceTool: "sessions_send",
-      }),
-    ).toBe(true);
-  });
-
-  it.each([
-    "subagent_announce",
-    "agent_harness_task",
-    "image_generate",
-    "sessions_send_delivery_failure",
-  ])("does not flag inter-session %s turns", (sourceTool) => {
-    expect(isAgentToAgentSendInputProvenance({ kind: "inter_session", sourceTool })).toBe(false);
-  });
-
-  it("does not flag external-user sessions_send provenance or missing provenance", () => {
-    expect(
-      isAgentToAgentSendInputProvenance({ kind: "external_user", sourceTool: "sessions_send" }),
-    ).toBe(false);
-    expect(isAgentToAgentSendInputProvenance(undefined)).toBe(false);
-  });
-});
-
 describe("sessions_send provenance routing", () => {
   it("returns the exact requester session for destination-aware blocking", () => {
     expect(
@@ -137,6 +110,32 @@ describe("sessions_send provenance routing", () => {
         sourceTool: "SESSIONS_SEND",
       }),
     ).toBe("agent:requester:main");
+  });
+
+  it.each([
+    "subagent_announce",
+    "agent_harness_task",
+    "image_generate",
+    "sessions_send_delivery_failure",
+  ])("does not return a requester key for inter-session %s turns", (sourceTool) => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "inter_session",
+        sourceSessionKey: "agent:requester:main",
+        sourceTool,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not return a requester key for external-user or missing provenance", () => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "external_user",
+        sourceSessionKey: "agent:requester:main",
+        sourceTool: "sessions_send",
+      }),
+    ).toBeUndefined();
+    expect(resolveAgentToAgentSendSourceSessionKey(undefined)).toBeUndefined();
   });
 
   it.each(["sessions_send", "sessions_send_delivery_failure"])(

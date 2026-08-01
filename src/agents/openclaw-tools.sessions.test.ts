@@ -47,6 +47,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.test-support.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
+import { withSessionsSendRestrictionContext } from "./tools/sessions-send-restriction-context.js";
 import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -1671,13 +1672,16 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    const tool = createSessionsSendTool({
-      agentSessionKey: targetKey,
-      agentSessionId: "target-active-session",
-      agentChannel: "telegram",
-      config: TEST_CONFIG,
-      callGateway: (opts) => callGatewayMock(opts),
-    });
+    const tool = withSessionsSendRestrictionContext(
+      { agentSessionId: "target-active-session" },
+      () =>
+        createSessionsSendTool({
+          agentSessionKey: targetKey,
+          agentChannel: "telegram",
+          config: TEST_CONFIG,
+          callGateway: (opts) => callGatewayMock(opts),
+        }),
+    );
 
     const result = await tool.execute("call-reverse-after-steer", {
       sessionKey: requesterKey,
@@ -2003,6 +2007,7 @@ describe("sessions tools", () => {
       steeringMode: "all",
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
+      sessionsSendCallerSessionKey: "agent:re-portal:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
