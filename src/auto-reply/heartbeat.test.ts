@@ -237,9 +237,9 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
     const content = `# HEARTBEAT.md Template
 
 \`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this file empty (or with only comments) to skip heartbeat API calls
 
-# Add tasks below when you want the agent to check something periodically.
+# Add tasks below when you want the agent to check something periodically
 \`\`\`
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
