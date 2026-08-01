@@ -69,10 +69,10 @@ consumer bug that happens to need a new SDK/config capability as particularly
 high risk; a material security or reliability defect owned by the SDK/config
 surface is important context, not an implicit approval.
 
-Before the staging PR, collect this warning evidence against the exact
-canonical branch tip recorded before applying any candidates. It shows both
-owner-path changes and generated public-contract manifests without failing the
-release script:
+Before the staging PR, collect this evidence against the exact canonical branch
+tip recorded before applying any candidates. The first command is optional
+owner-path context for investigating a warning. The generated public-contract
+manifests in the second command are the warning trigger:
 
 ```bash
 baseline_sha=<canonical-extended-stable-tip-before-backports>
@@ -97,9 +97,11 @@ git diff --numstat "$baseline_sha"..HEAD -- \
   docs/.generated/config-baseline.counts.json
 ```
 
-Nonempty output is the warning. Include it in the release ledger and PR body,
-then either remove the unnecessary surface change or record why the maintainer
-accepted it. It is not a reusable waiver.
+Nonempty manifest output is the warning. Include it in the release ledger and
+PR body, then either remove the unnecessary surface change or record why the
+maintainer accepted it. Owner-path output with unchanged manifests is optional
+review context, not a warning by itself. A recorded decision is not a reusable
+waiver.
 
 Do not use a SHA of all SDK/config source as an automated warning: it would
 noise on harmless implementation-only repairs. The two generated hash manifests
@@ -313,7 +315,7 @@ ledger and release set before changing branches.
    branch. Verify every publishable official plugin package has that exact
    version. Do not create the tag or dispatch publication before the PR lands.
 6. Run the **Flag SDK and Config Backports** comparison against the recorded
-   canonical tip. For nonempty output, attach the warning evidence and
+   canonical tip. For nonempty manifest output, attach the warning evidence and
    maintainer decision before continuing.
 7. Run `$autoreview` until no accepted/actionable findings remain.
 8. Open one coordinated PR targeting the canonical extended-stable branch.
