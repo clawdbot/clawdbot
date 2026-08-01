@@ -500,7 +500,14 @@ describe("consumeGoogleGenerateContentStream", () => {
 
     expect(output.content).toEqual(content);
     expect(events).toContainEqual(expect.objectContaining({ type: "text_delta", delta: "" }));
-    expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
+    expect(convertMessages(model, { messages: [output] })).toEqual([
+      {
+        role: "model",
+        parts: parts.map((part) =>
+          "thoughtSignature" in part && !("text" in part) ? { ...part, text: "" } : part,
+        ),
+      },
+    ]);
   });
 
   it("keeps an explicit signature-only thought separate from the preceding tool call", async () => {

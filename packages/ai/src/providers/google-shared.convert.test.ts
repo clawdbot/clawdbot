@@ -201,6 +201,27 @@ describe("google-shared convertMessages", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "text",
+      block: { type: "text", text: "", textSignature: "c2lnbmVk" },
+      part: { text: "", thoughtSignature: "c2lnbmVk" },
+    },
+    {
+      label: "thinking",
+      block: { type: "thinking", thinking: "", thinkingSignature: "c2lnbmVk" },
+      part: { thought: true, text: "", thoughtSignature: "c2lnbmVk" },
+    },
+  ])("preserves the empty content field of a signed $label part", ({ block, part }) => {
+    const model = makeModel("gemini-3-flash");
+
+    const contents = convertMessagesForTest(model, {
+      messages: [makeGoogleAssistantMessage(model.id, [block])],
+    } as Context);
+
+    expect(contents).toEqual([{ role: "model", parts: [part] }]);
+  });
+
   it("supplies the documented Gemini 3 thought-signature placeholder for unsigned calls", () => {
     const model = makeModel("gemini-3-flash");
     const contents = convertMessagesForTest(model, {

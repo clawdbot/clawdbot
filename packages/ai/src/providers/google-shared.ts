@@ -237,7 +237,7 @@ export function convertMessages<T extends GoogleApiType>(
             continue;
           }
           parts.push({
-            ...(block.text && { text: sanitizeSurrogates(block.text) }),
+            text: sanitizeSurrogates(block.text),
             ...(thoughtSignature && { thoughtSignature }),
           });
         } else if (block.type === "thinking") {
@@ -253,7 +253,7 @@ export function convertMessages<T extends GoogleApiType>(
           if (isSameProviderAndModel) {
             parts.push({
               thought: true,
-              ...(block.thinking && { text: sanitizeSurrogates(block.thinking) }),
+              text: sanitizeSurrogates(block.thinking),
               ...(thoughtSignature && { thoughtSignature }),
             });
           } else {
