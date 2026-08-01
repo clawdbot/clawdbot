@@ -659,6 +659,7 @@ describe("runHeartbeatOnce commitments", () => {
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase({
       heartbeatAccountId: "configured",
+      commitmentAccountId: "primary",
     });
 
     expect(result.status).toBe("ran");
