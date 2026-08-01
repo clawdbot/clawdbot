@@ -254,6 +254,13 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
   });
 
+  it("measures warmed and first-device gateway health separately", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain("--case gatewayHealthJson \\");
+    expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
+  });
+
   it("isolates required publication in a fresh artifact-consuming job", () => {
     const workflow = readWorkflow();
     const publisher = workflow.jobs?.publish;

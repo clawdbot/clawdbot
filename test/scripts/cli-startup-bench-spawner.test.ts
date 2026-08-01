@@ -34,6 +34,64 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
+  it("reuses warmed state for gateway health while isolating first-device samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "record-home.mjs");
+      const homeLogPath = path.join(tmpDir, "homes.log");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'import { appendFileSync } from "node:fs";',
+          "appendFileSync(process.env.OPENCLAW_BENCH_HOME_LOG, `${process.env.HOME}\\n`);",
+          "console.log('{\"ok\":true}');",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) => {
+        fs.rmSync(homeLogPath, { force: true });
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "2",
+            "--warmup",
+            "1",
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              OPENCLAW_BENCH_HOME_LOG: homeLogPath,
+            },
+            stdio: "pipe",
+          },
+        );
+        return fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
+      };
+
+      const warmedHomes = runCase("gatewayHealthJson");
+      expect(warmedHomes).toHaveLength(3);
+      expect(new Set(warmedHomes).size).toBe(1);
+      expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
+
+      const firstDeviceHomes = runCase("gatewayHealthJsonFirstDevice");
+      expect(firstDeviceHomes).toHaveLength(3);
+      expect(new Set(firstDeviceHomes).size).toBe(3);
+      expect(firstDeviceHomes.every((home) => !fs.existsSync(home))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not require unrelated fixture cases for a narrowed preset", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-test-"));
     try {
