@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements Slack live transport adapter behavior.
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   createSlackWebClient,
@@ -7,12 +8,17 @@ import {
 } from "@openclaw/slack/api.js";
 import type { FetchFunction } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { acquireDebugProxyCaptureStore } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
+import {
+  getSlackQaNativeTaskUpdateCursor,
+  readSlackQaNativeTaskUpdates,
+} from "./slack-live.capture.js";
 import {
   buildSlackQaConfig,
   parseSlackQaCredentialPayload,
@@ -26,7 +32,6 @@ import {
   listSlackThreadMessages,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
-import { startSlackQaRecordingProxy } from "./slack-live.recording-proxy.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
@@ -122,7 +127,8 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
-  let recordingProxy: Awaited<ReturnType<typeof startSlackQaRecordingProxy>>;
+  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
+  const captureSessionId = `qa-slack-${randomUUID()}`;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
       getSlackIdentity(runtimeEnv.driverBotToken),
@@ -131,7 +137,6 @@ export async function createSlackQaTransportAdapter(
     if (driverIdentity.userId === sutIdentity.userId) {
       throw new Error("Slack QA requires two distinct bots for driver and SUT.");
     }
-    recordingProxy = await startSlackQaRecordingProxy();
   } catch (error) {
     try {
       await heartbeat.stop();
@@ -225,6 +230,33 @@ export async function createSlackQaTransportAdapter(
     });
   };
 
+  const scenarioEnvironment = createSlackQaScenarioEnvironment({
+    accountId,
+    channelId: runtimeEnv.channelId,
+    driverBotUserId: driverIdentity.userId,
+    driverClient,
+    getNativeTaskUpdateCursor: () =>
+      captureStoreLease
+        ? getSlackQaNativeTaskUpdateCursor({
+            sessionId: captureSessionId,
+            store: captureStoreLease.store,
+          })
+        : 0,
+    readNativeTaskUpdates: async (afterRequestEventId) =>
+      captureStoreLease
+        ? await readSlackQaNativeTaskUpdates({
+            afterRequestEventId,
+            sessionId: captureSessionId,
+            store: captureStoreLease.store,
+          })
+        : [],
+    sutAppToken: runtimeEnv.sutAppToken,
+    sutBotToken: runtimeEnv.sutBotToken,
+    sutIdentity,
+    sutReadClient: sutClient,
+    sutWriteClient,
+  });
+
   return {
     id: "slack",
     label: "Slack live",
@@ -275,19 +307,16 @@ export async function createSlackQaTransportAdapter(
         sutAppToken: runtimeEnv.sutAppToken,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
-    createRuntimeEnvPatch: () => ({ SLACK_API_URL: recordingProxy.apiUrl }),
-    prepareFlow: createSlackQaScenarioEnvironment({
-      accountId,
-      channelId: runtimeEnv.channelId,
-      driverBotUserId: driverIdentity.userId,
-      driverClient,
-      sutAppToken: runtimeEnv.sutAppToken,
-      sutBotToken: runtimeEnv.sutBotToken,
-      sutIdentity,
-      sutReadClient: sutClient,
-      sutWriteClient,
-      readNativeTaskUpdates: () => recordingProxy.nativeTaskUpdates(),
-    }).prepareFlow,
+    createRuntimeEnvPatch: () => ({
+      OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+      OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
+    }),
+    prepareFlow: async (input) => {
+      captureStoreLease ??= acquireDebugProxyCaptureStore({
+        env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
+      });
+      return await scenarioEnvironment.prepareFlow(input);
+    },
     waitReady: async ({ gateway }) =>
       await waitForSlackChannelStable(gateway as never, accountId, "connected"),
     buildAgentDelivery: () => ({
@@ -307,9 +336,9 @@ export async function createSlackQaTransportAdapter(
       pollingAbort.abort();
     },
     async cleanupAfterGatewayStop() {
-      // Lease release must still run when proxy or heartbeat shutdown reports an error.
+      // Credential release must still run when capture or heartbeat shutdown reports an error.
       try {
-        await recordingProxy.stop();
+        captureStoreLease?.release();
       } finally {
         try {
           await heartbeat.stop();

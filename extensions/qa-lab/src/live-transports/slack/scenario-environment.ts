@@ -33,8 +33,9 @@ export type SlackQaScenarioEnvironment = {
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
   gatewayDebugDirPath: string;
+  getNativeTaskUpdateCursor: () => number;
   observedMessages: SlackObservedMessage[];
-  readNativeTaskUpdates: () => SlackQaNativeTaskUpdate[];
+  readNativeTaskUpdates: (afterRequestEventId: number) => Promise<SlackQaNativeTaskUpdate[]>;
   outputDir: string;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
@@ -61,7 +62,8 @@ export function createSlackQaScenarioEnvironment(params: {
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
-  readNativeTaskUpdates: () => SlackQaNativeTaskUpdate[];
+  getNativeTaskUpdateCursor: () => number;
+  readNativeTaskUpdates: (afterRequestEventId: number) => Promise<SlackQaNativeTaskUpdate[]>;
   sutAppToken: string;
   sutBotToken: string;
   sutIdentity: SlackAuthIdentity;
@@ -123,6 +125,7 @@ export function createSlackQaScenarioEnvironment(params: {
         },
         context,
         gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
+        getNativeTaskUpdateCursor: params.getNativeTaskUpdateCursor,
         observedMessages,
         readNativeTaskUpdates: params.readNativeTaskUpdates,
         outputDir: input.outputDir,
