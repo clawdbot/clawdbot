@@ -87,6 +87,7 @@ export async function deliverOutboundPayloadsCore(
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
+      session: params.session,
       deliveryQueueId: params.deliveryQueueId,
       preparedMessageId: params.preparedMessageId,
       requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,

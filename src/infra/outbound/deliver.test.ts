@@ -539,6 +539,19 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
+  it("forwards the canonical session key to plugin outbound adapters", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "m1" });
+    setTestOutbound({ sendText });
+
+    await deliverMatrix({
+      session: { key: "agent:main:matrix:room:ops" },
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:matrix:room:ops" }),
+    );
+  });
+
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
     setTestOutbound({
       deliveryMode: "direct",
