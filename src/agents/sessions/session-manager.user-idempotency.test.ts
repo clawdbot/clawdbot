@@ -144,14 +144,30 @@ describe("SessionManager user idempotency", () => {
       now: 2,
       parentId: "existing-assistant",
     });
+    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingId = sessionManager.appendThinkingLevelChange("off");
+    const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
+      modelApi: "openai-responses",
+      modelId: "gpt-5.5",
+      provider: "openai",
+    });
 
     expect(sessionManager.appendMessage(userMessage)).toBe("ingress-persisted-user");
-    expect(sessionManager.getLeafId()).toBe("ingress-persisted-user");
+    expect(sessionManager.getAppendParentId()).toBe(metadataId);
 
     const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
     const events = await loadTranscriptEvents(scope);
-    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+    expect(events.find((event) => (event as { id?: string }).id === modelChangeId)).toMatchObject({
       parentId: "ingress-persisted-user",
+    });
+    expect(events.find((event) => (event as { id?: string }).id === thinkingId)).toMatchObject({
+      parentId: modelChangeId,
+    });
+    expect(events.find((event) => (event as { id?: string }).id === metadataId)).toMatchObject({
+      parentId: thinkingId,
+    });
+    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+      parentId: metadataId,
     });
     expect(
       events.filter(

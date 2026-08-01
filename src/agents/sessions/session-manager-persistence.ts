@@ -167,7 +167,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     if (entry.type !== "message") {
-      if (!appendTranscriptEventSync(scope, entry)) {
+      if (
+        !appendTranscriptEventSync(
+          scope,
+          entry,
+          options?.appendIntent === "active-branch"
+            ? { appendIntent: options.appendIntent }
+            : undefined,
+        )
+      ) {
         throw new Error(`Session transcript entry was not persisted: ${entry.id}`);
       }
       return undefined;
