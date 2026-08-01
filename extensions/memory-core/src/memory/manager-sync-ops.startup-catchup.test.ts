@@ -9,10 +9,11 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { statSessionEntrySync } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import type {
-  MemorySource,
-  MemorySyncParams,
-  MemorySyncProgressUpdate,
+import {
+  MEMORY_CHUNKING_VERSION,
+  type MemorySource,
+  type MemorySyncParams,
+  type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   clearConfigCache,
@@ -25,6 +26,11 @@ import {
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
+  resolveConfiguredScopeHash,
+  type MemoryIndexMeta,
+} from "./manager-reindex-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -142,6 +148,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   readonly syncCalls: SyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+  corpusListCalls = 0;
+  private afterNextCorpusList: (() => Promise<void>) | null = null;
   private pendingSyncWork: Promise<void> = Promise.resolve();
 
   constructor(
@@ -202,18 +210,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     await this.pendingSyncWork;
   }
 
-  async combineTargetArchiveFilesForTest(params: {
-    sessions?: MemorySyncParams["sessions"];
-    archiveFiles?: string[];
-  }): Promise<Set<string> | null> {
-    return await (
-      this as unknown as {
-        combineTargetArchiveFiles: (params: {
-          sessions?: MemorySyncParams["sessions"];
-          archiveFiles?: string[];
-        }) => Promise<Set<string> | null>;
-      }
-    ).combineTargetArchiveFiles(params);
+  afterNextCorpusListForTest(callback: () => Promise<void>): void {
+    this.afterNextCorpusList = callback;
   }
 
   isSessionsDirty(): boolean {
@@ -253,6 +251,24 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return [];
   }
 
+  protected override readMeta(): MemoryIndexMeta {
+    return {
+      model: "fts-only",
+      provider: "none",
+      sources: ["sessions"],
+      scopeHash: resolveConfiguredScopeHash({
+        workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
+        multimodal: this.settings.multimodal,
+      }),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      chunkingVersion: MEMORY_CHUNKING_VERSION,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+      provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+    };
+  }
+
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
     this.pendingSyncWork = this.indexSessionUpdates
@@ -271,6 +287,15 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected getIndexConcurrency(): number {
     return 1;
+  }
+
+  protected override async listSessionCorpusEntries() {
+    const entries = await super.listSessionCorpusEntries();
+    this.corpusListCalls += 1;
+    const callback = this.afterNextCorpusList;
+    this.afterNextCorpusList = null;
+    await callback?.();
+    return entries;
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
@@ -599,6 +624,14 @@ describe("session startup catch-up", () => {
     expect(harness.indexedPaths).toEqual([]);
   });
 
+  it("skips corpus preflight when an ordinary sync has no session work", async () => {
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({ reason: "session-delta" });
+
+    expect(harness.corpusListCalls).toBe(0);
+  });
+
   it("resolves identity-targeted delta sync through a custom session store", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
@@ -624,6 +657,42 @@ describe("session startup catch-up", () => {
 
     expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+  });
+
+  it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
+    const session = await writeSqliteSession({
+      storePath: path.join(stateDir, "custom-sessions", "sessions.json"),
+      sessionId: "snapshot-thread",
+      sessionKey: "agent:main:chat:snapshot",
+      content: "original snapshot target",
+    });
+    const replacement = await writeSqliteSession({
+      storePath: path.join(stateDir, "replacement-sessions", "sessions.json"),
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      content: "replacement store target",
+    });
+    await configureTestSessionStore(session.storePath);
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.afterNextCorpusListForTest(async () => {
+      await configureTestSessionStore(replacement.storePath);
+    });
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [
+        {
+          agentId: "main",
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+        },
+      ],
+    });
+
+    expect(harness.corpusListCalls).toBe(1);
+    expect(harness.indexedPaths).toEqual([session.corpusPath]);
+    expect(harness.indexedContents[0]).toContain("original snapshot target");
+    expect(harness.indexedContents[0]).not.toContain("replacement store target");
   });
 
   it("preserves generated-session classification during targeted custom-store indexing", async () => {

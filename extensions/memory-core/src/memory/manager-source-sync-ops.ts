@@ -3,7 +3,6 @@ import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  listSessionTranscriptCorpusEntriesForAgent,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
@@ -168,6 +167,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
   protected override async syncArchiveFiles(params: {
     needsFullReindex: boolean;
     targetArchiveFiles?: string[];
+    corpusEntries?: readonly SessionTranscriptCorpusEntry[];
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
@@ -183,7 +183,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
     const targetArchiveFiles = params.needsFullReindex
       ? null
       : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries);
