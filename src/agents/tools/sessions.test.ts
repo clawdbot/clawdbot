@@ -65,7 +65,7 @@ type SessionsToolTestConfig = {
   agents?: OpenClawConfig["agents"];
   bindings?: OpenClawConfig["bindings"];
   session: {
-    scope: "per-sender";
+    scope: "per-sender" | "global";
     mainKey: string;
     dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
     agentToAgent?: { maxPingPongTurns: number };
