@@ -432,6 +432,47 @@ function buildTuiCliScript(args: string[]) {
   ].join("\n");
 }
 
+function buildLocalValidationTuiScript() {
+  const agentEventsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/infra/agent-events.ts"),
+  ).href;
+  const embeddedBackendModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/tui/embedded-backend.ts"),
+  ).href;
+  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
+  // A PTY-side abort can race the validation retry into another provider turn.
+  // Abort through the real local backend after its listener records the second
+  // tool error; the Gateway case below still covers keyboard-driven aborts.
+  return [
+    `import { onAgentEvent } from ${JSON.stringify(agentEventsModuleUrl)};`,
+    `import { EmbeddedTuiBackend } from ${JSON.stringify(embeddedBackendModuleUrl)};`,
+    `import { runTui } from ${JSON.stringify(tuiModuleUrl)};`,
+    `const backend = new EmbeddedTuiBackend();`,
+    `const sessionKey = "agent:main:main";`,
+    `let validationErrorCount = 0;`,
+    `onAgentEvent((event) => {`,
+    `  if (event.stream !== "tool" || event.data?.phase !== "result" || typeof event.data?.toolErrorSummary !== "string") return;`,
+    `  validationErrorCount += 1;`,
+    `  if (validationErrorCount !== 2) return;`,
+    `  queueMicrotask(() => {`,
+    `    void backend.abortChat({ sessionKey }).then((result) => {`,
+    `      if (!result.aborted) {`,
+    `        console.error("local validation test failed to abort its active run");`,
+    `        process.exit(1);`,
+    `      }`,
+    `    }).catch((error) => {`,
+    `      console.error(error);`,
+    `      process.exit(1);`,
+    `    });`,
+    `  });`,
+    `});`,
+    `runTui({ local: true, backend, session: sessionKey, deliver: false, historyLimit: 200, forceProcessExitOnReturn: true }).catch((error) => {`,
+    `  console.error(error);`,
+    `  process.exit(1);`,
+    `});`,
+  ].join("\n");
+}
+
 function buildTuiProcessArgs(args: string[]) {
   if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
     return [path.join(process.cwd(), "openclaw.mjs"), ...args];
@@ -566,7 +607,10 @@ async function startLocalModeTui(
       writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
     ]);
 
-    run = startPty(process.execPath, buildTuiProcessArgs(["tui", "--local"]), {
+    const processArgs = opts.invalidEditLoop
+      ? ["--import", "tsx", "--eval", buildLocalValidationTuiScript()]
+      : buildTuiProcessArgs(["tui", "--local"]);
+    run = startPty(process.execPath, processArgs, {
       cwd: process.cwd(),
       env: {
         HOME: homeDir,
@@ -1092,7 +1136,9 @@ describe("TUI PTY real backends", () => {
                 ),
             });
           }
-          await fixture.run.write("\u001b", { delay: false });
+          if (mode === "gateway") {
+            await fixture.run.write("\u001b", { delay: false });
+          }
           await fixture.run.waitForOutput(
             "run aborted: edit tool validation failed:",
             LOCAL_OUTPUT_TIMEOUT_MS,

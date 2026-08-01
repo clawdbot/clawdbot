@@ -1301,11 +1301,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.buffer = "";
     }
     // A tool-validation error summary terminalizes the run as aborted even when the
-    // provider reported no abort, so the sticky summary still reaches the transcript.
-    const terminalMetadata = run.toolErrorSummary
-      ? { ...evt.data, aborted: true, toolErrorSummary: run.toolErrorSummary }
-      : evt.data;
-    if (this.projectTerminalOutcome(evt.runId, run, terminalMetadata)) {
+    // provider reported no abort, so the safe summary reaches the transcript instead
+    // of a generic blocked/liveness diagnostic. The outcome is forced rather than
+    // classified because a validation loop also trips the blocked-liveness heuristic.
+    if (run.toolErrorSummary) {
+      this.projectTerminalOutcome(
+        evt.runId,
+        run,
+        { ...evt.data, aborted: true, toolErrorSummary: run.toolErrorSummary },
+        {
+          terminalOutcome: buildAgentRunTerminalOutcome({
+            status: "error",
+            stopReason: "aborted",
+          }),
+        },
+      );
+      return;
+    }
+    if (this.projectTerminalOutcome(evt.runId, run, evt.data)) {
       return;
     }
     run.lifecycleEnded = true;
