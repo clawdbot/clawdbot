@@ -22,8 +22,7 @@ const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
-  maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
-  maybeRepairCanonicalApiKeyFieldAlias: vi.fn().mockResolvedValue(undefined),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue(undefined),
   maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
     detected: 0,
     migrated: 0,
@@ -219,8 +218,7 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
 }));
 
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
-  maybeRepairLegacyFlatAuthProfileStores: mocks.maybeRepairLegacyFlatAuthProfileStores,
-  maybeRepairCanonicalApiKeyFieldAlias: mocks.maybeRepairCanonicalApiKeyFieldAlias,
+  maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
 }));
 
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
@@ -566,10 +564,8 @@ describe("doctor health contributions", () => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
-    mocks.maybeRepairLegacyFlatAuthProfileStores.mockClear();
-    mocks.maybeRepairLegacyFlatAuthProfileStores.mockResolvedValue(undefined);
-    mocks.maybeRepairCanonicalApiKeyFieldAlias.mockClear();
-    mocks.maybeRepairCanonicalApiKeyFieldAlias.mockResolvedValue(undefined);
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear();
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue(undefined);
     mocks.maybeMigrateLegacyPluginModelCatalogs.mockClear();
     mocks.maybeMigrateLegacyPluginModelCatalogs.mockResolvedValue({
       detected: 0,
@@ -843,6 +839,20 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("repairs canonical session rows before downstream agent-state checks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:legacy-state")).toBeLessThan(
+      ids.indexOf("doctor:session-transcripts"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:agent-memory-schema"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:plugin-registry"),
+    );
   });
 
   it("orders the config-flow commit before runtime-backed diagnostics", () => {
@@ -1831,7 +1841,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("keeps canonical api_key alias repair wired through auth profile health", async () => {
+  it("runs the receipted auth migration after repairing OAuth sidecars", async () => {
     const contribution = requireDoctorContribution("doctor:auth-profiles");
     const ctx = {
       cfg: {},
@@ -1843,14 +1853,17 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.maybeRepairLegacyFlatAuthProfileStores).toHaveBeenCalledWith({
+    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
     });
-    expect(mocks.maybeRepairCanonicalApiKeyFieldAlias).toHaveBeenCalledWith({
+    expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
     });
+    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
@@ -3627,6 +3640,35 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           writeOptions: expect.objectContaining({
             skipPluginValidation: false,
+          }),
+        }),
+      );
+    });
+
+    it("forwards explicit paths only for the pending doctor migration write", async () => {
+      const ctx = buildWriteConfigCtx({});
+      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            explicitSetPaths: [["agents", "entries"]],
+          }),
+        }),
+      );
+
+      ctx.cfg = { gateway: { mode: "remote" } };
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          writeOptions: expect.not.objectContaining({
+            explicitSetPaths: expect.anything(),
           }),
         }),
       );

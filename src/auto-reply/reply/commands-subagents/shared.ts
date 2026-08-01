@@ -70,7 +70,7 @@ function resolveSubagentTarget(
     label: (entry) => formatRunLabel(entry),
     aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: (entry) =>
-      !entry.endedAt ||
+      !entry.execution.endedAt ||
       Math.max(0, readIndex.countPendingDescendantRuns(entry.childSessionKey)) > 0,
     errors: {
       missingTarget: "Missing subagent id.",

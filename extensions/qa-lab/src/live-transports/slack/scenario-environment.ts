@@ -32,7 +32,9 @@ export type SlackQaScenarioEnvironment = {
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
   gatewayDebugDirPath: string;
+  getMessageWriteCursor: () => number;
   observedMessages: SlackObservedMessage[];
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   outputDir: string;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
@@ -59,6 +61,8 @@ export function createSlackQaScenarioEnvironment(params: {
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
+  getMessageWriteCursor: () => number;
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   sutAppToken: string;
   sutBotToken: string;
   sutIdentity: SlackAuthIdentity;
@@ -120,7 +124,9 @@ export function createSlackQaScenarioEnvironment(params: {
         },
         context,
         gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
+        getMessageWriteCursor: params.getMessageWriteCursor,
         observedMessages,
+        readMessageWrites: params.readMessageWrites,
         outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,

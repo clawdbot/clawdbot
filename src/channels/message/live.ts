@@ -198,7 +198,14 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
         await params.onPreviewFinalized?.(finalizedId, receipt, liveState);
         const supplementalPayload = params.buildSupplementalPayload?.(params.payload);
         if (supplementalPayload !== undefined) {
-          await params.deliverSupplemental?.(supplementalPayload);
+          const supplementalDelivered = await params.deliverSupplemental?.(supplementalPayload);
+          if (!params.deliverSupplemental || supplementalDelivered === false) {
+            // A finalized text preview must not silently acknowledge media that never became visible.
+            const fallbackDelivered = await params.deliverNormally(supplementalPayload);
+            if (fallbackDelivered === false) {
+              throw new Error("Live preview supplemental payload was not delivered");
+            }
+          }
         }
         return { kind: "preview-finalized", liveState };
       }

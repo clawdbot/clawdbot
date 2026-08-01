@@ -12,7 +12,6 @@ import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
-  formatHealthChannelLines,
   healthCommand,
 } from "./health.js";
 
@@ -504,82 +503,6 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
     expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("formats per-account probe timings", () => {
-    const summary = createHealthSummary({
-      channels: {
-        telegram: {
-          accountId: "main",
-          configured: true,
-          probe: { ok: true, elapsedMs: 196, bot: { username: "pinguini_ugi_bot" } },
-          accounts: {
-            main: {
-              accountId: "main",
-              configured: true,
-              probe: { ok: true, elapsedMs: 196, bot: { username: "pinguini_ugi_bot" } },
-            },
-            flurry: {
-              accountId: "flurry",
-              configured: true,
-              probe: { ok: true, elapsedMs: 190, bot: { username: "flurry_ugi_bot" } },
-            },
-            poe: {
-              accountId: "poe",
-              configured: true,
-              probe: { ok: true, elapsedMs: 188, bot: { username: "poe_ugi_bot" } },
-            },
-          },
-        },
-      },
-      channelOrder: ["telegram"],
-      channelLabels: { telegram: "Telegram" },
-    });
-
-    const lines = formatHealthChannelLines(summary, { accountMode: "all" });
-    expect(lines).toStrictEqual([
-      "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
-    ]);
-  });
-
-  it("formats statusState without inferring from linked", () => {
-    const summary = createHealthSummary({
-      channels: {
-        whatsapp: {
-          accountId: "default",
-          statusState: "unstable",
-          configured: true,
-        },
-      },
-      channelOrder: ["whatsapp"],
-      channelLabels: { whatsapp: "WhatsApp" },
-    });
-
-    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
-    expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
-  });
-
-  it("formats iMessage probe failures as failed health lines", () => {
-    const summary = createHealthSummary({
-      channels: {
-        imessage: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: false,
-            error:
-              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-          },
-        },
-      },
-      channelOrder: ["imessage"],
-      channelLabels: { imessage: "iMessage" },
-    });
-
-    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
-    expect(lines).toContain(
-      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-    );
   });
 });
 

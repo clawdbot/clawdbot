@@ -16,6 +16,7 @@ type ResolvedFailureAlert = {
   to?: string;
   mode?: "announce" | "webhook";
   accountId?: string;
+  threadId?: string | number;
   includeSkipped: boolean;
 };
 
@@ -111,6 +112,17 @@ export function resolveFailureAlert(
     mode !== "webhook" && !explicitTo && inheritsDeliveryChannel
       ? job.delivery?.accountId
       : undefined;
+  const accountId =
+    jobConfig?.accountId ??
+    (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
+    inheritedDeliveryAccountId;
+  // A topic belongs to its channel, peer, and account; never attach the
+  // primary topic to an independently routed failure destination.
+  const inheritsDeliveryThread =
+    mode !== "webhook" &&
+    inheritsDeliveryChannel &&
+    (explicitTo === undefined || explicitTo === deliveryTo) &&
+    accountId === job.delivery?.accountId;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
@@ -123,10 +135,8 @@ export function resolveFailureAlert(
     channel,
     to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
     mode,
-    accountId:
-      jobConfig?.accountId ??
-      (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
-      inheritedDeliveryAccountId,
+    accountId,
+    threadId: inheritsDeliveryThread ? job.delivery?.threadId : undefined,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
@@ -143,6 +153,7 @@ function emitFailureAlert(
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
     status: "error" | "skipped";
   },
 ) {
@@ -169,6 +180,7 @@ function emitFailureAlert(
         to: params.to,
         mode: params.mode,
         accountId: params.accountId,
+        threadId: params.threadId,
       })
       .catch((err: unknown) => {
         state.deps.log.warn(
@@ -241,6 +253,7 @@ export function maybeEmitFailureAlert(
       to: params.alertConfig.to,
       mode: params.alertConfig.mode,
       accountId: params.alertConfig.accountId,
+      threadId: params.alertConfig.threadId,
       status: params.status,
     });
   }

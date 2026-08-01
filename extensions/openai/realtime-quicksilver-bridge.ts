@@ -361,10 +361,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     if (this.socket?.readyState === WEBSOCKET_OPEN) {
       this.sendEvent({ type: "session.close" });
     }
@@ -565,8 +568,10 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     ) {
       return;
     }
-    this.pendingAudio.push(audio);
-    this.pendingAudioBytes += audio.byteLength;
+    // Capture transports can recycle caller-owned views before the provider becomes ready.
+    const queuedAudio = Buffer.from(audio);
+    this.pendingAudio.push(queuedAudio);
+    this.pendingAudioBytes += queuedAudio.byteLength;
   }
 
   private resetTerminalState(): void {

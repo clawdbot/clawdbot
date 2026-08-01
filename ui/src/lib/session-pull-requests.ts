@@ -8,12 +8,10 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
-
-const SUBSCRIPTION_RETRY_BASE_MS = 30_000;
-const SUBSCRIPTION_RETRY_MAX_MS = 5 * 60_000;
 
 export type SessionPullRequestSnapshotStore = {
   watch: (
@@ -63,11 +61,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     Set<(snapshot: ControlUiSessionPullRequestSnapshot | undefined) => void>
   >();
   const pendingRefreshKeys = new Set<string>();
+  const retry = createGatewayRetryOwner();
   let knownClient = gateway.snapshot.client;
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
-  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
   let syncRequestGeneration = 0;
   let syncScheduled = false;
   let syncScheduleGeneration = 0;
@@ -75,16 +72,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let stopGatewaySnapshots: (() => void) | null = null;
   let stopGatewayEvents: (() => void) | null = null;
   let visibilityDocument: Document | null = null;
-
-  const clearRetry = (resetDelay: boolean) => {
-    if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-    if (resetDelay) {
-      retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
-    }
-  };
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -142,7 +129,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     if (snapshot.client !== knownClient || snapshot.hello !== lastHello) {
-      clearRetry(true);
+      retry.reset();
       scheduleSync();
     }
   };
@@ -182,7 +169,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const handleVisibilityChange = () => {
-    clearRetry(true);
+    retry.reset();
     scheduleSync();
   };
 
@@ -215,7 +202,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     stopGatewayEvents = null;
     visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
     visibilityDocument = null;
-    clearRetry(true);
+    retry.reset();
     syncRequestGeneration += 1;
     syncScheduleGeneration += 1;
     syncScheduled = false;
@@ -232,7 +219,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (snapshot.client !== knownClient) {
-      clearRetry(true);
+      retry.reset();
       knownClient = snapshot.client;
       lastHello = null;
       lastSignature = null;
@@ -279,7 +266,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       requestGeneration === syncRequestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
-    clearRetry(false);
+    retry.cancel();
     const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys,
       ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
@@ -293,20 +280,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.delete(key);
           }
-          retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
+          retry.reset();
         }
       })
       .catch(() => {
         if (isCurrentRequest()) {
           lastSignature = null;
-          const delayMs = retryDelayMs;
-          retryDelayMs = Math.min(retryDelayMs * 2, SUBSCRIPTION_RETRY_MAX_MS);
-          retryTimer = globalThis.setTimeout(() => {
-            retryTimer = null;
+          retry.schedule(() => {
             if (attached && isActive()) {
               scheduleSync();
             }
-          }, delayMs);
+          });
           for (const key of sessionKeys) {
             settle(key);
           }
@@ -349,7 +333,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     } else {
       watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
     }
-    clearRetry(true);
+    retry.reset();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
@@ -415,7 +399,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         return;
       }
       pendingRefreshKeys.add(key);
-      clearRetry(true);
+      retry.reset();
       scheduleSync();
     },
     get: (sessionKey) => snapshots.get(sessionKey),

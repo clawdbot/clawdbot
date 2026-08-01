@@ -367,6 +367,41 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
   });
 
+  it("rejects invalid UTF-8 in LSP JSON bodies", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess("", new Set(["initialize"]));
+    spawnMock.mockReturnValue(child);
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    const hoverTool = runtime.tools.find((tool) => tool.name === "lsp_hover_typescript");
+    if (!hoverTool) {
+      throw new Error("expected hover tool");
+    }
+    const request = hoverTool.execute("call-1", {
+      uri: "file:///tmp/workspace/index.ts",
+      line: 0,
+      character: 0,
+    });
+    const hoverRequest = child.receivedMessages.find(
+      (message) => message.method === "textDocument/hover",
+    );
+    if (typeof hoverRequest?.id !== "number") {
+      throw new Error("expected numeric hover request id");
+    }
+    const body = Buffer.concat([
+      Buffer.from(`{"jsonrpc":"2.0","id":${hoverRequest.id},"result":{"contents":"`),
+      Buffer.from([0xff]),
+      Buffer.from('"}}'),
+    ]);
+    const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii");
+    child.stdout.write(Buffer.concat([header, body]));
+
+    await expect(request).rejects.toThrow(/LSP framing error: body is not valid UTF-8/i);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
+
+    await runtime.dispose();
+  });
+
   it.each([
     {
       name: "a suffixed Content-Length value",

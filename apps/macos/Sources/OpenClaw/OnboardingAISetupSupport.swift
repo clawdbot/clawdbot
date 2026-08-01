@@ -89,6 +89,7 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let actionLabel: String?
         let brandId: String?
         let icon: String?
         let website: String?
@@ -117,6 +118,7 @@ extension OnboardingAISetupModel {
                 id: "ollama",
                 label: "Ollama",
                 hint: "Download a tools-capable model from your Ollama server",
+                actionLabel: nil,
                 brandId: "ollama",
                 icon: nil,
                 website: nil),
@@ -124,6 +126,7 @@ extension OnboardingAISetupModel {
                 id: "llama-cpp",
                 label: "Local model (llama.cpp)",
                 hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                actionLabel: nil,
                 brandId: "llama-cpp",
                 icon: nil,
                 website: nil),

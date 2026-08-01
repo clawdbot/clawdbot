@@ -143,6 +143,7 @@ export type SignalEventHandlerDeps = {
   shouldEmitSignalReactionNotification: (params: {
     mode?: SignalReactionNotificationMode;
     account?: string | null;
+    accountUuid?: string | null;
     targets?: SignalReactionTarget[];
     sender?: SignalSender | null;
     allowlist?: string[];

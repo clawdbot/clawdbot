@@ -1,6 +1,7 @@
 // Control UI tests prove locale chunk recovery through a real browser reconnect.
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -68,6 +69,38 @@ describeControlUiE2e("Control UI offline locale retry", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("lazy-loads each registered locale only after the operator selects it", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page);
+    const requests = new Map<string, number>();
+    page.on("request", (request) => {
+      const match = new URL(request.url()).pathname.match(/\/src\/i18n\/locales\/([^/]+)\.ts$/);
+      if (match?.[1] && match[1] !== "en" && match[1] !== "en-agents") {
+        requests.set(match[1], (requests.get(match[1]) ?? 0) + 1);
+      }
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const picker = page.locator("#settings-language wa-select");
+      await picker.waitFor();
+      expect(requests.size).toBe(0);
+
+      for (const locale of SUPPORTED_LOCALES.slice(1)) {
+        await picker.evaluate((element, value) => {
+          (element as HTMLElement & { value: string }).value = value;
+          element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        }, locale);
+        await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
+        expect(requests.get(locale)).toBe(1);
+      }
+      expect(requests.size).toBe(20);
+    } finally {
+      await context.close();
+    }
   });
 
   it("applies a locale whose first chunk request failed after the Gateway reconnects", async () => {

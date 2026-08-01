@@ -134,6 +134,43 @@ describe("Matrix QA fault proxy", () => {
     ]);
   });
 
+  it.each(["forwarded", "faulted"] as const)(
+    "finishes the %s response when its exchange observer rejects",
+    async (mode) => {
+      const target = await startTargetServer();
+      let observations = 0;
+      proxy = await startMatrixQaFaultProxy({
+        targetBaseUrl: target.baseUrl,
+        rules:
+          mode === "faulted"
+            ? [
+                {
+                  id: "synthetic-fault",
+                  match: () => true,
+                  response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
+                },
+              ]
+            : [],
+        onExchange: async () => {
+          observations += 1;
+          throw new Error("capture observer failed");
+        },
+      });
+
+      const response = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toMatchObject({
+        errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
+        error: "capture observer failed",
+      });
+      expect(observations).toBe(1);
+      expect(target.requests).toHaveLength(mode === "forwarded" ? 1 : 0);
+    },
+  );
+
   it("rejects request targets that resolve outside the configured origin", async () => {
     const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });

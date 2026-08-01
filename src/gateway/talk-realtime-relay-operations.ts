@@ -5,7 +5,9 @@ import {
 } from "../talk/agent-run-control.js";
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
 import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
+import type { TalkEvent } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
+import { formatError } from "./server-utils.js";
 import {
   cancelForcedConsults,
   submitForcedTalkRealtimeRelayToolResult,
@@ -25,9 +27,11 @@ import {
   MAX_RELAY_SESSIONS_GLOBAL,
   MAX_RELAY_SESSIONS_PER_CONN,
   broadcastToOwner,
+  drainingRelaySessions,
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
   relaySessions,
+  resolveRelayProviderToolCallId,
   type RelaySession,
 } from "./talk-realtime-relay-state.js";
 import {
@@ -40,6 +44,7 @@ import {
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
+  closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
@@ -93,17 +98,36 @@ export function closeRelaySession(session: RelaySession, reason: "completed" | "
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
-  session.bridge.close();
-  closeRelayVoiceSession(session);
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "close",
-    reason,
-    talkEvent: session.harness.talk.emit({
-      type: "session.closed",
-      payload: { reason },
-      final: true,
-    }),
+  try {
+    session.bridge.close();
+  } finally {
+    // Provider teardown may throw, but the relay must still reach its durable
+    // voice and owner-visible terminal state before that error is surfaced.
+    void closeRelayVoiceSession(session);
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "close",
+      reason,
+      talkEvent: session.harness.talk.emit({
+        type: "session.closed",
+        payload: { reason },
+        final: true,
+      }),
+    });
+  }
+}
+
+/** Releases every realtime relay session owned by a disconnected gateway connection. */
+export function closeTalkRealtimeRelaySessionsForConnection(connId: string): void {
+  closeTalkRelaySessionsForConnection({
+    sessions: relaySessions.values(),
+    connId,
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    onCloseError: (error, session) => {
+      session.context.logGateway.warn(
+        `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,
+      );
+    },
   });
 }
 
@@ -122,12 +146,17 @@ function countRelaySessionsForConn(connId: string): number {
       count += 1;
     }
   }
+  for (const session of drainingRelaySessions.values()) {
+    if (session.connId === connId) {
+      count += 1;
+    }
+  }
   return count;
 }
 
 export function enforceRelaySessionLimits(connId: string): void {
   pruneExpiredRelaySessions();
-  if (relaySessions.size >= MAX_RELAY_SESSIONS_GLOBAL) {
+  if (relaySessions.size + drainingRelaySessions.size >= MAX_RELAY_SESSIONS_GLOBAL) {
     throw new Error("Too many active realtime relay sessions");
   }
   if (countRelaySessionsForConn(connId) >= MAX_RELAY_SESSIONS_PER_CONN) {
@@ -271,7 +300,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
     return trackAgentFinalToolResult(session, params.callId, completion);
   }
   const submit = () =>
-    session.bridge.submitToolResult(params.callId, params.result, params.options);
+    session.bridge.submitToolResult(
+      resolveRelayProviderToolCallId(session, params.callId),
+      params.result,
+      params.options,
+    );
   const pendingWorking = session.pendingWorkingToolResults.get(params.callId);
   if (pendingWorking) {
     const submission = pendingWorking.then(async () => {
@@ -330,7 +363,7 @@ export async function flushTalkRealtimeRelayVoiceWrites(params: {
   connId: string;
 }): Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  await session.voiceTranscriptWrites;
+  await session.voiceTranscriptQueue.flush();
 }
 
 /** Applies realtime voice-control text to the active agent-consult chat run. */
@@ -422,6 +455,54 @@ export function cancelTalkRealtimeRelayTurn(params: {
     type: "clear",
     talkEvent: cancelled.ok ? cancelled.event : undefined,
   });
+}
+
+/** Drops one provider generation without sending cancellation into its replacement. */
+export function resetTalkRealtimeRelayContinuity(
+  session: RelaySession,
+  reason = "session.continuity.reset",
+): TalkEvent | undefined {
+  session.toolResultEpoch += 1;
+  const retiredCallIds = new Set<string>([
+    ...session.activeAgentToolCalls.keys(),
+    ...session.cancelledAgentToolCalls.keys(),
+    ...session.providerToolCallIds.keys(),
+    ...session.providerToolCallIds.values(),
+    ...session.pendingFinalToolResults.keys(),
+    ...session.pendingProviderToolResults.keys(),
+    ...session.pendingWorkingToolResults.keys(),
+    ...session.forcedTerminalProviderResults.keys(),
+  ]);
+  for (const handle of session.harness.forcedConsults.handles()) {
+    retiredCallIds.add(handle.id);
+    for (const nativeCallId of session.harness.forcedConsults.nativeCallIds(handle)) {
+      retiredCallIds.add(nativeCallId);
+    }
+  }
+  for (const callId of retiredCallIds) {
+    session.completedAgentToolCalls.add(callId);
+  }
+  session.cancelledAgentToolCalls.clear();
+  session.providerToolCallIds.clear();
+  session.relayToolCallIdsByProviderId.clear();
+  session.pendingFinalToolResults.clear();
+  session.completedProviderToolResults.clear();
+  session.pendingProviderToolResults.clear();
+  session.pendingWorkingToolResults.clear();
+  session.forcedTerminalProviderResults.clear();
+  session.harness.forcedConsults.clear();
+  abortRelayAgentRuns(session, reason);
+  const turnId = session.harness.talk.activeTurnId;
+  session.harness.flushOutput(noFallbackRelayOutputFlush);
+  session.harness.finishOutputAudio(reason);
+  if (!turnId) {
+    return undefined;
+  }
+  const cancelled = session.harness.talk.cancelTurn({
+    turnId,
+    payload: { reason },
+  });
+  return cancelled.ok ? cancelled.event : undefined;
 }
 
 /** Closes a realtime relay session owned by the current connection. */

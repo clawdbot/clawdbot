@@ -18,6 +18,7 @@ import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversatio
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -469,7 +470,8 @@ export const zalouserOutboundAdapter = {
       emptyResult: createEmptyChannelResult("zalouser"),
     }),
   ...zalouserRawSendResultAdapter,
-};
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+} satisfies ChannelOutboundAdapter;
 
 export const zalouserMessagingAdapter = {
   targetPrefixes: ["zalouser", "zlu"],

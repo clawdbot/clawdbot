@@ -181,7 +181,7 @@ function completeSyntheticGatewayProtocolHandshake(
     JSON.stringify({
       type: "event",
       event: "connect.challenge",
-      payload: { nonce: "synthetic-nonce" },
+      payload: { nonce: "synthetic-nonce", ts: 1_777_777_777_000 },
     }),
   );
   const connectFrame = JSON.parse(String(connection.send.mock.calls[0]?.[0])) as {
@@ -660,7 +660,7 @@ describe("GatewayClient", () => {
           type: "event",
           event: "connect.challenge",
           seq: connectionNumber,
-          payload: { nonce: `nonce-${connectionNumber}` },
+          payload: { nonce: `nonce-${connectionNumber}`, ts: 1_777_777_777_000 },
         }),
       );
       socket.on("message", (data) => {

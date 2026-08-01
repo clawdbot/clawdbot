@@ -20,6 +20,8 @@ in a hosted or self-hosted Buzz workspace.
   `message` tool
 - Supports mention requirements and sender allowlists
 - Discovers rooms after the bot has been approved
+- Resolves current Buzz profile names, avatars, room names, and room membership
+  through OpenClaw's directory commands
 - Reconnects and avoids processing the same message twice
 
 The current plugin supports group rooms, Markdown text, and inbound structured
@@ -183,6 +185,49 @@ openclaw message send \
   --message "Hello from OpenClaw"
 ```
 
+### Directory and sender labels
+
+OpenClaw keeps a bounded snapshot of the configured rooms, their current
+relay-signed member lists, room metadata, and kind `0` member profiles. Incoming
+agent context uses the current profile and room names when available, while the
+sender public key remains the stable authorization, routing, and session
+identity.
+
+Inspect the same data from the CLI:
+
+```bash
+openclaw directory self --channel buzz
+openclaw directory peers list --channel buzz --query "alice"
+openclaw directory groups list --channel buzz --query "engineering"
+openclaw directory groups members \
+  --channel buzz \
+  --group-id buzz:<ROOM_UUID>
+```
+
+When the Gateway is connected, directory reads reuse its authenticated Buzz
+connection and in-memory snapshot. A standalone directory command opens one
+bounded authenticated connection, loads the current snapshot, and closes it.
+Ordinary directory errors are logged without reconnecting. If a directory or
+profile subscription does not reach EOSE within 10 seconds, OpenClaw treats the
+Buzz relay session as stalled and recycles only that Buzz account connection;
+the Gateway keeps running.
+
+Archived rooms are omitted from directory results and live room subscriptions.
+If a configured room is archived or restored while OpenClaw is connected, the
+plugin recycles only its Buzz connection so the subscription set matches the
+relay's current metadata. The Gateway keeps running.
+
+Each configured room uses one room-scoped relay subscription. OpenClaw reserves
+four of Buzz's 1,024 connection subscriptions for membership notifications and
+concurrent profile, membership, and metadata queries, so one account can
+configure up to 1,020 rooms. Near that limit, optional member profile
+subscriptions are reduced first; directory entries continue to work with stable
+public keys and deterministic fallback labels.
+
+Unique current room names can resolve as outbound targets through OpenClaw's
+shared directory lookup. The canonical `buzz:<ROOM_UUID>` target remains the
+safest choice for automation and for rooms with duplicate names.
+
 ### Route rooms to different agents
 
 Standard OpenClaw bindings can send each Buzz room to a different agent,
@@ -279,8 +324,9 @@ For a narrower sender policy:
 }
 ```
 
-Room targets are UUIDs. Use the room UUID shown during discovery or ask a room
-admin for it; a display name such as `general` is not a valid target.
+Room UUIDs are the canonical targets. Use the UUID shown during discovery or ask
+a room admin for it. A unique current room name can resolve through the live
+directory, but automation should use `buzz:<ROOM_UUID>` to avoid ambiguity.
 
 For manual configuration, `groupAllowFrom` entries must use the 64-character
 hexadecimal form.

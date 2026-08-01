@@ -681,7 +681,6 @@ describeLive("gateway live (ACP bind)", () => {
         cron: {
           ...cfg.cron,
           enabled: true,
-          store: path.join(tempRoot, "cron.json"),
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);

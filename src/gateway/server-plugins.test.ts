@@ -1,6 +1,11 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
@@ -13,7 +18,6 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
-const clearActivatedPluginRuntimeState = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn(() => ({
     startup: {
@@ -41,7 +45,6 @@ const handleGatewayRequest = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/loader.js", () => ({
-  clearActivatedPluginRuntimeState,
   loadOpenClawPlugins,
 }));
 
@@ -387,7 +390,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearActivatedPluginRuntimeState.mockClear();
   loadOpenClawPlugins.mockReset();
   loadPluginLookUpTable.mockReset().mockReturnValue({
     startup: {
@@ -429,6 +431,7 @@ afterEach(() => {
   serverPluginsModule.clearFallbackGatewayContext();
   clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
+  resetGlobalHookRunner();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -768,10 +771,27 @@ describe("loadGatewayPlugins", () => {
       baseMethods: ["sessions.get"],
     });
 
-    expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toStrictEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
+  test("activates the empty registry in the global hook runner", () => {
+    const previous = addLoadedPlugin(createRegistry([]), { id: "previous-plugin" });
+    runtimeRegistryModule.setActivePluginRegistry(previous);
+    initializeGlobalHookRunner(previous);
+    loadPluginLookUpTable.mockReturnValue({ startup: { pluginIds: [] } });
+
+    const result = serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(getGlobalPluginRegistry()).toBe(result.pluginRegistry);
+    expect(result.pluginRegistry.plugins).toStrictEqual([]);
   });
 
   test("stores workspaceDir on the active registry when startup scope is empty", () => {
@@ -932,7 +952,7 @@ describe("loadGatewayPlugins", () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("delegated-tool-policy"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       expect(opts.req.params).not.toHaveProperty("delegatedToolPolicyHandoff");
-      expect(opts.client?.internal?.delegatedToolPolicyHandoff).toBe(true);
+      expect(opts.client?.internal?.delegatedToolPolicyHandoffId).toEqual(expect.any(String));
       opts.respond(true, { status: "ok" });
     });
 
@@ -940,7 +960,15 @@ describe("loadGatewayPlugins", () => {
       serverPluginsModule.dispatchGatewayMethodInProcess(
         "agent",
         { sessionKey: "agent:main:main" },
-        { delegatedToolPolicyHandoff: true, forceSyntheticClient: true },
+        {
+          delegatedToolPolicyHandoff: {
+            sourceSessionKey: "agent:main:subagent:child",
+            targetSessionKey: "agent:main:main",
+            targetSessionId: "requester-session",
+            idempotencyKey: "announce-1",
+          },
+          forceSyntheticClient: true,
+        },
       ),
     ).resolves.toEqual({ status: "ok" });
   });
@@ -1509,7 +1537,7 @@ describe("loadGatewayPlugins", () => {
             pluginId: "other-plugin",
             toolNames: ["other_plugin_tool"],
           },
-          delegatedToolPolicyHandoff: true,
+          delegatedToolPolicyHandoffId: "handoff-old",
         },
       } as unknown as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
@@ -1526,7 +1554,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
     expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
-    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoff).toBeUndefined();
+    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoffId).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {

@@ -9,7 +9,11 @@ import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import { syncClickClackCommandMenu } from "./command-menu.js";
-import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+import {
+  ClickClackHttpError,
+  createClickClackClient,
+  normalizeClickClackCorrelationId,
+} from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
 import type {
@@ -38,34 +42,14 @@ async function resolveEventMessage(params: {
   if (!messageId) {
     return null;
   }
-  const directConversationId = payloadString(params.event, "direct_conversation_id");
-  if (directConversationId && typeof params.event.seq === "number") {
-    // ClickClack event payloads carry ids and cursors; fetch a narrow window
-    // around the sequence so the message body/author fields stay authoritative.
-    const messages = await params.client.directMessages(
-      directConversationId,
-      params.event.seq - 1,
-      10,
-    );
-    return messages.find((message) => message.id === messageId) ?? null;
-  }
-  if (params.event.type === "thread.reply_created") {
-    const rootId = payloadString(params.event, "root_message_id");
-    if (!rootId) {
+  try {
+    return await params.client.message(messageId);
+  } catch (error) {
+    if (error instanceof ClickClackHttpError && error.status === 404) {
       return null;
     }
-    const thread = await params.client.thread(rootId);
-    return thread.replies.find((message) => message.id === messageId) ?? null;
+    throw error;
   }
-  if (params.event.channel_id && typeof params.event.seq === "number") {
-    const messages = await params.client.channelMessages(
-      params.event.channel_id,
-      params.event.seq - 1,
-      10,
-    );
-    return messages.find((message) => message.id === messageId) ?? null;
-  }
-  return null;
 }
 
 function decodeSocketMessage(data: RawData): string {
@@ -95,7 +79,7 @@ async function processEvent(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
-  log?: { info: (message: string) => void };
+  log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
     return;
@@ -114,7 +98,14 @@ async function processEvent(params: {
       })
     : params.client;
   const message = await resolveEventMessage({ client: messageClient, event: params.event });
-  if (!message || message.author_id === params.botUserId) {
+  if (!message) {
+    params.log?.warn?.(
+      `[${params.account.accountId}] skipped unreadable ClickClack message before agent dispatch: ` +
+        `type=${params.event.type} messageId=${payloadString(params.event, "message_id") || "unknown"}`,
+    );
+    return;
+  }
+  if (message.author_id === params.botUserId) {
     return;
   }
   if (message.author?.kind === "bot") {

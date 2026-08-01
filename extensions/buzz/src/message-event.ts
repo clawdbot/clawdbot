@@ -24,6 +24,10 @@ const BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS = 4_000;
 const BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX = "\n...[Buzz diff truncated for model context]";
 const BUZZ_INBOUND_MESSAGE_KIND_SET = new Set<number>(BUZZ_INBOUND_MESSAGE_KINDS);
 
+export function isBuzzInboundMessageKind(kind: number): boolean {
+  return BUZZ_INBOUND_MESSAGE_KIND_SET.has(kind);
+}
+
 interface BuzzDiffMetadata {
   repoUrl: string;
   commitSha: string;
@@ -210,7 +214,7 @@ export function formatBuzzMessageForAgent(message: BuzzInboundMessage): string {
 
 export function parseBuzzMessageEvent(event: Event): BuzzInboundMessage | null {
   if (
-    !BUZZ_INBOUND_MESSAGE_KIND_SET.has(event.kind) ||
+    !isBuzzInboundMessageKind(event.kind) ||
     !event.content.trim() ||
     Buffer.byteLength(event.content, "utf8") >
       (event.kind === BUZZ_DIFF_MESSAGE_KIND

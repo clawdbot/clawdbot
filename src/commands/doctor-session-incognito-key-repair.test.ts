@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -38,6 +39,7 @@ describe("doctor reserved incognito session key repair", () => {
     try {
       const entryJson = JSON.stringify({
         sessionId: "session-old",
+        updatedAt: 1,
         parentSessionKey: oldKey,
         spawnedBy: oldKey,
         completionOwnerSessionKey: oldKey,
@@ -81,10 +83,22 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES ('agent:work:dashboard:regular', 'session-work', ?, 1, ?, ?)",
         )
         .run(
-          JSON.stringify({ sessionId: "session-work", completionOwnerSessionKey: oldKey }),
+          JSON.stringify({
+            sessionId: "session-work",
+            updatedAt: 1,
+            parentSessionKey: oldKey,
+            spawnedBy: oldKey,
+            completionOwnerSessionKey: oldKey,
+          }),
           oldKey,
           oldKey,
         );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(oldKey);
+      secondaryDatabase.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run("agent:work:dashboard:regular");
       secondaryDatabase.db
         .prepare(
           "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES ('session-work', 'agent:work:dashboard:regular', 'conversation', 1, 1, ?, ?)",
@@ -206,6 +220,26 @@ describe("doctor reserved incognito session key repair", () => {
         systemPromptReport: { sessionKey: newKey },
         pluginExtensions: { test: { label: oldKey } },
       });
+      expect(
+        database.db
+          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+          .get(newKey),
+      ).toEqual({ entry_valid: 1 });
+      expect(
+        secondaryDatabase.db
+          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+          .get("agent:work:dashboard:regular"),
+      ).toEqual({ entry_valid: 1 });
+      closeOpenClawAgentDatabasesForTest();
+      expect(listSessionEntries({ agentId: "main", env })).toMatchObject([
+        { sessionKey: newKey, entry: { sessionId: "session-old", updatedAt: 1 } },
+      ]);
+      expect(listSessionEntries({ agentId: "work", env })).toMatchObject([
+        {
+          sessionKey: "agent:work:dashboard:regular",
+          entry: { sessionId: "session-work", updatedAt: 1 },
+        },
+      ]);
       expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
         found: 0,
         repaired: 0,

@@ -37,8 +37,16 @@ import {
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import {
+  classifyGatewayProbePath,
+  classifyMcpAppStandalonePath,
+} from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
-import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import {
+  finishFailedGatewayHttpResponse,
+  sendGatewayAuthFailure,
+  setDefaultSecurityHeaders,
+} from "./http-common.js";
 import { resolveRequestClientIp } from "./net.js";
 import {
   normalizePluginNodeCapabilityScopedUrl,
@@ -138,13 +146,6 @@ const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
   () => import("./server/plugin-route-runtime-scopes.js"),
 );
 
-const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
-  ["/health", "live"],
-  ["/healthz", "live"],
-  ["/ready", "ready"],
-  ["/readyz", "ready"],
-]);
-
 function isControlUiCatalogIconRequest(pathname: string, basePath: string): boolean {
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
@@ -194,10 +195,6 @@ function getCachedPluginGatewayAuthBypassPaths(
 
 function isOpenAiModelsPath(pathname: string): boolean {
   return pathname === "/v1/models" || pathname.startsWith("/v1/models/");
-}
-
-function isMcpAppStandalonePath(pathname: string): boolean {
-  return pathname === "/__openclaw__/mcp-app" || pathname === "/__openclaw__/mcp-app/view";
 }
 
 function isBoardWidgetPath(pathname: string): boolean {
@@ -278,8 +275,8 @@ async function handleGatewayProbeRequest(
   allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
 ): Promise<boolean> {
-  const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
-  if (!status) {
+  const status = classifyGatewayProbePath(requestPath);
+  if (status === "namespace" || status === "outside") {
     return false;
   }
 
@@ -544,13 +541,17 @@ export function createGatewayHttpServer(opts: {
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
+  const handleServerRequest = (req: IncomingMessage, res: ServerResponse) => {
+    void handleRequestWithTrace(req, res).catch((error: unknown) => {
+      console.error("[gateway-http] failed to finalize request:", error);
+      if (!res.destroyed) {
+        res.destroy(error instanceof Error ? error : undefined);
+      }
+    });
+  };
   const httpServer: HttpServer = opts.tlsOptions
-    ? createHttpsServer(opts.tlsOptions, (req, res) => {
-        void handleRequestWithTrace(req, res);
-      })
-    : createHttpServer((req, res) => {
-        void handleRequestWithTrace(req, res);
-      });
+    ? createHttpsServer(opts.tlsOptions, handleServerRequest)
+    : createHttpServer(handleServerRequest);
 
   function handleRequestWithTrace(req: IncomingMessage, res: ServerResponse) {
     return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
@@ -581,7 +582,7 @@ export function createGatewayHttpServer(opts: {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return;
       }
-      if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
+      if (classifyGatewayProbePath(requestPath) === "live") {
         await handleGatewayProbeRequest(
           req,
           res,
@@ -873,16 +874,21 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
+      const mcpAppRoute = classifyMcpAppStandalonePath(scopedRequestPath);
+      if (
+        configSnapshot.mcp?.apps?.enabled === true &&
+        (mcpAppRoute === "shell" || mcpAppRoute === "view")
+      ) {
         requestStages.push({
           name: "mcp-app-standalone",
-          run: async () => {
-            const standalone = await getMcpAppStandaloneModule();
-            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-            });
-          },
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () => {
+              const standalone = await getMcpAppStandaloneModule();
+              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+              });
+            }),
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so
@@ -978,9 +984,7 @@ export function createGatewayHttpServer(opts: {
       res.end("Not Found");
     } catch (err) {
       console.error("[gateway-http] unhandled error in request handler:", err);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Internal Server Error");
+      finishFailedGatewayHttpResponse(res);
     }
   }
 

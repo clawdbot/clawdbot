@@ -17,6 +17,7 @@ import {
   sendDiscordComponentMessageLazy,
 } from "./outbound-components.js";
 import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
+import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
@@ -108,6 +109,10 @@ export async function sendDiscordOutboundPayload(params: {
       });
       deliveredVoice = true;
     } catch (err) {
+      // A lost create response can hide a committed voice; a text retry has a different nonce.
+      if (hasDiscordMessageCreateAmbiguity(err)) {
+        throw err;
+      }
       const supplement = getReplyPayloadTtsSupplement(payload);
       const visibleFallbackText = payload.text?.trim() ? payload.text : undefined;
       const hiddenFallbackText = supplement?.visibleTextAlreadyDelivered

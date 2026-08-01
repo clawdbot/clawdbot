@@ -416,10 +416,11 @@ function hasMissingOutput(paths) {
   return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
 }
 
-function removeIncrementalStateForMissingOutput(params) {
-  if (!hasMissingOutput(params.outputPaths)) {
-    return;
-  }
+// Stale inputs invalidate the whole incremental emit graph, not just missing
+// outputs: reused .tsbuildinfo can skip re-emitting declarations whose own
+// sources did not change even when the cached d.ts predates their current
+// exports (observed on sticky-disk CI runners).
+function removeStaleIncrementalState(params) {
   fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
 }
 
@@ -802,8 +803,7 @@ async function main(argv = process.argv.slice(2)) {
     const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
         prerequisiteSteps.push({
@@ -818,8 +818,7 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (!packageDtsFresh) {
-      removeIncrementalStateForMissingOutput({
-        outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
+      removeStaleIncrementalState({
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
       prerequisiteSteps.push({
@@ -834,8 +833,7 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (mode === "all") {
       if (!qaChannelDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -865,8 +863,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
       }
       if (!matrixDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -896,8 +893,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -927,8 +923,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
       if (!slackDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -958,8 +953,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
       if (!whatsappDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: WHATSAPP_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -989,8 +983,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
       }
       if (!telegramDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
         });
         dependentSteps.push({

@@ -279,7 +279,14 @@ export type OutputItem = z.infer<typeof OutputItemSchema>;
 
 const UsageSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
+  input_tokens_details: z.object({
+    cached_tokens: z.number().int().nonnegative(),
+    cache_write_tokens: z.number().int().nonnegative(),
+  }),
   output_tokens: z.number().int().nonnegative(),
+  output_tokens_details: z.object({
+    reasoning_tokens: z.number().int().nonnegative(),
+  }),
   total_tokens: z.number().int().nonnegative(),
 });
 

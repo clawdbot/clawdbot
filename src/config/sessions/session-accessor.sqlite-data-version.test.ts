@@ -560,7 +560,7 @@ describe("SQLite session entry cache", () => {
 
     parseSessionEntryCalls.mockClear();
     const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
-    expect(borrowedAfter).toBe(borrowedBefore);
+    expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
@@ -578,8 +578,8 @@ describe("SQLite session entry cache", () => {
 
     const view = openSessionEntryReadView(scope);
     const first = view.get(scope.sessionKey);
-    expect(view.get(scope.sessionKey)).toBe(first);
-    expect(view.entries()[0]?.entry).toBe(first);
+    expect(view.get(scope.sessionKey)).toStrictEqual(first);
+    expect(view.entries()[0]?.entry).toStrictEqual(first);
   });
 
   it("honors latest reads after an untracked own-connection write", async () => {

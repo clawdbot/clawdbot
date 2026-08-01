@@ -768,6 +768,26 @@ PY
       expect(disabled.querySelector("a[data-file-path]")).toBeNull();
     });
 
+    it.each([
+      ["plain text", "see src/lib/foo.ts:42"],
+      ["inline code", "`src/lib/foo.ts:42`"],
+      ["explicit Markdown", "[source](src/lib/foo.ts:42)"],
+    ])(
+      "makes %s workspace file links keyboard-focusable without adding an href",
+      (_kind, input) => {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { fileLinks: true }));
+        const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+
+        expect(link?.getAttribute("role")).toBe("button");
+        expect(link?.getAttribute("tabindex")).toBe("0");
+        expect(link?.hasAttribute("href")).toBe(false);
+        document.body.append(fragment);
+        link?.focus();
+        expect(document.activeElement).toBe(link);
+        fragment.remove();
+      },
+    );
+
     it("links prefixed single-segment paths but not bare prose filenames", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts", { fileLinks: true }),
@@ -1075,6 +1095,20 @@ describe("toStreamingMarkdownHtml", () => {
     const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
 
     expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
+  });
+
+  it.each([
+    ["loose sibling list items", "- one\n\n- two"],
+    ["list-item paragraph continuation", "- one\n\n  continuation"],
+    ["nested loose list items", "- one\n\n  - nested"],
+    ["a reference link and its later definition", "[Docs][doc]\n\n[doc]: https://example.com"],
+    ["escaped bracket labels", "[Docs][ref\\]]\n\n[ref\\]]: https://example.com"],
+    ["multiline reference labels", "[Docs][foo bar]\n\n[foo\n bar]: https://example.com"],
+    ["list-nested reference definitions", "See [x]\n\n- item\n\n    [x]: /url"],
+    ["tab-indented list continuation", "Intro\n\n  - one\n\n\tcontinuation"],
+    ["list continuation before a root heading", "- one\n\n  continuation\n# Heading"],
+  ])("preserves whole-document Markdown semantics for %s", (_kind, input) => {
+    expect(toStreamingMarkdownHtml(input)).toBe(toSanitizedMarkdownHtml(input));
   });
 
   it("uses Unicode separators as stable markdown boundaries", () => {

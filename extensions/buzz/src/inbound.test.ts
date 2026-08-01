@@ -3,6 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuzzBus } from "./buzz-bus.js";
+import { BuzzDirectoryState } from "./directory-state.js";
 import { handleBuzzInbound } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
@@ -54,9 +55,19 @@ function createMessage(overrides: Partial<BuzzInboundMessage> = {}): BuzzInbound
   };
 }
 
+function createSignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
 function createBus(): BuzzBus {
   return {
     publicKey: BOT_PUBLIC_KEY,
+    directory: new BuzzDirectoryState({
+      publicKey: BOT_PUBLIC_KEY,
+      fallbackProfileName: "OpenClaw",
+      channelIds: [ROOM_ID],
+    }),
+    refreshDirectory: vi.fn(async () => {}),
     sendText: vi.fn(async () => "reply-event-1"),
     sendTyping: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
@@ -81,20 +92,87 @@ describe("handleBuzzInbound", () => {
   it("accepts a native Nostr public-key mention", async () => {
     const runtime = createPluginRuntimeMock();
     setBuzzRuntime(runtime);
+    const signal = createSignal();
 
     await handleBuzzInbound({
       account: createAccount(),
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+      signal,
     });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    expect(firstDispatch(runtime).replyOptions?.abortSignal).toBe(signal);
     expect(firstDispatch(runtime).ctxPayload).toMatchObject({
       WasMentioned: true,
       SenderId: SENDER_PUBLIC_KEY,
       GroupChannel: ROOM_ID,
       GroupSubject: ROOM_ID,
+    });
+  });
+
+  it("uses current Buzz labels without changing the stable sender identity", async () => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+    const bus = createBus();
+    bus.directory.replaceMemberships(
+      new Map([
+        [
+          ROOM_ID,
+          {
+            roomId: ROOM_ID,
+            createdAt: 1_777_000_000,
+            eventId: "membership-1",
+            publisherPublicKey: OTHER_PUBLIC_KEY,
+            members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY]),
+            roles: new Map([
+              [BOT_PUBLIC_KEY, "bot"],
+              [SENDER_PUBLIC_KEY, "member"],
+            ]),
+          },
+        ],
+      ]),
+    );
+    bus.directory.applyProfileEvent({
+      id: "profile-1",
+      kind: 0,
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: 1_777_000_000,
+      content: JSON.stringify({ display_name: "Alice" }),
+      sig: "e".repeat(128),
+      tags: [],
+    });
+    bus.directory.applyRoomEvent({
+      id: "room-1",
+      kind: 39_000,
+      pubkey: OTHER_PUBLIC_KEY,
+      created_at: 1_777_000_000,
+      content: "",
+      sig: "e".repeat(128),
+      tags: [
+        ["d", ROOM_ID],
+        ["name", "Engineering"],
+      ],
+    });
+
+    await handleBuzzInbound({
+      account: createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: [SENDER_PUBLIC_KEY],
+        groups: { [ROOM_ID]: { requireMention: false } },
+      }),
+      cfg: {} satisfies OpenClawConfig,
+      bus,
+      message: createMessage(),
+      signal: createSignal(),
+    });
+
+    expect(firstDispatch(runtime).ctxPayload).toMatchObject({
+      SenderId: SENDER_PUBLIC_KEY,
+      SenderName: "Alice",
+      GroupChannel: ROOM_ID,
+      GroupSubject: "Engineering",
     });
   });
 
@@ -108,6 +186,7 @@ describe("handleBuzzInbound", () => {
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage({ text: "@openclaw status" }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
@@ -123,6 +202,7 @@ describe("handleBuzzInbound", () => {
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage(),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -140,6 +220,7 @@ describe("handleBuzzInbound", () => {
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -161,6 +242,7 @@ describe("handleBuzzInbound", () => {
       message: createMessage({
         text: "/status",
       }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
@@ -181,6 +263,7 @@ describe("handleBuzzInbound", () => {
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage({ text: "/status" }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -200,6 +283,7 @@ describe("handleBuzzInbound", () => {
         threadId: "event-root",
         mentionedPubkeys: [BOT_PUBLIC_KEY],
       }),
+      signal: createSignal(),
     });
 
     const dispatch = firstDispatch(runtime);
@@ -257,6 +341,7 @@ describe("handleBuzzInbound", () => {
           truncated: true,
         },
       }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.commands.shouldComputeCommandAuthorized).not.toHaveBeenCalled();
@@ -295,6 +380,7 @@ describe("handleBuzzInbound", () => {
           truncated: false,
         },
       }),
+      signal: createSignal(),
     });
 
     expect(runtime.channel.mentions.matchesMentionPatterns).not.toHaveBeenCalled();
@@ -310,6 +396,7 @@ describe("handleBuzzInbound", () => {
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
       message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+      signal: createSignal(),
     });
 
     const dispatch = firstDispatch(runtime);

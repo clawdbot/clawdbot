@@ -1456,7 +1456,7 @@ async function runCliWithPreparedOutputMode(
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreTerminalState },
+        { restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1464,7 +1464,7 @@ async function runCliWithPreparedOutputMode(
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../../packages/terminal-core/src/restore.js"),
+          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());
@@ -1494,7 +1494,7 @@ async function runCliWithPreparedOutputMode(
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
         process.exit(1);
       });
 

@@ -341,6 +341,33 @@ describe("registry race safety", () => {
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
   });
 
+  it("preserves a Podman target across registry usage updates", async () => {
+    await updateRegistry(
+      containerEntry({
+        backendId: "podman",
+        backendTarget: {
+          key: "machine:target-a",
+          globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+        },
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        backendId: "podman",
+        lastUsedAtMs: 2,
+      }),
+    );
+
+    await expect(readRegistryEntry("container-a")).resolves.toMatchObject({
+      backendId: "podman",
+      backendTarget: {
+        key: "machine:target-a",
+        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+      },
+      lastUsedAtMs: 2,
+    });
+  });
+
   it("reads registered runtime IDs for one backend and scope newest first", async () => {
     await updateRegistry(
       containerEntry({

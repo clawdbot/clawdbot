@@ -44,7 +44,7 @@ export async function offerLiveModelVerification(params: {
     : undefined;
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
-    const result = await withConsoleSubsystemsSuppressed(() =>
+    const verification = withConsoleSubsystemsSuppressed(() =>
       inference.verifySetupInferenceConfig({
         config: candidate.config,
         runtime: params.runtime,
@@ -67,7 +67,12 @@ export async function offerLiveModelVerification(params: {
           : {}),
       }),
     );
-    progress.stop();
+    let result: Awaited<typeof verification>;
+    try {
+      result = await verification;
+    } finally {
+      progress.stop();
+    }
     if (result.ok) {
       await params.prompter.note(
         t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),

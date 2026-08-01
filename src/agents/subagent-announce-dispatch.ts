@@ -64,6 +64,7 @@ function mapSteerOutcomeToDeliveryResult(
 /** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
+  requireDirectDelivery?: boolean;
   signal?: AbortSignal;
   steer: () => Promise<SubagentAnnounceSteerOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
@@ -93,6 +94,14 @@ export async function runSubagentAnnounceDispatch(params: {
       delivered: false,
       path: "none",
     });
+  }
+
+  if (params.requireDirectDelivery) {
+    // Settle synthesis needs its own delivery turn; steering can inherit a
+    // message-tool-only completion turn and silently suppress the final reply.
+    const primaryDirect = await params.direct();
+    appendPhase("direct-primary", primaryDirect);
+    return withPhases(primaryDirect);
   }
 
   if (!params.expectsCompletionMessage) {

@@ -84,6 +84,70 @@ describe("searchVisibleSessionTranscripts", () => {
     );
   });
 
+  it("recovers a moving thread when a later page omits the authoritative total", async () => {
+    const first = { key: "agent:main:first" } as GatewaySessionRow;
+    const moved = { key: "agent:main:moved" } as GatewaySessionRow;
+    const missed = { key: "agent:main:missed" } as GatewaySessionRow;
+    const request = vi.fn(async (_method: string, params: { sessionKeys: string[] }) => ({
+      results: params.sessionKeys.includes(missed.key)
+        ? [
+            {
+              sessionKey: missed.key,
+              sessionId: "missed",
+              messageId: "message-missed",
+              role: "assistant" as const,
+              timestamp: 1,
+              snippet: "the missing launch code",
+              score: 1,
+            },
+          ]
+        : [],
+    }));
+    const listSessions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        count: 1,
+        sessions: [moved],
+        offset: 2,
+        hasMore: false,
+      } as SessionsListResult)
+      .mockResolvedValueOnce({
+        count: 2,
+        totalCount: 3,
+        sessions: [first, missed],
+        offset: 0,
+        nextOffset: 2,
+        hasMore: true,
+      } as SessionsListResult)
+      .mockResolvedValueOnce({
+        count: 1,
+        totalCount: 3,
+        sessions: [moved],
+        offset: 2,
+        hasMore: false,
+      } as SessionsListResult);
+
+    const found = await searchVisibleSessionTranscripts({
+      client: { request } as unknown as GatewayBrowserClient,
+      query: "launch code",
+      result: {
+        count: 2,
+        totalCount: 3,
+        sessions: [first, moved],
+        nextOffset: 2,
+        hasMore: true,
+      } as SessionsListResult,
+      listSessions,
+      listOptions: { agentId: "main" },
+      resolveAgentId: () => "main",
+    });
+
+    expect(found.results.map((result) => result.sessionKey)).toEqual([missed.key]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1].sessionKeys).toEqual([first.key, moved.key, missed.key]);
+    expect(listSessions.mock.calls.map(([options]) => options.offset)).toEqual([2, 0, 2]);
+  });
+
   it.each([
     {
       label: "a later session page cannot be loaded",

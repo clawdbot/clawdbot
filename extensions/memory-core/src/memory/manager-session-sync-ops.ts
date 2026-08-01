@@ -4,15 +4,9 @@ import path from "node:path";
 import {
   createSubsystemLogger,
   onInternalSessionTranscriptUpdate,
-  resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
   listSessionTranscriptCorpusEntriesForAgent,
-  parseCanonicalSessionSyncTargetFromPath,
-  parseSqliteSessionFileMarker,
-  resolveSessionFileForSyncTarget,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
@@ -20,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   isFileMissingError,
-  retryTransientMemoryRead,
   runWithConcurrency,
   type MemorySessionSyncTarget,
   type MemorySyncParams,
@@ -35,7 +28,6 @@ import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
-const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = {
@@ -50,6 +42,10 @@ type MemorySessionTranscriptUpdate = {
 };
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
+  protected listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
+    return listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+  }
+
   protected sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
     return entry.transcriptSource === "sqlite"
       ? sessionPathForSessionIdentity(entry.agentId, entry.sessionId)
@@ -85,21 +81,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       if (this.closed) {
         return;
       }
-      const sessionFile = update.sessionFile;
-      if (sessionFile && this.isSessionFileForAgent(sessionFile)) {
-        if (!isUsageCountedSessionTranscriptFileName(path.basename(sessionFile))) {
-          return;
-        }
-        this.scheduleSessionDirty(sessionFile);
-        return;
-      }
       const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
       if (target) {
         this.scheduleSessionDirty(target);
         return;
       }
-      if (sessionFile) {
-        void this.scheduleCorpusSessionFileDirty(sessionFile).catch((err: unknown) => {
+      if (update.sessionFile) {
+        void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
           log.warn(`memory session corpus update failed: ${String(err)}`);
         });
       }
@@ -114,8 +102,14 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
-    if (corpusEntries.some((entry) => path.resolve(entry.sessionFile) === resolvedSessionFile)) {
+    const corpusEntries = await this.listSessionCorpusEntries();
+    if (
+      corpusEntries.some(
+        (entry) =>
+          entry.transcriptSource !== "sqlite" &&
+          path.resolve(entry.sessionFile) === resolvedSessionFile,
+      )
+    ) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
   }
@@ -133,7 +127,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = await this.listSessionCorpusEntries();
     if (corpusEntries.length === 0 || this.closed) {
       return [];
     }
@@ -207,13 +201,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
-      void this.processSessionDeltaBatch().catch((err: unknown) => {
-        log.warn(`memory session delta failed: ${String(err)}`);
+      void this.processSessionUpdateBatch().catch((err: unknown) => {
+        log.warn(`memory session update failed: ${String(err)}`);
       });
     }, SESSION_DIRTY_DEBOUNCE_MS);
   }
 
-  private async processSessionDeltaBatch(): Promise<void> {
+  private async processSessionUpdateBatch(): Promise<void> {
     if (this.sessionPendingFiles.size === 0 && this.sessionPendingTargets.size === 0) {
       return;
     }
@@ -222,217 +216,32 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
     pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
-    let shouldSync = false;
     for (const sessionFile of pending) {
-      if (!path.isAbsolute(sessionFile)) {
-        this.sessionsDirtyFiles.add(sessionFile);
-        this.sessionsDirty = true;
-        shouldSync = true;
-        continue;
-      }
-      // Usage-counted session archives (`.jsonl.reset.<iso>` and
-      // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
-      // written once by the archive rotation and then never touched again.
-      // They carry no incremental `append` semantics, so the delta-bytes /
-      // delta-messages thresholds (designed for live transcripts accumulating
-      // appended messages) cannot gate them correctly — a short archive
-      // below the threshold would simply never reindex. Mark them dirty
-      // directly and skip the delta accounting.
-      const baseName = path.basename(sessionFile);
-      if (
-        isSessionArchiveArtifactName(baseName) &&
-        isUsageCountedSessionTranscriptFileName(baseName)
-      ) {
-        this.sessionsDirtyFiles.add(sessionFile);
-        this.sessionsDirty = true;
-        shouldSync = true;
-        continue;
-      }
-      const delta = await this.updateSessionDelta(sessionFile);
-      if (!delta) {
-        continue;
-      }
-      const bytesThreshold = delta.deltaBytes;
-      const messagesThreshold = delta.deltaMessages;
-      const bytesHit =
-        bytesThreshold <= 0 ? delta.pendingBytes > 0 : delta.pendingBytes >= bytesThreshold;
-      const messagesHit =
-        messagesThreshold <= 0
-          ? delta.pendingMessages > 0
-          : delta.pendingMessages >= messagesThreshold;
-      if (!bytesHit && !messagesHit) {
-        continue;
-      }
       this.sessionsDirtyFiles.add(sessionFile);
-      this.sessionsDirty = true;
-      delta.pendingBytes =
-        bytesThreshold > 0 ? Math.max(0, delta.pendingBytes - bytesThreshold) : 0;
-      delta.pendingMessages =
-        messagesThreshold > 0 ? Math.max(0, delta.pendingMessages - messagesThreshold) : 0;
-      shouldSync = true;
     }
-    if (shouldSync) {
+    if (pending.length > 0) {
+      this.sessionsDirty = true;
       void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
-        log.warn(`memory sync failed (session-delta): ${String(err)}`);
+        log.warn(`memory sync failed (session update): ${String(err)}`);
       });
     }
-  }
-
-  private async updateSessionDelta(sessionFile: string): Promise<{
-    deltaBytes: number;
-    deltaMessages: number;
-    pendingBytes: number;
-    pendingMessages: number;
-  } | null> {
-    const thresholds = this.settings.sync.sessions;
-    if (!thresholds) {
-      return null;
-    }
-    let stat: { size: number };
-    try {
-      stat = await fs.stat(sessionFile);
-    } catch {
-      return null;
-    }
-    const size = stat.size;
-    let state = this.sessionDeltas.get(sessionFile);
-    if (!state) {
-      state = { lastSize: 0, pendingBytes: 0, pendingMessages: 0 };
-      this.sessionDeltas.set(sessionFile, state);
-    }
-    const deltaBytes = Math.max(0, size - state.lastSize);
-    if (deltaBytes === 0 && size === state.lastSize) {
-      return {
-        deltaBytes: thresholds.deltaBytes,
-        deltaMessages: thresholds.deltaMessages,
-        pendingBytes: state.pendingBytes,
-        pendingMessages: state.pendingMessages,
-      };
-    }
-    if (size < state.lastSize) {
-      state.lastSize = size;
-      state.pendingBytes += size;
-      const shouldCountMessages =
-        thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
-      if (shouldCountMessages) {
-        state.pendingMessages += await this.countNewlines(sessionFile, 0, size);
-      }
-    } else {
-      state.pendingBytes += deltaBytes;
-      const shouldCountMessages =
-        thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
-      if (shouldCountMessages) {
-        state.pendingMessages += await this.countNewlines(sessionFile, state.lastSize, size);
-      }
-      state.lastSize = size;
-    }
-    this.sessionDeltas.set(sessionFile, state);
-    return {
-      deltaBytes: thresholds.deltaBytes,
-      deltaMessages: thresholds.deltaMessages,
-      pendingBytes: state.pendingBytes,
-      pendingMessages: state.pendingMessages,
-    };
-  }
-
-  private async countNewlines(absPath: string, start: number, end: number): Promise<number> {
-    if (end <= start) {
-      return 0;
-    }
-    let handle;
-    try {
-      handle = await retryTransientMemoryRead(
-        () => fs.open(absPath, "r"),
-        `open session transcript for newline count ${absPath}`,
-      );
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return 0;
-      }
-      throw err;
-    }
-    try {
-      let offset = start;
-      let count = 0;
-      const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
-      while (offset < end) {
-        const toRead = Math.min(buffer.length, end - offset);
-        const { bytesRead } = await retryTransientMemoryRead(
-          () => handle.read(buffer, 0, toRead, offset),
-          `count session transcript newlines ${absPath}`,
-        );
-        if (bytesRead <= 0) {
-          break;
-        }
-        for (let i = 0; i < bytesRead; i += 1) {
-          if (buffer[i] === 10) {
-            count += 1;
-          }
-        }
-        offset += bytesRead;
-      }
-      return count;
-    } finally {
-      await handle.close();
-    }
-  }
-
-  protected resetSessionDelta(absPath: string, size: number): void {
-    const state = this.sessionDeltas.get(absPath);
-    if (!state) {
-      return;
-    }
-    state.lastSize = size;
-    state.pendingBytes = 0;
-    state.pendingMessages = 0;
-  }
-
-  private isSessionFileForAgent(sessionFile: string): boolean {
-    if (!sessionFile) {
-      return false;
-    }
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    const resolvedFile = path.resolve(sessionFile);
-    const resolvedDir = path.resolve(sessionsDir);
-    return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
   private resolveSessionTranscriptUpdateSyncTarget(
     update: MemorySessionTranscriptUpdate,
   ): MemorySessionSyncTarget | null {
-    if (update.sessionFile && isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+    if (!update.target) {
       return null;
     }
-    if (update.target) {
-      const agentId = update.target.agentId.trim();
-      const sessionId = update.target.sessionId.trim();
-      const sessionKey = update.target.sessionKey.trim();
-      if (!agentId || !sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
-        return null;
-      }
-      return {
-        agentId,
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-      };
-    }
-    if (!update.sessionFile) {
+    const agentId = update.target.agentId.trim();
+    const sessionId = update.target.sessionId.trim();
+    const sessionKey = update.target.sessionKey.trim();
+    if (!agentId || !sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
       return null;
     }
-    const parsed = parseCanonicalSessionSyncTargetFromPath(update.sessionFile);
-    if (!parsed) {
-      return null;
-    }
-    const agentId = update.agentId?.trim() || parsed.agentId;
-    if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
-      return null;
-    }
-    const sessionKey = update.sessionKey?.trim();
     return {
       agentId,
-      sessionId: parsed.sessionId,
+      sessionId,
       ...(sessionKey ? { sessionKey } : {}),
     };
   }
@@ -440,73 +249,29 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   protected normalizeTargetArchiveFiles(
     archiveFiles?: string[],
     corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
+    includeSqlite = false,
   ): Set<string> | null {
     if (!archiveFiles || archiveFiles.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
-    const corpusMarkers = new Set(
+    const corpusPaths = new Map(
       corpusEntries
-        .filter((entry) => entry.transcriptSource === "sqlite")
-        .map((entry) => entry.sessionFile),
-    );
-    const corpusPaths = new Set(
-      corpusEntries
-        .filter((entry) => entry.transcriptSource !== "sqlite")
-        .map((entry) => path.resolve(entry.sessionFile)),
+        .filter((entry) => includeSqlite || entry.transcriptSource !== "sqlite")
+        .map((entry) => [
+          entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
+          entry.sessionFile,
+        ]),
     );
     for (const sessionFile of archiveFiles) {
       const trimmed = sessionFile.trim();
       if (!trimmed) {
         continue;
       }
-      if (corpusMarkers.has(trimmed)) {
-        normalized.add(trimmed);
-        continue;
+      const corpusPath = corpusPaths.get(trimmed) ?? corpusPaths.get(path.resolve(trimmed));
+      if (corpusPath) {
+        normalized.add(corpusPath);
       }
-      const sqliteMarker = parseSqliteSessionFileMarker(trimmed);
-      if (
-        sqliteMarker &&
-        normalizeAgentId(sqliteMarker.agentId) === normalizeAgentId(this.agentId)
-      ) {
-        normalized.add(trimmed);
-        continue;
-      }
-      const resolved = path.resolve(trimmed);
-      if (
-        this.isSessionFileForAgent(resolved) &&
-        parseCanonicalSessionSyncTargetFromPath(resolved)
-      ) {
-        normalized.add(resolved);
-        continue;
-      }
-      if (corpusPaths.has(resolved)) {
-        normalized.add(resolved);
-      }
-    }
-    return normalized.size > 0 ? normalized : null;
-  }
-
-  private normalizeTargetSessions(
-    sessions?: MemorySessionSyncTarget[],
-  ): Map<string, MemorySessionSyncTarget> | null {
-    if (!sessions || sessions.length === 0) {
-      return null;
-    }
-    const normalized = new Map<string, MemorySessionSyncTarget>();
-    for (const session of sessions) {
-      const sessionId = session.sessionId.trim();
-      const agentId = session.agentId?.trim() || this.agentId;
-      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
-        continue;
-      }
-      const sessionKey = session.sessionKey?.trim();
-      const target = {
-        agentId,
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-      };
-      normalized.set(this.memorySessionSyncTargetKey(target), target);
     }
     return normalized.size > 0 ? normalized : null;
   }
@@ -520,60 +285,45 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (targets.length === 0) {
       return files;
     }
-    const corpusEntries =
-      knownCorpusEntries ?? (await listSessionTranscriptCorpusEntriesForAgent(this.agentId));
-    for (const session of targets) {
-      const sessionKey = session.sessionKey?.trim();
-      let matchedCorpusEntry = false;
-      for (const entry of corpusEntries) {
-        if (normalizeAgentId(entry.agentId) !== normalizeAgentId(this.agentId)) {
-          continue;
-        }
-        if (entry.sessionId !== session.sessionId) {
-          continue;
-        }
-        if (sessionKey && entry.sessionKey !== sessionKey) {
-          continue;
-        }
+    const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
+    for (const rawSession of targets) {
+      const sessionId = rawSession.sessionId.trim();
+      const agentId = rawSession.agentId?.trim() || this.agentId;
+      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+        continue;
+      }
+      const sessionKey = rawSession.sessionKey?.trim();
+      const matchingEntries = corpusEntries.filter(
+        (entry) =>
+          normalizeAgentId(entry.agentId) === normalizeAgentId(this.agentId) &&
+          entry.sessionId === sessionId &&
+          (!sessionKey || entry.sessionKey === sessionKey),
+      );
+      for (const entry of matchingEntries) {
         files.add(
           entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
         );
-        matchedCorpusEntry = true;
-      }
-      if (matchedCorpusEntry) {
-        continue;
-      }
-      const resolved = resolveSessionFileForSyncTarget(session, this.agentId);
-      if (!resolved || normalizeAgentId(resolved.agentId) !== normalizeAgentId(this.agentId)) {
-        continue;
-      }
-      const sessionFile = path.resolve(resolved.sessionFile);
-      if (
-        this.isSessionFileForAgent(sessionFile) &&
-        parseCanonicalSessionSyncTargetFromPath(sessionFile)
-      ) {
-        files.add(sessionFile);
       }
     }
     return files;
   }
 
-  protected async combineTargetArchiveFiles(params: {
+  protected async resolveTargetSessionSyncPlan(params: {
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
-  }): Promise<Set<string> | null> {
+  }) {
     const files = new Set<string>();
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = await this.listSessionCorpusEntries();
     for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
       files.add(file);
     }
     for (const file of await this.resolveArchiveFilesForSyncTargets(
-      this.normalizeTargetSessions(params.sessions)?.values(),
+      params.sessions,
       corpusEntries,
     )) {
       files.add(file);
     }
-    return files.size > 0 ? files : null;
+    return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
 
   private memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {

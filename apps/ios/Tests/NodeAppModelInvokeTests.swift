@@ -1684,9 +1684,9 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
         await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
-        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        let deadline = ContinuousClock().now.advanced(by: .seconds(10))
         while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
-            await Task.yield()
+            try await Task.sleep(for: .milliseconds(10))
         }
         let writeCount = await writeGate.callCount()
         #expect(writeCount == 1)

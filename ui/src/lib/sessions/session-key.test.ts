@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { canonicalUiSessionKeyForPersistence, uiSessionEventMatches } from "./session-key.ts";
+import {
+  canonicalUiSessionKeyForPersistence,
+  resolveUiSessionNavigationParentKey,
+  uiSessionEventMatches,
+} from "./session-key.ts";
 
 describe("UI session identity", () => {
   it.each([
@@ -53,5 +57,26 @@ describe("UI session identity", () => {
     expect(uiSessionEventMatches(host, "agent:ops:main")).toBe(true);
     expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:ops:home");
     expect(canonicalUiSessionKeyForPersistence(host, "agent:ops:main")).toBe("agent:ops:home");
+  });
+
+  it.each([
+    {
+      parentSessionKey: "  agent:main:dashboard:navigation-parent  ",
+      spawnedBy: "agent:main:controller",
+      expected: "agent:main:dashboard:navigation-parent",
+    },
+    {
+      parentSessionKey: "",
+      spawnedBy: "  agent:main:controller  ",
+      expected: "agent:main:controller",
+    },
+    {
+      parentSessionKey: "  \t  ",
+      spawnedBy: "agent:main:controller",
+      expected: "agent:main:controller",
+    },
+    { parentSessionKey: null, spawnedBy: "  ", expected: undefined },
+  ])("resolves the first non-empty navigation parent", ({ expected, ...row }) => {
+    expect(resolveUiSessionNavigationParentKey(row)).toBe(expected);
   });
 });

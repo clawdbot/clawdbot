@@ -15,7 +15,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { managedWorktrees, WorktreeRepositoryError } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -375,6 +375,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           provisionedSessionWorktree = true;
         }
       } catch (error) {
+        if (error instanceof WorktreeRepositoryError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "agent workspace is not a git checkout"),
+          );
+          return;
+        }
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
         return;
       }

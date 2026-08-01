@@ -323,6 +323,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "tools.web.fetch.headers": "Web Fetch Request Headers",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.useTrustedEnvProxy": "Web Fetch Trusted Env Proxy",
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
