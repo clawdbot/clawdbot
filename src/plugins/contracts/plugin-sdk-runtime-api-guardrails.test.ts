@@ -136,7 +136,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";',
     'export { setMSTeamsRuntime } from "./src/runtime.js";',
-    "export const qaRunnerCliRegistrations = [msteamsQaCliRegistration];",
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "irc", relativePath: "runtime-api.ts" })]: [
     'export { setIrcRuntime } from "./src/runtime.js";',
@@ -356,6 +355,32 @@ describe("runtime api guardrails", () => {
         source,
         `${pluginId} runtime api should use generic sdk subpaths or local exports`,
       ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
+    }
+  });
+
+  it("keeps QA runner registration on narrow plugin facades", () => {
+    const qaRunnerApiFiles: string[] = [];
+
+    for (const [pluginId, rootDir] of getBundledPluginRoots().entries()) {
+      const runtimeApiPath = resolve(rootDir, "runtime-api.ts");
+      if (existsSync(runtimeApiPath)) {
+        expect(
+          readFileSync(runtimeApiPath, "utf8"),
+          `${pluginId} runtime api must not own QA discovery`,
+        ).not.toContain("qaRunnerCliRegistrations");
+      }
+
+      const qaRunnerApiPath = resolve(rootDir, "qa-runner-api.ts");
+      if (existsSync(qaRunnerApiPath)) {
+        qaRunnerApiFiles.push(qaRunnerApiPath);
+      }
+    }
+
+    expect(qaRunnerApiFiles.length).toBeGreaterThan(0);
+    for (const file of qaRunnerApiFiles) {
+      const exports = readExportStatements(file);
+      expect(exports).toHaveLength(1);
+      expect(exports[0]).toMatch(/^export const qaRunnerCliRegistrations = \[/u);
     }
   });
 

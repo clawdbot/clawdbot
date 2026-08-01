@@ -71,7 +71,8 @@ describe("qa scenario catalog", () => {
           pluginPersonality?: string;
           adversarialPersonality?: string;
           expectedSurfaceIds?: Record<string, string[]>;
-          expectedAdversarialDiagnostics?: string[];
+          allowedAdversarialDiagnostics?: string[];
+          requiredAdversarialDiagnostics?: string[];
         }
       | undefined;
 
@@ -89,23 +90,32 @@ describe("qa scenario catalog", () => {
     expect(config?.expectedSurfaceIds?.realtimeVoiceProviderIds).toContain(
       "kitchen-sink-realtime-voice-provider",
     );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
+    expect(config?.requiredAdversarialDiagnostics).toContain(
       "agent tool result middleware must be a function",
     );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
+    expect(config?.requiredAdversarialDiagnostics).toContain(
       "trusted tool policy registration requires id, description, and evaluate()",
     );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
+    expect(config?.requiredAdversarialDiagnostics).toContain(
+      "plugin must declare contracts.tools for: kitchen-sink-tool",
+    );
+    expect(config?.requiredAdversarialDiagnostics).toContain(
+      'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    );
+    expect(config?.requiredAdversarialDiagnostics).toContain(
+      'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
+    );
+    expect(config?.allowedAdversarialDiagnostics).toContain(
       "hosted media resolver registration missing resolver",
     );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
+    expect(config?.allowedAdversarialDiagnostics).toContain(
       "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
+    expect(config?.allowedAdversarialDiagnostics).toContain(
       "model catalog provider registration missing provider",
     );
     expect(
-      config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
+      config?.requiredAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
     ).toBe(true);
     expect(JSON.stringify(scenario.execution.flow)).toContain("--runtime");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
