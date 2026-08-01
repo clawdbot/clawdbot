@@ -841,8 +841,9 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         if (dataLines.length > 0) {
           const data = dataLines.join("\n").trim();
           if (data && data !== "[DONE]") {
+            let event: Record<string, unknown>;
             try {
-              yield JSON.parse(data) as Record<string, unknown>;
+              event = JSON.parse(data) as Record<string, unknown>;
             } catch (cause) {
               if (!(cause instanceof SyntaxError)) {
                 throw cause;
@@ -851,6 +852,9 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
               // assistant error formatting maps to the malformed-fragment retry copy.
               throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
             }
+            // Keep suspension outside the parse catch so iterator.throw() cannot relabel a
+            // consumer failure as malformed provider input.
+            yield event;
           }
         }
         idx = buffer.indexOf("\n\n");
