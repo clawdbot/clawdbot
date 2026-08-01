@@ -293,6 +293,7 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
+          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
         shell: bash
         run: |
           set -euo pipefail
