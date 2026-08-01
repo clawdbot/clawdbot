@@ -163,6 +163,35 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
     expect(findings.map((finding) => finding.line)).toEqual([3, 4, 4]);
   });
 
+  it("detects aliased child_process calls", () => {
+    const cases = [
+      {
+        name: "ES module import alias",
+        source: `
+import { exec as run } from "node:child_process";
+run("echo unsafe");
+`,
+      },
+      {
+        name: "CommonJS destructuring alias",
+        source: `
+const { spawn: launch } = require("child_process");
+launch("node", ["unsafe.js"]);
+`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      runSyncNamedCase(testCase.name, () => {
+        const findings = scanSource(testCase.source, "plugin.ts").filter(
+          (candidate) => candidate.ruleId === "dangerous-exec",
+        );
+
+        expect(findings.map((finding) => finding.line)).toEqual([3]);
+      });
+    }
+  });
+
   it("bounds dense line-rule findings and reports truncation", () => {
     const source = [
       `import { spawn } from "node:child_process";`,
@@ -308,6 +337,16 @@ const options: ExecOptions = { timeout: 5000 };
 import type { ExecOptions } from "child_process";
 const options: ExecOptions = {};
 const match = /^keychain:(.+)$/.exec(value);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not treat member calls as child_process alias calls", () => {
+    const source = `
+import { exec as run } from "node:child_process";
+const worker = getWorker();
+worker.run();
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);

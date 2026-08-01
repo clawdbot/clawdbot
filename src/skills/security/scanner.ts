@@ -163,12 +163,17 @@ type SourceRule = {
   requiresContextWindowLines?: number;
 };
 
+const DANGEROUS_CHILD_PROCESS_CALL_NAMES = "exec|execSync|spawn|spawnSync|execFile|execFileSync";
+const DANGEROUS_CHILD_PROCESS_CALL_PATTERN = new RegExp(
+  `\\b(${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*\\(`,
+);
+
 const LINE_RULES: LineRule[] = [
   {
     ruleId: "dangerous-exec",
     severity: "critical",
     message: "Shell command execution detected (child_process)",
-    pattern: /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(/,
+    pattern: DANGEROUS_CHILD_PROCESS_CALL_PATTERN,
     requiresContext: /child_process/,
   },
   {
@@ -288,6 +293,53 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   }
 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+}
+
+const CHILD_PROCESS_ALIAS_DECLARATIONS = [
+  {
+    declaration: /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
+    alias: new RegExp(
+      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s+as\\s+([A-Za-z_$][\\w$]*)`,
+      "g",
+    ),
+  },
+  {
+    declaration:
+      /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g,
+    alias: new RegExp(
+      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*:\\s*([A-Za-z_$][\\w$]*)`,
+      "g",
+    ),
+  },
+] as const;
+
+function collectDangerousChildProcessAliases(source: string): string[] {
+  const aliases = new Set<string>();
+
+  // Only declarations tied to child_process create aliases. Matching arbitrary
+  // same-name calls would turn this heuristic into a broad false-positive source.
+  for (const patterns of CHILD_PROCESS_ALIAS_DECLARATIONS) {
+    for (const declaration of source.matchAll(patterns.declaration)) {
+      for (const alias of (declaration[1] ?? "").matchAll(patterns.alias)) {
+        if (alias[1]) {
+          aliases.add(alias[1]);
+        }
+      }
+    }
+  }
+
+  return [...aliases];
+}
+
+function buildDangerousExecPattern(source: string): RegExp {
+  const aliases = collectDangerousChildProcessAliases(source);
+  if (aliases.length === 0) {
+    return DANGEROUS_CHILD_PROCESS_CALL_PATTERN;
+  }
+  const aliasAlternation = aliases.map((alias) => alias.replaceAll("$", "\\$")).join("|");
+  return new RegExp(
+    `${DANGEROUS_CHILD_PROCESS_CALL_PATTERN.source}|(?<![\\w$.])(?:${aliasAlternation})\\s*\\(`,
+  );
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -413,11 +465,13 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
+    const pattern =
+      rule.ruleId === "dangerous-exec" ? buildDangerousExecPattern(heuristicSource) : rule.pattern;
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
-          rule.pattern.source,
-          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+          pattern.source,
+          pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
         ),
       );
       for (const match of matches) {
