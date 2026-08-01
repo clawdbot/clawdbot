@@ -481,6 +481,9 @@ const enSettings = {
       microphone: "Microphone",
       systemDefault: "System Default",
       disconnectedMicrophone: "{id} (disconnected)",
+      systemVoice: "On-device voice",
+      systemVoiceHint:
+        "Used when Talk Mode falls back to the built-in system voice. Download more in System Settings > Accessibility > Spoken Content > Voices.",
       primaryLanguage: "Primary language",
       additionalLanguages: "Additional languages",
       addLanguage: "Add language…",

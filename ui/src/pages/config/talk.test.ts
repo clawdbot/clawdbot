@@ -574,6 +574,13 @@ describe("Talk device and voice wake settings", () => {
     microphone.value = "builtin";
     microphone.dispatchEvent(new Event("change"));
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.microphone", "builtin");
+    const systemVoice = row("On-device voice").querySelector("select")!;
+    systemVoice.value = "voice-1";
+    systemVoice.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.systemVoiceId", "voice-1");
+    systemVoice.value = "";
+    systemVoice.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.systemVoiceId", null);
     expect(
       [...row("Additional languages").querySelectorAll("option")].map((option) => option.value),
     ).toEqual([""]);

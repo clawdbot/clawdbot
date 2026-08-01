@@ -321,6 +321,22 @@ struct TalkGatewaySpeechClientTests {
         #expect(unavailableDirective.systemVoice == "tr-TR")
     }
 
+    @Test func `resolved speech languages thread an installed on-device voice identifier`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        let installed = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: nil,
+            voiceSelection: "com.apple.voice.enhanced.en-US.Samantha",
+            isVoiceInstalled: { $0 == "com.apple.voice.enhanced.en-US.Samantha" })
+        let uninstalled = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: nil,
+            voiceSelection: "com.apple.voice.deleted.voice",
+            isVoiceInstalled: { _ in false })
+
+        #expect(installed.systemVoiceIdentifier == "com.apple.voice.enhanced.en-US.Samantha")
+        #expect(uninstalled.systemVoiceIdentifier == nil)
+    }
+
     @Test func `explicit realtime config keeps realtime relay`() {
         let parsed = TalkModeGatewayConfigParser.parse(
             config: [

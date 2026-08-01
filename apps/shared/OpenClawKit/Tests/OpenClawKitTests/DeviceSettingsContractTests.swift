@@ -60,11 +60,13 @@ struct DeviceSettingsContractTests {
         let cookieSync = try #require(browser["cookieSync"] as? [String: Any])
         let voice = try #require(payload["voice"] as? [String: Any])
         let microphone = try #require(voice["microphone"] as? [String: Any])
+        let systemVoice = try #require(voice["systemVoice"] as? [String: Any])
         let updates = try #require(payload["updates"] as? [String: Any])
         #expect(device["profileName"] as? String == "fixture-profile")
         #expect(app["quickChatShortcut"] as? String == "⌥Space")
         #expect(cookieSync["detail"] as? String == "Sync 'fixture' \\\"quoted\\\"\nnext line")
         #expect(microphone["selectedId"] as? String == "fixture-mic")
+        #expect(systemVoice["selectedId"] as? String == "fixture-voice")
         #expect(updates["unavailableReason"] as? String == "Updates are unavailable for this fixture.")
     }
 
@@ -105,6 +107,9 @@ struct DeviceSettingsContractTests {
                 microphone: .init(
                     selectedId: withNullableValues ? "fixture-mic" : nil,
                     devices: [.init(id: "fixture-mic", name: "Fixture Microphone")]),
+                systemVoice: .init(
+                    selectedId: withNullableValues ? "fixture-voice" : nil,
+                    available: [.init(id: "fixture-voice", name: "Fixture Voice (Enhanced)")]),
                 locale: .init(
                     primary: "en-US", additional: ["de-DE"],
                     available: [.init(id: "en-US", name: "English (United States)")])),
@@ -131,7 +136,11 @@ struct DeviceSettingsContractTests {
                 ],
                 location: .init(mode: .whileUsing, precise: false, preciseEditable: false)),
             voice: .init(
-                supported: true, wakeEnabled: false, talkEnabled: true, talkButtonEnabled: true,
+                supported: true, wakeEnabled: false,
+                systemVoice: .init(
+                    selectedId: "fixture-ios-voice",
+                    available: [.init(id: "fixture-ios-voice", name: "Fixture iOS Voice (Enhanced)")]),
+                talkEnabled: true, talkButtonEnabled: true,
                 talkBackgroundEnabled: false, speakerphoneEnabled: true))
     }
 }

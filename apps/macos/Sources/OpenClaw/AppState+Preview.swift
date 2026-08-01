@@ -16,6 +16,7 @@ extension AppState {
         state.voiceWakeMicID = "BuiltInMic"
         state.voiceWakeMicName = "Built-in Microphone"
         state.voiceWakeLocaleID = Locale.current.identifier
+        state.talkSystemVoiceID = ""
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false

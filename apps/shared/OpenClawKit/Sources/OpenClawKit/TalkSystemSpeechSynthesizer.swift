@@ -33,6 +33,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     public func speak(
         text: String,
         language: String? = nil,
+        voiceIdentifier: String? = nil,
         onStart: (() -> Void)? = nil) async throws
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -46,14 +47,15 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.didStartCallback = onStart
 
         let utterance = AVSpeechUtterance(string: trimmed)
-        if let language, let voice = AVSpeechSynthesisVoice(language: language) {
-            utterance.voice = voice
+        let resolvedVoice = Self.resolveVoice(voiceIdentifier: voiceIdentifier, language: language)
+        if let resolvedVoice {
+            utterance.voice = resolvedVoice
         }
         self.currentUtterance = utterance
 
         let watchdogTimeout = Self.watchdogTimeoutSeconds(
             text: trimmed,
-            language: language ?? utterance.voice?.language)
+            language: resolvedVoice?.language ?? language)
         self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -86,6 +88,37 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         if self.currentToken != token {
             throw SpeakError.canceled
         }
+    }
+
+    /// A specific voice identifier (from a downloaded Enhanced/Premium voice, for example) must win
+    /// over a bare language match, since the language lookup only ever returns Apple's undocumented
+    /// per-language default voice, never the user's explicit pick. But a directive-resolved language
+    /// still owns cross-language replies: an explicit voice only applies when its primary language
+    /// subtag matches the resolved synthesis language, so a reply directed in another language does
+    /// not get spoken in a voice picked for a different one.
+    static func resolveVoice(
+        voiceIdentifier: String?,
+        language: String?,
+        voiceLookup: (String) -> AVSpeechSynthesisVoice? = AVSpeechSynthesisVoice.init(identifier:),
+        languageLookup: (String) -> AVSpeechSynthesisVoice? = AVSpeechSynthesisVoice.init(language:))
+        -> AVSpeechSynthesisVoice?
+    {
+        if let voiceIdentifier, let voice = voiceLookup(voiceIdentifier),
+           language == nil || sharesPrimaryLanguage(voice.language, language)
+        {
+            return voice
+        }
+        if let language, let voice = languageLookup(language) {
+            return voice
+        }
+        return nil
+    }
+
+    private static func sharesPrimaryLanguage(_ lhs: String, _ rhs: String?) -> Bool {
+        guard let rhs else { return true }
+        let lhsCode = Locale(identifier: lhs).language.languageCode?.identifier
+        let rhsCode = Locale(identifier: rhs).language.languageCode?.identifier
+        return lhsCode != nil && lhsCode == rhsCode
     }
 
     static func watchdogTimeoutSeconds(text: String, language: String?) -> Double {

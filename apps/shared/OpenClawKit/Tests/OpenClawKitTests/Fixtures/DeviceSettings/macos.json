@@ -35,6 +35,9 @@
     "talkPhaseSoundsEnabled": true, "talkShiftToStopEnabled": false, "realtimeRelayEnabled": true,
     "triggerChime": false, "sendChime": true,
     "microphone": {"selectedId": null, "devices": [{"id": "fixture-mic", "name": "Fixture Microphone"}]},
+    "systemVoice": {
+      "selectedId": null, "available": [{"id": "fixture-voice", "name": "Fixture Voice (Enhanced)"}]
+    },
     "locale": {
       "primary": "en-US", "additional": ["de-DE"], "available": [{"id": "en-US", "name": "English (United States)"}]
     }

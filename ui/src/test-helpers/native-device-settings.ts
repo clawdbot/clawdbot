@@ -77,6 +77,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
       triggerChime: true,
       sendChime: true,
       microphone: { selectedId: null, devices: [{ id: "builtin", name: "Built-in Microphone" }] },
+      systemVoice: { selectedId: null, available: [{ id: "voice-1", name: "Voice One" }] },
       locale: {
         primary: "en-US",
         additional: [],

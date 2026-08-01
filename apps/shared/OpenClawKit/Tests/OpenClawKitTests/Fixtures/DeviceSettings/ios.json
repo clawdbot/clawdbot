@@ -13,5 +13,12 @@
     ],
     "location": {"mode": "whileUsing", "precise": false, "preciseEditable": false}
   },
-  "voice": {"supported": true, "wakeEnabled": false, "talkEnabled": true, "talkButtonEnabled": true, "talkBackgroundEnabled": false, "speakerphoneEnabled": true}
+  "voice": {
+    "supported": true, "wakeEnabled": false,
+    "systemVoice": {
+      "selectedId": "fixture-ios-voice",
+      "available": [{"id": "fixture-ios-voice", "name": "Fixture iOS Voice (Enhanced)"}]
+    },
+    "talkEnabled": true, "talkButtonEnabled": true, "talkBackgroundEnabled": false, "speakerphoneEnabled": true
+  }
 }

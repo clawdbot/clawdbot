@@ -28,6 +28,7 @@ let voiceWakeMaxWordLength = 64
 let voiceWakeMicKey = "openclaw.voiceWakeMicID"
 let voiceWakeMicNameKey = "openclaw.voiceWakeMicName"
 let voiceWakeLocaleKey = "openclaw.voiceWakeLocaleID"
+let talkSystemVoiceIDKey = "openclaw.talkSystemVoiceID"
 let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
 let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"

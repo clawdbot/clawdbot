@@ -17,6 +17,14 @@ enum VoiceWakeDeviceOptions {
         return devices.map { DeviceSettingsSnapshot.Option(id: $0.uniqueID, name: $0.localizedName) }
     }
 
+    /// Filtered by the recognition language so the picker never offers a voice the synthesizer
+    /// would refuse; `AppState.resolvedSystemVoiceID` clears a stored pick against this same list.
+    static func systemVoices(languageID: String) -> [DeviceSettingsSnapshot.Option] {
+        TalkSystemVoiceCatalog
+            .voices(matchingLanguageID: languageID, in: TalkSystemVoiceCatalog.availableVoices())
+            .map { DeviceSettingsSnapshot.Option(id: $0.id, name: TalkSystemVoiceCatalog.label(for: $0)) }
+    }
+
     static func localeSettings(
         primary: String,
         additional: [String],

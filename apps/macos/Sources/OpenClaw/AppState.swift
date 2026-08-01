@@ -192,6 +192,10 @@ final class AppState {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
             }
+            // The voice picker filters by this same locale; self-heal a now-mismatched pick.
+            self.talkSystemVoiceID = Self.resolvedSystemVoiceID(
+                self.talkSystemVoiceID,
+                matchingLanguageID: self.voiceWakeLocaleID)
         }
     }
 
@@ -199,6 +203,11 @@ final class AppState {
         didSet { self.ifNotPreview { AppDefaults.standard.set(
             self.voiceWakeAdditionalLocaleIDs,
             forKey: voiceWakeAdditionalLocalesKey) } }
+    }
+
+    /// Empty string means System Default: keep today's language-only on-device TTS fallback.
+    var talkSystemVoiceID: String {
+        didSet { self.ifNotPreview { AppDefaults.standard.set(self.talkSystemVoiceID, forKey: talkSystemVoiceIDKey) } }
     }
 
     var voicePushToTalkEnabled: Bool {
@@ -476,21 +485,16 @@ final class AppState {
         self.voiceWakeSendChime = Self.loadChime(
             key: voiceWakeSendChimeKey,
             fallback: .system(name: "Glass"))
-        if let storedIconAnimations = AppDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
-            self.iconAnimationsEnabled = storedIconAnimations
-        } else {
-            self.iconAnimationsEnabled = true
-            AppDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
-        }
-        if let storedShowDockIcon = AppDefaults.standard.object(forKey: showDockIconKey) as? Bool {
-            self.showDockIcon = storedShowDockIcon
-        } else {
-            self.showDockIcon = true
-            AppDefaults.standard.set(true, forKey: showDockIconKey)
-        }
+        self.iconAnimationsEnabled = Self.loadDefaultingToTrue(key: iconAnimationsEnabledKey)
+        self.showDockIcon = Self.loadDefaultingToTrue(key: showDockIconKey)
         self.voiceWakeMicID = AppDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = AppDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
-        self.voiceWakeLocaleID = AppDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
+        let voiceWakeLocaleID = AppDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
+        self.voiceWakeLocaleID = voiceWakeLocaleID
+        // A prior-session voice may predate a locale change made while the app wasn't running.
+        self.talkSystemVoiceID = Self.resolvedSystemVoiceID(
+            AppDefaults.standard.string(forKey: talkSystemVoiceIDKey) ?? "",
+            matchingLanguageID: voiceWakeLocaleID)
         self.voiceWakeAdditionalLocaleIDs = AppDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voicePushToTalkEnabled = AppDefaults.standard

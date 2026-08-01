@@ -1392,6 +1392,14 @@ final class NodeAppModel {
         }
     }
 
+    /// Stores the resolved identifier only; an uninstalled pick clears back to System Default so a
+    /// stale identifier never survives a voice the user deleted. No session restart is needed
+    /// because `resolvedSpeechLanguages` rereads this key for every utterance.
+    func setTalkSystemVoiceSelection(_ rawValue: String) {
+        let voice = TalkSystemVoiceSelection.resolvedOverride(rawValue) ?? ""
+        UserDefaults.standard.set(voice, forKey: TalkSystemVoiceSelection.storageKey)
+    }
+
     private func requestTalkPermissionUpgrade() {
         if self.forceOperatorTalkPermissionUpgradeRequest {
             guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }

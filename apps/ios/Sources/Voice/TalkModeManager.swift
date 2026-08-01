@@ -76,6 +76,9 @@ private struct TalkSpeechLanguageSelection: Equatable {
     /// voice accepts a BCP 47 locale. Keep both forms so fallback stays correct.
     let provider: String?
     let systemVoice: String?
+    /// An explicit on-device voice pick, when installed. Wins over `systemVoice`'s
+    /// language-only lookup so a downloaded Enhanced/Premium voice actually gets used.
+    let systemVoiceIdentifier: String?
 }
 
 @MainActor
@@ -298,7 +301,9 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
-    private var gatewaySpeechLocaleID: String?
+    /// Read by the device-settings snapshot so the on-device voice list is filtered by the same
+    /// gateway-configured language synthesis resolves against; only this manager may write it.
+    private(set) var gatewaySpeechLocaleID: String?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
@@ -332,7 +337,8 @@ final class TalkModeManager: NSObject {
     private var incrementalSpeechUsed = false
     private var incrementalSpeechLanguages = TalkSpeechLanguageSelection(
         provider: nil,
-        systemVoice: nil)
+        systemVoice: nil,
+        systemVoiceIdentifier: nil)
     private var incrementalSpeechBuffer = IncrementalSpeechBuffer()
     private var incrementalSpeechContext: IncrementalSpeechContext?
     private var incrementalSpeechDirective: TalkDirective?
@@ -2902,7 +2908,7 @@ final class TalkModeManager: NSObject {
                 self.logger.error("gateway TTS failed: \(errorMessage, privacy: .public); falling back to system voice")
                 GatewayDiagnostics.log("talk tts: provider=system (gateway error) msg=\(error.localizedDescription)")
                 do {
-                    try await self.playSystemVoice(text: cleaned, language: languages.systemVoice)
+                    try await self.playSystemVoiceFallback(text: cleaned, languages: languages)
                 } catch {
                     guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
                     let status = String(
@@ -2999,7 +3005,7 @@ final class TalkModeManager: NSObject {
             } else {
                 self.logger.warning("tts unavailable; falling back to system voice (missing key or voiceId)")
                 GatewayDiagnostics.log("talk tts: provider=system (missing key or voiceId)")
-                try await self.playSystemVoice(text: cleaned, language: languages.systemVoice)
+                try await self.playSystemVoiceFallback(text: cleaned, languages: languages)
             }
         } catch {
             guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
@@ -3007,7 +3013,7 @@ final class TalkModeManager: NSObject {
                 "tts failed: \(error.localizedDescription, privacy: .public); falling back to system voice")
             GatewayDiagnostics.log("talk tts: provider=system (error) msg=\(error.localizedDescription)")
             do {
-                try await self.playSystemVoice(text: cleaned, language: languages.systemVoice)
+                try await self.playSystemVoiceFallback(text: cleaned, languages: languages)
             } catch {
                 guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
                 let status = String(
@@ -3020,6 +3026,13 @@ final class TalkModeManager: NSObject {
                 self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    private func playSystemVoiceFallback(text: String, languages: TalkSpeechLanguageSelection) async throws {
+        try await self.playSystemVoice(
+            text: text,
+            language: languages.systemVoice,
+            voiceIdentifier: languages.systemVoiceIdentifier)
     }
 
     private func playGatewayTalkSpeak(
@@ -3101,22 +3114,28 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func playSystemVoice(text: String, language: String?) async throws {
+    private func playSystemVoice(text: String, language: String?, voiceIdentifier: String?) async throws {
+        let voiceLabel = voiceIdentifier.flatMap { TalkSystemVoiceSelection.label(for: $0) }
         applyVoiceModeDescriptor(TalkVoiceModeDescriptorBuilder.build(
             providerId: "system",
             providerLabel: Self.displayName(forProvider: "system"),
             modelId: nil,
-            voiceId: language,
+            voiceId: voiceLabel ?? language,
             transport: "native",
             isRealtime: false))
         self.startSpeechInterruptionRecognitionIfNeeded()
         self.setStatus(String(localized: "Speaking (System)…"), phase: .speaking)
-        try await TalkSystemSpeechSynthesizer.shared.speak(text: text, language: language)
+        try await TalkSystemSpeechSynthesizer.shared.speak(
+            text: text,
+            language: language,
+            voiceIdentifier: voiceIdentifier)
     }
 
     private func resolvedSpeechLanguages(
         directiveLanguage: String?,
-        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
+        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable,
+        voiceSelection: String? = UserDefaults.standard.string(forKey: TalkSystemVoiceSelection.storageKey),
+        isVoiceInstalled: (String) -> Bool = TalkSystemVoiceSelection.isInstalled)
         -> TalkSpeechLanguageSelection
     {
         TalkSpeechLanguageSelection(
@@ -3124,7 +3143,10 @@ final class TalkModeManager: NSObject {
             systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
                 directiveLanguage: directiveLanguage,
                 gatewaySelection: self.gatewaySpeechLocaleID,
-                isVoiceAvailable: isSystemVoiceAvailable))
+                isVoiceAvailable: isSystemVoiceAvailable),
+            systemVoiceIdentifier: TalkSystemVoiceSelection.resolvedOverride(
+                voiceSelection,
+                isVoiceInstalled: isVoiceInstalled))
     }
 
     private func resolvedElevenLabsAPIKey() -> String? {
@@ -3718,7 +3740,8 @@ final class TalkModeManager: NSObject {
             guard let resolvedContext = incrementalSpeechContext else {
                 try? await TalkSystemSpeechSynthesizer.shared.speak(
                     text: text,
-                    language: self.incrementalSpeechLanguages.systemVoice)
+                    language: self.incrementalSpeechLanguages.systemVoice,
+                    voiceIdentifier: self.incrementalSpeechLanguages.systemVoiceIdentifier)
                 return
             }
             context = resolvedContext
@@ -3728,7 +3751,8 @@ final class TalkModeManager: NSObject {
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {
             try? await TalkSystemSpeechSynthesizer.shared.speak(
                 text: text,
-                language: self.incrementalSpeechLanguages.systemVoice)
+                language: self.incrementalSpeechLanguages.systemVoice,
+                voiceIdentifier: self.incrementalSpeechLanguages.systemVoiceIdentifier)
             return
         }
 
@@ -4878,13 +4902,17 @@ extension TalkModeManager {
 
     func _test_resolvedSpeechLanguages(
         directiveLanguage: String?,
-        isSystemVoiceAvailable: (String) -> Bool = { _ in true })
-        -> (provider: String?, systemVoice: String?)
+        isSystemVoiceAvailable: (String) -> Bool = { _ in true },
+        voiceSelection: String? = nil,
+        isVoiceInstalled: (String) -> Bool = { _ in true })
+        -> (provider: String?, systemVoice: String?, systemVoiceIdentifier: String?)
     {
         let selection = self.resolvedSpeechLanguages(
             directiveLanguage: directiveLanguage,
-            isSystemVoiceAvailable: isSystemVoiceAvailable)
-        return (selection.provider, selection.systemVoice)
+            isSystemVoiceAvailable: isSystemVoiceAvailable,
+            voiceSelection: voiceSelection,
+            isVoiceInstalled: isVoiceInstalled)
+        return (selection.provider, selection.systemVoice, selection.systemVoiceIdentifier)
     }
 
     func _test_stopSpeaking(storeInterruption: Bool = true) {
