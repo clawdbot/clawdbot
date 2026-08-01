@@ -4,6 +4,9 @@ import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
+type ExternalCliProfilesResolver =
+  typeof import("../../agents/auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
+
 type PluginSnapshotResult = {
   source: "persisted" | "provided" | "derived";
   snapshot: {
@@ -21,6 +24,9 @@ const pluginRegistryMocks = vi.hoisted(() => ({
     }),
   ),
 }));
+const externalCliMocks = vi.hoisted(() => ({
+  resolveExternalCliAuthProfiles: vi.fn<ExternalCliProfilesResolver>(() => []),
+}));
 
 vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
@@ -30,6 +36,10 @@ vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
       pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
   };
 });
+
+vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: externalCliMocks.resolveExternalCliAuthProfiles,
+}));
 
 const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
 
@@ -56,12 +66,60 @@ const dualRouteResolverFactory = (() => () => ({
 
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
+    externalCliMocks.resolveExternalCliAuthProfiles.mockReset();
+    externalCliMocks.resolveExternalCliAuthProfiles.mockReturnValue([]);
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "persisted",
       snapshot: { plugins: [] },
       diagnostics: [],
     });
+  });
+
+  it("keeps a fresh auth scope empty", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual([]);
+  });
+
+  it("scopes provider discovery to concrete API-key evidence", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual(["anthropic", "anthropic-openai"]);
+  });
+
+  it("scopes provider discovery to external CLI credentials", () => {
+    externalCliMocks.resolveExternalCliAuthProfiles.mockReturnValue([
+      {
+        profileId: "openai:codex-cli",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "external-cli",
+          refresh: "external-cli-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    ]);
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      externalCliProviderIds: ["openai"],
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual(["openai"]);
   });
 
   it("forwards route-aware evaluation through the command adapter", () => {
@@ -142,6 +200,37 @@ describe("createModelListAuthIndex", () => {
     });
     expect(index.evaluateModelAuth("disabled-provider").availability).toBeUndefined();
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it("maps synthetic auth refs to their configured plugin catalog providers", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      registryDiagnostics: [],
+      plugins: [],
+      index: {
+        plugins: [
+          {
+            pluginId: "local-runtime",
+            enabled: true,
+            syntheticAuthRefs: ["local-cli"],
+            contributions: {
+              providers: ["local-runtime"],
+              modelCatalogProviders: ["local-catalog"],
+            },
+          },
+        ],
+      },
+    } as unknown as PluginMetadataSnapshot;
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      syntheticAuthProviderRefs: ["local-cli"],
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual(["local-catalog", "local-runtime"]);
   });
 
   it.each(["derived" as const, "persisted" as const])(

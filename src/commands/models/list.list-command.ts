@@ -119,6 +119,12 @@ export async function modelsListCommand(
   // The default configured view remains lazy; full and filtered views share
   // the registry and the same committed model generation as the Gateway.
   const includePreparedCatalog = Boolean(opts.all || providerFilter);
+  const providerDiscoveryProviderIds =
+    opts.all && !providerFilter
+      ? undefined
+      : providerFilter
+        ? [providerFilter]
+        : authIndex.providerDiscoveryProviderIds;
   const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -163,6 +169,7 @@ export async function modelsListCommand(
     agentId,
     agentDir,
     authIndex,
+    providerDiscoveryProviderIds,
     availableKeys,
     configuredByKey,
     discoveredKeys,

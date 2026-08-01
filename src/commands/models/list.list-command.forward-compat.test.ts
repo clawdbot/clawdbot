@@ -1144,6 +1144,11 @@ describe("modelsListCommand forward-compat", () => {
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
       expect(mocks.loadModelCatalog).toHaveBeenCalledOnce();
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          providerDiscoveryProviderIds: expect.anything(),
+        }),
+      );
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "moonshot/kimi-k2.6"]);
     });
 
@@ -1164,6 +1169,11 @@ describe("modelsListCommand forward-compat", () => {
       expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadModelCatalog).toHaveBeenCalledOnce();
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerDiscoveryProviderIds: ["openai"],
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["openai/gpt-5.4"]);
       expectRowFields(rows, "openai/gpt-5.4", { available: true });

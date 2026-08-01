@@ -50,6 +50,7 @@ export type RowBuilderContext = {
   agentId?: string;
   agentDir: string;
   authIndex: ModelListAuthIndex;
+  providerDiscoveryProviderIds?: readonly string[];
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
@@ -462,6 +463,9 @@ export async function loadListModelCatalogSnapshot(
     ...(context.agentId ? { agentId: context.agentId } : {}),
     agentDir: context.agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(context.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: context.providerDiscoveryProviderIds }
+      : {}),
     readOnly: true,
   });
 }

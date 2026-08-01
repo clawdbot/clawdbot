@@ -248,7 +248,10 @@ describe("appendPreparedModelCatalogRows", () => {
         agentId: "worker",
         agentDir: "/tmp/openclaw-worker",
         workspaceDir: "/tmp/openclaw-workspace",
-        authIndex: { evaluateModelAuth: () => authEvaluation(true) },
+        providerDiscoveryProviderIds: ["anthropic"],
+        authIndex: {
+          evaluateModelAuth: () => authEvaluation(true),
+        },
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "anthropic" },
@@ -262,6 +265,7 @@ describe("appendPreparedModelCatalogRows", () => {
       agentId: "worker",
       agentDir: "/tmp/openclaw-worker",
       workspaceDir: "/tmp/openclaw-workspace",
+      providerDiscoveryProviderIds: ["anthropic"],
       readOnly: true,
     });
   });
@@ -907,6 +911,7 @@ describe("appendAuthenticatedCatalogRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
+        providerDiscoveryProviderIds: ["local-openai"],
         authIndex: {
           evaluateModelAuth: () => ({
             availability: undefined,
@@ -930,6 +935,7 @@ describe("appendAuthenticatedCatalogRows", () => {
       config: {},
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
+      providerDiscoveryProviderIds: ["local-openai"],
       readOnly: true,
     });
   });

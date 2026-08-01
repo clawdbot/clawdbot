@@ -13,6 +13,10 @@ import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owne
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
 import {
+  isPreparedModelCatalogFull,
+  prepareScopedReadOnlyModelCatalog,
+} from "./prepared-model-runtime.facts.js";
+import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
@@ -31,6 +35,7 @@ export type LoadPreparedModelCatalogParams = {
   readOnly?: boolean;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerDiscoveryProviderIds?: readonly string[];
 };
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
@@ -231,6 +236,33 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   );
 }
 
+async function loadScopedReadOnlyModelCatalog(
+  params: LoadPreparedModelCatalogParams,
+): Promise<ModelCatalogSnapshot> {
+  const { activationExact, activationFull, full } = resolveInputs(params);
+  const fullCandidates =
+    activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
+  for (const candidate of fullCandidates) {
+    try {
+      const prepared = await prepareModelRuntimeSnapshot(candidate);
+      if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
+        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+      }
+      if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
+        return prepared.modelCatalog;
+      }
+    } catch (error) {
+      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+        throw error;
+      }
+    }
+  }
+  return prepareScopedReadOnlyModelCatalog(
+    activationExact,
+    params.providerDiscoveryProviderIds ?? [],
+  );
+}
+
 /** Resolves the lifecycle owner for an exact caller-supplied config. */
 export async function loadPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
@@ -258,6 +290,9 @@ export async function loadResolvedPublishedModelCatalogOwner(
 export async function loadPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogSnapshot> {
+  if (params.readOnly && params.providerDiscoveryProviderIds) {
+    return loadScopedReadOnlyModelCatalog(params);
+  }
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
 

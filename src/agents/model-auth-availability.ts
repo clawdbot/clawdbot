@@ -33,7 +33,10 @@ import {
 } from "./auth-profiles/read-only-availability.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
-import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
 import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
@@ -88,6 +91,7 @@ export type ModelAuthAvailabilityEvaluation = {
   evidence?: ModelAuthAvailabilityEvidence;
 };
 export type ModelAuthAvailabilityResolver = {
+  providerDiscoveryProviderIds: readonly string[];
   evaluateModelAuth(
     provider: string,
     ref?: ModelAuthAvailabilityRef,
@@ -1005,7 +1009,50 @@ export function createModelAuthAvailabilityResolver(
       selectedRoute,
     };
   };
+  const providerDiscoveryProviderIds = new Set<string>();
+  const addProviderDiscoveryProviderId = (provider: string | undefined) => {
+    if (!provider) {
+      return;
+    }
+    const normalized = normalizeProvider(provider);
+    if (normalized) {
+      providerDiscoveryProviderIds.add(normalized);
+    }
+  };
+  for (const credential of Object.values(store.profiles)) {
+    addProviderDiscoveryProviderId(credential.provider);
+  }
+  for (const profile of Object.values(params.cfg.auth?.profiles ?? {})) {
+    addProviderDiscoveryProviderId(profile.provider);
+  }
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (envAuth(provider)) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  for (const plugin of params.metadataSnapshot?.index?.plugins ?? []) {
+    if (
+      !plugin.enabled ||
+      !(plugin.syntheticAuthRefs ?? []).some((ref) =>
+        synthetic.has(normalizeProviderIdForAuth(ref)),
+      )
+    ) {
+      continue;
+    }
+    for (const provider of [
+      ...(plugin.contributions?.providers ?? []),
+      ...(plugin.contributions?.modelCatalogProviders ?? []),
+    ]) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  if (synthetic.has("codex")) {
+    addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
+  }
   return {
+    providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     evaluateModelAuth,
     resolveProviderAuthAvailability,
     hasSyntheticAuth: (provider) =>

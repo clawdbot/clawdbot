@@ -14,6 +14,7 @@ export type ModelListAuthRef = ModelAuthAvailabilityRef;
 export type ModelListAuthEvaluation = ModelAuthAvailabilityEvaluation;
 
 export type ModelListAuthIndex = {
+  providerDiscoveryProviderIds?: readonly string[];
   evaluateModelAuth(provider: string, ref?: ModelListAuthRef): ModelListAuthEvaluation;
 };
 
@@ -87,6 +88,7 @@ export function createModelListAuthIndex(
       }),
   });
   return {
+    providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
     evaluateModelAuth: (provider, ref) => resolver.evaluateModelAuth(provider, ref),
   };
 }
