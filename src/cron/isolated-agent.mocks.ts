@@ -58,6 +58,10 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
+}));
+
 vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
