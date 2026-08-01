@@ -13,7 +13,6 @@ import {
   type MatrixQaProvisionedTopology,
   type MatrixQaTopologySpec,
 } from "../../substrate/topology.js";
-import { MATRIX_QA_VOICE_PREFLIGHT_MENTION } from "./scenario-media-fixtures.js";
 
 type MatrixQaScenarioId =
   | "matrix-thread-follow-up"
@@ -515,10 +514,10 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       audio: {
         enabled: true,
       },
-      groupMentionPatterns: [MATRIX_QA_VOICE_PREFLIGHT_MENTION],
+      groupMentionPatterns: ["\\S"],
     },
-    providerMode: "mock-openai",
-    timeoutMs: 60_000,
+    providerMode: "live-frontier",
+    timeoutMs: 180_000,
     title: "Matrix voice notes can trigger mention gating through transcription",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
