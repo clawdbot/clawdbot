@@ -322,6 +322,7 @@ describe("Engine contract tests", () => {
 
     const result = await delegateCompactionToRuntime({
       sessionId: "s-usage",
+      sessionKey: "agent:main:s-usage",
       tokenBudget: 4096,
     });
 
