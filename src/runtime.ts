@@ -1,6 +1,7 @@
 // Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
+import { loggingState } from "./logging/state.js";
 
 export type RuntimeExitOptions = {
   /** Route ANSI terminal-reset bytes away from structured stdout when needed. */
@@ -96,12 +97,25 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
   };
 }
 
+/** Keep terminal reset bytes off stdout when the invocation owns machine-readable output. */
+export function restoreRuntimeTerminalState(
+  reason?: string,
+  options: NonNullable<Parameters<typeof restoreTerminalState>[1]> = {},
+): void {
+  const resetStream =
+    options.resetStream ?? (loggingState.forceConsoleToStderr ? process.stderr : undefined);
+  restoreTerminalState(reason, {
+    ...options,
+    ...(resetStream ? { resetStream } : {}),
+  });
+}
+
 export const defaultRuntime: OutputRuntimeEnv = {
   ...createRuntimeIo(),
   exit: (code, opts) => {
-    restoreTerminalState("runtime exit", {
+    restoreRuntimeTerminalState("runtime exit", {
       resumeStdinIfPaused: false,
-      resetStream: opts?.resetStream,
+      ...(opts?.resetStream ? { resetStream: opts.resetStream } : {}),
     });
     process.exit(code);
     throw new Error("unreachable"); // satisfies tests when mocked
