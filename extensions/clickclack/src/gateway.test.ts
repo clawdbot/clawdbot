@@ -26,9 +26,7 @@ const mocks = vi.hoisted(() => ({
     events: vi.fn(),
     eventPage: vi.fn(),
     websocket: vi.fn(),
-    channelMessages: vi.fn(),
-    directMessages: vi.fn(),
-    thread: vi.fn(),
+    message: vi.fn(),
     setBotCommands: vi.fn(),
   },
   handleClickClackInbound: vi.fn(),
@@ -139,26 +137,24 @@ describe("ClickClack gateway", () => {
       commandAuthorized: true,
     });
     mocks.resolveWorkspaceId.mockResolvedValue("workspace-1");
-    mocks.client.channelMessages.mockResolvedValue([
-      {
-        id: "msg-1",
-        workspace_id: "workspace-1",
-        channel_id: "chan-1",
-        author_id: "human-1",
-        thread_root_id: "msg-1",
-        body: "hello",
-        body_format: "markdown",
+    mocks.client.message.mockResolvedValue({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "human-1",
+      thread_root_id: "msg-1",
+      body: "hello",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "human-1",
+        kind: "human",
+        display_name: "Human",
+        handle: "human",
+        avatar_url: "",
         created_at: "2026-01-01T00:00:00.000Z",
-        author: {
-          id: "human-1",
-          kind: "human",
-          display_name: "Human",
-          handle: "human",
-          avatar_url: "",
-          created_at: "2026-01-01T00:00:00.000Z",
-        },
       },
-    ]);
+    });
   });
 
   it("uses the private API base for REST and realtime startup", async () => {
@@ -523,7 +519,7 @@ describe("ClickClack gateway", () => {
       token: "test-token",
       correlationId: "fakeco.case_1",
     });
-    expect(mocks.client.channelMessages).toHaveBeenCalledWith("chan-1", 1, 10);
+    expect(mocks.client.message).toHaveBeenCalledWith("msg-1");
     expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
       expect.objectContaining({ correlationId: "fakeco.case_1" }),
     );
