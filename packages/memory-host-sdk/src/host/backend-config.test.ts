@@ -645,6 +645,26 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).searchMode).toBe("vsearch");
   });
 
+  it("resolves qmd backend fallback policy", () => {
+    const defaultResolved = resolveMemoryBackendConfig({
+      cfg: {
+        agents: { defaults: { workspace: "/tmp/memory-test" } },
+        memory: { backend: "qmd" },
+      },
+      agentId: "main",
+    });
+    const disabledResolved = resolveMemoryBackendConfig({
+      cfg: {
+        agents: { defaults: { workspace: "/tmp/memory-test" } },
+        memory: { backend: "qmd", qmd: { fallback: "none" } },
+      },
+      agentId: "main",
+    });
+
+    expect(requireQmdConfig(defaultResolved).fallback).toBe("builtin");
+    expect(requireQmdConfig(disabledResolved).fallback).toBe("none");
+  });
+
   it("resolves qmd rerank override", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

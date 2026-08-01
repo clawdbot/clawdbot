@@ -256,6 +256,7 @@ export type RegisteredMemorySearchManager = MemorySearchManager;
 
 type MemoryRuntimeQmdConfig = {
   command?: string;
+  fallback?: "builtin" | "none";
 };
 
 type MemoryRuntimeBackendConfig =

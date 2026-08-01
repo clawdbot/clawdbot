@@ -181,6 +181,16 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts qmd backend fallback policy", () => {
+    const result = OpenClawSchema.safeParse({
+      memory: {
+        backend: "qmd",
+        qmd: { fallback: "none" },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects retired status reaction emoji overrides", () => {
     const result = OpenClawSchema.safeParse({
       messages: {

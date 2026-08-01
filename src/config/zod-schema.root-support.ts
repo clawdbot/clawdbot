@@ -127,6 +127,7 @@ export const LoggingLevelSchema = z.union([
 
 const MemoryQmdSchema = z.strictObject({
   command: z.string().optional(),
+  fallback: z.union([z.literal("builtin"), z.literal("none")]).optional(),
   searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
   rerank: z.boolean().optional(),
   searchTool: z.string().trim().min(1).optional(),

@@ -576,6 +576,23 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("returns the qmd startup failure when builtin fallback is disabled", async () => {
+    const agentId = "missing-qmd-fallback-disabled";
+    const cfg = createQmdCfg(agentId, "/tmp/workspace", { fallback: "none" });
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      reason: "binary",
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toBe("qmd binary unavailable (qmd): spawn qmd ENOENT");
+    expect(result.debug?.managerCacheState).toBe("qmd-unavailable");
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
   it("returns the qmd startup failure when builtin fallback is unavailable", async () => {
     const cfg = createQmdCfg("missing-qmd-no-builtin");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
@@ -1242,6 +1259,18 @@ describe("getMemorySearchManager caching", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.path).toBe("MEMORY.md");
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not initialize builtin search when qmd fallback is disabled", async () => {
+    const agentId = "qmd-fallback-disabled";
+    const cfg = createQmdCfg(agentId, "/tmp/workspace", { fallback: "none" });
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+
+    await expect(manager.search("hello")).rejects.toThrow("qmd query failed");
+    await expect(manager.readFile({ relPath: "MEMORY.md" })).rejects.toThrow("qmd query failed");
+    expect(manager.status().backend).toBe("qmd");
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
   });
 
   it("falls back to builtin when curated project listing fails", async () => {

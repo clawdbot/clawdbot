@@ -469,6 +469,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
   "memory.qmd.command": "QMD Binary",
+  "memory.qmd.fallback": "QMD Backend Fallback",
   "memory.qmd.searchMode": "QMD Search Mode",
   "memory.qmd.rerank": "QMD Rerank",
   "memory.qmd.searchTool": "QMD Search Tool Override",

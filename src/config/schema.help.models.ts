@@ -265,6 +265,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
   "memory.qmd.command":
     "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
+  "memory.qmd.fallback":
+    'Selects the backend used when QMD is unavailable: "builtin" preserves automatic fallback, while "none" fails closed without starting a second index. Keep "builtin" unless QMD must remain the sole memory source.',
   "memory.qmd.searchMode":
     'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
   "memory.qmd.rerank":

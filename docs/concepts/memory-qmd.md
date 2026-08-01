@@ -17,8 +17,8 @@ binary, and can index content beyond your workspace memory files.
 - **Index session transcripts** - recall earlier conversations.
 - **Fully local** - runs with the official llama.cpp provider plugin and
   auto-downloads GGUF models.
-- **Automatic fallback** - if QMD is unavailable, OpenClaw falls back to the
-  builtin engine seamlessly.
+- **Configurable fallback** - if QMD is unavailable, OpenClaw falls back to the
+  builtin engine by default, or can fail closed without starting a second index.
 
 ## Getting started
 
@@ -86,6 +86,10 @@ present.
   missing binary or broken sidecar dependency does not create a retry storm;
   `openclaw memory status` and one-shot CLI probes still recheck QMD
   directly.
+- Set `memory.qmd.fallback` to `"none"` when QMD must remain canonical. QMD
+  startup and runtime failures then surface directly instead of constructing
+  the builtin SQLite index. The default is `"builtin"` for backward
+  compatibility.
 
 <Info>
 The first search may be slow - QMD auto-downloads GGUF models (~2 GB) for
