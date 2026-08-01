@@ -57,6 +57,15 @@ export async function runDoctorLintChecks(
         message: `Unknown health check id selected by --only: ${id}.`,
         path: id,
       });
+      continue;
+    }
+    if (skip.has(id)) {
+      findings.push({
+        checkId: "core/doctor/lint-selection",
+        severity: "error",
+        message: `Health check id cannot be selected by --only and excluded by --skip: ${id}.`,
+        path: id,
+      });
     }
   }
   for (const check of selected) {

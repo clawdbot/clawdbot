@@ -174,6 +174,43 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("rejects a requested health check that --skip also excludes", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+
+    const checkId = "core/doctor/final-config-validation";
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin: "error",
+        onlyIds: [checkId],
+        skipIds: [checkId],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 0,
+        findings: [
+          {
+            checkId: "core/doctor/lint-selection",
+            severity: "error",
+            message: `Health check id cannot be selected by --only and excluded by --skip: ${checkId}.`,
+            path: checkId,
+          },
+        ],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("reports disabled Codex plugin routes through doctor lint", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,

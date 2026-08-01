@@ -1,5 +1,5 @@
 // Doctor lint flow tests cover lint diagnostics surfaced by doctor.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { RunnableHealthCheck } from "./health-check-runner-types.js";
@@ -32,11 +32,86 @@ describe("runDoctorLintChecks", () => {
         check("b", async () => [{ checkId: "b", severity: "error", message: "err" }]),
       ],
       onlyIds: ["a"],
+      skipIds: ["b"],
     });
 
     expect(result.checksRun).toBe(1);
     expect(result.checksSkipped).toBe(1);
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
+  });
+
+  it.each([
+    ["array", ["critical", "critical"], ["critical"]],
+    ["set", new Set(["critical"]), new Set(["critical"])],
+  ] as const)("rejects contradictory %s check selectors", async (_kind, onlyIds, skipIds) => {
+    const detect = vi.fn(async () => []);
+
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [check("critical", detect)],
+      onlyIds,
+      skipIds,
+    });
+
+    expect(detect).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      checksRun: 0,
+      checksSkipped: 1,
+      findings: [
+        {
+          checkId: "core/doctor/lint-selection",
+          severity: "error",
+          message: "Health check id cannot be selected by --only and excluded by --skip: critical.",
+          path: "critical",
+        },
+      ],
+    });
+    expect(exitCodeFromFindings(result.findings, "error")).toBe(1);
+  });
+
+  it("runs other explicitly selected checks when one selector conflicts", async () => {
+    const skippedDetect = vi.fn(async () => []);
+    const selectedDetect = vi.fn(async () => [
+      { checkId: "selected", severity: "warning" as const, message: "still runs" },
+    ]);
+
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [check("skipped", skippedDetect), check("selected", selectedDetect)],
+      onlyIds: ["skipped", "selected"],
+      skipIds: ["skipped"],
+    });
+
+    expect(skippedDetect).not.toHaveBeenCalled();
+    expect(selectedDetect).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      checksRun: 1,
+      checksSkipped: 1,
+      findings: [
+        {
+          checkId: "core/doctor/lint-selection",
+          severity: "error",
+          message: "Health check id cannot be selected by --only and excluded by --skip: skipped.",
+          path: "skipped",
+        },
+        { checkId: "selected", severity: "warning", message: "still runs" },
+      ],
+    });
+  });
+
+  it("keeps an unknown selected check as one unknown-id finding when it is also skipped", async () => {
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [],
+      onlyIds: ["missing"],
+      skipIds: ["missing"],
+    });
+
+    expect(result.findings).toEqual([
+      {
+        checkId: "core/doctor/lint-selection",
+        severity: "error",
+        message: "Unknown health check id selected by --only: missing.",
+        path: "missing",
+      },
+    ]);
   });
 
   it("skips default-disabled checks unless explicitly selected", async () => {
