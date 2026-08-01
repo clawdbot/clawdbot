@@ -116,6 +116,29 @@ function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): st
     : undefined;
 }
 
+type CliNonReplayableReason = NonNullable<CliOutput["nonReplayableReason"]>;
+
+function formatCliNonReplayableTurnError(reason: CliNonReplayableReason): string {
+  if (reason === "cancelled" || reason === "aborted") {
+    return "Claude CLI cancelled the turn before producing an assistant response. Review any possible tool effects before retrying manually.";
+  }
+  if (reason === "failed") {
+    return "Claude CLI failed the turn before producing an assistant response. Review any possible tool effects before retrying manually.";
+  }
+  if (reason === "captured_tool_activity") {
+    return "Claude CLI ended without an assistant response while tool activity could not be verified. Review any possible tool effects before retrying manually.";
+  }
+  return "Claude CLI ended without an assistant response after a tool action was approved or completed. Review any tool effects before retrying manually.";
+}
+
+function getCliNonReplayableReason(error: unknown): CliNonReplayableReason | undefined {
+  if (!isFailoverError(error) || error.code !== "cli_non_replayable_incomplete_turn") {
+    return undefined;
+  }
+  return (error as FailoverError & { nonReplayableReason?: CliNonReplayableReason })
+    .nonReplayableReason;
+}
+
 function shouldRetryFreshCliSessionAfterFailover(params: {
   error: FailoverError;
   hasHistoryPrompt: boolean;
@@ -803,19 +826,37 @@ export async function runPreparedCliAgent(
     return { payloads, delivered, visibleText };
   };
 
-  const buildDeliveredFailureResult = (
+  const buildTerminalFailureResult = (
     error: unknown,
-    evidence: NonNullable<ReturnType<typeof getCliMessagingDeliveryEvidence>>,
+    evidence?: NonNullable<ReturnType<typeof getCliMessagingDeliveryEvidence>>,
   ): EmbeddedAgentRunResult => {
     const message = formatErrorMessage(error);
-    const { payloads } = resolveCliSourceReplyMirror(evidence);
-    deliveredMessagingSideEffect = true;
+    const nonReplayableReason = getCliNonReplayableReason(error);
+    const { payloads } = evidence
+      ? resolveCliSourceReplyMirror(evidence)
+      : { payloads: [{ text: message, isError: true }] };
+    if (evidence) {
+      deliveredMessagingSideEffect = true;
+    }
     return {
       ...(payloads.length > 0 ? { payloads } : {}),
       meta: {
         durationMs: Date.now() - context.started,
         systemPromptReport: context.systemPromptReport,
         stopReason: "error",
+        ...(nonReplayableReason
+          ? {
+              replayInvalid: true,
+              error: {
+                kind: "incomplete_turn" as const,
+                message,
+                fallbackSafe: false,
+              },
+              ...(nonReplayableReason === "cancelled" || nonReplayableReason === "aborted"
+                ? { aborted: true }
+                : {}),
+            }
+          : {}),
         executionTrace: {
           winnerProvider: params.provider,
           winnerModel: context.modelId,
@@ -840,29 +881,35 @@ export async function runPreparedCliAgent(
           refusal: false,
         },
         agentMeta: {
-          sessionId: "",
+          sessionId: evidence
+            ? ""
+            : (params.cliSessionBinding?.sessionId ?? params.sessionId ?? ""),
           provider: params.provider,
           model: context.modelId,
           ...preparedContextAgentMeta,
-          ...(sessionBindingDisabled || resolveReusableCliSessionId(context.reusableCliSession)
+          ...(!evidence && !sessionBindingDisabled && params.cliSessionBinding
+            ? { cliSessionBinding: params.cliSessionBinding }
+            : {}),
+          ...(sessionBindingDisabled ||
+          (evidence && resolveReusableCliSessionId(context.reusableCliSession))
             ? { clearCliSessionBinding: true }
             : {}),
         },
       },
-      didSendViaMessagingTool: true,
-      ...(evidence.didDeliverSourceReplyViaMessageTool
+      ...(evidence ? { didSendViaMessagingTool: true } : {}),
+      ...(evidence?.didDeliverSourceReplyViaMessageTool
         ? { didDeliverSourceReplyViaMessageTool: true }
         : {}),
-      ...(evidence.messagingToolSentTexts?.length
+      ...(evidence?.messagingToolSentTexts?.length
         ? { messagingToolSentTexts: evidence.messagingToolSentTexts }
         : {}),
-      ...(evidence.messagingToolSentMediaUrls?.length
+      ...(evidence?.messagingToolSentMediaUrls?.length
         ? { messagingToolSentMediaUrls: evidence.messagingToolSentMediaUrls }
         : {}),
-      ...(evidence.messagingToolSentTargets?.length
+      ...(evidence?.messagingToolSentTargets?.length
         ? { messagingToolSentTargets: evidence.messagingToolSentTargets }
         : {}),
-      ...(evidence.messagingToolSourceReplyPayloads?.length
+      ...(evidence?.messagingToolSourceReplyPayloads?.length
         ? { messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads }
         : {}),
     };
@@ -1029,23 +1076,44 @@ export async function runPreparedCliAgent(
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
       : output.text.trim();
+    // Intentional silent replies must not conceal owner-proven tool effects or a
+    // lifecycle placeholder that still needs its one safe same-session retry.
+    const syntheticPlaceholder = output.retryableSyntheticPlaceholder === true;
+    const nonReplayableReason = output.nonReplayableReason;
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      (nonReplayableReason ||
+        syntheticPlaceholder ||
+        params.allowEmptyAssistantReplyAsSilent !== true)
     ) {
       const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
       if (emptyOutputDiagnostics) {
         cliBackendLog.warn(`cli empty response diagnostics: ${emptyOutputDiagnostics}`);
       }
-      throw attachCliMessagingDeliveryEvidence(
-        new FailoverError("CLI backend returned an empty response.", {
+      const emptyResponseError = new FailoverError(
+        nonReplayableReason
+          ? formatCliNonReplayableTurnError(nonReplayableReason)
+          : syntheticPlaceholder
+            ? "Claude CLI resumed with a synthetic placeholder instead of processing the user message."
+            : "CLI backend returned an empty response.",
+        {
           reason: "empty_response",
           provider: params.provider,
           model: context.modelId,
           sessionId: params.sessionId,
           lane: params.lane,
-        }),
+          ...(nonReplayableReason
+            ? { code: "cli_non_replayable_incomplete_turn" }
+            : syntheticPlaceholder
+              ? { code: "cli_synthetic_placeholder_empty" }
+              : {}),
+        },
+      );
+      throw attachCliMessagingDeliveryEvidence(
+        nonReplayableReason
+          ? Object.assign(emptyResponseError, { nonReplayableReason })
+          : emptyResponseError,
         output,
       );
     }
@@ -1375,11 +1443,11 @@ export async function runPreparedCliAgent(
       }
     };
 
-    const finishDeliveredFailure = async (
+    const finishTerminalFailure = async (
       error: unknown,
     ): Promise<EmbeddedAgentRunResult | undefined> => {
       const evidence = getCliMessagingDeliveryEvidence(error);
-      if (!evidence) {
+      if (!evidence && !getCliNonReplayableReason(error)) {
         return undefined;
       }
       await runCliAgentEndHook(params, {
@@ -1387,7 +1455,7 @@ export async function runPreparedCliAgent(
         ctx: hookContext,
         hookRunner,
       });
-      return buildDeliveredFailureResult(error, evidence);
+      return buildTerminalFailureResult(error, evidence);
     };
 
     if (hasBeforeAgentRunHooks && hookRunner) {
@@ -1469,16 +1537,45 @@ export async function runPreparedCliAgent(
         reusableCliSessionId,
       );
     } catch (err) {
-      const deliveredFailure = await finishDeliveredFailure(err);
-      if (deliveredFailure) {
-        return deliveredFailure;
-      }
       let recoveryError = err;
+      if (
+        isFailoverError(recoveryError) &&
+        recoveryError.reason === "empty_response" &&
+        recoveryError.code === "cli_synthetic_placeholder_empty" &&
+        isClaudeCliProvider(params.provider) &&
+        reusableCliSessionId &&
+        !params.forkCliSessionOnResume &&
+        !context.mcpDeliveryCapture &&
+        !params.abortSignal?.aborted &&
+        !getCliMessagingDeliveryEvidence(recoveryError)
+      ) {
+        const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
+        if (retryTimeoutMs > 0) {
+          cliBackendLog.warn(
+            `cli synthetic placeholder retry: provider=${params.provider} model=${context.modelId} sessionKey=${params.sessionKey ?? "none"}`,
+          );
+          try {
+            return await finishCliAttempt(
+              await executeCliAttempt(reusableCliSessionId, {
+                timeoutMs: retryTimeoutMs,
+                forkCliSessionOnResume: false,
+              }),
+              reusableCliSessionId,
+            );
+          } catch (retryError) {
+            recoveryError = retryError;
+          }
+        }
+      }
+      const terminalFailure = await finishTerminalFailure(recoveryError);
+      if (terminalFailure) {
+        return terminalFailure;
+      }
       if (
         params.forkCliSessionOnResume &&
         resumeCheckpointId &&
         context.preparedBackend.backend.resumeAtArg &&
-        isUnsupportedCliResumeAtError(err, context.preparedBackend.backend.resumeAtArg)
+        isUnsupportedCliResumeAtError(recoveryError, context.preparedBackend.backend.resumeAtArg)
       ) {
         recoveryError = new FailoverError("CLI backend cannot resume from the stored checkpoint.", {
           reason: "session_expired",
@@ -1487,7 +1584,7 @@ export async function runPreparedCliAgent(
           sessionId: params.sessionId,
           lane: params.lane,
           status: resolveFailoverStatus("session_expired"),
-          cause: err,
+          cause: recoveryError,
         });
       }
       if (isFailoverError(recoveryError)) {
@@ -1528,7 +1625,7 @@ export async function runPreparedCliAgent(
               }),
             );
           } catch (forkError) {
-            const deliveredForkFailure = await finishDeliveredFailure(forkError);
+            const deliveredForkFailure = await finishTerminalFailure(forkError);
             if (deliveredForkFailure) {
               return deliveredForkFailure;
             }
@@ -1574,7 +1671,7 @@ export async function runPreparedCliAgent(
               }),
             );
           } catch (retryErr) {
-            const deliveredRetryFailure = await finishDeliveredFailure(retryErr);
+            const deliveredRetryFailure = await finishTerminalFailure(retryErr);
             if (deliveredRetryFailure) {
               return deliveredRetryFailure;
             }

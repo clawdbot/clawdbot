@@ -90,8 +90,15 @@ type ClaudeLiveTurn = {
   observedStdout: boolean;
   /** Only resumed turns may replay a lifecycle-only stall through a fork. */
   useResume: boolean;
-  /** True after any output other than init or the exact synthetic queue placeholder. */
+  /** Exact vendor lifecycle evidence remains meaningful after the first grace-bound retry. */
+  observedSyntheticPlaceholder: boolean;
+  /** True after anything beyond init, an exact synthetic placeholder, or its empty result. */
   hasReplayUnsafeActivity: boolean;
+  /** An allow control frame reached Claude; its native tool may already have run. */
+  hasApprovedNativeToolUse: boolean;
+  /** Only a successful owner-classified MCP result proves a completed tool action. */
+  hasCompletedMcpToolUse: boolean;
+  nonReplayableTerminalStatus?: "cancelled" | "aborted" | "failed";
   /**
    * Claude consumed queued session notifications before processing this turn.
    * The following empty result is provisional; the same process can emit the
@@ -735,6 +742,9 @@ function markClaudeLiveToolCompleted(
   }
   turn.activeTools.delete(result.toolCallId);
   turn.completedToolCallIds.add(result.toolCallId);
+  if (activeTool.kind === "mcp_tool_use" && !result.isError && !terminalOutcome) {
+    turn.hasCompletedMcpToolUse = true;
+  }
   const event = {
     ...claudeLiveDiagnosticBase(turn),
     toolName: activeTool.toolName,
@@ -963,6 +973,45 @@ function isClaudeLiveSubstantiveAssistantProgress(parsed: Record<string, unknown
   );
 }
 
+function annotateClaudeLiveSyntheticTerminalOutput(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  terminalOutput: CliOutput,
+): CliOutput {
+  // Capture-bound processes close after this turn; replaying them would silently
+  // switch process owners or duplicate a native tool/messaging side effect.
+  const retryableSyntheticPlaceholder =
+    turn.useResume &&
+    turn.observedSyntheticPlaceholder &&
+    !turn.hasReplayUnsafeActivity &&
+    !turn.abortSignal?.aborted &&
+    !session.mcpCaptureKey &&
+    turn.toolEventCount === 0 &&
+    turn.activeTools.size === 0 &&
+    turn.completedToolCallIds.size === 0 &&
+    session.outstandingBackgroundTaskIds.size === 0 &&
+    !terminalOutput.didSendViaMessagingTool &&
+    !terminalOutput.didDeliverSourceReplyViaMessageTool &&
+    !terminalOutput.messagingToolSentTexts?.length &&
+    !terminalOutput.messagingToolSentMediaUrls?.length &&
+    !terminalOutput.messagingToolSentTargets?.length &&
+    !terminalOutput.messagingToolSourceReplyPayloads?.length;
+  const nonReplayableReason: CliOutput["nonReplayableReason"] =
+    turn.nonReplayableTerminalStatus ??
+    (turn.hasApprovedNativeToolUse
+      ? "approved_native_tool"
+      : turn.hasCompletedMcpToolUse
+        ? "completed_mcp_tool"
+        : session.mcpCaptureKey
+          ? "captured_tool_activity"
+          : undefined);
+  return {
+    ...terminalOutput,
+    ...(retryableSyntheticPlaceholder ? { retryableSyntheticPlaceholder: true as const } : {}),
+    ...(nonReplayableReason ? { nonReplayableReason } : {}),
+  };
+}
+
 function deferClaudeLiveSyntheticResult(
   session: ClaudeLiveSession,
   turn: ClaudeLiveTurn,
@@ -982,18 +1031,11 @@ function deferClaudeLiveSyntheticResult(
     if (session.currentTurn !== turn || !turn.deferredSyntheticOutput) {
       return;
     }
+    const terminalOutput = turn.deferredSyntheticOutput;
     turn.syntheticContinuationTimer = null;
     turn.deferredSyntheticOutput = null;
     emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
-    closeLiveSession(
-      session,
-      "abort",
-      createTimeoutError(
-        session,
-        "Claude resumed session ended with a synthetic placeholder and no assistant response.",
-        "cli_no_output_timeout",
-      ),
-    );
+    finishTurn(session, annotateClaudeLiveSyntheticTerminalOutput(session, turn, terminalOutput));
   }, graceMs);
   emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
 }
@@ -1317,6 +1359,7 @@ function handleClaudeLiveControlRequest(
       toolInput,
       decision: { behavior: "allow" },
     });
+    turn.hasApprovedNativeToolUse = true;
     return;
   }
   if (plan === "deny") {
@@ -1373,6 +1416,9 @@ function handleClaudeLiveControlRequest(
                     : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
             },
       });
+      if (allowed) {
+        turn.hasApprovedNativeToolUse = true;
+      }
     } catch {
       // The live process may close while an out-of-band approval is pending.
     }
@@ -1406,9 +1452,28 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   if (
+    parsed.type === "result" &&
+    (parsed.status === "cancelled" || parsed.status === "aborted" || parsed.status === "failed")
+  ) {
+    turn.nonReplayableTerminalStatus = parsed.status;
+  }
+  const syntheticPlaceholder = isClaudeLiveProvisionalSyntheticPlaceholder(parsed);
+  if (turn.useResume && syntheticPlaceholder) {
+    turn.observedSyntheticPlaceholder = true;
+  }
+  const syntheticPlaceholderResult =
+    (turn.pendingSyntheticPlaceholder || turn.observedSyntheticPlaceholder) &&
+    parsed.type === "result" &&
+    (parsed.subtype === undefined || parsed.subtype === "success") &&
+    parsed.is_error !== true &&
+    (parsed.status === undefined || parsed.status === "success") &&
+    typeof parsed.result === "string" &&
+    parsed.result.length === 0;
+  if (
     !(
       (parsed.type === "system" && parsed.subtype === "init") ||
-      isClaudeLiveProvisionalSyntheticPlaceholder(parsed)
+      syntheticPlaceholder ||
+      syntheticPlaceholderResult
     )
   ) {
     turn.hasReplayUnsafeActivity = true;
@@ -1428,7 +1493,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   }
   turn.rawLines.push(trimmed);
   applyBackgroundTasksChanged(session, parsed);
-  if (turn.allowSyntheticContinuationGrace && isClaudeLiveProvisionalSyntheticPlaceholder(parsed)) {
+  if (turn.allowSyntheticContinuationGrace && syntheticPlaceholder) {
     turn.pendingSyntheticPlaceholder = true;
   } else if (turn.pendingSyntheticPlaceholder && isClaudeLiveSubstantiveAssistantProgress(parsed)) {
     turn.pendingSyntheticPlaceholder = false;
@@ -1482,6 +1547,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   // live process and watchdogs authoritative instead of racing it with fallback.
   if (turn.pendingSyntheticPlaceholder && !output.text.trim()) {
     deferClaudeLiveSyntheticResult(session, turn, output);
+    return;
+  }
+  if (turn.useResume && turn.observedSyntheticPlaceholder && !output.text.trim()) {
+    finishTurn(session, annotateClaudeLiveSyntheticTerminalOutput(session, turn, output));
     return;
   }
   finishTurn(session, output);
@@ -1749,7 +1818,10 @@ function createTurn(params: {
     activeTools: new Map(),
     observedStdout: false,
     useResume: params.useResume,
+    observedSyntheticPlaceholder: false,
     hasReplayUnsafeActivity: false,
+    hasApprovedNativeToolUse: false,
+    hasCompletedMcpToolUse: false,
     pendingSyntheticPlaceholder: false,
     allowSyntheticContinuationGrace: params.allowSyntheticContinuationGrace,
     deferredSyntheticOutput: null,

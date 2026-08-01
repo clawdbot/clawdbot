@@ -75,6 +75,16 @@ export type CliOutput = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  /** A resumed Claude process consumed a lifecycle placeholder without running this turn. */
+  retryableSyntheticPlaceholder?: true;
+  /** Owner-proven activity makes an empty Claude turn unsafe to execute on another model. */
+  nonReplayableReason?:
+    | "approved_native_tool"
+    | "completed_mcp_tool"
+    | "captured_tool_activity"
+    | "cancelled"
+    | "aborted"
+    | "failed";
   yielded?: true;
 };
 

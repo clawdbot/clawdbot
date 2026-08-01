@@ -65,8 +65,10 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 
@@ -1999,7 +2001,397 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a terminal synthetic resume without rebuilding its cached conversation", async () => {
+  it.each(
+    [
+      {
+        label: "replays an expired synthetic placeholder on the original live session and model",
+        secondPlaceholder: false,
+        exhaustedBudget: false,
+      },
+      {
+        label: "does not replay a second synthetic placeholder",
+        secondPlaceholder: true,
+        exhaustedBudget: false,
+      },
+      {
+        label: "does not replay a synthetic placeholder after the original timeout budget expires",
+        secondPlaceholder: false,
+        exhaustedBudget: true,
+      },
+    ].flatMap((scenario) => [
+      { ...scenario, allowSilent: false },
+      {
+        ...scenario,
+        label: `${scenario.label} when intentional empty replies are allowed`,
+        allowSilent: true,
+      },
+    ]),
+  )("$label", async ({ secondPlaceholder, exhaustedBudget, allowSilent }) => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    const writtenPrompts: string[] = [];
+    let firstWriteReady: (() => void) | undefined;
+    const firstWrite = new Promise<void>((resolve) => {
+      firstWriteReady = resolve;
+    });
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as { onStdout?: (chunk: string) => void };
+      const emitLines = (lines: unknown[]) =>
+        input.onStdout?.(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+      return {
+        runId: "live-synthetic-same-session",
+        pid: 3303,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+            writtenPrompts.push(data);
+            if (writtenPrompts.length === 1) {
+              emitLines([
+                { type: "system", subtype: "init", session_id: "retained-live" },
+                {
+                  type: "assistant",
+                  session_id: "retained-live",
+                  message: {
+                    model: "<synthetic>",
+                    role: "assistant",
+                    content: [{ type: "text", text: "No response requested." }],
+                  },
+                },
+                { type: "result", session_id: "retained-live", result: "" },
+              ]);
+              firstWriteReady?.();
+            } else if (secondPlaceholder) {
+              emitLines([
+                {
+                  type: "assistant",
+                  session_id: "retained-live",
+                  message: {
+                    model: "<synthetic>",
+                    role: "assistant",
+                    content: [{ type: "text", text: "No response requested." }],
+                  },
+                },
+                { type: "result", session_id: "retained-live", result: "" },
+              ]);
+            } else {
+              emitLines([
+                {
+                  type: "assistant",
+                  session_id: "retained-live",
+                  message: {
+                    model: "claude-sonnet-5",
+                    role: "assistant",
+                    content: [{ type: "text", text: "original model answer" }],
+                  },
+                },
+                {
+                  type: "result",
+                  session_id: "retained-live",
+                  result: "original model answer",
+                },
+              ]);
+            }
+            callback?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const backend = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+      output: "jsonl" as const,
+      input: "stdin" as const,
+      modelArg: "--model",
+      sessionArgs: ["--session-id", "{sessionId}"],
+      sessionMode: "always" as const,
+      liveSession: "claude-stdio" as const,
+      serialize: true,
+    };
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:synthetic-same-session",
+      cliSessionId: "retained-live",
+      provider: "claude-cli",
+      model: "claude-sonnet-5",
+    });
+    context.preparedBackend.backend = backend;
+    context.backendResolved.config = backend;
+    context.params.timeoutMs = 60_000;
+    context.params.cliSessionBinding = { sessionId: "retained-live" };
+    context.params.onBeforeFreshCliSessionRetry = clearBeforeRetry;
+    context.params.allowEmptyAssistantReplyAsSilent = allowSilent;
+    if (exhaustedBudget) {
+      context.started -= 30_001;
+    }
+
+    const resultPromise = runPreparedCliAgent(context);
+    const settledResult = resultPromise.then(
+      (result) => ({ result, error: undefined }),
+      (error: unknown) => ({ result: undefined, error }),
+    );
+    await firstWrite;
+    await vi.advanceTimersByTimeAsync(30_000);
+    const { result, error } = await settledResult;
+
+    if (secondPlaceholder || exhaustedBudget) {
+      expect(error).toMatchObject({ name: "FailoverError", reason: "empty_response" });
+      expect(result).toBeUndefined();
+    } else {
+      expect(error).toBeUndefined();
+      expect(result?.payloads).toEqual([{ text: "original model answer" }]);
+      expect(result?.meta.agentMeta?.model).toBe("claude-sonnet-5");
+      expect(result?.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("retained-live");
+    }
+    expect(writtenPrompts).toHaveLength(exhaustedBudget ? 1 : 2);
+    if (!exhaustedBudget) {
+      expect(writtenPrompts[1]).toBe(writtenPrompts[0]);
+    }
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    [
+      { label: "an approved native Bash action", activity: "native" as const, status: undefined },
+      { label: "a successfully completed MCP action", activity: "mcp" as const, status: undefined },
+      {
+        label: "uncertain captured tool activity",
+        activity: "captured" as const,
+        status: undefined,
+      },
+      { label: "a cancelled turn", activity: undefined, status: "cancelled" as const },
+      { label: "an aborted turn", activity: undefined, status: "aborted" as const },
+      { label: "a failed turn", activity: undefined, status: "failed" as const },
+    ].flatMap((scenario) => [
+      { ...scenario, allowSilent: false },
+      {
+        ...scenario,
+        label: `${scenario.label} when intentional empty replies are allowed`,
+        allowSilent: true,
+      },
+    ]),
+  )(
+    "never runs a configured fallback model after $label",
+    async ({ activity, status, allowSilent }) => {
+      vi.useFakeTimers();
+      supervisorSpawnMock.mockClear();
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+        runAgentEnd: vi.fn(async (_event: unknown) => undefined),
+      };
+      setHookRunnerForTest(hookRunner);
+      const writtenMessages: Array<Record<string, unknown>> = [];
+      let firstUserWriteReady: (() => void) | undefined;
+      const firstUserWrite = new Promise<void>((resolve) => {
+        firstUserWriteReady = resolve;
+      });
+      let resolveManagedExit: ((result: RunExit) => void) | undefined;
+      const managedExit = new Promise<RunExit>((resolve) => {
+        resolveManagedExit = resolve;
+      });
+      const cancelLiveProcess = vi.fn(() => {
+        resolveManagedExit?.({
+          reason: "manual-cancel",
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as { onStdout?: (chunk: string) => void };
+        return {
+          runId: "live-synthetic-non-replayable",
+          pid: 3311,
+          startedAtMs: Date.now(),
+          stdin: {
+            write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+              const message = JSON.parse(data) as Record<string, unknown>;
+              writtenMessages.push(message);
+              if (message.type === "user") {
+                const sessionId = "retained-non-replayable";
+                const lines: unknown[] = [
+                  { type: "system", subtype: "init", session_id: sessionId },
+                  {
+                    type: "assistant",
+                    session_id: sessionId,
+                    message: {
+                      model: "<synthetic>",
+                      role: "assistant",
+                      content: [
+                        { type: "text", text: "No response requested." },
+                        ...(activity === "mcp"
+                          ? [
+                              {
+                                type: "mcp_tool_use",
+                                id: "mcp-fallback-action-1",
+                                name: "action",
+                                input: {},
+                              },
+                              {
+                                type: "mcp_tool_result",
+                                tool_use_id: "mcp-fallback-action-1",
+                                content: [{ type: "text", text: "done" }],
+                                is_error: false,
+                              },
+                            ]
+                          : []),
+                      ],
+                    },
+                  },
+                  ...(activity === "native"
+                    ? [
+                        {
+                          type: "control_request",
+                          request_id: "native-bash-fallback-approval",
+                          request: {
+                            subtype: "can_use_tool",
+                            tool_use_id: "native-bash-fallback-1",
+                            tool_name: "Bash",
+                            input: { command: "touch must-not-run-twice" },
+                          },
+                        },
+                      ]
+                    : []),
+                  {
+                    type: "result",
+                    subtype: "success",
+                    ...(status ? { status, is_error: false } : {}),
+                    session_id: sessionId,
+                    result: "",
+                  },
+                ];
+                input.onStdout?.(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+                firstUserWriteReady?.();
+              }
+              callback?.();
+            }),
+            end: vi.fn(),
+          },
+          wait: vi.fn(() => managedExit),
+          cancel: cancelLiveProcess,
+        };
+      });
+
+      const backend = {
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+        output: "jsonl" as const,
+        input: "stdin" as const,
+        modelArg: "--model",
+        sessionArgs: ["--session-id", "{sessionId}"],
+        sessionMode: "always" as const,
+        liveSession: "claude-stdio" as const,
+        serialize: true,
+      };
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:synthetic-non-replayable",
+        cliSessionId: "retained-non-replayable",
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+      });
+      context.preparedBackend.backend = backend;
+      context.backendResolved.config = backend;
+      context.params.timeoutMs = 60_000;
+      context.params.cliSessionBinding = { sessionId: "retained-non-replayable" };
+      context.params.allowEmptyAssistantReplyAsSilent = allowSilent;
+      if (activity === "captured") {
+        context.mcpDeliveryCapture = true;
+      }
+      context.params.config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "claude-cli/claude-sonnet-5",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
+        },
+        tools: { exec: { security: "full", ask: "off" } },
+      };
+      const run = vi.fn(async (provider: string, model: string) => {
+        if (provider !== "claude-cli" || model !== "claude-sonnet-5") {
+          throw new Error(`unsafe fallback invoked: ${provider}/${model}`);
+        }
+        return await runPreparedCliAgent(context);
+      });
+      const fallbackPromise = runWithModelFallback({
+        cfg: context.params.config,
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+        skipAuthProfileRuntime: true,
+        manifestPlugins: [],
+        run,
+        classifyResult: ({ result, provider, model }) =>
+          classifyEmbeddedAgentRunResultForModelFallback({ result, provider, model }),
+      });
+
+      await firstUserWrite;
+      await vi.advanceTimersByTimeAsync(30_000);
+      const fallbackResult = await fallbackPromise;
+
+      expect(run).toHaveBeenCalledOnce();
+      expect(fallbackResult.provider).toBe("claude-cli");
+      expect(fallbackResult.model).toBe("claude-sonnet-5");
+      expect(fallbackResult.result.payloads).toEqual([
+        expect.objectContaining({
+          text: expect.stringMatching(
+            /review any (?:possible )?tool effects before retrying manually/i,
+          ),
+          isError: true,
+        }),
+      ]);
+      expect(fallbackResult.result.meta.replayInvalid).toBe(true);
+      expect(fallbackResult.result.meta.error).toMatchObject({
+        kind: "incomplete_turn",
+        fallbackSafe: false,
+      });
+      expect(fallbackResult.result.meta.agentMeta).toMatchObject({
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+        cliSessionBinding: { sessionId: "retained-non-replayable" },
+      });
+      expect(fallbackResult.result.didSendViaMessagingTool).toBeUndefined();
+      expect(fallbackResult.result.messagingToolSentTexts).toBeUndefined();
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledOnce();
+      expect(hookRunner.runAgentEnd.mock.calls[0]?.[0]).toMatchObject({ success: false });
+      expect(writtenMessages.filter((message) => message.type === "user")).toHaveLength(1);
+      if (status === "cancelled" || status === "aborted") {
+        expect(fallbackResult.result.meta.aborted).toBe(true);
+      } else {
+        expect(fallbackResult.result.meta.aborted).toBeUndefined();
+      }
+      if (activity === "native") {
+        expect(writtenMessages).toContainEqual(
+          expect.objectContaining({
+            type: "control_response",
+            response: expect.objectContaining({
+              request_id: "native-bash-fallback-approval",
+              response: expect.objectContaining({ behavior: "allow" }),
+            }),
+          }),
+        );
+      }
+      if (activity === "captured") {
+        expect(cancelLiveProcess).toHaveBeenCalledOnce();
+      } else {
+        expect(cancelLiveProcess).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -2068,12 +2460,6 @@ describe("runCliAgent reliability", () => {
                       role: "assistant",
                       content: [{ type: "text", text: "No response requested." }],
                     },
-                  }),
-                  JSON.stringify({
-                    type: "result",
-                    subtype: "success",
-                    session_id: "stale-live",
-                    result: "",
                   }),
                 ].join("\n") + "\n",
               );
