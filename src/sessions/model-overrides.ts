@@ -1,7 +1,6 @@
 // Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
-import { shouldPreserveSessionAuthProfileOverride } from "./auth-profile-preservation.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 type ModelOverrideSelection = {
@@ -57,10 +56,6 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
-  const currentProvider =
-    normalizeOptionalString(entry.providerOverride) ??
-    normalizeOptionalString(entry.modelProvider) ??
-    "";
   assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
@@ -156,14 +151,6 @@ export function applyModelOverrideToSessionEntry(params: {
     updated = true;
   }
 
-  const preserveAuthProfileOverride =
-    params.preserveAuthProfileOverride === true ||
-    shouldPreserveSessionAuthProfileOverride({
-      entry,
-      currentProvider,
-      provider: selection.provider,
-    });
-
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;
@@ -179,7 +166,7 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.authProfileOverrideCompactionCount;
       updated = true;
     }
-  } else if (!preserveAuthProfileOverride) {
+  } else if (!params.preserveAuthProfileOverride) {
     if (entry.authProfileOverride) {
       delete entry.authProfileOverride;
       updated = true;

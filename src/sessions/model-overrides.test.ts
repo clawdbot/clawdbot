@@ -330,13 +330,14 @@ describe("applyModelOverrideToSessionEntry", () => {
   });
 
   it.each([
-    { provider: "openai", expectedProfile: "openai:work" },
-    { provider: "anthropic", expectedProfile: undefined },
+    { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
+    { preserveAuthProfileOverride: false, expectedProfile: undefined },
+    { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
   ])(
-    "keeps auth profile metadata only when it matches $provider",
-    ({ provider, expectedProfile }) => {
+    "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",
+    ({ preserveAuthProfileOverride, expectedProfile }) => {
       const entry: SessionEntry = {
-        sessionId: "sess-profile-compatibility",
+        sessionId: "sess-profile-preservation-contract",
         updatedAt: Date.now() - 5_000,
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
@@ -348,9 +349,10 @@ describe("applyModelOverrideToSessionEntry", () => {
       applyModelOverrideToSessionEntry({
         entry,
         selection: {
-          provider,
-          model: provider === "openai" ? "gpt-4.1" : "claude-sonnet-4-6",
+          provider: "openai",
+          model: "gpt-4.1",
         },
+        preserveAuthProfileOverride,
       });
 
       expect(entry.authProfileOverride).toBe(expectedProfile);
