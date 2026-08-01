@@ -610,10 +610,15 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       await expect
         .poll(async () => {
           const settings = await readPersistedSettings(page);
-          return { customTheme: settings.customTheme, theme: settings.theme };
+          return {
+            hasCustomTheme: typeof settings.customTheme === "object",
+            theme: settings.theme,
+          };
         })
-        .toEqual({ customTheme: undefined, theme: "knot" });
-      await expect.poll(() => importer.locator(".settings-theme-import__message").count()).toBe(0);
+        .toEqual({ hasCustomTheme: true, theme: "knot" });
+      await expect
+        .poll(() => importer.locator(".settings-theme-import__message").textContent())
+        .toContain("Imported");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
       releaseImport();

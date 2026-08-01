@@ -145,6 +145,14 @@ function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   return result;
 }
 
+export function readServerUiThemePreference(configObject: unknown): ThemeName | null {
+  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
+  if (!prefs || !Object.hasOwn(prefs, "theme")) {
+    return null;
+  }
+  return SYNCED_PREFS.theme.extract(prefs.theme) ?? null;
+}
+
 export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,

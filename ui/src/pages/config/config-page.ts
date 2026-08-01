@@ -17,6 +17,7 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  readServerUiThemePreference,
   resetServerUiPref,
   resolveServerUiPrefState,
   type ServerUiPrefState,
@@ -276,8 +277,9 @@ export class ConfigPage extends OpenClawLightDomElement {
     null;
   @state() private customThemeImportExpanded = false;
   @state() private customThemeImportFocusToken = 0;
-  private customThemeImportSelectOnSuccess = false;
   private customThemeImportGeneration = 0;
+  private customThemeActivationGeneration = 0;
+  private serverThemePreferenceValue: ThemeName | null | undefined;
   private configViewState: ConfigViewState = createConfigViewState();
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
@@ -501,9 +503,14 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== this.runtimeConfigSource) {
+      if (this.runtimeConfigSource) {
+        this.retireCustomThemeImport();
+      }
       this.runtimeConfigSource = runtimeConfig;
+      this.serverThemePreferenceValue = undefined;
       this.resetConfigViewState();
     }
+    this.synchronizeServerThemePreference(runtimeConfig);
     const config = runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void runtimeConfig
@@ -692,13 +699,28 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private adoptThemeSettings() {
     const next = loadSettings();
-    const themeChanged =
-      next.theme !== this.settings.theme ||
-      next.customTheme?.importedAt !== this.settings.customTheme?.importedAt;
-    if (themeChanged) {
+    if (next.customTheme?.importedAt !== this.settings.customTheme?.importedAt) {
       this.retireCustomThemeImport();
+    } else if (next.theme !== this.settings.theme) {
+      this.revokeCustomThemeActivation();
     }
     this.settings = next;
+  }
+
+  private synchronizeServerThemePreference(runtimeConfig: ApplicationContext["runtimeConfig"]) {
+    const config = runtimeConfig.state.configSnapshot?.config;
+    if (!config) {
+      return;
+    }
+    const themePreference = readServerUiThemePreference(config);
+    if (
+      this.serverThemePreferenceValue !== undefined &&
+      themePreference !== this.serverThemePreferenceValue &&
+      themePreference !== "custom"
+    ) {
+      this.revokeCustomThemeActivation();
+    }
+    this.serverThemePreferenceValue = themePreference;
   }
 
   private setLocale(locale: Locale | undefined) {
@@ -769,7 +791,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   ) {
     switch (key) {
       case "theme":
-        this.retireCustomThemeImport();
+        this.revokeCustomThemeActivation();
         this.settings = resetServerUiPref("theme", this.currentThemePref());
         break;
       case "themeMode":
@@ -790,7 +812,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
     if (theme !== "custom") {
-      this.retireCustomThemeImport();
+      this.revokeCustomThemeActivation();
     }
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     const next = { ...this.settings, theme };
@@ -852,23 +874,20 @@ export class ConfigPage extends OpenClawLightDomElement {
   private openCustomThemeImport() {
     this.customThemeImportExpanded = true;
     this.customThemeImportFocusToken += 1;
-    if (!this.settings.customTheme) {
-      this.customThemeImportSelectOnSuccess = true;
-    }
   }
 
   private retireCustomThemeImport() {
     this.customThemeImportGeneration += 1;
     this.customThemeImportBusy = false;
-    this.customThemeImportSelectOnSuccess = false;
+  }
+
+  private revokeCustomThemeActivation() {
+    this.customThemeActivationGeneration += 1;
   }
 
   private setCustomThemeImportUrl(next: string) {
     if (next !== this.customThemeImportUrl) {
       this.retireCustomThemeImport();
-      if (!this.settings.customTheme) {
-        this.customThemeImportSelectOnSuccess = true;
-      }
     }
     this.customThemeImportUrl = next;
     if (this.customThemeImportMessage?.kind === "error") {
@@ -878,9 +897,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private async importCustomTheme() {
     const generation = ++this.customThemeImportGeneration;
+    const activationGeneration = this.customThemeActivationGeneration;
     const importUrl = this.customThemeImportUrl;
-    const selectThemeOnSuccess =
-      !this.settings.customTheme || this.customThemeImportSelectOnSuccess;
+    const selectThemeOnSuccess = !this.settings.customTheme;
     this.customThemeImportExpanded = true;
     this.customThemeImportBusy = true;
     this.customThemeImportMessage = null;
@@ -892,10 +911,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.applySettings({
         ...this.settings,
         customTheme,
-        theme: selectThemeOnSuccess ? "custom" : this.settings.theme,
+        theme:
+          selectThemeOnSuccess && activationGeneration === this.customThemeActivationGeneration
+            ? "custom"
+            : this.settings.theme,
       });
       this.customThemeImportUrl = "";
-      this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
         text: t("configPage.themeImported", { name: customTheme.label }),

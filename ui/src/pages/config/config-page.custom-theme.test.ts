@@ -32,6 +32,7 @@ type CustomThemeImportState = {
   clearCustomTheme: () => void;
   setCustomThemeImportUrl: (next: string) => void;
   setTheme: (theme: ThemeName) => void;
+  synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
   willUpdate: (changed: Map<PropertyKey, unknown>) => void;
 };
 
@@ -171,10 +172,42 @@ describe("ConfigPage custom theme import ownership", () => {
     await pendingImport;
 
     expect(state.customThemeImportBusy).toBe(false);
-    expect(state.customThemeImportUrl).toBe("first");
-    expect(state.customThemeImportMessage).toBeNull();
+    expect(state.customThemeImportUrl).toBe("");
+    expect(state.customThemeImportMessage?.kind).toBe("success");
     expect(state.settings.theme).toBe("knot");
-    expect(state.settings.customTheme).toBeUndefined();
+    expect(state.settings.customTheme?.themeId).toBe("first");
+  });
+
+  it("revokes activation when server intent changes but the local mirror is equal", async () => {
+    const pending = deferred<ImportedCustomTheme>();
+    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
+    const { state } = createCustomThemePage();
+    const runtimeConfig = {
+      state: {
+        configLoading: false,
+        configSchema: {},
+        configSchemaLoading: false,
+        configSnapshot: { config: { ui: { prefs: { theme: "custom" } } } },
+      },
+    } as unknown as ApplicationContext["runtimeConfig"];
+    state.context = {
+      ...state.context,
+      gateway: { connection: { gatewayUrl: "ws://gateway.test" } },
+      runtimeConfig,
+    } as ApplicationContext;
+    state.synchronizeRuntimeConfig(runtimeConfig);
+    state.setCustomThemeImportUrl("first");
+    const pendingImport = state.importCustomTheme();
+
+    runtimeConfig.state.configSnapshot = {
+      config: { ui: { prefs: { theme: "claw" } } },
+    } as typeof runtimeConfig.state.configSnapshot;
+    state.synchronizeRuntimeConfig(runtimeConfig);
+    pending.resolve(customThemeFixture("First", "first"));
+    await pendingImport;
+
+    expect(state.settings.theme).toBe("claw");
+    expect(state.settings.customTheme?.themeId).toBe("first");
   });
 
   it("retires an import when navigation leaves Appearance", async () => {
@@ -209,10 +242,10 @@ describe("ConfigPage custom theme import ownership", () => {
     await pendingImport;
 
     expect(state.customThemeImportBusy).toBe(false);
-    expect(state.customThemeImportUrl).toBe("first");
-    expect(state.customThemeImportMessage).toBeNull();
+    expect(state.customThemeImportUrl).toBe("");
+    expect(state.customThemeImportMessage?.kind).toBe("success");
     expect(state.settings.theme).toBe("knot");
-    expect(state.settings.customTheme).toBeUndefined();
+    expect(state.settings.customTheme?.themeId).toBe("first");
   });
 
   it("retires an import when the page disconnects", async () => {
