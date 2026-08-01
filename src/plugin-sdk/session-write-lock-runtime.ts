@@ -205,6 +205,12 @@ async function acquireFileArtifactLock(
         shouldRemoveStaleLock: async ({ lockPath: contenderPath, payload }) =>
           (await inspectArtifact(contenderPath, payload, Date.now())).removable,
       });
+      // The signal can fire while fs-safe owns its retry loop. Never return a
+      // newly acquired sidecar after the caller has cancelled admission.
+      if (params.signal?.aborted) {
+        await lock.release().catch(() => undefined);
+        throwIfAborted(params.signal);
+      }
       return { release: () => lock.release() };
     } catch (error) {
       throwIfAborted(params.signal);
