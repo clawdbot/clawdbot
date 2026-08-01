@@ -18,6 +18,7 @@ import {
   type QaReportCheck,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -28,8 +29,8 @@ import {
   type MatrixQaConfigSnapshot,
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+import { startMatrixQaFaultProxy } from "../../substrate/fault-proxy.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
@@ -702,6 +703,10 @@ export async function runMatrixQaLive(params: {
   writeMatrixQaProgress(
     `harness ready ${formatMatrixQaDurationMs(harnessBootMs)} baseUrl=${harness.baseUrl}`,
   );
+  const faultProxy = await startMatrixQaFaultProxy({
+    rules: [],
+    targetBaseUrl: harness.baseUrl,
+  });
   const { durationMs: provisioningMs, result: provisioning } = await (async () => {
     try {
       return await measureMatrixQaStep(() =>
@@ -723,6 +728,7 @@ export async function runMatrixQaLive(params: {
         action: () => harness.stop(),
         recovery: harness.stopCommand,
       }).catch(() => {});
+      await faultProxy.stop().catch(() => {});
       throw error;
     }
   })();
@@ -763,7 +769,7 @@ export async function runMatrixQaLive(params: {
   const gatewayConfigParams = {
     driverAccessToken: provisioning.driver.accessToken,
     driverUserId: provisioning.driver.userId,
-    homeserver: harness.baseUrl,
+    homeserver: faultProxy.baseUrl,
     observerAccessToken: provisioning.observer.accessToken,
     observerUserId: provisioning.observer.userId,
     sutAccessToken: provisioning.sut.accessToken,
@@ -940,6 +946,7 @@ export async function runMatrixQaLive(params: {
                 gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
                 gatewayCall: async (method, paramsLocal, opts) =>
                   await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
+                faultProxy,
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {
@@ -1098,6 +1105,14 @@ export async function runMatrixQaLive(params: {
       } catch (error) {
         appendLiveLaneIssue(cleanupErrors, "live gateway cleanup", error);
       }
+    }
+    try {
+      await cleanupMatrixQaResource({
+        label: "Matrix homeserver fault proxy cleanup",
+        action: () => faultProxy.stop(),
+      });
+    } catch (error) {
+      appendLiveLaneIssue(cleanupErrors, "Matrix fault proxy cleanup", error);
     }
     try {
       await cleanupMatrixQaResource({

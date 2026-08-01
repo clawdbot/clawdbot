@@ -1379,42 +1379,24 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
   if (!context.restartGatewayAfterStateMutation) {
     throw new Error("Matrix E2EE state_after QA scenario requires hard gateway restart support");
   }
-  const accountId = context.sutAccountId ?? "sut";
-  const configPath = requireMatrixQaGatewayConfigPath(context);
-  const originalAccountConfig = await readMatrixQaGatewayMatrixAccount({
-    accountId,
-    configPath,
-  });
-  const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
-    rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
-  });
-  let gatewayPatched = false;
-  try {
-    await context.restartGatewayAfterStateMutation(
-      async () => {
-        await patchMatrixQaGatewayMatrixAccount({
-          accountId,
-          accountPatch: {
-            homeserver: proxy.baseUrl,
-            network: {
-              dangerouslyAllowPrivateNetwork: true,
-            },
-          },
-          configPath,
-        });
-        gatewayPatched = true;
-      },
-      {
-        timeoutMs: context.timeoutMs,
-        waitAccountId: accountId,
-      },
+  if (!context.faultProxy) {
+    throw new Error(
+      "Matrix E2EE state_after QA scenario requires the stable homeserver fault proxy",
     );
+  }
+  const accountId = context.sutAccountId ?? "sut";
+  const faultRule = buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken);
+  context.faultProxy.installRule(faultRule);
+  try {
+    await context.restartGatewayAfterStateMutation(async () => undefined, {
+      timeoutMs: context.timeoutMs,
+      waitAccountId: accountId,
+    });
     const result = await runMatrixQaE2eeTopLevelScenario(context, {
       scenarioId: "matrix-e2ee-state-after-missing-encryption",
       tokenPrefix: "MATRIX_QA_E2EE_STATE_AFTER",
     });
-    const stateAfterHits = proxy
+    const stateAfterHits = context.faultProxy
       .hits()
       .filter((hit) => hit.ruleId === MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID);
     if (stateAfterHits.length > 0) {
@@ -1425,7 +1407,6 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
     return {
       artifacts: {
         driverEventId: result.driverEventId,
-        faultProxyBaseUrl: proxy.baseUrl,
         reply: result.reply,
         roomKey: result.roomKey,
         roomId: result.roomId,
@@ -1437,30 +1418,12 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
         `encrypted room key: ${result.roomKey}`,
         `encrypted room id: ${result.roomId}`,
         `driver event: ${result.driverEventId}`,
-        `fault proxy: ${proxy.baseUrl}`,
         `state_after sync opt-in hits: ${stateAfterHits.length}`,
         ...buildMatrixReplyDetails("E2EE state_after reply", result.reply),
       ].join("\n"),
     };
   } finally {
-    if (gatewayPatched) {
-      await context
-        .restartGatewayAfterStateMutation(
-          async () => {
-            await replaceMatrixQaGatewayMatrixAccount({
-              accountConfig: originalAccountConfig,
-              accountId,
-              configPath,
-            });
-          },
-          {
-            timeoutMs: context.timeoutMs,
-            waitAccountId: accountId,
-          },
-        )
-        .catch(() => undefined);
-    }
-    await proxy.stop().catch(() => undefined);
+    context.faultProxy.removeRule(faultRule.id);
   }
 }
 

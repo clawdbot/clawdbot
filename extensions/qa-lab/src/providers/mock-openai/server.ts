@@ -191,6 +191,9 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
+const QA_MATRIX_VOICE_PREFLIGHT_FILENAME = "matrix-qa-voice-preflight.wav";
+const QA_MATRIX_VOICE_PREFLIGHT_TRANSCRIPTION_TEXT =
+  "MATRIX_QA_VOICE_PREFLIGHT_MENTION reply with only this exact marker: MATRIX_QA_VOICE_PREFLIGHT_OK";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -252,6 +255,9 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.includes(QA_MATRIX_VOICE_PREFLIGHT_FILENAME)) {
+    return QA_MATRIX_VOICE_PREFLIGHT_TRANSCRIPTION_TEXT;
+  }
   if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
@@ -2032,9 +2038,10 @@ async function buildResponsesPayload(
   const currentTurnIsToolProgress =
     QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(toolProgressPrompt) ||
     QA_TOOL_PROGRESS_PROMPT_RE.test(toolProgressPrompt);
-  const toolProgressToolOutput = currentTurnIsToolProgress && currentUserTurn
-    ? extractToolOutput(input.slice(currentUserTurn.index))
-    : "";
+  const toolProgressToolOutput =
+    currentTurnIsToolProgress && currentUserTurn
+      ? extractToolOutput(input.slice(currentUserTurn.index))
+      : "";
   const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
   const buildToolProgressReadEvents = () => {
     return buildToolCallEventsWithArgs("read", {
@@ -2813,11 +2820,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (
-    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
-    !toolOutput &&
-    !completedImageMediaPath
-  ) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput && !completedImageMediaPath) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",

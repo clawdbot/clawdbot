@@ -3989,6 +3989,29 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("serves the Matrix voice preflight transcription contract for its explicit fixture", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: '--qa\r\ncontent-disposition: form-data; name="file"; filename="matrix-qa-voice-preflight.wav"\r\n\r\nvoice\r\n--qa--\r\n',
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "MATRIX_QA_VOICE_PREFLIGHT_MENTION reply with only this exact marker: MATRIX_QA_VOICE_PREFLIGHT_OK",
+    });
+  });
+
   it("serves deterministic WhatsApp group audio transcription for large audio uploads", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
