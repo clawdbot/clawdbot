@@ -325,6 +325,27 @@ async function cleanupMatrixQaResource(params: {
   }
 }
 
+async function startMatrixQaFaultProxyForHarness(params: {
+  harness: Pick<
+    Awaited<ReturnType<typeof startMatrixQaHarness>>,
+    "baseUrl" | "stop" | "stopCommand"
+  >;
+}) {
+  try {
+    return await startMatrixQaFaultProxy({
+      rules: [],
+      targetBaseUrl: params.harness.baseUrl,
+    });
+  } catch (error) {
+    await cleanupMatrixQaResource({
+      label: "Matrix homeserver cleanup after fault proxy startup failure",
+      action: () => params.harness.stop(),
+      recovery: params.harness.stopCommand,
+    }).catch(() => {});
+    throw error;
+  }
+}
+
 function countMatrixQaStatuses(entries: Array<{ status: "fail" | "pass" | "skip" }>) {
   return {
     failed: entries.filter((entry) => entry.status === "fail").length,
@@ -703,9 +724,8 @@ export async function runMatrixQaLive(params: {
   writeMatrixQaProgress(
     `harness ready ${formatMatrixQaDurationMs(harnessBootMs)} baseUrl=${harness.baseUrl}`,
   );
-  const faultProxy = await startMatrixQaFaultProxy({
-    rules: [],
-    targetBaseUrl: harness.baseUrl,
+  const faultProxy = await startMatrixQaFaultProxyForHarness({
+    harness,
   });
   const { durationMs: provisioningMs, result: provisioning } = await (async () => {
     try {
@@ -1301,6 +1321,7 @@ export const testing = {
   resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,
+  startMatrixQaFaultProxyForHarness,
   summarizeMatrixQaGatewayStderrLog,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
