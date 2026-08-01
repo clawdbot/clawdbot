@@ -4,6 +4,55 @@ import { describe, expect, it } from "vitest";
 import { parseLogLine } from "./log-lines.ts";
 
 describe("parseLogLine", () => {
+  it.each([
+    {
+      name: "uses the complete persisted message for subsystem records",
+      record: {
+        "0": '{"subsystem":"gateway"}',
+        "1": "request failed",
+        "2": "retry later",
+        message: "request failed retry later",
+        time: "2026-08-01T15:00:00.000Z",
+        _meta: { logLevelName: "ERROR" },
+      },
+      message: "request failed retry later",
+      subsystem: "gateway",
+      level: "error",
+      time: "2026-08-01T15:00:00.000Z",
+    },
+    {
+      name: "preserves positional-only legacy records",
+      record: {
+        "0": '{"subsystem":"gateway"}',
+        "1": "legacy request failed",
+      },
+      message: "legacy request failed",
+      subsystem: "gateway",
+      level: null,
+      time: null,
+    },
+    {
+      name: "uses the complete persisted message for generic positional records",
+      record: {
+        "0": "worker",
+        "1": "request failed",
+        "2": "retry later",
+        message: "request failed retry later",
+      },
+      message: "request failed retry later",
+      subsystem: "worker",
+      level: null,
+      time: null,
+    },
+  ])("$name", ({ record, message, subsystem, level, time }) => {
+    const parsed = parseLogLine(JSON.stringify(record));
+
+    expect(parsed.message).toBe(message);
+    expect(parsed.subsystem).toBe(subsystem);
+    expect(parsed.level).toBe(level);
+    expect(parsed.time).toBe(time);
+  });
+
   it("strips ANSI escape sequences from rendered log fields", () => {
     const parsed = parseLogLine(
       JSON.stringify({
