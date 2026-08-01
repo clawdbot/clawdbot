@@ -823,6 +823,95 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("resumes a gateway-timed-out session with its durable delivery claim on startup", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:slack:channel:c0bly1apgh5": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "timeout",
+        abortedLastRun: false,
+        endedAt: Date.now() - 9_000,
+        runtimeMs: 1_000,
+        restartRecoveryDeliveryContext: {
+          channel: "slack",
+          to: "channel:C0BLY1APGH5",
+          accountId: "main",
+          threadId: "1785613439.266819",
+        },
+        restartRecoveryDeliveryRequestMessageId: "1785613439.266819",
+        restartRecoveryDeliveryRunId: "req_27a0924bb52678eefb17de80c8816ede",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "research these companies" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ceto" }] },
+      { role: "toolResult", content: '{"job_id":"dr_rUN3w1Jh","status":"running"}' },
+    ]);
+
+    const result = await recoverStartupOrphanedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ marked: 1, recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c0bly1apgh5",
+      expectedExistingSessionId: "main-session",
+      deliver: true,
+      channel: "slack",
+      to: "channel:C0BLY1APGH5",
+      threadId: "1785613439.266819",
+    });
+  });
+
+  it("leaves an ordinary terminal timeout without a delivery claim untouched", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "timeout",
+        abortedLastRun: false,
+        endedAt: Date.now() - 9_000,
+        runtimeMs: 1_000,
+      },
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readStore(path.join(sessionsDir, "sessions.json"))["agent:main:main"]).toMatchObject({
+      status: "timeout",
+      abortedLastRun: false,
+      runtimeMs: 1_000,
+    });
+  });
+
+  it("leaves a queue-owned source claim for its live retry loop", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "timeout",
+        abortedLastRun: false,
+        endedAt: Date.now() - 9_000,
+        runtimeMs: 1_000,
+        restartRecoveryDeliveryRunId: "queue-run",
+        restartRecoveryDeliverySourceRunId: "queue-run",
+      },
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readStore(path.join(sessionsDir, "sessions.json"))["agent:main:main"]).toMatchObject({
+      status: "timeout",
+      restartRecoveryDeliveryRunId: "queue-run",
+      restartRecoveryDeliverySourceRunId: "queue-run",
+    });
+  });
+
   it("delivers resumed marked sessions through the current run recovery context", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

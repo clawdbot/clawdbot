@@ -274,6 +274,30 @@ export function shouldPersistRestartRecoveryCleanup(
   );
 }
 
+/**
+ * A gateway-owned deadline abort is an interruption, not proof that the
+ * authenticated delivery obligation is finished. Keep the exact claim so a
+ * later gateway startup can resume from the durable transcript.
+ */
+export function shouldRetainRestartRecoveryClaimAfterRun(params: {
+  abortReason: unknown;
+  claimedRunId?: string;
+  runId: string;
+  sourceRunId?: string;
+  terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+}): boolean {
+  const abortReason =
+    params.abortReason && typeof params.abortReason === "object"
+      ? (params.abortReason as { name?: unknown })
+      : undefined;
+  return (
+    params.claimedRunId === params.runId &&
+    params.sourceRunId === undefined &&
+    abortReason?.name === "TimeoutError" &&
+    params.terminalDeliveryEvidence?.restartUnsafeSideEffectsDetected !== true
+  );
+}
+
 export function buildCurrentRunRestartRecoveryClaim(params: {
   deliveryContext?: DeliveryContext;
   deliveryMediaUrls?: string[];

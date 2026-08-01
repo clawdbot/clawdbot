@@ -345,12 +345,17 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await applySessionEntryReplacements({
       storePath,
-      statuses: ["running"],
+      statuses: ["running", "timeout"],
       update: (entries) => {
         const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
         const counts = { marked: 0, skipped: 0 };
         for (const { sessionKey, entry } of entries) {
-          if (entry.status !== "running" || entry.abortedLastRun === true) {
+          const isStartupOrphan = entry.status === "running" && entry.abortedLastRun !== true;
+          const isGatewayTimeoutWithDurableClaim =
+            entry.status === "timeout" &&
+            normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== undefined &&
+            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === undefined;
+          if (!isStartupOrphan && !isGatewayTimeoutWithDurableClaim) {
             continue;
           }
           if (shouldSkipMainRecovery(entry, sessionKey)) {
@@ -375,7 +380,11 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
           ) {
             continue;
           }
+          entry.status = "running";
           entry.abortedLastRun = true;
+          entry.startedAt = undefined;
+          entry.endedAt = undefined;
+          entry.runtimeMs = undefined;
           entry.updatedAt = Date.now();
           replacements.push({ sessionKey, entry });
           counts.marked++;

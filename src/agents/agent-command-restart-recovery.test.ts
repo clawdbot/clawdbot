@@ -3,7 +3,65 @@ import {
   buildCurrentRunRestartRecoveryClaim,
   buildRestartRecoveryTerminalDeliveryEvidence,
   constrainRestartRecoveryDeliveryPayloads,
+  shouldRetainRestartRecoveryClaimAfterRun,
 } from "./agent-command-restart-recovery.js";
+
+describe("shouldRetainRestartRecoveryClaimAfterRun", () => {
+  it("retains the exact claim after a gateway deadline abort", () => {
+    const timeout = new Error("chat run timed out");
+    timeout.name = "TimeoutError";
+
+    expect(
+      shouldRetainRestartRecoveryClaimAfterRun({
+        abortReason: timeout,
+        claimedRunId: "run-1",
+        runId: "run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retain claims for operator aborts or another run", () => {
+    expect(
+      shouldRetainRestartRecoveryClaimAfterRun({
+        abortReason: new Error("stopped"),
+        claimedRunId: "run-1",
+        runId: "run-1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetainRestartRecoveryClaimAfterRun({
+        abortReason: Object.assign(new Error("timed out"), { name: "TimeoutError" }),
+        claimedRunId: "run-other",
+        runId: "run-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not retain a timed-out claim after committed outbound delivery", () => {
+    expect(
+      shouldRetainRestartRecoveryClaimAfterRun({
+        abortReason: Object.assign(new Error("timed out"), { name: "TimeoutError" }),
+        claimedRunId: "run-1",
+        runId: "run-1",
+        terminalDeliveryEvidence: {
+          captured: true,
+          restartUnsafeSideEffectsDetected: true,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("does not retain a queue-owned source claim after a gateway timeout", () => {
+    expect(
+      shouldRetainRestartRecoveryClaimAfterRun({
+        abortReason: Object.assign(new Error("timed out"), { name: "TimeoutError" }),
+        claimedRunId: "queue-run",
+        runId: "queue-run",
+        sourceRunId: "queue-run",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("buildCurrentRunRestartRecoveryClaim", () => {
   it("persists the complete generated-media policy, including an empty allowlist", () => {

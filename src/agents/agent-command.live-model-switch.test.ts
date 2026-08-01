@@ -2977,6 +2977,81 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
 
+  it("retains the exact delivery claim when the gateway deadline aborts the run", async () => {
+    setupSingleAttemptFallback();
+    const controller = new AbortController();
+    const timeout = new Error("chat run timed out");
+    timeout.name = "TimeoutError";
+    state.runAgentAttemptMock.mockImplementationOnce(async () => {
+      controller.abort(timeout);
+      return makeEmptyResult("openai", "gpt-5.4");
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "continue the long-running research",
+      sessionKey: "agent:main:main",
+      channel: "slack",
+      to: "channel:C0BLY1APGH5",
+      deliver: true,
+      runId: "req-timeout",
+      abortSignal: controller.signal,
+    });
+
+    const cleanupClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return params.entry?.restartRecoveryDeliveryRunId;
+    });
+    expect(cleanupClaims).toContain("req-timeout");
+    expect(cleanupClaims).not.toContain(undefined);
+    expect(cleanupClaims.at(-1)).toBe("req-timeout");
+  });
+
+  it("clears a queue-owned source claim when the gateway deadline aborts the run", async () => {
+    setupSingleAttemptFallback();
+    const controller = new AbortController();
+    const timeout = new Error("chat run timed out");
+    timeout.name = "TimeoutError";
+    state.runAgentAttemptMock.mockImplementationOnce(async () => {
+      controller.abort(timeout);
+      return makeEmptyResult("openai", "gpt-5.4");
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      restartRecoveryDeliveryRunId: "queue-run",
+      restartRecoveryDeliverySourceRunId: "queue-run",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "deliver queued generated media",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "queue-run",
+      abortSignal: controller.signal,
+    });
+
+    const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        runId: params.entry?.restartRecoveryDeliveryRunId,
+        sourceRunId: params.entry?.restartRecoveryDeliverySourceRunId,
+      };
+    });
+    expect(persistedClaims).toContainEqual({ runId: "queue-run", sourceRunId: "queue-run" });
+    expect(persistedClaims.at(-1)).toEqual({ runId: undefined, sourceRunId: undefined });
+  });
+
   it("refreshes delivery session entries through the session accessor", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
