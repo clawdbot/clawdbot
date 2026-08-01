@@ -1408,6 +1408,13 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         "main",
       );
 
+      expect(
+        canPrewarmCombinedSessionStoresForGateway(cfg, {
+          agentIds: ["main", "ops"],
+          maxRows: 1,
+        }),
+      ).toBe(false);
+
       const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
       expect(store["agent:main:main"]?.sessionId).toBe("s-main-unscoped");
       expect(store["agent:ops:main"]).toBeUndefined();

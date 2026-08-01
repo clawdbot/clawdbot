@@ -229,18 +229,19 @@ export function canPrewarmCombinedSessionStoresForGateway(
   cfg: OpenClawConfig,
   params: { agentIds: readonly string[]; maxRows: number },
 ): boolean {
-  const resolvedTargets = params.agentIds.flatMap((agentId) => {
-    const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
-    return [...resolved.durableTargets, ...resolved.incognitoTargets];
-  });
-  const targets = dedupeSessionStoreTargetsBySqliteTarget(resolvedTargets, {
-    defaultAgentId: normalizeAgentId(resolveDefaultAgentId(cfg)),
-  });
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   let totalRows = 0;
-  for (const target of targets) {
-    totalRows += countSessionEntryRowsReadOnly(target);
-    if (totalRows > params.maxRows) {
-      return false;
+  for (const agentId of params.agentIds) {
+    const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
+    const projectionTargets = dedupeSessionStoreTargetsBySqliteTarget(
+      [...resolved.durableTargets, ...resolved.incognitoTargets],
+      { defaultAgentId },
+    );
+    for (const target of projectionTargets) {
+      totalRows += countSessionEntryRowsReadOnly(target);
+      if (totalRows > params.maxRows) {
+        return false;
+      }
     }
   }
   return true;
