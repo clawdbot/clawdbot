@@ -1,4 +1,5 @@
 // Control UI assistant media e2e tests verify scoped media-ticket access through gateway HTTP routes.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -59,13 +60,19 @@ describe("Control UI assistant media e2e", () => {
         expect(ranged.headers.get("accept-ranges")).toBe("bytes");
         expect(ranged.headers.get("content-range")).toBe("bytes 9-15/26");
         expect(ranged.headers.get("content-length")).toBe("7");
-        expect(ranged.headers.get("etag")).toMatch(/^W\/"[A-Za-z0-9_-]+"$/);
+        expect(ranged.headers.get("etag")).toBeNull();
+        expect(ranged.headers.get("last-modified")).toBeNull();
         expect(await ranged.text()).toBe("control");
 
         const mutableFilePath = path.join(mediaDir, "mutable-preview.txt");
         const preservedTime = new Date("2026-07-01T00:00:00.000Z");
         await fs.writeFile(mutableFilePath, "AAAA", "utf8");
         await fs.utimes(mutableFilePath, preservedTime, preservedTime);
+        const originalStat = await fs.stat(mutableFilePath);
+        const legacyEtag = `"${createHash("sha256")
+          .update(`${originalStat.size}:${originalStat.mtimeMs}`)
+          .digest("base64url")}"`;
+        const legacyLastModified = originalStat.mtime.toUTCString();
         const mutableUrl = `${route}?source=${encodeURIComponent(mutableFilePath)}`;
         const initialRange = await fetch(mutableUrl, {
           headers: {
@@ -75,23 +82,43 @@ describe("Control UI assistant media e2e", () => {
         });
         expect(initialRange.status).toBe(206);
         expect(await initialRange.text()).toBe("AA");
-        const initialEtag = initialRange.headers.get("etag");
-        expect(initialEtag).toMatch(/^W\/"[A-Za-z0-9_-]+"$/);
-        const initialLastModified = initialRange.headers.get("last-modified");
-        expect(initialLastModified).toBe(preservedTime.toUTCString());
+        expect(initialRange.headers.get("etag")).toBeNull();
+        expect(initialRange.headers.get("last-modified")).toBeNull();
 
         await fs.writeFile(mutableFilePath, "BBBB", "utf8");
         await fs.utimes(mutableFilePath, preservedTime, preservedTime);
+        const revalidatedByEtag = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            "If-None-Match": legacyEtag,
+          },
+        });
+        expect(revalidatedByEtag.status).toBe(200);
+        expect(revalidatedByEtag.headers.get("etag")).toBeNull();
+        expect(revalidatedByEtag.headers.get("last-modified")).toBeNull();
+        expect(await revalidatedByEtag.text()).toBe("BBBB");
+
+        const revalidatedByDate = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            "If-Modified-Since": legacyLastModified,
+          },
+        });
+        expect(revalidatedByDate.status).toBe(200);
+        expect(revalidatedByDate.headers.get("etag")).toBeNull();
+        expect(revalidatedByDate.headers.get("last-modified")).toBeNull();
+        expect(await revalidatedByDate.text()).toBe("BBBB");
+
         const resumed = await fetch(mutableUrl, {
           headers: {
             Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
             Range: "bytes=2-3",
-            "If-Range": initialEtag ?? "",
+            "If-Range": legacyEtag,
           },
         });
         expect(resumed.status).toBe(200);
-        expect(resumed.headers.get("etag")).toBe(initialEtag);
-        expect(resumed.headers.get("last-modified")).toBe(initialLastModified);
+        expect(resumed.headers.get("etag")).toBeNull();
+        expect(resumed.headers.get("last-modified")).toBeNull();
         expect(resumed.headers.get("content-range")).toBeNull();
         expect(await resumed.text()).toBe("BBBB");
 
@@ -99,14 +126,24 @@ describe("Control UI assistant media e2e", () => {
           headers: {
             Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
             Range: "bytes=2-3",
-            "If-Range": initialLastModified ?? "",
+            "If-Range": legacyLastModified,
           },
         });
         expect(resumedByDate.status).toBe(200);
-        expect(resumedByDate.headers.get("etag")).toBe(initialEtag);
-        expect(resumedByDate.headers.get("last-modified")).toBe(initialLastModified);
+        expect(resumedByDate.headers.get("etag")).toBeNull();
+        expect(resumedByDate.headers.get("last-modified")).toBeNull();
         expect(resumedByDate.headers.get("content-range")).toBeNull();
         expect(await resumedByDate.text()).toBe("BBBB");
+
+        const currentRange = await fetch(mutableUrl, {
+          headers: {
+            Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}`,
+            Range: "bytes=2-3",
+          },
+        });
+        expect(currentRange.status).toBe(206);
+        expect(currentRange.headers.get("content-range")).toBe("bytes 2-3/4");
+        expect(await currentRange.text()).toBe("BB");
 
         const head = await fetch(
           `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
@@ -115,7 +152,8 @@ describe("Control UI assistant media e2e", () => {
         expect(head.status).toBe(200);
         expect(head.headers.get("accept-ranges")).toBe("bytes");
         expect(head.headers.get("content-length")).toBe("26");
-        expect(head.headers.get("etag")).toBe(ranged.headers.get("etag"));
+        expect(head.headers.get("etag")).toBeNull();
+        expect(head.headers.get("last-modified")).toBeNull();
         expect(await head.text()).toBe("");
 
         for (const method of ["GET", "HEAD"]) {
@@ -124,14 +162,15 @@ describe("Control UI assistant media e2e", () => {
             {
               method,
               headers: {
-                "If-None-Match": ranged.headers.get("etag") ?? "",
+                "If-None-Match": "*",
                 Range: "bytes=9-15",
                 "If-Range": '"stale"',
               },
             },
           );
           expect(notModified.status).toBe(304);
-          expect(notModified.headers.get("etag")).toBe(ranged.headers.get("etag"));
+          expect(notModified.headers.get("etag")).toBeNull();
+          expect(notModified.headers.get("last-modified")).toBeNull();
           expect(notModified.headers.get("content-length")).toBeNull();
           expect(await notModified.text()).toBe("");
         }

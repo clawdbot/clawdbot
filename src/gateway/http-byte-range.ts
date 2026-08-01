@@ -19,7 +19,7 @@ type FileIdentity = {
   mtimeMs: number;
 };
 
-type ValidatorStrength = "strong" | "weak";
+type ValidatorPolicy = "immutable-metadata" | "none";
 
 type ByteSlice = {
   start: number;
@@ -27,8 +27,8 @@ type ByteSlice = {
 };
 
 type ByteResponsePlan = {
-  etag: string;
-  lastModified: string;
+  etag?: string;
+  lastModified?: string;
 } & (
   | {
       kind: "full";
@@ -117,10 +117,9 @@ function parseConditionalHttpDate(value: string, nowMs: number): number | undefi
   return seconds === 60 ? timestamp + 1_000 : timestamp;
 }
 
-function createByteEtag(file: FileIdentity, strength: ValidatorStrength): string {
+function createByteEtag(file: FileIdentity): string {
   const digest = createHash("sha256").update(`${file.size}:${file.mtimeMs}`).digest("base64url");
-  const opaqueTag = `"${digest}"`;
-  return strength === "weak" ? `W/${opaqueTag}` : opaqueTag;
+  return `"${digest}"`;
 }
 
 function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "unsatisfiable" {
@@ -160,15 +159,24 @@ function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "u
 export function resolveByteResponse(params: {
   file: FileIdentity;
   nowMs?: number;
-  validatorStrength: ValidatorStrength;
+  validatorPolicy: ValidatorPolicy;
   method?: string;
   request?: Pick<IncomingMessage, "headers" | "headersDistinct">;
 }): ByteResponsePlan {
-  const etag = createByteEtag(params.file, params.validatorStrength);
-  const originatedAtMs = params.nowMs ?? Date.now();
+  const usesMetadataValidators = params.validatorPolicy === "immutable-metadata";
+  const etag = usesMetadataValidators ? createByteEtag(params.file) : undefined;
+  const originatedAtMs = usesMetadataValidators ? (params.nowMs ?? Date.now()) : undefined;
   // Filesystem clocks may lead this host; validators cannot postdate message origination.
-  const lastModifiedMs = Math.floor(Math.min(params.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
-  const lastModified = new Date(lastModifiedMs).toUTCString();
+  const lastModifiedMs =
+    originatedAtMs === undefined
+      ? undefined
+      : Math.floor(Math.min(params.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+  const lastModified =
+    lastModifiedMs === undefined ? undefined : new Date(lastModifiedMs).toUTCString();
+  const validators = {
+    ...(etag ? { etag } : {}),
+    ...(lastModified ? { lastModified } : {}),
+  };
   const headers = params.request?.headers;
   const ifNoneMatch = headers?.["if-none-match"];
   const ifModifiedSinceValues = params.request?.headersDistinct["if-modified-since"];
@@ -180,19 +188,20 @@ export function resolveByteResponse(params: {
     (params.method === "GET" || params.method === "HEAD") &&
     (matchesHttpIfNoneMatch(ifNoneMatch, etag) ||
       (ifNoneMatch === undefined &&
+        originatedAtMs !== undefined &&
+        lastModifiedMs !== undefined &&
         typeof ifModifiedSince === "string" &&
         (parseConditionalHttpDate(ifModifiedSince, originatedAtMs) ?? Number.NEGATIVE_INFINITY) >=
           lastModifiedMs))
   ) {
     // RFC 9110 evaluates representation validators before Range or If-Range.
-    return { kind: "not-modified", statusCode: 304, etag, lastModified };
+    return { kind: "not-modified", statusCode: 304, ...validators };
   }
   const full = {
     kind: "full",
     statusCode: 200,
     contentLength: params.file.size,
-    etag,
-    lastModified,
+    ...validators,
   } as const;
   const rangeHeader = headers?.range;
   if (params.method !== "GET" || typeof rangeHeader !== "string") {
@@ -201,13 +210,13 @@ export function resolveByteResponse(params: {
   const ifRangeHeader = headers?.["if-range"];
   if (
     ifRangeHeader !== undefined &&
-    (params.validatorStrength === "weak" ||
+    (params.validatorPolicy === "none" ||
       (ifRangeHeader !== etag &&
         // If-Range must exactly match the emitted HTTP-date; parsing accepts invalid lookalikes.
         ifRangeHeader !== lastModified))
   ) {
-    // Mutable files only have weak metadata validators, so neither their ETag nor
-    // Last-Modified date can safely authorize reusing bytes from an earlier response.
+    // Mutable files have no stable representation validator, so no prior response
+    // can safely authorize reusing bytes from the current file.
     return full;
   }
 
@@ -220,8 +229,7 @@ export function resolveByteResponse(params: {
       kind: "unsatisfiable",
       statusCode: 416,
       contentLength: 0,
-      etag,
-      lastModified,
+      ...validators,
       size: params.file.size,
     };
   }
@@ -229,8 +237,7 @@ export function resolveByteResponse(params: {
     kind: "partial",
     statusCode: 206,
     contentLength: range.end - range.start + 1,
-    etag,
-    lastModified,
+    ...validators,
     range,
     size: params.file.size,
   };
@@ -239,8 +246,12 @@ export function resolveByteResponse(params: {
 export function writeByteHeaders(res: ServerResponse, plan: ByteResponsePlan): void {
   res.statusCode = plan.statusCode;
   res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("ETag", plan.etag);
-  res.setHeader("Last-Modified", plan.lastModified);
+  if (plan.etag) {
+    res.setHeader("ETag", plan.etag);
+  }
+  if (plan.lastModified) {
+    res.setHeader("Last-Modified", plan.lastModified);
+  }
   if (plan.kind === "not-modified") {
     return;
   }

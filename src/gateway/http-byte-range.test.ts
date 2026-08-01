@@ -33,15 +33,22 @@ function createByteRequest(
   };
 }
 
-const STRONG_FILE = { file: FILE, validatorStrength: "strong" } as const;
-const WEAK_FILE = { file: FILE, validatorStrength: "weak" } as const;
+const IMMUTABLE_FILE = { file: FILE, validatorPolicy: "immutable-metadata" } as const;
+const MUTABLE_FILE = { file: FILE, validatorPolicy: "none" } as const;
 
 function resolveByteResponse(
-  params: Omit<Parameters<typeof resolveByteResponseImpl>[0], "validatorStrength"> & {
-    validatorStrength?: "strong" | "weak";
+  params: Omit<Parameters<typeof resolveByteResponseImpl>[0], "validatorPolicy"> & {
+    validatorPolicy?: "immutable-metadata" | "none";
   },
 ) {
-  return resolveByteResponseImpl({ validatorStrength: "strong", ...params });
+  return resolveByteResponseImpl({ validatorPolicy: "immutable-metadata", ...params });
+}
+
+function requireEtag(plan: ReturnType<typeof resolveByteResponse>): string {
+  if (!plan.etag) {
+    throw new Error("expected an ETag");
+  }
+  return plan.etag;
 }
 
 describe("resolveByteResponse", () => {
@@ -128,10 +135,10 @@ describe("resolveByteResponse", () => {
   );
 
   it("honors a matching strong If-Range ETag", () => {
-    const etag = resolveByteResponse(STRONG_FILE).etag;
+    const etag = requireEtag(resolveByteResponse(IMMUTABLE_FILE));
     expect(
       resolveByteResponse({
-        ...STRONG_FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
       }),
@@ -212,7 +219,7 @@ describe("resolveByteResponse", () => {
     "bounds the future Last-Modified validator on %s not-modified responses",
     (method) => {
       const nowMs = FILE.mtimeMs - 60_000;
-      const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
+      const etag = requireEtag(resolveByteResponse({ file: FILE, nowMs }));
 
       expect(
         resolveByteResponse({
@@ -415,43 +422,30 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
-  it("does not use a weak metadata ETag as an If-Range validator", () => {
-    const etag = resolveByteResponse(WEAK_FILE).etag;
+  it("does not use an ETag as an If-Range validator for mutable content", () => {
     expect(
       resolveByteResponse({
-        ...WEAK_FILE,
+        ...MUTABLE_FILE,
         method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
+        request: createByteRequest({ range: "bytes=1-2", "if-range": '"stale"' }),
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
-  it("does not use the strong form of a weak metadata ETag as an If-Range validator", () => {
-    const etag = resolveByteResponse(WEAK_FILE).etag;
+  it("does not use a Last-Modified date as an If-Range validator for mutable content", () => {
     expect(
       resolveByteResponse({
-        ...WEAK_FILE,
+        ...MUTABLE_FILE,
         method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": etag.slice(2) }),
+        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
-  it("does not use a weak metadata Last-Modified date as an If-Range validator", () => {
-    const lastModified = resolveByteResponse(WEAK_FILE).lastModified;
+  it("still serves an unconditional range for mutable content", () => {
     expect(
       resolveByteResponse({
-        ...WEAK_FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": lastModified }),
-      }),
-    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
-  });
-
-  it("still serves an unconditional range for a weakly validated file", () => {
-    expect(
-      resolveByteResponse({
-        ...WEAK_FILE,
+        ...MUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2" }),
       }),
@@ -461,7 +455,7 @@ describe("resolveByteResponse", () => {
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
       resolveByteResponse({
-        ...STRONG_FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
       }),
@@ -475,7 +469,7 @@ describe("resolveByteResponse", () => {
     { label: "list", header: (etag: string) => `"other", ${etag}` },
     { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
   ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = requireEtag(resolveByteResponse({ file: FILE }));
     const plan = resolveByteResponse({
       file: FILE,
       method: "GET",
@@ -497,21 +491,40 @@ describe("resolveByteResponse", () => {
     expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
-  it("weakly compares the strong form of a current weak ETag for If-None-Match", () => {
-    const etag = resolveByteResponse(WEAK_FILE).etag;
+  it("does not match a specific If-None-Match tag without a current validator", () => {
     expect(
       resolveByteResponse({
-        ...WEAK_FILE,
+        ...MUTABLE_FILE,
         method: "GET",
-        request: createByteRequest({ "if-none-match": etag.slice(2) }),
+        request: createByteRequest({ "if-none-match": '"stale"' }),
       }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304, etag });
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("still honors If-None-Match wildcard for an existing mutable representation", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-none-match": "*" }),
+      }),
+    ).toEqual({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it("ignores If-Modified-Since without a reliable modification validator", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": LAST_MODIFIED }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
   it.each(["GET", "HEAD"])(
     "evaluates matching If-None-Match before Range and If-Range for %s",
     (method) => {
-      const etag = resolveByteResponse({ file: FILE }).etag;
+      const etag = requireEtag(resolveByteResponse({ file: FILE }));
 
       expect(
         resolveByteResponse({
@@ -528,7 +541,7 @@ describe("resolveByteResponse", () => {
   );
 
   it("keeps the requested range when If-None-Match does not match", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = requireEtag(resolveByteResponse({ file: FILE }));
 
     expect(
       resolveByteResponse({
@@ -567,19 +580,30 @@ describe("resolveByteResponse", () => {
 });
 
 describe("byte ETag generation", () => {
-  it("is stable for the same file identity and reflects the requested strength", () => {
-    const strongEtag = resolveByteResponse(STRONG_FILE).etag;
-    expect(resolveByteResponse({ ...STRONG_FILE, file: { ...FILE } }).etag).toBe(strongEtag);
+  it("is stable for the same immutable file identity", () => {
+    const strongEtag = requireEtag(resolveByteResponse(IMMUTABLE_FILE));
+    expect(resolveByteResponse({ ...IMMUTABLE_FILE, file: { ...FILE } }).etag).toBe(strongEtag);
     expect(
-      resolveByteResponse({ ...STRONG_FILE, file: { ...FILE, size: FILE.size + 1 } }).etag,
+      resolveByteResponse({ ...IMMUTABLE_FILE, file: { ...FILE, size: FILE.size + 1 } }).etag,
     ).not.toBe(strongEtag);
     expect(
-      resolveByteResponse({ ...STRONG_FILE, file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag,
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 },
+      }).etag,
     ).not.toBe(strongEtag);
     expect(strongEtag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+  });
 
-    const weakEtag = resolveByteResponse(WEAK_FILE).etag;
-    expect(weakEtag).toBe(`W/${strongEtag}`);
+  it("omits representation validators for mutable content", () => {
+    const plan = resolveByteResponse(MUTABLE_FILE);
+    const setHeader = vi.fn();
+    const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+
+    expect(plan).toEqual({ kind: "full", statusCode: 200, contentLength: FILE.size });
+    writeByteHeaders(res, plan);
+    expect(setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
+    expect(setHeader).not.toHaveBeenCalledWith("Last-Modified", expect.anything());
   });
 });
 

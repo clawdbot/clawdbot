@@ -730,7 +730,7 @@ export async function handleControlUiAssistantMediaRequest(
     res.setHeader("Cache-Control", "no-cache");
     const byteResponse = resolveByteResponse({
       file: opened.stat,
-      validatorStrength: "weak",
+      validatorPolicy: "none",
       method: req.method,
       request: req,
     });
