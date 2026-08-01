@@ -7,6 +7,7 @@ import type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asObjectRecord,
+  defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor";
@@ -14,6 +15,13 @@ import {
 const RESTRICTED_GROUP_TOOLS: GroupToolPolicyConfig = {
   deny: ["exec", "read", "write"],
 };
+
+const streamingTransportMigration = defineKeyMoveMigration({
+  from: ["streaming", "c2cStreamApi"],
+  to: ["streaming", "nativeTransport"],
+  match: (value) => value !== undefined,
+  sourceOwn: false,
+});
 
 // QQBot's legacy scalar `streaming` is not a plain mode alias: `true` enabled
 // block streaming AND the official C2C stream API (shouldUseOfficialC2cStream
@@ -28,10 +36,7 @@ function hasLegacyStreamingValue(value: unknown): boolean {
   if (!entry) {
     return false;
   }
-  return (
-    typeof entry.streaming === "boolean" ||
-    asObjectRecord(entry.streaming)?.c2cStreamApi !== undefined
-  );
+  return typeof entry.streaming === "boolean" || streamingTransportMigration.hasLegacy(entry);
 }
 
 function migrateStreamingValue(params: {
@@ -52,27 +57,7 @@ function migrateStreamingValue(params: {
     }
     return { entry: { ...params.entry, streaming: next }, changed: true };
   }
-  const streamingRecord = asObjectRecord(streaming);
-  if (!streamingRecord || streamingRecord.c2cStreamApi === undefined) {
-    return { entry: params.entry, changed: false };
-  }
-  const { c2cStreamApi, ...rest } = streamingRecord;
-  const next: Record<string, unknown> = { ...rest };
-  if (next.nativeTransport === undefined) {
-    next.nativeTransport = c2cStreamApi;
-    params.changes.push(`Moved ${path}.c2cStreamApi → ${path}.nativeTransport.`);
-  } else {
-    params.changes.push(`Removed ${path}.c2cStreamApi (${path}.nativeTransport already set).`);
-  }
-  return { entry: { ...params.entry, streaming: next }, changed: true };
-}
-
-function hasLegacyGroupToolPolicy(value: unknown): boolean {
-  const groups = asObjectRecord(value);
-  if (!groups) {
-    return false;
-  }
-  return Object.values(groups).some((group) => asObjectRecord(group)?.toolPolicy !== undefined);
+  return streamingTransportMigration.normalize(params);
 }
 
 function migrateToolPolicy(value: unknown): GroupToolPolicyConfig | undefined {
@@ -92,58 +77,55 @@ function describeToolPolicy(value: unknown): string {
   return typeof value === "string" ? value : String(value);
 }
 
-function migrateGroups(params: {
-  groups: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { groups: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextGroups = { ...params.groups };
-  for (const [groupId, rawGroup] of Object.entries(params.groups)) {
-    const group = asObjectRecord(rawGroup);
-    if (!group || group.toolPolicy === undefined) {
-      continue;
-    }
-    const { toolPolicy, ...rest } = group;
-    const nextGroup = { ...rest };
-    const policy = migrateToolPolicy(toolPolicy);
-    const path = `${params.pathPrefix}.${groupId}`;
-    if (nextGroup.tools !== undefined) {
-      params.changes.push(`Removed ${path}.toolPolicy (${path}.tools already exists).`);
-    } else if (policy) {
-      nextGroup.tools = policy;
-      params.changes.push(
-        `Moved ${path}.toolPolicy=${describeToolPolicy(toolPolicy)} to ${path}.tools.`,
-      );
-    } else {
-      params.changes.push(
-        `Removed unsupported ${path}.toolPolicy=${describeToolPolicy(toolPolicy)}.`,
-      );
-    }
-    nextGroups[groupId] = nextGroup;
-    changed = true;
-  }
-  return { groups: nextGroups, changed };
-}
+const groupToolPolicyMigration = defineKeyMoveMigration({
+  scope: ["*"],
+  from: ["toolPolicy"],
+  to: ["tools"],
+  match: (value) => value !== undefined,
+  sourceOwn: false,
+  map: (value) => {
+    const policy = migrateToolPolicy(value);
+    return policy ? { value: policy } : null;
+  },
+  movedMessage: ({ sourcePath, targetPath, sourceValue }) =>
+    `Moved ${sourcePath}=${describeToolPolicy(sourceValue)} to ${targetPath}.`,
+  existingMessage: ({ sourcePath, targetPath }) =>
+    `Removed ${sourcePath} (${targetPath} already exists).`,
+  invalidMessage: ({ sourcePath, sourceValue }) =>
+    `Removed unsupported ${sourcePath}=${describeToolPolicy(sourceValue)}.`,
+});
+
+const voiceDirectUploadFormatsMigration = defineKeyMoveMigration({
+  from: ["voiceDirectUploadFormats"],
+  to: ["audioFormatPolicy", "uploadDirectFormats"],
+  match: (value) => value !== undefined,
+  sourceOwn: false,
+});
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "qqbot"],
     message:
-      'channels.qqbot.streaming (boolean) and channels.qqbot.streaming.c2cStreamApi are legacy; use channels.qqbot.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
-    match: hasLegacyStreamingValue,
+      'channels.qqbot streaming aliases and voiceDirectUploadFormats are legacy; use streaming.{mode,nativeTransport} and audioFormatPolicy.uploadDirectFormats. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyStreamingValue(value) || voiceDirectUploadFormatsMigration.hasLegacy(value),
   },
   {
     path: ["channels", "qqbot", "accounts"],
     message:
-      'channels.qqbot.accounts.<id>.streaming (boolean) and streaming.c2cStreamApi are legacy; use channels.qqbot.accounts.<id>.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyStreamingValue),
+      'channels.qqbot account streaming aliases and voiceDirectUploadFormats are legacy; use streaming.{mode,nativeTransport} and audioFormatPolicy.uploadDirectFormats. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(
+        value,
+        (entry) =>
+          hasLegacyStreamingValue(entry) || voiceDirectUploadFormatsMigration.hasLegacy(entry),
+      ),
   },
   {
     path: ["channels", "qqbot", "groups"],
     message:
       'channels.qqbot.groups.<id>.toolPolicy is legacy and was ignored by QQBot group tool enforcement; use channels.qqbot.groups.<id>.tools instead. Run "openclaw doctor --fix".',
-    match: hasLegacyGroupToolPolicy,
+    match: groupToolPolicyMigration.hasLegacy,
   },
   {
     path: ["channels", "qqbot", "accounts"],
@@ -151,7 +133,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.qqbot.accounts.<id>.groups.<groupId>.toolPolicy is legacy and was ignored by QQBot group tool enforcement; use channels.qqbot.accounts.<id>.groups.<groupId>.tools instead. Run "openclaw doctor --fix".',
     match: (value) =>
       hasLegacyAccountStreamingAliases(value, (account) =>
-        hasLegacyGroupToolPolicy(asObjectRecord(account)?.groups),
+        groupToolPolicyMigration.hasLegacy(asObjectRecord(account)?.groups),
       ),
   },
 ];
@@ -161,19 +143,25 @@ function normalizeQqbotEntry(params: {
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
-  const streaming = migrateStreamingValue(params);
-  const groups = asObjectRecord(streaming.entry.groups);
+  let { entry, changed } = migrateStreamingValue(params);
+  const audioFormats = voiceDirectUploadFormatsMigration.normalize({
+    ...params,
+    entry,
+  });
+  entry = audioFormats.entry;
+  changed ||= audioFormats.changed;
+  const groups = asObjectRecord(entry.groups);
   if (!groups) {
-    return streaming;
+    return { entry, changed };
   }
-  const migrated = migrateGroups({
-    groups,
+  const migrated = groupToolPolicyMigration.normalize({
+    entry: groups,
     pathPrefix: `${params.pathPrefix}.groups`,
     changes: params.changes,
   });
   return migrated.changed
-    ? { entry: { ...streaming.entry, groups: migrated.groups }, changed: true }
-    : streaming;
+    ? { entry: { ...entry, groups: migrated.entry }, changed: true }
+    : { entry, changed };
 }
 
 export function normalizeCompatibilityConfig({

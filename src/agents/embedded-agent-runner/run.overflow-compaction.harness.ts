@@ -224,7 +224,9 @@ export const mockedResolveModelAsync = vi.fn(
   async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
     createMockResolvedModel(provider, modelId, cfg),
 );
-const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedPrepareProviderRuntimeAuth = vi.fn<
+  (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
+>(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedBuildEmbeddedRunPayloads = vi.fn<
@@ -416,9 +418,9 @@ export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
+  agentId: "main",
   sessionId: "test-session",
-  sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
+  sessionKey: "agent:main:test-key",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
@@ -1003,7 +1005,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   const { runEmbeddedAgent } = await import("./run.js");
-  return { runEmbeddedAgent };
+  return {
+    runEmbeddedAgent: (params) =>
+      runEmbeddedAgent({ ...params, agentId: params.agentId ?? "main" }),
+  };
 }
 
 /** Move one-time runner compilation out of individual behavior timings. */

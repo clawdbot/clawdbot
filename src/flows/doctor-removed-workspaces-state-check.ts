@@ -1,6 +1,7 @@
 // Doctor cleanup for state left by the retired experimental Workspaces plugin.
 import { lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -68,7 +69,7 @@ async function configuredAgentWorkspaceCollisions(
 ): Promise<string[]> {
   const configured: Array<{ label: string; workspace: string | undefined }> = [
     { label: "agents.defaults.workspace", workspace: cfg.agents?.defaults?.workspace },
-    ...(cfg.agents?.list ?? []).map((agent) => ({
+    ...listAgentEntries(cfg).map((agent) => ({
       label: `agents.list.${agent.id}.workspace`,
       workspace: agent.workspace,
     })),

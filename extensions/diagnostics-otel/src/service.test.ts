@@ -191,16 +191,15 @@ import {
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent } from "../api.js";
+import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   CHILD_SPAN_ID,
   createOtelContext,
   createTestTrace,
   GRANDCHILD_SPAN_ID,
-  INPUT_ONLY_CAPTURE,
   MODEL_CALL_SPAN_ID,
   MODEL_CALL_FIXTURE,
-  MODEL_CONTENT_CAPTURE,
   MODEL_FIXTURE,
   MODEL_USAGE_SPAN_ID,
   type OtelContextFlags,
@@ -216,6 +215,8 @@ import {
 function numberedSpanId(index: number) {
   return (index + 0x1000).toString(16).padStart(16, "0");
 }
+// Longer than the default 30-minute background exec timeout.
+const LATE_CHILD_ELAPSED_MS = 30 * 60_000 + 1_000;
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
@@ -1974,18 +1975,6 @@ describe("diagnostics-otel service", () => {
     expect(emitCall?.body).toBe("log");
   });
 
-  test("keeps granular content capture from enabling OTLP log bodies", async () => {
-    const emitCall = await emitAndCaptureLog(
-      {
-        level: "INFO",
-        message: "model replied OTEL-QA-OK",
-      },
-      { captureContent: { enabled: true, inputMessages: true } },
-    );
-
-    expect(emitCall?.body).toBe("log");
-  });
-
   test("redacts sensitive data from log messages before export when broad content capture is enabled", async () => {
     const emitCall = await emitAndCaptureLog(
       {
@@ -3662,24 +3651,92 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  test("removes retained run contexts after queued diagnostics drain", async () => {
+  // Background commands can finish long after run.completed ended the parent span.
+  // A missed parent lookup makes OTel mint a fresh trace id, silently splitting the
+  // turn into one-span traces, so the link must not depend on elapsed time.
+  test.each([
+    [
+      "openclaw.model.call",
+      {
+        type: "model.call.completed",
+        ...MODEL_CALL_FIXTURE,
+        durationMs: 80,
+        trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
+      },
+    ],
+    [
+      "openclaw.tool.execution",
+      {
+        type: "tool.execution.completed",
+        runId: "run-1",
+        toolName: "read",
+        durationMs: 20,
+        trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+      },
+    ],
+  ] as const)(
+    "parents late %s spans into the run trace after more than 30 minutes",
+    async (spanName, childEvent) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        await startOtelService({ traces: true, metrics: true });
+
+        emitRunStarted();
+        const runSpanContext = spanByName("openclaw.run").spanContext();
+        emitRunCompleted();
+
+        vi.setSystemTime(Date.now() + LATE_CHILD_ELAPSED_MS);
+        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
+        await flushDiagnosticEvents();
+
+        emitTrustedDiagnosticEvent(childEvent);
+        await flushDiagnosticEvents();
+
+        const parentContext = startedSpanParentContexts(spanName)[0];
+        expect(parentContext?.traceId).toBe(TRACE_ID);
+        expect(parentContext?.spanId).toBe(runSpanContext.spanId);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // Retained contexts outlive the turn, so this bound is what keeps a long-lived
+  // gateway from growing the map without limit.
+  test("bounds retained run contexts by evicting the oldest completed runs", async () => {
     await startOtelService({ traces: true, metrics: true });
 
-    emitQueuedRunWithModelCalls();
-
-    await waitForDiagnosticEventsDrained();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    await waitForDiagnosticEventsDrained();
-    await Promise.resolve();
-    telemetryState.tracer.setSpanContext.mockClear();
+    // Each completed run retains its own span id plus its upstream alias, so
+    // this comfortably overflows the bound and evicts the earliest run.
+    for (let index = 0; index < MAX_RETAINED_TRUSTED_SPAN_CONTEXTS; index += 1) {
+      const runId = `run-${index}`;
+      const runTrace = createTestTrace(numberedSpanId(index), SPAN_ID);
+      emitRunStarted({ runId, trace: runTrace });
+      emitRunCompleted({ runId, trace: runTrace });
+    }
+    const newestRunSpanId = numberedSpanId(MAX_RETAINED_TRUSTED_SPAN_CONTEXTS - 1);
+    const newestRunSpan = telemetryState.spans.findLast((span) => span.name === "openclaw.run");
     telemetryState.tracer.startSpan.mockClear();
 
-    emitDefaultModelUsage();
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...MODEL_FIXTURE,
+      usage: { input: 3, output: 2, total: 5 },
+      durationMs: 10,
+      trace: createTestTrace(GRANDCHILD_SPAN_ID, newestRunSpanId),
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...MODEL_FIXTURE,
+      usage: { input: 3, output: 2, total: 5 },
+      durationMs: 10,
+      trace: createTestTrace(MODEL_USAGE_SPAN_ID, numberedSpanId(0)),
+    });
 
-    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
-    expect(startedSpanCall("openclaw.model.usage")?.[2]).toBeUndefined();
+    const usageParents = startedSpanParentContexts("openclaw.model.usage");
+    expect(usageParents[0]?.spanId).toBe(newestRunSpan?.spanContext().spanId);
+    expect(usageParents[1]).toBeUndefined();
   });
 
   test("clears retained run contexts when the service stops", async () => {
@@ -3839,6 +3896,35 @@ describe("diagnostics-otel service", () => {
         (call) => call[0] === "openclaw.harness.run",
       ),
     ).toHaveLength(1);
+  });
+
+  // Exec spans used to always be roots, which stranded every shell command in its
+  // own single-span trace instead of nesting it under the run that spawned it.
+  test("nests exec spans under the run when the trace context is OpenClaw-owned", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitRunStarted();
+    const runSpanContext = spanByName("openclaw.run").spanContext();
+    const execEvent = {
+      type: "exec.process.completed",
+      target: "host",
+      mode: "child",
+      outcome: "completed",
+      durationMs: 30,
+      commandLength: 12,
+      // Exec carries the ambient run scope, so its own span id is the run's.
+      trace: createTestTrace(CHILD_SPAN_ID, SPAN_ID),
+    } as const;
+
+    emitDiagnosticEventWithTrustedTraceContext(execEvent);
+    emitDiagnosticEvent(execEvent);
+    await flushDiagnosticEvents();
+
+    const execParents = startedSpanParentContexts("openclaw.exec");
+    expect(execParents[0]?.traceId).toBe(TRACE_ID);
+    expect(execParents[0]?.spanId).toBe(runSpanContext.spanId);
+    // A plain untrusted emitter must not be able to inject a parent link.
+    expect(execParents[1]).toBeUndefined();
   });
 
   test("exports exec process spans without command text", async () => {
@@ -4142,18 +4228,11 @@ describe("diagnostics-otel service", () => {
     expect(toolOptions?.startTime).toBeTypeOf("number");
   });
 
-  test("exports bounded redacted content when capture fields are opted in", async () => {
+  test("exports bounded redacted content when capture is enabled", async () => {
     await startOtelService({
       traces: true,
       metrics: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: true,
-      },
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4188,7 +4267,7 @@ describe("diagnostics-otel service", () => {
     const toolAttrs = startedSpanOptions("openclaw.tool.execution")?.attributes;
 
     expect(modelAttrs?.["openclaw.content.output_messages"]).toBe("model reply");
-    expect(modelAttrs?.["openclaw.content.system_prompt"]).toBe("system prompt");
+    expect(Object.hasOwn(modelAttrs ?? {}, "openclaw.content.system_prompt")).toBe(false);
     expect(String(modelAttrs?.["openclaw.content.input_messages"])).not.toContain(
       "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
     );
@@ -4208,10 +4287,10 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  test("omits absent model content fields when capture fields are opted in", async () => {
+  test("omits absent model content fields when capture is enabled", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4239,7 +4318,7 @@ describe("diagnostics-otel service", () => {
   test("exports Phoenix-readable GenAI prompt, output, and tool definition attributes", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4277,9 +4356,7 @@ describe("diagnostics-otel service", () => {
     await flushDiagnosticEvents();
 
     const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
-    expect(attrs?.["gen_ai.system_instructions"]).toBe(
-      JSON.stringify([{ type: "text", content: "be exact" }]),
-    );
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.system_instructions")).toBe(false);
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
       { role: "user", parts: [{ type: "text", content: "what changed?" }] },
       {
@@ -4320,7 +4397,7 @@ describe("diagnostics-otel service", () => {
   test("exports Claude CLI turn content through the existing Phoenix GenAI keys", async () => {
     await startOtelService({
       traces: true,
-      captureContent: MODEL_CONTENT_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4362,22 +4439,136 @@ describe("diagnostics-otel service", () => {
         role: "assistant",
         parts: [
           { type: "text", content: "trace complete" },
-          { type: "reasoning", content: "checked the span" },
           { type: "tool_call", id: "tool-1", name: "Read" },
         ],
         finish_reason: "end_turn",
       },
     ]);
-    expect(JSON.parse(stringAttribute(attrs, "gen_ai.system_instructions"))).toEqual([
-      { type: "text", content: "OpenClaw appended instructions" },
+    const compatibilityOutput = stringAttribute(attrs, "openclaw.content.output_messages");
+    expect(compatibilityOutput).not.toContain("checked the span");
+    expect(JSON.parse(compatibilityOutput)[0]?.content).toEqual([
+      { type: "text", text: "trace complete" },
+      { type: "reasoning", redacted: true },
+      { type: "tool_call", id: "tool-1", name: "Read" },
     ]);
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.system_instructions")).toBe(false);
     expect(Object.hasOwn(attrs ?? {}, "gen_ai.tool.definitions")).toBe(false);
+  });
+
+  test("never exports provider-internal thinking payloads in model message attributes", async () => {
+    await startOtelService({
+      traces: true,
+      captureContent: true,
+    });
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "assistant",
+            reasoning_content: "input-message-internal-canary",
+            reasoning_details: [{ text: "input-details-internal-canary" }],
+            content: [
+              { type: "thinking", thinking: "input-internal-canary" },
+              { type: "reasoning", content: "input-part-internal-canary" },
+              {
+                type: "text",
+                text: "visible input",
+                textSignature: "input-text-signature-internal-canary",
+              },
+            ],
+          },
+        ],
+        outputMessages: [
+          {
+            role: "assistant",
+            reasoning: "output-message-internal-canary",
+            reasoning_text: "output-text-internal-canary",
+            content: [
+              { type: "redacted_thinking", data: "output-internal-canary" },
+              { type: "text", text: "visible output" },
+              {
+                type: "toolCall",
+                id: "tool-1",
+                name: "lookup",
+                arguments: { query: "visible" },
+                thoughtSignature: "output-thought-signature-internal-canary",
+              },
+            ],
+          },
+        ],
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
+    const internalCanaries = [
+      "input-internal-canary",
+      "input-message-internal-canary",
+      "input-details-internal-canary",
+      "input-part-internal-canary",
+      "output-internal-canary",
+      "output-message-internal-canary",
+      "output-text-internal-canary",
+      "input-text-signature-internal-canary",
+      "output-thought-signature-internal-canary",
+    ];
+    for (const key of [
+      "gen_ai.input.messages",
+      "gen_ai.output.messages",
+      "openclaw.content.input_messages",
+      "openclaw.content.output_messages",
+    ]) {
+      const value = stringAttribute(attrs, key);
+      for (const canary of internalCanaries) {
+        expect(value).not.toContain(canary);
+      }
+    }
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))[0]?.parts).toEqual([
+      { type: "text", content: "visible input" },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))[0]?.parts).toEqual([
+      { type: "text", content: "visible output" },
+      {
+        type: "tool_call",
+        id: "tool-1",
+        name: "lookup",
+        arguments: { query: "visible" },
+      },
+    ]);
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[0],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[1],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[0],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[2],
+    ).toEqual({ type: "text", text: "visible input" });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[2],
+    ).toEqual({
+      type: "toolCall",
+      id: "tool-1",
+      name: "lookup",
+      arguments: { query: "visible" },
+    });
   });
 
   test("emits semconv response text for tool response parts", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4444,7 +4635,7 @@ describe("diagnostics-otel service", () => {
   test("flattens oversized pure-text tool results with a truncation marker", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     const textParts = Array.from({ length: 201 }, (_, index) => ({
@@ -4479,7 +4670,7 @@ describe("diagnostics-otel service", () => {
   test("normalizes snake_case tool_call parts the same as camelCase toolCall parts", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     emitTrustedModelCallCompletedWithContent(
@@ -4523,7 +4714,7 @@ describe("diagnostics-otel service", () => {
   test("truncates oversized GenAI input messages instead of silently dropping them", async () => {
     await startOtelService({
       traces: true,
-      captureContent: INPUT_ONLY_CAPTURE,
+      captureContent: true,
     });
 
     // Build messages that exceed MAX_OTEL_CONTENT_ATTRIBUTE_CHARS (128KB) in total.
@@ -4561,12 +4752,7 @@ describe("diagnostics-otel service", () => {
   test("keeps single oversized GenAI messages and tool definitions parseable", async () => {
     await startOtelService({
       traces: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: false,
-        toolDefinitions: true,
-      },
+      captureContent: true,
     });
 
     // The 8,192-character candidate budget leaves an 8,178-character text prefix;
@@ -4632,54 +4818,6 @@ describe("diagnostics-otel service", () => {
         type: "object",
       },
     });
-  });
-
-  test("exports tool definitions without requiring input message capture", async () => {
-    await startOtelService({
-      traces: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: false,
-        toolDefinitions: true,
-      },
-    });
-
-    emitTrustedModelCallCompletedWithContent(
-      {
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        durationMs: 80,
-      },
-      {
-        inputMessages: [{ role: "user", content: "do not export this prompt" }],
-        toolDefinitions: [
-          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-        ],
-      },
-    );
-    await flushDiagnosticEvents();
-
-    const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
-    expect(Object.hasOwn(attrs ?? {}, "gen_ai.input.messages")).toBe(false);
-    expect(Object.hasOwn(attrs ?? {}, "input.value")).toBe(false);
-    expect(Object.hasOwn(attrs ?? {}, "openclaw.content.input_messages")).toBe(false);
-    expect(JSON.parse(stringAttribute(attrs, "gen_ai.tool.definitions"))).toEqual([
-      {
-        type: "function",
-        name: "lookup",
-        description: "Lookup data",
-        parameters: { type: "object" },
-      },
-    ]);
-    expect(JSON.parse(String(attrs?.["openclaw.content.tool_definitions"]))).toEqual([
-      {
-        name: "lookup",
-        description: "Lookup data",
-        parameters: { type: "object" },
-      },
-    ]);
   });
 
   test("ignores invalid diagnostic event trace parents", async () => {

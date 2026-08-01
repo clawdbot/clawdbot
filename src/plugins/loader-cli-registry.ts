@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import {
@@ -224,7 +224,14 @@ export async function loadOpenClawPluginCliRegistry(
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      pushPluginLoadError(
+        describeRootFileOpenFailure({
+          failure: opened,
+          subject: "plugin entry path",
+          boundaryLabel: "plugin root",
+          filePath: sourceForCliMetadata,
+        }),
+      );
       continue;
     }
     const safeSource = opened.path;
@@ -323,7 +330,7 @@ export async function loadOpenClawPluginCliRegistry(
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       },
     });
-    const transaction = createPluginRegistrationTransaction({ registry });
+    const transaction = createPluginRegistrationTransaction({ registry, activeRecord: record });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
         runPluginRegisterSync(register, api),

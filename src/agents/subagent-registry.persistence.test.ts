@@ -17,6 +17,7 @@ import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -132,7 +133,7 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runs = (persisted.runs ?? {}) as Record<string, SubagentRunRecord>;
-    saveSubagentRegistryToSqlite(new Map(Object.entries(runs)));
+    saveCanonicalRunFixtures(new Map(Object.entries(runs)));
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
@@ -194,6 +195,10 @@ describe("subagent registry persistence", () => {
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
+
+  function saveCanonicalRunFixtures(runs: Map<string, SubagentRunRecord>) {
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
+  }
 
   beforeEach(() => {
     announceSpy.mockReset();
@@ -397,7 +402,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveSubagentRegistryToSqlite(
+    saveCanonicalRunFixtures(
       new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
     );
     await writeChildSessionEntry({
@@ -513,7 +518,7 @@ describe("subagent registry persistence", () => {
         usage: { inputTokens: 10, outputTokens: 3 },
       },
     };
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
     await writeChildSessionEntry({
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
@@ -588,7 +593,7 @@ describe("subagent registry persistence", () => {
         maxConcurrent: 8,
       },
     };
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
 
     closeOpenClawStateDatabaseForTest();
     expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
@@ -938,7 +943,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveSubagentRegistryToSqlite(
+    saveCanonicalRunFixtures(
       new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
     );
 
@@ -1071,6 +1076,9 @@ describe("subagent registry persistence", () => {
       createdAt: now - 50,
       startedAt: now - 25,
       endedAt: now,
+      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
+      completion: { required: false },
+      delivery: { status: "pending" },
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });

@@ -50,6 +50,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
@@ -362,7 +363,7 @@ ${JSON.stringify(details, null, 2)}
 
 function formatSessionStateChanges(details: {
   stateVersion: number;
-  stateChanges: ReturnType<typeof listSessionStateEventsSince>;
+  stateChanges: ReturnType<typeof compactSessionStateChanges>;
 }): string {
   return `Session state changes:
 \`\`\`json
@@ -413,6 +414,7 @@ function withActiveStatusModelIdentity(
   delete next.providerOverride;
   delete next.modelOverride;
   delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
   return next;
 }
 
@@ -571,8 +573,10 @@ export function createSessionStatusTool(opts?: {
         sandboxed: opts?.sandboxed,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const configuredDefaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
+        configuredDefaultAgentId,
       );
       const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
@@ -583,7 +587,8 @@ export function createSessionStatusTool(opts?: {
       const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
         const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
         if (
-          resolveAgentIdFromSessionKey(visibilityRequesterKey) === sessionAgentId &&
+          resolveAgentIdFromSessionKey(visibilityRequesterKey, configuredDefaultAgentId) ===
+            sessionAgentId &&
           (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
         ) {
           return visibilityRequesterKey;
@@ -613,6 +618,7 @@ export function createSessionStatusTool(opts?: {
       };
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "status",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: visibilityRequesterKey,
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,
@@ -683,7 +689,10 @@ export function createSessionStatusTool(opts?: {
       };
 
       if (requestedKeyInput.startsWith("agent:") && !isSemanticCurrentRequest) {
-        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyInput);
+        const requestedAgentId = resolveAgentIdFromSessionKey(
+          requestedKeyInput,
+          configuredDefaultAgentId,
+        );
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
@@ -695,7 +704,7 @@ export function createSessionStatusTool(opts?: {
 
       const isExplicitAgentKey = requestedKeyInput.startsWith("agent:");
       let agentId = isExplicitAgentKey
-        ? resolveAgentIdFromSessionKey(requestedKeyInput)
+        ? resolveAgentIdFromSessionKey(requestedKeyInput, configuredDefaultAgentId)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -735,14 +744,18 @@ export function createSessionStatusTool(opts?: {
             visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
-            throw new Error("Session status visibility is restricted to the current session tree.");
+            // The resolver's copy already names the denying policy (including the
+            // watched-group carve-out); a local string here would drift from it.
+            throw new Error(visibleSession.error);
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          ensureAgentAccess(
+            resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId),
+          );
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           requestedKeyInput = requestedKeyRaw.trim();
-          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
+          agentId = resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
@@ -1072,9 +1085,7 @@ export function createSessionStatusTool(opts?: {
             : undefined;
           const extraBlocks = [
             routeContextText,
-            rawStateChanges
-              ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
-              : undefined,
+            stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText =
             extraBlocks.length > 0

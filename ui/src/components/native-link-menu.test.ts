@@ -104,7 +104,12 @@ describe("native link menu", () => {
     expect(hints).toEqual(["S", "B", "C"]);
 
     document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true }),
+      new KeyboardEvent("keydown", {
+        key: "с",
+        code: "KeyC",
+        bubbles: true,
+        cancelable: true,
+      }),
     );
     expect(calls).toEqual(["close", "copy"]);
   });

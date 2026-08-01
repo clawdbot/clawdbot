@@ -2,7 +2,9 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { t } from "../i18n/index.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
 export type SessionCreatorOption = SessionCreatedActor & { id: string };
@@ -17,12 +19,21 @@ export function listSessionCreators(
       continue;
     }
     const label = session.createdActor?.label?.trim();
+    const avatarUrl = session.createdActor?.avatarUrl?.trim();
     const existing = creators.get(id);
-    if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
+    const nextLabel =
+      label && (!existing?.label || label.localeCompare(existing.label) < 0)
+        ? label
+        : existing?.label;
+    const nextAvatarUrl = [existing?.avatarUrl, avatarUrl]
+      .filter((value): value is string => Boolean(value))
+      .toSorted()[0];
+    if (!existing || nextLabel !== existing.label || nextAvatarUrl !== existing.avatarUrl) {
       creators.set(id, {
         type: session.createdActor?.type ?? "human",
         id,
-        ...(label ? { label } : {}),
+        ...(nextLabel ? { label: nextLabel } : {}),
+        ...(nextAvatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
       });
     }
   }
@@ -73,6 +84,9 @@ function ownerHue(id: string): number {
  * this chip is solid and never pulses/expires, in deliberate contrast to the
  * translucent, ring-styled live-presence chips. Render only when the gateway
  * has 2+ distinct creator identities (solo mode shows no attribution chrome).
+ * Human actors use only the durable profile projection carried by the session
+ * record. Actors without that source keep stable initials because provenance
+ * outlives live connection presence.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
@@ -93,6 +107,13 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
       { name: title },
     );
+    const avatar = createdActor.avatarUrl
+      ? resolveAvatar({
+          id: createdActor.id,
+          name: createdActor.label,
+          profileAvatarUrl: createdActor.avatarUrl,
+        })
+      : null;
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size}"
@@ -100,7 +121,18 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${initials}</span
+        >${avatar?.kind === "profile"
+          ? html`<openclaw-viewer-avatar
+              .user=${{
+                id: createdActor.id,
+                name: createdActor.label,
+                avatarUrl: createdActor.avatarUrl,
+                watchedSessions: [],
+              }}
+              variant="session"
+              aria-hidden="true"
+            ></openclaw-viewer-avatar>`
+          : initials}</span
       >
     `;
   }

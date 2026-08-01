@@ -1,7 +1,7 @@
 /** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginEnablementCompat,
@@ -277,10 +277,11 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       workspaceDir: candidate.workspaceDir,
     });
 
+    const boundaryLabel = record.source === candidate.source ? "plugin root" : "repo root";
     const opened = openRootFileSync({
       absolutePath: record.source,
       rootPath: record.source === candidate.source ? candidate.rootDir : repoRoot,
-      boundaryLabel: record.source === candidate.source ? "plugin root" : "repo root",
+      boundaryLabel,
       rejectHardlinks: false,
       skipLexicalRootCheck: true,
     });
@@ -288,7 +289,12 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       recordCapabilityLoadError(
         registry,
         record,
-        "plugin entry path escapes plugin root or fails alias checks",
+        describeRootFileOpenFailure({
+          failure: opened,
+          subject: "plugin entry path",
+          boundaryLabel,
+          filePath: record.source,
+        }),
       );
       continue;
     }

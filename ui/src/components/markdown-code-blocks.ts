@@ -83,7 +83,8 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
   });
 }
 
-function highlightCode(text: string, lang: string): string {
+/** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+export function highlightCodeHtml(text: string, lang: string): string {
   const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
@@ -103,7 +104,7 @@ function highlightCode(text: string, lang: string): string {
 
 /** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
 export function highlightJsonHtml(text: string): string {
-  return highlightCode(text, "json");
+  return highlightCodeHtml(text, "json");
 }
 
 function codeClassAttribute(lang: string, highlighted: string): string {
@@ -122,7 +123,7 @@ function renderCodeElement(
   if (options.blockArt || isMarkdownBlockArtText(text)) {
     return `<pre><code class="markdown-block-art">${escapeMarkdownHtml(text)}</code></pre>`;
   }
-  const highlighted = highlightCode(text, lang);
+  const highlighted = highlightCodeHtml(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
@@ -157,7 +158,10 @@ export function renderMarkdownCodeBlock(
 
   if (isJson) {
     const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    const label =
+      lineCount > 1
+        ? escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }))
+        : "JSON";
     return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
   }
 

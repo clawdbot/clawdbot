@@ -70,7 +70,7 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
-vi.mock("./status.summary.runtime.js", () => ({
+vi.mock("../status/summary.runtime.js", () => ({
   statusSummaryRuntime: {
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
@@ -171,6 +171,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  LEGACY_IMPLICIT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),
@@ -184,16 +185,16 @@ vi.mock("../version.js", async () => {
   };
 });
 
-vi.mock("./status.link-channel.js", () => ({
+vi.mock("../status/link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
-const { resolveLinkChannelContext } = await import("./status.link-channel.js");
-let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
-let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
+const { resolveLinkChannelContext } = await import("../status/link-channel.js");
+let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
+let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
   return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
@@ -201,8 +202,8 @@ function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>)
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
-    ({ getStatusSummary } = await import("./status.summary.js"));
-    ({ statusSummaryRuntime } = await import("./status.summary.runtime.js"));
+    ({ getStatusSummary } = await import("../status/summary.js"));
+    ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
   });
 
   beforeEach(() => {
@@ -277,6 +278,52 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("redacts collected session details when sensitive output is disabled", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue([
+      {
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 100,
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          totalTokens: 42,
+        },
+      },
+    ]);
+
+    const summary = await getStatusSummary({ includeSensitive: false });
+
+    expect(summary.sessions).toMatchObject({
+      paths: [],
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: [{ agentId: "main", path: "[redacted]", count: 1, recent: [] }],
+    });
+  });
+
+  it("keeps resolved and source config roles distinct for channel summaries", async () => {
+    const config = { channels: { discord: { enabled: true } } };
+    const sourceConfig = { channels: { discord: { token: "source-secret" } } };
+
+    await getStatusSummary({
+      config: config as never,
+      sourceConfig: sourceConfig as never,
+    });
+
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config,
+      activationSourceConfig: sourceConfig,
+    });
+    expect(resolveLinkChannelContext).toHaveBeenCalledWith(config, { sourceConfig });
+    expect(buildChannelSummary).toHaveBeenCalledWith(config, {
+      colorize: true,
+      includeAllowFrom: true,
+      sourceConfig,
+    });
   });
 
   it("reports degraded SecretRef owners without exposing ref identifiers", async () => {

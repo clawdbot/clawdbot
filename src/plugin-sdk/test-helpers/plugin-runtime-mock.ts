@@ -1,9 +1,7 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
@@ -18,6 +16,22 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+
+type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
+type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
+
+export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (params) => {
+  const source = params.lifecycle;
+  const completion = params.dispatch({
+    abortSignal: source?.abortSignal ?? new AbortController().signal,
+    onAdopted: async () => await source?.onAdopted?.(),
+    onDeferred: () => source?.onDeferred?.(),
+    onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
+    onFailed: source?.onFailed ? async (error) => await source.onFailed?.(error) : undefined,
+    onAbandoned: async () => await source?.onAbandoned?.(),
+  });
+  return { admission: completion, completion };
+};
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -34,9 +48,12 @@ type DeepPartial<T> = {
 
 type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
 type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
-type UntrustedStructuredContextEntries = NonNullable<
-  Awaited<BuildContextResult>["UntrustedStructuredContext"]
+type ChannelStructuredContextEntries = NonNullable<
+  Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,19 +99,24 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveMockUntrustedStructuredContext(
+function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
-): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+): ChannelStructuredContextResolution {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  const supplementalEntries =
+    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
+  if (supplementalEntries !== undefined) {
+    entries.push(...supplementalEntries);
+  }
 
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
@@ -107,7 +129,9 @@ function resolveMockUntrustedStructuredContext(
     });
   }
 
-  return entries.length > 0 ? entries : undefined;
+  const contextProvided =
+    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
@@ -163,14 +187,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
     const sourceDelivery = params.delivery as {
-      deliver: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliver?: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliverWithProviderMessageSending?: (payload: unknown, info: unknown) => Promise<unknown>;
       onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
       onError?: (err: unknown, info: unknown) => void;
     };
+    const sourceDeliver =
+      sourceDelivery.deliverWithProviderMessageSending ?? sourceDelivery.deliver;
+    if (admission.kind !== "observeOnly" && !sourceDeliver) {
+      throw new Error("channel delivery mock requires a delivery callback");
+    }
     const delivery =
       admission.kind === "observeOnly"
         ? { deliver: async () => ({ visibleReplySent: false }) }
-        : sourceDelivery;
+        : { ...sourceDelivery, deliver: sourceDeliver! };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
     const dispatchReplyWithBufferedBlockDispatcher =
@@ -402,7 +432,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
-    const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    const channelStructuredContext = resolveMockChannelStructuredContext(params);
+    const extra = { ...params.extra };
+    delete extra.UntrustedStructuredContext;
+    const structuredContextField =
+      channelStructuredContext.kind === "present"
+        ? { ChannelStructuredContext: channelStructuredContext.entries }
+        : {};
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -431,8 +467,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
       CommandAuthorized: params.access?.commands?.authorized ?? false,
-      ...params.extra,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ...extra,
+      ...structuredContextField,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
   const sessionRuntime = {
@@ -527,12 +563,30 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ) => {
             const sessionId = "plugin-runtime-mock-session";
             const key = params.key;
+            const sessionInitialEntry =
+              "acpSessionBinding" in params.initialEntry
+                ? {
+                    acpSessionBinding: {
+                      acpBackendId: params.initialEntry.acpBackendId,
+                      ...params.initialEntry.acpSessionBinding,
+                    },
+                    ...(params.initialEntry.modelSelectionLocked
+                      ? { modelSelectionLocked: true as const }
+                      : {}),
+                    ...(params.initialEntry.pluginExtensions
+                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+                      : {}),
+                    ...(params.initialEntry.pluginOwnerId
+                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
+                      : {}),
+                  }
+                : structuredClone(params.initialEntry);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
               ...(params.label !== undefined ? { label: params.label } : {}),
               ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-              ...structuredClone(params.initialEntry),
+              ...sessionInitialEntry,
               ...(params.afterCreate ? { initializationPending: true as const } : {}),
             };
             const initialized = {
@@ -778,13 +832,25 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       debounce: {
         createInboundDebouncer: vi.fn(
-          (params: { onFlush: (items: unknown[]) => Promise<void> }) => ({
-            enqueue: async (item: unknown) => {
-              await params.onFlush([item]);
-            },
-            flushKey: vi.fn(),
-            cancelKey: vi.fn(() => false),
-          }),
+          (params: Pick<InboundDebounceCreateParams<unknown>, "onFlush">) => {
+            const activeCompletions = new Set<Promise<void>>();
+            const runFlush = async (flush: InboundDebounceFlush) => {
+              const completion = flush.completion.catch(() => undefined);
+              activeCompletions.add(completion);
+              void completion.finally(() => activeCompletions.delete(completion));
+              await Promise.race([flush.admission, completion]);
+            };
+            return {
+              enqueue: async (item: unknown) => {
+                await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
+              },
+              flushKey: vi.fn(),
+              cancelKey: vi.fn(() => false),
+              drain: async () => {
+                await Promise.all(activeCompletions);
+              },
+            };
+          },
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
         resolveInboundDebounceMs: vi.fn((params: unknown) => {
           // Match the production contract so channel plugins that delegate to
@@ -943,7 +1009,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     llm: {
       acquireLocalService: vi.fn(),
-      complete: vi.fn(),
+      complete: vi.fn().mockResolvedValue({
+        text: "{}",
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        agentId: "main",
+        usage: {},
+        execution: {
+          mode: "direct-provider",
+          owner: { kind: "provider", id: DEFAULT_PROVIDER },
+        },
+        audit: { caller: { kind: "plugin", id: "test" } },
+      }),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

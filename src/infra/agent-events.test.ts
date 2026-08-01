@@ -14,6 +14,7 @@ import {
   listAgentRunsForSession,
   onAgentAuditEvent,
   onAgentEvent,
+  onAgentRuntimeEvent,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
@@ -558,6 +559,35 @@ describe("agent-events sequencing", () => {
     expect(seen.has("old-run")).toBe(false);
     expect(seen.get("new-run")?.generation).toBe(newGeneration);
     expect(seen.get("new-run")?.keys).not.toContain("lifecycleGeneration");
+  });
+
+  test("stamps session lifecycle projection policy without serializing it", () => {
+    registerAgentRunContext("maintenance-run", {
+      projectSessionLifecycle: false,
+      sessionKey: "main",
+    });
+    let received:
+      | {
+          projectSessionLifecycle?: boolean;
+          keys: string[];
+        }
+      | undefined;
+    const stop = onAgentRuntimeEvent((evt) => {
+      received = {
+        projectSessionLifecycle: evt.projectSessionLifecycle,
+        keys: Object.keys(evt),
+      };
+    });
+
+    emitAgentEvent({
+      runId: "maintenance-run",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+    stop();
+
+    expect(received?.projectSessionLifecycle).toBe(false);
+    expect(received?.keys).not.toContain("projectSessionLifecycle");
   });
 
   test("lets a newly admitted retry claim an explicit lifecycle generation", () => {

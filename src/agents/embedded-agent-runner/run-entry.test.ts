@@ -38,7 +38,7 @@ const state = vi.hoisted(() => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async (_params: unknown) => undefined),
 }));
 
-vi.mock("../model-fallback.js", () => ({
+vi.mock("../model-fallback-runner.js", () => ({
   runWithModelFallback: (params: FallbackRunnerParams) => state.runWithModelFallback(params),
 }));
 

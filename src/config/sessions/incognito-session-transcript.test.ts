@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { resolveStorePath } from "./paths.js";
 import { createSessionEntryWithTranscript, loadSessionEntry } from "./session-accessor.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
@@ -43,7 +44,13 @@ describe("incognito transcript access", () => {
       ).toBe(true);
       expect(fs.existsSync(durableStorePath)).toBe(false);
 
-      const firstTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const target = {
+        agentId: "main",
+        sessionId: created.entry.sessionId,
+        sessionKey,
+        storePath: resolveStorePath(undefined, { agentId: "main" }),
+      };
+      const firstTurn = SessionManager.open(target, cwd);
       firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });
       firstTurn.appendMessage({
         role: "assistant",
@@ -63,7 +70,7 @@ describe("incognito transcript access", () => {
         timestamp: 2,
       });
 
-      const secondTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const secondTurn = SessionManager.open(target, cwd);
       secondTurn.appendMessage({ role: "user", content: "second question", timestamp: 3 });
       const messages = secondTurn.buildSessionContext().messages;
 

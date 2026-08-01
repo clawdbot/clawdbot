@@ -142,8 +142,11 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
-export type { OpenClawPluginGatewayEventScope } from "../plugins/gateway-events.js";
-export type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
+export type {
+  OpenClawPluginGatewayEventScope,
+  OpenClawPluginGatewayEvents,
+  OpenClawPluginSessionsChangedEvent,
+} from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,

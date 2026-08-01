@@ -19,7 +19,7 @@ scenario:
     - docs/gateway/configuration.md
     - docs/plugins/manifest.md
   codeRefs:
-    - src/agents/skills-status.ts
+    - src/skills/discovery/status.ts
     - src/gateway/server-methods/config.ts
     - extensions/qa-lab/src/suite-runtime-agent-tools.ts
   execution:

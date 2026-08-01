@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -36,10 +37,6 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceHash: string;
   sourceSizeBytes: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function sha256FileSync(filePath: string): string {
   const digest = createHash("sha256");

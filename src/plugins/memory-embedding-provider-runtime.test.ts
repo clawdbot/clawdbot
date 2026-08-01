@@ -1,5 +1,6 @@
 // Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearEmbeddingProviders, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -30,6 +31,7 @@ function createCapabilityAdapter(id: string): MemoryEmbeddingProviderAdapter {
 }
 
 beforeEach(async () => {
+  clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   mocks.resolvePluginCapabilityProviders.mockReset();
   mocks.resolvePluginCapabilityProviders.mockReturnValue([]);
@@ -39,6 +41,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
 });
 
@@ -109,21 +112,25 @@ describe("memory embedding provider runtime resolution", () => {
   it("uses registered adapters through a configured provider api", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
     registerMemoryEmbeddingProvider(ollamaAdapter);
-
-    expect(
-      runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", {
-        models: {
-          providers: {
-            "ollama-gpu1": {
-              api: "ollama",
-              baseUrl: "http://ollama-host:11435",
-              models: [],
-            },
+    const config = {
+      models: {
+        providers: {
+          "ollama-gpu1": {
+            api: "ollama",
+            baseUrl: "http://ollama-host:11435",
+            models: [],
           },
         },
-      } as never),
-    ).toBe(ollamaAdapter);
-    expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalled();
+      },
+    } as never;
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)).toBe(ollamaAdapter);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      providerId: "ollama-gpu1",
+      cfg: config,
+    });
   });
 
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
@@ -141,5 +148,71 @@ describe("memory embedding provider runtime resolution", () => {
       "openai",
     ]);
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("adapts generic providers once without adding them to memory auto-selection", async () => {
+    const close = vi.fn();
+    const embed = vi.fn(async () => [1, 2]);
+    const embedBatch = vi.fn(async (inputs: unknown[]) => inputs.map(() => [3, 4]));
+    const runtime = { id: "generic", inlineQueryTimeoutMs: 1234 };
+    const runtimeFactsKey = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
+    const provider = {
+      id: "generic",
+      model: "generic-model",
+      maxInputTokens: 2048,
+      embed,
+      embedBatch,
+      close,
+    };
+    const runtimeFacts = () => ({ model: "generic-model" });
+    Object.defineProperty(provider, runtimeFactsKey, { value: runtimeFacts });
+    const create = vi.fn(async () => ({ provider, runtime }));
+    registerEmbeddingProvider({
+      id: "generic",
+      defaultModel: "generic-default",
+      transport: "local",
+      resolveIndexIdentity: (options) => ({
+        model: options.model,
+        cacheKeyData: { dimensions: options.dimensions },
+      }),
+      create,
+    });
+
+    const adapter = runtimeModule.getMemoryEmbeddingProvider("generic");
+    expect(adapter).toMatchObject({
+      id: "generic",
+      defaultModel: "generic-default",
+      transport: "local",
+    });
+    expect(runtimeModule.listMemoryEmbeddingProviders()).toEqual([]);
+    const options = { config: {}, model: "generic-model", outputDimensionality: 7 };
+    expect(adapter?.resolveIndexIdentity?.(options)).toEqual({
+      model: "generic-model",
+      cacheKeyData: { dimensions: 7 },
+    });
+
+    const result = await adapter?.create(options);
+    expect(create).toHaveBeenCalledWith({ ...options, dimensions: 7 });
+    expect(result?.runtime).toBe(runtime);
+    expect(result?.provider?.maxInputTokens).toBe(2048);
+    await result?.provider?.embedQuery("query", { signal: undefined });
+    await result?.provider?.embedBatch(["document"]);
+    await result?.provider?.embedBatchInputs?.([{ text: "structured" }]);
+    expect(embed).toHaveBeenCalledWith("query", { signal: undefined, inputType: "query" });
+    expect(embedBatch).toHaveBeenNthCalledWith(1, ["document"], { inputType: "document" });
+    expect(embedBatch).toHaveBeenNthCalledWith(2, [{ text: "structured" }], {
+      inputType: "document",
+    });
+    expect(Reflect.get(result?.provider ?? {}, runtimeFactsKey)).toBe(runtimeFacts);
+    await result?.provider?.close?.();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps memory-specific adapters authoritative during dual registration", () => {
+    const memoryAdapter = createCapabilityAdapter("dual");
+    registerMemoryEmbeddingProvider(memoryAdapter);
+    registerEmbeddingProvider({ id: "dual", create: async () => ({ provider: null }) });
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("dual")).toBe(memoryAdapter);
   });
 });

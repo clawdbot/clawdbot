@@ -115,7 +115,7 @@ describe("qwen provider plugin", () => {
     } as never);
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
-    expect(catalogProvider.models).toHaveLength(14);
+    expect(catalogProvider.models).toHaveLength(6);
 
     const legacy = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID);
     expect(legacy.auth).toEqual([]);
@@ -196,13 +196,13 @@ describe("qwen provider plugin", () => {
       apiKey: "canonical-key",
       baseUrl: QWEN_TOKEN_PLAN_CN_BASE_URL,
     });
-    expect(catalogProvider.models).toHaveLength(14);
+    expect(catalogProvider.models).toHaveLength(6);
     expect(catalogProvider.models?.map((model) => model.id)).not.toContain("legacy-only");
     expect(resolveProviderApiKey).toHaveBeenCalledTimes(1);
     expect(resolveProviderApiKey).toHaveBeenCalledWith(QWEN_TOKEN_PLAN_PROVIDER_ID);
   });
 
-  it("exposes on-only thinking controls for thinking-only Token Plan models", async () => {
+  it("preserves thinking controls for catalog and uncataloged Token Plan refs", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: qwenPlugin,
       id: "qwen",
@@ -245,12 +245,12 @@ describe("qwen provider plugin", () => {
       throw new Error("Token Plan provider missing after onboarding");
     }
     const globalModels = [...(globalProvider.models ?? [])];
-    const glmIndex = globalModels.findIndex((model) => model.id === "glm-5.2");
-    const glmModel = globalModels[glmIndex];
-    if (!glmModel) {
-      throw new Error("GLM 5.2 missing from Token Plan catalog");
+    const qwenIndex = globalModels.findIndex((model) => model.id === "qwen3.7-plus");
+    const qwenModel = globalModels[qwenIndex];
+    if (!qwenModel) {
+      throw new Error("Qwen3.7-Plus missing from Token Plan catalog");
     }
-    globalModels[glmIndex] = { ...glmModel, name: "Custom GLM 5.2" };
+    globalModels[qwenIndex] = { ...qwenModel, name: "Custom Qwen3.7-Plus" };
     globalModels.push({
       id: "custom-model",
       name: "Custom model",
@@ -278,16 +278,17 @@ describe("qwen provider plugin", () => {
 
     const tokenPlanProvider = (config: OpenClawConfig) =>
       config.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
-    const glmContext = (config: OpenClawConfig) =>
-      tokenPlanProvider(config)?.models?.find((model) => model.id === "glm-5.2")?.contextWindow;
-    expect(glmContext(global)).toBe(1_000_000);
-    expect(glmContext(cnFromGlobal)).toBe(1_000_000);
-    expect(glmContext(globalAgain)).toBe(1_000_000);
+    const qwenContext = (config: OpenClawConfig) =>
+      tokenPlanProvider(config)?.models?.find((model) => model.id === "qwen3.7-plus")
+        ?.contextWindow;
+    expect(qwenContext(global)).toBe(1_000_000);
+    expect(qwenContext(cnFromGlobal)).toBe(1_000_000);
+    expect(qwenContext(globalAgain)).toBe(1_000_000);
     expect(tokenPlanProvider(cnFromGlobal)?.baseUrl).toBe(QWEN_TOKEN_PLAN_CN_BASE_URL);
     expect(tokenPlanProvider(globalAgain)?.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
     expect(
-      tokenPlanProvider(globalAgain)?.models?.find((model) => model.id === "glm-5.2")?.name,
-    ).toBe("Custom GLM 5.2");
+      tokenPlanProvider(globalAgain)?.models?.find((model) => model.id === "qwen3.7-plus")?.name,
+    ).toBe("Custom Qwen3.7-Plus");
     expect(tokenPlanProvider(globalAgain)?.models?.map((model) => model.id)).toContain(
       "custom-model",
     );

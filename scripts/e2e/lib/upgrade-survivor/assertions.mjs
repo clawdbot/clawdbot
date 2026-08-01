@@ -20,6 +20,7 @@ const SCENARIOS = new Set([
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
   "cron-scheduled-authority",
+  "auth-profile-v2026-7-2-beta-5",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -309,6 +310,22 @@ function seedState() {
   if (scenario === "cron-scheduled-authority") {
     seedLegacyCronScheduledAuthority(stateDir);
   }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    const fixture = readJson(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+      ),
+    );
+    assert(fixture.sourceTag === "v2026.7.2-beta.5", "auth profile fixture tag drifted");
+    assert(fixture.sourceCommit === "34aefcf2fefa", "auth profile fixture commit drifted");
+    assert(fixture.agentSchemaVersion === 15, "auth profile fixture schema drifted");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    writeJson(path.join(agentDir, "auth-profiles.json"), fixture.authProfiles);
+    writeJson(path.join(agentDir, "auth-state.json"), fixture.authState);
+    writeJson(path.join(agentDir, "auth.json"), fixture.legacyAuth);
+    writeJson(path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth);
+  }
 
   const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
   for (const plugin of ["discord", "telegram", "whatsapp"]) {
@@ -551,6 +568,9 @@ function assertStateSurvived() {
   if (scenario === "cron-scheduled-authority") {
     assertCronScheduledAuthorityMigrated(stateDir, stage);
   }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    assertAuthProfileMigrationSurvived(stateDir, stage);
+  }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
     if (fs.existsSync(legacyRuntimeRoot)) {
@@ -591,6 +611,70 @@ function assertStateSurvived() {
       staleVersionedRoots.length === 0,
       `stale versioned runtime deps survived update/doctor: ${staleVersionedRoots.join(", ")}`,
     );
+  }
+}
+
+function assertAuthProfileMigrationSurvived(stateDir, stage) {
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const sources = [
+    path.join(agentDir, "auth-profiles.json"),
+    path.join(agentDir, "auth-state.json"),
+    path.join(agentDir, "auth.json"),
+    path.join(stateDir, "credentials", "oauth.json"),
+  ];
+  if (stage === "baseline") {
+    assert(
+      sources.every((source) => fs.existsSync(source)),
+      "auth profile fixture source missing",
+    );
+    return;
+  }
+  for (const source of sources) {
+    assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
+    const prefix = `${path.basename(source)}.migrated-`;
+    const archives = fs
+      .readdirSync(path.dirname(source))
+      .filter((entry) => entry.startsWith(prefix));
+    assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
+  }
+  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = agentDatabase
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
+      .get();
+    const store = JSON.parse(row?.store_json ?? "null");
+    assert(
+      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
+      "openai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
+      "legacy xai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
+      "shared OAuth credential did not migrate",
+    );
+  } finally {
+    agentDatabase.close();
+  }
+  const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const receipt = stateDatabase
+      .prepare(
+        "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",
+      )
+      .get("auth-profile-json-to-sqlite-v2");
+    assert(
+      receipt?.count === 4,
+      `expected four completed auth migration receipts, got ${String(receipt?.count)}`,
+    );
+  } finally {
+    stateDatabase.close();
   }
 }
 

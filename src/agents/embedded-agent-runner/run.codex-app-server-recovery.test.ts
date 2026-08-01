@@ -141,7 +141,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       freezeAbort,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async () => {
@@ -212,7 +214,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       abortByUser,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       asAttemptParams(attemptParams).onAttemptAbort?.();
@@ -244,7 +248,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       abortByUser,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       controller.abort(upstreamAbort);

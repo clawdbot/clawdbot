@@ -16,7 +16,7 @@ scenario:
   docsRefs:
     - docs/help/testing.md
   codeRefs:
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   execution:
     kind: flow

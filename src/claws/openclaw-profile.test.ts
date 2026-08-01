@@ -40,9 +40,26 @@ describe("OpenClaw profile schema", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects retired heartbeat fields with a heartbeat-scoped diagnostic", () => {
+    const result = parseClawOpenClawProfile({
+      schemaVersion: 1,
+      agent: { heartbeat: { every: "30m", skipWhenBusy: true } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        path: "$.agent.heartbeat",
+        message: expect.stringContaining("skipWhenBusy"),
+      }),
+    );
+  });
+
   it("rejects invalid profile policy", () => {
     for (const agent of [
-      { heartbeat: { skipWhenBusy: true } },
       { tools: { profile: "future-profile" } },
       { tools: { allow: ["read"], alsoAllow: ["write"] } },
       { memory: { search: { provider: "openai" } } },

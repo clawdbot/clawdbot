@@ -11,6 +11,7 @@ const originalServiceRepairPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 
 const mocks = vi.hoisted(() => ({
   createUpdateProgress: vi.fn(),
+  isDefaultInstallIdentity: vi.fn(() => true),
   note: vi.fn(),
   readGatewayServiceState: vi.fn(),
   restartGatewayService: vi.fn(),
@@ -23,6 +24,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../cli/update-cli/progress.js", () => ({
   createUpdateProgress: mocks.createUpdateProgress,
 }));
+
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: mocks.isDefaultInstallIdentity };
+});
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
@@ -67,6 +73,7 @@ async function runOffer(params?: {
 beforeEach(async () => {
   mocks.createUpdateProgress.mockReset();
   mocks.createUpdateProgress.mockReturnValue({ progress: {}, stop: vi.fn() });
+  mocks.isDefaultInstallIdentity.mockReturnValue(true);
   mocks.note.mockReset();
   mocks.readGatewayServiceState.mockReset();
   mocks.restartGatewayService.mockReset();

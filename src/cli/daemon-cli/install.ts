@@ -25,10 +25,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import {
-  formatExternalSupervisorActionRequired,
-  isGatewayExternallySupervised,
-} from "../../infra/gateway-supervision.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -149,10 +146,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
-  if (isGatewayExternallySupervised()) {
-    fail(
-      `Gateway install blocked: ${formatExternalSupervisorActionRequired("install or rewrite the gateway service")}`,
-    );
+  try {
+    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
+  } catch (error) {
+    fail(`Gateway install blocked: ${String(error)}`);
     return;
   }
 

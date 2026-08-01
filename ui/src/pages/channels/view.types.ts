@@ -54,6 +54,7 @@ export type ChannelsProps = {
   configUiHints: ConfigUiHints;
   configSaving: boolean;
   configFormDirty: boolean;
+  showAdvancedSettings: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   selectedChannel: string | null;
@@ -80,6 +81,7 @@ export type ChannelsProps = {
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;
+  onShowAdvancedSettings: (enabled: boolean) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;

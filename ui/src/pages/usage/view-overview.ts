@@ -2,11 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
-import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import "../../components/tooltip.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../components/tooltip.ts";
+import { formatDurationCompact } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
@@ -101,7 +101,7 @@ function renderFilterChips(
     ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
-      ? selectedSessionKey.slice(0, 8) + "…"
+      ? truncateUtf16Safe(selectedSessionKey, 8) + "…"
       : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
@@ -592,8 +592,9 @@ function renderPeakErrorList(
 }
 
 function focusSummaryHint(event: MouseEvent) {
-  if (event.currentTarget instanceof HTMLElement) {
-    event.currentTarget.focus();
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    target.focus();
   }
 }
 
@@ -628,7 +629,7 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <openclaw-tooltip>
+        <openclaw-tooltip open-on-click>
           <button
             id=${hintId}
             type="button"
@@ -638,8 +639,10 @@ function renderSummaryStat(params: {
           >
             ?
           </button>
-          <!-- Some browsers do not focus buttons on pointer activation; the
-               click handler normalizes that path without adding a second toggle. -->
+          <!-- Shared tooltips dismiss pointer activation so action buttons never
+               strand one open. This hint exists only to be read, so it opts in to
+               click-to-open; the click handler still normalizes browsers that do
+               not focus buttons on pointer activation. -->
           <span slot="content">${params.hint}</span>
         </openclaw-tooltip>
       </div>
@@ -1006,17 +1009,31 @@ function renderSessionsCard(
     return html`
       <div
         class="session-bar-row ${isSelected ? "selected" : ""}"
-        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+        @click=${(event: MouseEvent) => {
+          if ((event.target as Element | null)?.closest("button")) {
+            return;
+          }
+          onSelectSession(s.key, event.shiftKey);
+        }}
         title="${s.key}"
       >
-        <div class="session-bar-label">
-          <div class="session-bar-title">${displayLabel}</div>
-          ${meta.length > 0
-            ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>`
-            : nothing}
-        </div>
+        <button
+          type="button"
+          class="session-bar-selection"
+          aria-label=${displayLabel}
+          aria-pressed=${isSelected ? "true" : "false"}
+          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey)}
+        >
+          <span class="session-bar-label">
+            <span class="session-bar-title">${displayLabel}</span>
+            ${meta.length > 0
+              ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
+              : nothing}
+          </span>
+        </button>
         <div class="session-bar-actions">
           <button
+            type="button"
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();

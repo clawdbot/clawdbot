@@ -44,22 +44,6 @@ describe("slack actions contract", () => {
         expectedCapabilities: ["presentation"],
       },
       {
-        name: "interactive replies keep the shared presentation capability",
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: {
-                interactiveReplies: true,
-              },
-            },
-          },
-        } as OpenClawConfig,
-        expectedActions: slackDefaultActions,
-        expectedCapabilities: ["presentation"],
-      },
-      {
         name: "missing tokens disables the actions surface",
         cfg: {
           channels: {
@@ -173,10 +157,15 @@ describe("slack setup contract", () => {
       },
       {
         name: "user identity rejects relay mode",
-        cfg: {} as OpenClawConfig,
+        cfg: {
+          channels: {
+            slack: {
+              mode: "relay",
+            },
+          },
+        } as OpenClawConfig,
         input: {
           identity: "user",
-          mode: "relay",
           userToken: "test-user-token",
           appToken: "test-app-token",
         },

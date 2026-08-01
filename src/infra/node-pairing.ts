@@ -348,21 +348,32 @@ export async function listNodePairing(
   options?: { includePairingGeneration?: boolean },
 ): Promise<NodePairingList | NodePairingListWithGeneration> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    const pending: NodePairingPendingEntry[] = [];
-    const paired: NodePairingPairedNode[] = [];
-    for (const device of Object.values(pairedByDeviceId)) {
-      if (device.pendingNodeSurface) {
-        pending.push(toPendingEntry(device, device.pendingNodeSurface));
-      }
-      const node = toPairedNode(device, options);
-      if (node) {
-        paired.push(node);
-      }
-    }
-    pending.sort((a, b) => b.ts - a.ts);
-    paired.sort((a, b) => b.approvedAtMs - a.approvedAtMs);
-    return { value: { pending, paired }, persist: false };
+    return {
+      value: projectNodePairing(Object.values(pairedByDeviceId), options),
+      persist: false,
+    };
   });
+}
+
+/** Project node pairing state from an already-loaded device pairing snapshot. */
+export function projectNodePairing(
+  pairedDevices: readonly PairedDevice[],
+  options?: { includePairingGeneration?: boolean },
+): NodePairingListWithGeneration {
+  const pending: NodePairingPendingEntry[] = [];
+  const paired: NodePairingPairedNode[] = [];
+  for (const device of pairedDevices) {
+    if (device.pendingNodeSurface) {
+      pending.push(toPendingEntry(device, device.pendingNodeSurface));
+    }
+    const node = toPairedNode(device, options);
+    if (node) {
+      paired.push(node);
+    }
+  }
+  pending.sort((a, b) => b.ts - a.ts);
+  paired.sort((a, b) => b.approvedAtMs - a.approvedAtMs);
+  return { pending, paired };
 }
 
 /** Snapshot pairing state and claim current pending revisions for one paired reconnect. */

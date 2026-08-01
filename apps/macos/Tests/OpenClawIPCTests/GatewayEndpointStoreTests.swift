@@ -6,6 +6,7 @@ import Testing
 
 private actor GatewayEndpointSourceGate {
     private var current: GatewayEndpointStore.SourceSnapshot
+    private var readCount = 0
     private var suspendNext = false
     private var returnCapturedSource = false
     private var suspendedReadStarted = false
@@ -17,6 +18,7 @@ private actor GatewayEndpointSourceGate {
     }
 
     func snapshot() async -> GatewayEndpointStore.SourceSnapshot {
+        self.readCount += 1
         guard self.suspendNext else { return self.current }
         self.suspendNext = false
         let capturedSource = self.returnCapturedSource ? self.current : nil
@@ -30,6 +32,10 @@ private actor GatewayEndpointSourceGate {
             self.releaseWaiter = continuation
         }
         return capturedSource ?? self.current
+    }
+
+    func reads() -> Int {
+        self.readCount
     }
 
     func suspendNextRead(returningCapturedSource: Bool = false) {
@@ -572,7 +578,7 @@ extension GatewayEndpointStoreTests {
                     tunnelStarts.withValue { $0 += 1 }
                     return .init(localPort: 18789, generation: 1)
                 },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             await store.refresh()
@@ -598,7 +604,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let first = Task { try await store.requireEndpoint() }
@@ -612,6 +618,50 @@ extension GatewayEndpointStoreTests {
             #expect(firstEndpoint.config.token == "same-token")
             #expect(firstEndpoint.revision == secondEndpoint.revision)
         }
+    }
+
+    @Test func `routing generation avoids redundant source reads within each request`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .local, token: "same-token", routingGeneration: 7)
+            let sourceGate = GatewayEndpointSourceGate(source)
+            let store = GatewayEndpointStore(deps: .init(
+                token: { nil },
+                password: { nil },
+                localPort: { 18789 },
+                remoteRouteIfRunning: { nil },
+                remoteRouteIsCurrent: { _ in true },
+                canStartRemoteTunnel: { true },
+                ensureRemoteTunnel: { throw CancellationError() },
+                liveSourceIsCurrent: { $0.routingGeneration == 7 },
+                sourceSnapshot: { await sourceGate.snapshot() }))
+
+            _ = try await store.requireEndpoint()
+            #expect(await sourceGate.reads() == 1)
+
+            _ = try await store.requireEndpoint()
+            #expect(await sourceGate.reads() == 2)
+        }
+    }
+
+    @Test func `live source validation rejects tailnet address changes`() {
+        let source = self.source(
+            mode: .local,
+            localHost: "100.64.1.5",
+            bindMode: "tailnet",
+            routingGeneration: 7)
+
+        #expect(GatewayEndpointStore._testLiveSourceIsCurrent(
+            source,
+            currentRoutingGeneration: 7,
+            currentTailnetIP: "100.64.1.5"))
+        #expect(!GatewayEndpointStore._testLiveSourceIsCurrent(
+            source,
+            currentRoutingGeneration: 7,
+            currentTailnetIP: "100.64.1.6"))
+        #expect(!GatewayEndpointStore._testLiveSourceIsCurrent(
+            source,
+            currentRoutingGeneration: 8,
+            currentTailnetIP: "100.64.1.5"))
     }
 
     @Test func `remote TLS fingerprint changes advance endpoint revision`() async throws {
@@ -631,7 +681,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let first = try await store.requireEndpoint()
@@ -667,7 +717,7 @@ extension GatewayEndpointStoreTests {
                     remoteRouteIsCurrent: { _ in true },
                     canStartRemoteTunnel: { true },
                     ensureRemoteTunnel: { throw CancellationError() },
-                    routingGenerationIsCurrent: { _ in true },
+                    liveSourceIsCurrent: { _ in true },
                     sourceSnapshot: { source }))
 
                 let first = try await store.requireEndpoint()
@@ -703,7 +753,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let staleRequest = Task { try await store.requireEndpoint() }
@@ -747,8 +797,8 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { generation in
-                    currentRoutingGeneration.withValue { $0 == generation }
+                liveSourceIsCurrent: { source in
+                    currentRoutingGeneration.withValue { $0 == source.routingGeneration }
                 },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
@@ -779,7 +829,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let request = Task { try await store.requireEndpoint() }
@@ -815,7 +865,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
             let initialURL = try #require(URL(string: "ws://127.0.0.1:18789"))
 
@@ -856,7 +906,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
             let stream = await store.subscribe(bufferingNewest: 10)
             var iterator = stream.makeAsyncIterator()
@@ -900,7 +950,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             let cancelledWaiter = Task { try await store.requireEndpoint() }
@@ -940,7 +990,7 @@ extension GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
-                routingGenerationIsCurrent: { _ in true },
+                liveSourceIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             let first = Task { try await store.requireEndpoint() }
@@ -1106,6 +1156,30 @@ extension GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
     }
 
+    @Test func `gateway url validation guidance matches trusted plaintext policy`() {
+        let accepted = [
+            "ws://localhost:18789",
+            "ws://192.168.0.202:18789",
+            "ws://169.254.20.1:18789",
+            "ws://gateway.local:18789",
+            "ws://gateway.example.ts.net:18789",
+            "ws://100.123.224.76:18789",
+        ]
+        for rawURL in accepted {
+            #expect(GatewayRemoteConfig.normalizeGatewayUrl(rawURL) != nil)
+        }
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789") == nil)
+
+        let message = GatewayRemoteConfig.directGatewayUrlValidationMessage
+        #expect(message.contains("public hosts"))
+        #expect(message.contains("localhost"))
+        #expect(message.contains("LAN"))
+        #expect(message.contains("link-local"))
+        #expect(message.contains(".local"))
+        #expect(message.contains("Tailnet"))
+        #expect(!message.contains("only for localhost"))
+    }
+
     @Test func `missing transport infers direct from private remote URL`() {
         let root: [String: Any] = [
             "gateway": [
@@ -1200,6 +1274,36 @@ extension GatewayEndpointStoreTests {
                 identity: routeA.identity,
                 remotePort: routeA.remotePort,
                 hostKeyPolicy: .openssh)))
+    }
+
+    @Test func `ssh restart backoff propagates cancellation`() async {
+        await #expect(throws: CancellationError.self) {
+            try await RemoteTunnelManager._testWaitForRestartBackoff(seconds: 2) { _ in
+                throw CancellationError()
+            }
+        }
+    }
+
+    @Test func `stale ssh waiter cannot replace current tunnel create`() throws {
+        let oldTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example"))
+        let newTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-b.example"))
+        let oldConfiguration = RemotePortTunnel.Configuration(
+            target: oldTarget,
+            identity: "/tmp/id-a",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+        let newConfiguration = RemotePortTunnel.Configuration(
+            target: newTarget,
+            identity: "/tmp/id-b",
+            remotePort: 18789,
+            hostKeyPolicy: .strict)
+
+        #expect(!RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: oldConfiguration,
+            current: newConfiguration))
+        #expect(RemoteTunnelManager._testIsCurrentConfiguration(
+            requested: newConfiguration,
+            current: newConfiguration))
     }
 
     @Test func `normalize gateway url rejects public host ws`() {

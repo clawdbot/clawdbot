@@ -120,6 +120,9 @@ function resolveDelegatedPolicy(
   ) {
     return { delegated: false };
   }
+  if (!params.config) {
+    throw new Error("Trusted internal handoff policy resolution requires configuration.");
+  }
   const targetSessionKey = resolveRequesterStoreKey(params.config, params.sessionKey);
   let currentSessionKey = resolveRequesterStoreKey(params.config, provenance.sourceSessionKey);
   const visited = new Set<string>();

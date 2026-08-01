@@ -15,6 +15,7 @@ export type DispatchFromConfigResult = {
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
   noVisibleReplyFallbackEligible?: boolean;
+  noVisibleReplyFallbackDelivered?: boolean;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };
@@ -31,6 +32,11 @@ export type DispatchFromConfigParams = {
   formatAbortReplyTextResolver?: FormatAbortReplyText;
   /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
+  /**
+   * Channel turns consume the Gateway's committed model-runtime owner even when the global
+   * config snapshot is unavailable during startup or durable ingress replay.
+   */
+  usePublishedModelRuntime?: boolean;
 };
 
 export type DispatchReplyFromConfig = (

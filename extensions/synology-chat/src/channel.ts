@@ -47,11 +47,7 @@ import {
 } from "./gateway-runtime.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
-import {
-  synologyChatSetupAdapter,
-  synologyChatSetupContract,
-  synologyChatSetupWizard,
-} from "./setup-surface.js";
+import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
@@ -240,23 +236,17 @@ function normalizeSynologyChatTarget(target: string): string | undefined {
 }
 
 function createSynologyChatSendResult(params: {
-  messageId: string;
   chatId: string;
   kind: MessageReceiptPartKind;
 }): SynologyChatOutboundResult {
   return {
     channel: CHANNEL_ID,
-    messageId: params.messageId,
+    // The webhook acknowledges delivery without returning a platform message id.
+    // Keep the empty receipt so a chat id cannot become a fabricated message id.
+    messageId: "",
     chatId: params.chatId,
     receipt: createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          channel: CHANNEL_ID,
-          messageId: params.messageId,
-          chatId: params.chatId,
-          conversationId: params.chatId,
-        },
-      ],
+      results: [],
       threadId: params.chatId,
       kind: params.kind,
     }),
@@ -281,7 +271,6 @@ async function sendSynologyChatText(
     throw new Error("Failed to send message to Synology Chat");
   }
   return createSynologyChatSendResult({
-    messageId: `sc-${Date.now()}`,
     chatId: ctx.to,
     kind: "text",
   });
@@ -297,7 +286,6 @@ async function sendSynologyChatMedia(
     throw new Error("Failed to send media to Synology Chat");
   }
   return createSynologyChatSendResult({
-    messageId: `sc-${Date.now()}`,
     chatId: ctx.to,
     kind: "media",
   });
@@ -344,7 +332,6 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
       },
       reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
       configSchema: SynologyChatChannelConfigSchema,
-      setup: synologyChatSetupAdapter,
       setupContract: synologyChatSetupContract,
       setupWizard: synologyChatSetupWizard,
       config: {

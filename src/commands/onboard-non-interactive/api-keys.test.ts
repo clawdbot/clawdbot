@@ -41,6 +41,36 @@ function createRuntime() {
 }
 
 describe("resolveNonInteractiveApiKey", () => {
+  it("resolves provider environment auth against the staged config and agent workspace", async () => {
+    const runtime = createRuntime();
+    const cfg = { plugins: { entries: { example: { enabled: true } } } };
+    const workspaceDir = "/tmp/openclaw-example-workspace";
+    resolveEnvApiKey.mockReturnValue({
+      apiKey: "example-manifest-key",
+      source: "env: EXAMPLE_WORKSPACE_API_KEY",
+    });
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "example",
+      cfg,
+      workspaceDir,
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      runtime: runtime as never,
+    });
+
+    expect(result).toEqual({
+      key: "example-manifest-key",
+      source: "env",
+      envVarName: "EXAMPLE_WORKSPACE_API_KEY",
+    });
+    expect(resolveEnvApiKey).toHaveBeenCalledWith("example", process.env, {
+      config: cfg,
+      workspaceDir,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("returns explicit flag keys before resolving env or plugin-backed setup", async () => {
     const runtime = createRuntime();
     resolveEnvApiKey.mockImplementation(() => {

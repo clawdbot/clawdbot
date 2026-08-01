@@ -106,6 +106,11 @@ defaults to the account workspace, and `section` defaults to `Sessions`.
 `controlUrlBase` adds a link back to `/chat?session=<session-key>` in the
 OpenClaw Control UI.
 
+ClickClack-managed embed URLs explicitly advertise host-theme support. The
+Control UI uses that provider-owned capability to apply its full palette before
+the sidebar first paints and to stream live palette changes without rewriting
+opaque or signed discussion URLs from other providers.
+
 Enable discussions on exactly one ClickClack account. Multiple enabled
 discussion accounts are rejected because the session discussion provider does
 not have an account selector.

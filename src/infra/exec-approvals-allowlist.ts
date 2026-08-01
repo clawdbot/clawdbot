@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
@@ -1207,10 +1208,6 @@ export type AllowAlwaysPattern = {
   pattern: string;
   argPattern?: string;
 };
-
-function escapeRegExpLiteral(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function buildScriptArgPatternFromArgv(
   argv: string[],

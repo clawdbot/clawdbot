@@ -5,7 +5,10 @@
     "onStartup": true
   },
   "enabledByDefault": true,
-  "providers": ["ollama", "ollama-cloud"],
+  "providers": [
+    "ollama",
+    "ollama-cloud"
+  ],
   "providerCatalogEntry": "./provider-discovery.ts",
   "providerRequest": {
     "providers": {
@@ -27,17 +30,25 @@
       }
     }
   },
-  "syntheticAuthRefs": ["ollama"],
-  "nonSecretAuthMarkers": ["ollama-local"],
+  "syntheticAuthRefs": [
+    "ollama"
+  ],
+  "nonSecretAuthMarkers": [
+    "ollama-local"
+  ],
   "setup": {
     "providers": [
       {
         "id": "ollama",
-        "envVars": ["OLLAMA_API_KEY"]
+        "envVars": [
+          "OLLAMA_API_KEY"
+        ]
       },
       {
         "id": "ollama-cloud",
-        "envVars": ["OLLAMA_API_KEY"]
+        "envVars": [
+          "OLLAMA_API_KEY"
+        ]
       }
     ]
   },
@@ -47,8 +58,9 @@
       "method": "local",
       "choiceId": "ollama",
       "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Choose connection",
       "choiceLabel": "Ollama",
-      "choiceHint": "Cloud and local open models",
+      "choiceHint": "Connect to an Ollama server and select a cloud or local model",
       "icon": "https://cdn.simpleicons.org/ollama",
       "website": "https://ollama.com/download",
       "groupId": "ollama",
@@ -81,17 +93,21 @@
         "api": "ollama",
         "models": [
           {
-            "id": "kimi-k2.5:cloud",
-            "name": "kimi-k2.5:cloud",
+            "id": "kimi-k2.5",
+            "name": "kimi-k2.5",
+            "status": "deprecated",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text",
+              "image"
+            ],
             "cost": {
               "input": 0,
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 128000,
+            "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
@@ -99,17 +115,19 @@
             }
           },
           {
-            "id": "minimax-m2.7:cloud",
-            "name": "minimax-m2.7:cloud",
+            "id": "minimax-m2.7",
+            "name": "minimax-m2.7",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "cost": {
               "input": 0,
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 128000,
+            "contextWindow": 196608,
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
@@ -117,28 +135,33 @@
             }
           },
           {
-            "id": "glm-5.1:cloud",
-            "name": "glm-5.1:cloud",
+            "id": "glm-5.1",
+            "name": "glm-5.1",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "cost": {
               "input": 0,
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 128000,
+            "contextWindow": 202752,
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
-            "id": "glm-5.2:cloud",
-            "name": "glm-5.2:cloud",
+            "id": "glm-5.2",
+            "name": "glm-5.2",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text"
+            ],
             "cost": {
               "input": 0,
               "output": 0,
@@ -149,7 +172,8 @@
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           }
         ]
@@ -161,9 +185,15 @@
     }
   },
   "contracts": {
-    "memoryEmbeddingProviders": ["ollama"],
-    "tools": ["node_inference"],
-    "webSearchProviders": ["ollama"]
+    "memoryEmbeddingProviders": [
+      "ollama"
+    ],
+    "tools": [
+      "node_inference"
+    ],
+    "webSearchProviders": [
+      "ollama"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -173,14 +203,18 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" }
+          "enabled": {
+            "type": "boolean"
+          }
         }
       },
       "nodeInference": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" }
+          "enabled": {
+            "type": "boolean"
+          }
         }
       }
     }

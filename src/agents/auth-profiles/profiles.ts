@@ -14,6 +14,7 @@ import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
+  resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
@@ -270,6 +271,39 @@ export async function removeAuthProfilesWithLock(params: {
       return changed;
     },
   });
+}
+
+/**
+ * Removes profiles from every store that owns them. Auth profiles can be
+ * adopted by a provider-specific owner agent dir, so removing only the caller's
+ * store lets the profile reappear on the next status read and auth warmup.
+ */
+export async function removeAuthProfilesAcrossOwnerStores(params: {
+  agentDir: string;
+  profileIds: readonly string[];
+}): Promise<boolean> {
+  const profilesByOwner = new Map<string | undefined, Set<string>>([
+    [params.agentDir, new Set(params.profileIds)],
+  ]);
+  for (const profileId of params.profileIds) {
+    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      agentDir: params.agentDir,
+      profileId,
+    });
+    const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
+    ownerProfiles.add(profileId);
+    profilesByOwner.set(ownerAgentDir, ownerProfiles);
+  }
+  for (const [ownerAgentDir, profileIds] of profilesByOwner) {
+    const updatedStore = await removeAuthProfilesWithLock({
+      profileIds: [...profileIds],
+      agentDir: ownerAgentDir,
+    });
+    if (!updatedStore) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Clear the last-good profile pointer for a provider under the store lock. */

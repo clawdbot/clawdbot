@@ -264,7 +264,7 @@ function createChallengeStore() {
       const nonce = randomBytes(24).toString("base64url");
       const expiresAtMs = current + CHALLENGE_TTL_MS;
       challenges.set(nonce, { clientKey, expiresAtMs });
-      return { nonce, expiresAtMs };
+      return { nonce, ts: current, expiresAtMs };
     },
     consume: (nonce: string, clientKey: string, current: number) => {
       const challenge = challenges.get(nonce);

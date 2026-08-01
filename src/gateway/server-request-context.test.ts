@@ -32,6 +32,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
@@ -43,7 +44,9 @@ function makeContextParams(
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
       routeVariants: [],
@@ -126,6 +129,26 @@ function makeGatewayClient(params: {
 }
 
 describe("createGatewayRequestContext", () => {
+  it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
+    const unsubscribeAllSessionEvents = vi.fn();
+    const unsubscribePullRequests = vi.fn();
+    const unsubscribeViewerPresence = vi.fn();
+    const params = makeContextParams({ unsubscribeAllSessionEvents });
+    params.runtimeState.controlUiSessionPullRequests = {
+      unsubscribe: unsubscribePullRequests,
+    } as never;
+    params.runtimeState.sessionViewerPresence = {
+      unsubscribe: unsubscribeViewerPresence,
+    } as never;
+    const context = createGatewayRequestContext(params);
+
+    context.unsubscribeAllSessionEvents("conn-control-ui");
+
+    expect(unsubscribeAllSessionEvents).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribePullRequests).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribeViewerPresence).toHaveBeenCalledWith("conn-control-ui");
+  });
+
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;

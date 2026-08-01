@@ -1,5 +1,6 @@
 // Vydra provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
@@ -11,7 +12,6 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   resolveCompletedVydraPayload,
-  resolveVydraGeneratedMediaMaxBytes,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
   resolveVydraRequestContext,
@@ -47,7 +47,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       if ((req.inputImages?.length ?? 0) > 0) {
         throw new Error(
-          "Vydra image generation currently supports text-to-image only in the bundled plugin.",
+          "Vydra image generation currently supports text-to-image only in the Vydra plugin.",
         );
       }
       if ((req.count ?? 1) > 1) {
@@ -98,7 +98,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
           kind: "image",
           timeoutMs: req.timeoutMs,
           fetchFn,
-          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "image" }),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           requestPolicy,
         });
         return {

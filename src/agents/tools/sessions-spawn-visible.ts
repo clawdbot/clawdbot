@@ -92,6 +92,7 @@ export async function maybeSpawnVisibleSession(params: {
   label: string;
   runtime: "subagent" | "acp";
   requestedAgentId?: string;
+  runTimeoutSeconds?: number;
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
@@ -227,7 +228,10 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const resolvedModel =
     modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
-  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({ cfg });
+  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+    cfg,
+    runTimeoutSeconds: params.runTimeoutSeconds,
+  });
   const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,

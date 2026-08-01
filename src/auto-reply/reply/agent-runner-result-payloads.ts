@@ -29,21 +29,21 @@ import {
 } from "./agent-runner-core.js";
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
-import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { buildReplyPayloads, loadReplyPayloadsDedupeRuntime } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import type { accountReplyAgentRun } from "./agent-runner-result-accounting.js";
+import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
-import { buildStrandedReplyDeliveryFailurePayload } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountReplyAgentRun>>;
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
+type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
@@ -97,6 +97,10 @@ export async function prepareReplyAgentPayloads(state: {
     verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
+  const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
+  if (deliberateSilentTerminalReply) {
+    opts?.onDeliberateSilentTerminalReply?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -142,7 +146,7 @@ export async function prepareReplyAgentPayloads(state: {
           "message_tool_only",
         hasPendingContinuation:
           runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,
         cfg,
@@ -162,16 +166,41 @@ export async function prepareReplyAgentPayloads(state: {
       runtimePolicySessionKey,
       opts,
     });
-    if (
-      sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
-      sourceReplyPolicy.sendPolicyDenied
-    ) {
-      return undefined;
-    }
-    return buildStrandedReplyDeliveryFailurePayload();
+    // The guard above limits this to a one-shot recovery turn. A second miss
+    // always gets a diagnostic, even when the retry produced no final text.
+    const recovery = resolveStrandedReplyRecovery({
+      base: followupRun,
+      finalText: "",
+      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+      successfulSourceReplyDelivery: completedSourceReplyDelivery,
+      isHeartbeat,
+      isRoomEvent: false,
+    });
+    return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
-    await opts.onObservedReplyDelivery?.();
+  // Structured source-reply delivery evidence is the canonical owner for current
+  // runtimes. The route matcher remains only for legacy results that recorded
+  // successful target/text/media aggregates before structured receipts existed.
+  // It still keeps unrelated-target tool sends from counting as the source reply.
+  const sourceRoutedMessagingToolDelivery =
+    completedSourceReplyDelivery ||
+    ((runResult.messagingToolSentTargets?.length ?? 0) > 0 &&
+      (await loadReplyPayloadsDedupeRuntime()).hasSourceRoutedMessagingToolDelivery({
+        config: cfg,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+      }));
+  if (sourceRoutedMessagingToolDelivery) {
+    await opts?.onObservedReplyDelivery?.();
   }
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   // A terminal fallback is built separately after normal payload filtering.

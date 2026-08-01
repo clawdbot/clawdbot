@@ -1,5 +1,8 @@
 import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner/runs.js";
-import { hasProjectedAgentRunForSession } from "../../infra/agent-events.js";
+import {
+  hasProjectedAgentRunForSession,
+  type ProjectedAgentRunIndex,
+} from "../../infra/agent-events.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -11,7 +14,7 @@ type TrackedActiveSessionRun = {
   agentId?: string;
 };
 
-function collectTrackedActiveSessionRuns(
+export function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
@@ -91,9 +94,11 @@ export function resolveVisibleActiveSessionRunState(params: {
   sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
+  trackedActiveRuns?: readonly TrackedActiveSessionRun[];
+  projectedAgentRunIndex?: ProjectedAgentRunIndex;
 }): { active: boolean; runIds: string[] } {
   const sessionId = params.sessionId?.trim();
-  const runIds = collectTrackedActiveSessionRuns(params.context)
+  const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
     .filter(
       (active) =>
         isTrackedActiveSessionRunForKey(
@@ -115,6 +120,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   const hasProjectedRun = hasProjectedAgentRunForSession({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
+    ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
   const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.

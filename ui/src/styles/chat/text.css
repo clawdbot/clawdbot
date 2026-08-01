@@ -79,6 +79,12 @@
   vertical-align: top;
 }
 
+.chat-text :where(th:first-child, td:first-child) {
+  min-width: 8rem;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .chat-text :where(th) {
   font-family: var(--mono);
   font-weight: 500;
@@ -231,7 +237,7 @@
 
 /* Order contract: stays below the nested-blockquote margin rule so a nested
    quote that follows a paragraph gets paragraph rhythm, not the 8px gap. */
-.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
+.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote, ul + p, ol + p) {
   margin-top: 0.75em;
 }
 

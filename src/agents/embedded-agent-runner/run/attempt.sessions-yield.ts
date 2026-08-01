@@ -1,5 +1,6 @@
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { SessionManager } from "../../sessions/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
@@ -171,74 +172,57 @@ export async function persistSessionsYieldContextMessage(
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+// After strip, the transcript must end with a non-assistant role so subagent
+// completion auto-announce can inject a continuation turn.
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-  sessionManager?: unknown;
+  sessionManager: Pick<SessionManager, "removeTrailingEntries">;
 }) {
   const strippedMessages = activeSession.messages.slice();
+
+  // The tool-calling assistant turn and synthetic abort artifacts form one
+  // non-continuable suffix after sessions_yield.
   while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1) as
-      | AgentMessage
-      | { role?: string; customType?: string; stopReason?: string };
-    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
-      strippedMessages.pop();
-      continue;
+    const last = strippedMessages.at(-1);
+    const removable =
+      last?.role === "assistant" ||
+      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
+    if (!removable) {
+      break;
     }
-    if (
-      last?.role === "custom" &&
-      "customType" in last &&
-      last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
-    ) {
-      strippedMessages.pop();
-      continue;
-    }
-    break;
-  }
-  if (strippedMessages.length !== activeSession.messages.length) {
-    activeSession.agent.state.messages = strippedMessages;
+    strippedMessages.pop();
   }
 
-  const sessionManager = activeSession.sessionManager as
-    | {
-        removeTrailingEntries?: (
-          predicate: (entry: {
-            type?: string;
-            message?: {
-              role?: string;
-              stopReason?: string;
-              provider?: string;
-              model?: string;
-            };
-            customType?: string;
-          }) => boolean,
-          options?: {
-            preserveTrailing?: (entry: {
-              type?: string;
-              message?: {
-                role?: string;
-                provider?: string;
-                model?: string;
-              };
-            }) => boolean;
-          },
-        ) => number;
-      }
-    | undefined;
-  if (typeof sessionManager?.removeTrailingEntries !== "function") {
+  const removedMessages = activeSession.messages.slice(strippedMessages.length);
+  if (removedMessages.length === 0) {
     return;
   }
 
-  sessionManager.removeTrailingEntries(
+  activeSession.agent.state.messages = strippedMessages;
+
+  // The interrupt marker can settle independently in live and persisted state.
+  // Only assistant removals need the live-suffix cap to prevent data loss.
+  let remainingAssistantCount = removedMessages.filter(
+    (message) => message.role === "assistant",
+  ).length;
+  activeSession.sessionManager.removeTrailingEntries(
     (entry) => {
-      const isYieldAbortAssistant =
-        entry.type === "message" &&
-        entry.message?.role === "assistant" &&
-        entry.message?.stopReason === "aborted";
-      const isYieldInterruptMessage =
+      if (
         entry.type === "custom_message" &&
-        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-      return isYieldAbortAssistant || isYieldInterruptMessage;
+        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+      ) {
+        return true;
+      }
+      if (
+        entry.type !== "message" ||
+        entry.message.role !== "assistant" ||
+        remainingAssistantCount === 0
+      ) {
+        return false;
+      }
+      remainingAssistantCount -= 1;
+      return true;
     },
     {
       preserveTrailing: (entry) =>

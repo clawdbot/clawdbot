@@ -710,6 +710,7 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(

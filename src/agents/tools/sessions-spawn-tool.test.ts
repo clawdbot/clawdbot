@@ -250,16 +250,17 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
   });
 
-  it("does not expose timeout override fields to the model", () => {
+  it("exposes the canonical per-run timeout without advertising a wait-timeout alias", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: {
-        runTimeoutSeconds?: unknown;
+        runTimeoutSeconds?: { type?: string; minimum?: number; description?: string };
         timeoutSeconds?: unknown;
       };
     };
 
-    expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
+    expect(schema.properties?.runTimeoutSeconds).toMatchObject({ type: "integer", minimum: 0 });
+    expect(schema.properties?.runTimeoutSeconds?.description).toContain("configured subagent");
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
   });
 
@@ -492,6 +493,38 @@ describe("sessions_spawn tool", () => {
       tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
     ).rejects.toThrow("Parameters require visible=true: worktree");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("applies a per-run timeout to visible dashboard sessions", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:timed-child",
+      runStarted: true,
+      runId: "run-visible-timed",
+    }));
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { runTimeoutSeconds: 120 } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-timeout", {
+      task: "inspect issue",
+      visible: true,
+      runTimeoutSeconds: 7,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible-timed" });
+    expect(registerRun).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: 7 }),
+    );
   });
 
   it("uses the target agent model for cross-agent visible sessions", async () => {
@@ -1234,27 +1267,67 @@ describe("sessions_spawn tool", () => {
     expect(result.details).not.toHaveProperty("role");
   });
 
-  it.each([
-    "runTimeoutSeconds",
-    "timeoutSeconds",
-    "run_timeout_seconds",
-    "timeout_seconds",
-  ] as const)("rejects stale timeout override argument %s", async (timeoutParam) => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
+  it.each(["runTimeoutSeconds", "run_timeout_seconds"] as const)(
+    "forwards native per-run timeout argument %s",
+    async (timeoutParam) => {
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
 
-    await expect(
-      tool.execute("call-stale-timeout-override", {
+      await tool.execute("call-run-timeout", {
         task: "do thing",
         [timeoutParam]: 2,
-      }),
-    ).rejects.toThrow(
-      `sessions_spawn does not support per-call "${timeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
-    );
+      });
 
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+        expect.objectContaining({ task: "do thing", runTimeoutSeconds: 2 }),
+        expect.any(Object),
+      );
+    },
+  );
+
+  it("forwards a zero native timeout so a child can explicitly disable the default", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute("call-no-timeout", { task: "do thing", runTimeoutSeconds: 0 });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ task: "do thing", runTimeoutSeconds: 0 }),
+      expect.any(Object),
+    );
   });
+
+  it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, "not-a-number"])(
+    "rejects invalid native timeout %s before spawning",
+    async (runTimeoutSeconds) => {
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+      await expect(
+        tool.execute("call-invalid-timeout", { task: "do thing", runTimeoutSeconds }),
+      ).rejects.toThrow("runTimeoutSeconds must be a non-negative integer");
+
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["timeoutSeconds", "timeout_seconds"] as const)(
+    "rejects ambiguous wait-timeout argument %s",
+    async (timeoutParam) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      });
+
+      await expect(
+        tool.execute("call-stale-timeout-override", {
+          task: "do thing",
+          [timeoutParam]: 2,
+        }),
+      ).rejects.toThrow(
+        `sessions_spawn does not support "${timeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
+      );
+
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
@@ -1489,6 +1562,27 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("investigate the failing CI run");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.model).toBe("github-copilot/claude-sonnet-4.6");
+  });
+
+  it("forwards a per-run timeout to ACP runtime spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute("call-acp-timeout", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      runTimeoutSeconds: 45,
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        runTimeoutSeconds: 45,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("adds requested role to forwarded ACP failures", async () => {

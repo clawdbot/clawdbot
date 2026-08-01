@@ -10,6 +10,10 @@
     "additionalProperties": false,
     "properties": {
       "enabled": { "type": "boolean" },
+      "mode": {
+        "type": "string",
+        "enum": ["escalate", "always", "off"]
+      },
       "agents": {
         "type": "array",
         "items": { "type": "string" }
@@ -37,7 +41,7 @@
       },
       "thinking": {
         "type": "string",
-        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
       },
       "fastMode": {
         "anyOf": [
@@ -99,6 +103,10 @@
     "enabled": {
       "label": "Active Memory Recall",
       "help": "Globally enable or pause Active Memory recall while keeping the plugin command available. Remember across conversations requires this plugin to remain enabled."
+    },
+    "mode": {
+      "label": "Recall Mode",
+      "help": "Escalate runs deep recall only for recall-intent messages without a strong deterministic hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping deterministic trigger recall available."
     },
     "agents": {
       "label": "Target Agents",

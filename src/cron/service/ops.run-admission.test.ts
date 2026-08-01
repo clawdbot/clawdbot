@@ -18,7 +18,10 @@ import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
-import { enqueueRun, list, run, stop, update } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { update } from "./ops-mutations.js";
+import { list } from "./ops-read.js";
+import { enqueueRun, run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 

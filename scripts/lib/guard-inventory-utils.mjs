@@ -22,7 +22,7 @@ export function resolveRepoSpecifier(repoRoot, specifier, importerFile) {
 }
 
 /** Visit static and dynamic module specifiers in a parsed TypeScript source file. */
-export function visitModuleSpecifiers(ts, sourceFile, visit) {
+export function visitModuleSpecifiers(ts, sourceFile, visit, options = {}) {
   function walk(node) {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       visit({
@@ -50,6 +50,39 @@ export function visitModuleSpecifiers(ts, sourceFile, visit) {
     ) {
       visit({
         kind: "dynamic-import",
+        node,
+        specifier: node.arguments[0].text,
+        specifierNode: node.arguments[0],
+      });
+    } else if (
+      options.includeCommonJs &&
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "require" &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteralLike(node.arguments[0])
+    ) {
+      visit({
+        kind: "commonjs-require",
+        node,
+        specifier: node.arguments[0].text,
+        specifierNode: node.arguments[0],
+      });
+    } else if (
+      options.includeImportMetaUrl &&
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "URL" &&
+      node.arguments?.length >= 2 &&
+      ts.isStringLiteralLike(node.arguments[0]) &&
+      ts.isPropertyAccessExpression(node.arguments[1]) &&
+      node.arguments[1].name.text === "url" &&
+      ts.isMetaProperty(node.arguments[1].expression) &&
+      node.arguments[1].expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[1].expression.name.text === "meta"
+    ) {
+      visit({
+        kind: "import-meta-url",
         node,
         specifier: node.arguments[0].text,
         specifierNode: node.arguments[0],

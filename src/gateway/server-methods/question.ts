@@ -100,6 +100,7 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
           questions: normalizeQuestions(request),
           ...(request.agentId ? { agentId: request.agentId } : {}),
           ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+          ...(request.runId ? { runId: request.runId } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
           onResolved: (event) => {
             handleQuestionChannelResolved(event);

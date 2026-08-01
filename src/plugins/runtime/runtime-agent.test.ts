@@ -119,8 +119,6 @@ describe("plugin runtime session creation", () => {
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toEqual(created.entry);
-      expect(stored?.sessionFile).toBeTruthy();
-      expect(stored?.sessionFile).toContain(`sqlite:main:${created.sessionId}:`);
     });
   });
 
@@ -152,6 +150,7 @@ describe("plugin runtime session creation", () => {
         pluginOwnerId: "anthropic",
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
+        modelOverrideRouteResolution: "resolved",
         modelSelectionLocked: true,
         execHost: "node",
         execNode: "node-a",
@@ -171,8 +170,6 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-failure";
-      let sessionFile: string | undefined;
-
       await expect(
         runtime.session.createSessionEntry({
           cfg: {},
@@ -181,8 +178,7 @@ describe("plugin runtime session creation", () => {
             agentHarnessId: "codex",
             modelSelectionLocked: true,
           },
-          afterCreate: async (created) => {
-            sessionFile = created.entry.sessionFile;
+          afterCreate: async () => {
             throw new Error("native binding failed");
           },
         }),
@@ -191,8 +187,6 @@ describe("plugin runtime session creation", () => {
       expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toBe(
         undefined,
       );
-      expect(sessionFile).toBeTruthy();
-      expect(fs.existsSync(sessionFile ?? "")).toBe(false);
     });
   });
 
@@ -202,7 +196,6 @@ describe("plugin runtime session creation", () => {
       const key = "agent:main:catalog-adopt:claude:rollback";
       const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
       let sessionId: string | undefined;
-      let sessionFile: string | undefined;
 
       await expect(
         runtime.session.createSessionEntry({
@@ -221,7 +214,6 @@ describe("plugin runtime session creation", () => {
           },
           afterCreate: async (created) => {
             sessionId = created.sessionId;
-            sessionFile = created.entry.sessionFile;
             throw new Error("history import failed");
           },
         }),
@@ -230,8 +222,6 @@ describe("plugin runtime session creation", () => {
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toBeUndefined();
-      expect(sessionFile).toBeTruthy();
-      expect(sessionFile).toContain(`sqlite:main:${sessionId}:`);
       await expect(
         loadTranscriptEvents({
           agentId: "main",
@@ -249,15 +239,12 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:unlocked-binding-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
             key,
             initialEntry: { agentHarnessId: "codex" },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               throw new Error("unlocked native binding failed");
             },
           }),
@@ -266,8 +253,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });
@@ -309,8 +294,6 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-final-patch-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
@@ -322,8 +305,7 @@ describe("plugin runtime session creation", () => {
                 codex: { supervision: { initializing: true } },
               },
             },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               return {
                 pluginExtensions: {
                   codex: { supervision: { invalidJsonValue: 1n as never } },
@@ -336,8 +318,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });
@@ -348,15 +328,12 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:unlocked-final-patch-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
             key,
             initialEntry: { agentHarnessId: "codex" },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               return {
                 pluginExtensions: {
                   codex: { supervision: { invalidJsonValue: 1n as never } },
@@ -369,8 +346,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });

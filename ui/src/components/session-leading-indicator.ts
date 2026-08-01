@@ -6,9 +6,35 @@ import {
   renderSessionAttentionIcon,
   renderSessionState,
 } from "./session-attention-presentation.ts";
+import {
+  renderSessionGlyph,
+  renderSessionUnreadBadge,
+  type SessionGlyphContent,
+} from "./session-glyph.ts";
 import { resolveSessionIcon } from "./session-icon-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
+
+function renderGlyphBadge(
+  session: SidebarRecentSession,
+  pullRequestState: SessionPullRequestIndicatorState,
+): SessionGlyphContent {
+  if (session.unread) {
+    return renderSessionUnreadBadge();
+  }
+  if (pullRequestState === "none") {
+    return nothing;
+  }
+  const label =
+    pullRequestState === "open" ? t("sessionsView.openPullRequest") : t("chat.pullRequests.merged");
+  return html`<span
+    class="session-glyph__badge sidebar-session-pr-indicator--${pullRequestState}"
+    data-session-pr-state=${pullRequestState}
+    role="img"
+    aria-label=${label}
+    title=${label}
+  ></span>`;
+}
 
 export function renderSessionLeadingState(
   session: SidebarRecentSession,
@@ -16,71 +42,46 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "archived",
 ) {
-  const running = session.hasActiveRun || session.status === "running";
-  const sessionState = renderSessionState(session);
-  // Pinned rows keep their custom icon in the fixed leading slot and place
-  // transient run/unread/terminal state at the row edge.
-  const pinnedState =
-    session.pinned && sessionState !== nothing
-      ? html`<span class="nav-item__state">${sessionState}</span>`
-      : nothing;
+  const running = session.hasActiveRun;
 
   if (session.attention.kind !== "none") {
     return {
       running,
-      pinnedState,
-      leadingIndicator: renderSessionAttentionIcon(session.attention),
+      leadingIndicator: renderSessionGlyph({
+        content: renderSessionAttentionIcon(session.attention),
+        running,
+        // Attention does not replace unread: a row waiting on the user can also
+        // hold output the user has not seen.
+        badge: renderGlyphBadge(session, pullRequestState),
+      }),
     };
   }
   if (session.pinned) {
     return {
       running,
-      pinnedState,
-      leadingIndicator: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-        >${resolveSessionIcon(session.icon)}</span
-      >`,
+      leadingIndicator: renderSessionGlyph({
+        content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+          >${resolveSessionIcon(session.icon)}</span
+        >`,
+        running,
+        badge: renderGlyphBadge(session, pullRequestState),
+      }),
     };
   }
   if (!session.isChild && ownerActor?.id?.trim()) {
-    const label =
-      pullRequestState === "open"
-        ? t("sessionsView.openPullRequest")
-        : t("chat.pullRequests.merged");
     return {
       running,
-      pinnedState,
-      leadingIndicator: html`<span
-        class="sidebar-session-avatar ${running ? "sidebar-session-avatar--running" : ""}"
-      >
-        ${renderSessionOwnerChip(ownerActor, "row", attribution)}
-        ${running
-          ? html`<span
-              class="sidebar-session-avatar__running-ring"
-              role="img"
-              aria-label=${t("sessionsView.activeRun")}
-              title=${t("sessionsView.activeRun")}
-            ></span>`
-          : nothing}
-        ${session.unread
-          ? html`<span
-              class="sidebar-session-avatar__badge sidebar-session-avatar__badge--unread"
-              role="img"
-              aria-label=${t("sessionsView.unread")}
-            ></span>`
-          : pullRequestState !== "none"
-            ? html`<span
-                class="sidebar-session-avatar__badge sidebar-session-pr-indicator--${pullRequestState}"
-                data-session-pr-state=${pullRequestState}
-                role="img"
-                aria-label=${label}
-                title=${label}
-              ></span>`
-            : nothing}
-      </span>`,
+      leadingIndicator: renderSessionGlyph({
+        content: renderSessionOwnerChip(ownerActor, "row", attribution),
+        running,
+        circular: true,
+        badge: renderGlyphBadge(session, pullRequestState),
+      }),
     };
   }
+  // No artwork to ring: the bare spinner already sits in the leading slot.
   if (running) {
-    return { running, pinnedState, leadingIndicator: sessionState };
+    return { running, leadingIndicator: renderSessionState(session) };
   }
   if (pullRequestState !== "none") {
     const label =
@@ -89,7 +90,6 @@ export function renderSessionLeadingState(
         : t("chat.pullRequests.merged");
     return {
       running,
-      pinnedState,
       leadingIndicator: html`<span
         class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${pullRequestState}"
         data-session-pr-state=${pullRequestState}
@@ -100,9 +100,9 @@ export function renderSessionLeadingState(
       >`,
     };
   }
+  const sessionState = renderSessionState(session);
   return {
     running,
-    pinnedState,
     leadingIndicator:
       sessionState !== nothing
         ? sessionState

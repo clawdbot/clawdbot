@@ -90,8 +90,10 @@ OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
 - Secrets and runtime auth-routing state live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
-- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into the per-agent auth store on first use).
-- Legacy `auth-profiles.json`, `auth-state.json`, and per-agent `auth.json` files are imported by `openclaw doctor --fix`.
+- Legacy `credentials/oauth.json`, `auth-profiles.json`, `auth-state.json`, and
+  per-agent `auth.json` files are imported only by `openclaw doctor --fix`.
+  Runtime fails closed for the affected agent until credential-bearing legacy
+  files are migrated; it never silently imports or falls back to them.
 
 More detail: [OAuth](/concepts/oauth)
 

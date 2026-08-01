@@ -4,6 +4,7 @@ export type ConfigUiPresentation = "phone-number";
 export type ConfigUiHint = {
   label?: string;
   help?: string;
+  docsUrl?: string;
   tags?: string[];
   group?: string;
   order?: number;

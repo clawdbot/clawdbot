@@ -73,6 +73,88 @@ function firstRegisteredSubagentRun(): Record<string, unknown> {
   return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
 }
 
+type InheritedSpawnPreferenceCase = {
+  name: string;
+  task: string;
+  requesterState: Readonly<Record<string, unknown>>;
+  preferenceKey: "thinkingLevel" | "fastMode";
+  expected: string | boolean;
+  agentDefaults?: Readonly<Record<string, unknown>>;
+  requesterAgent?: Readonly<Record<string, unknown>>;
+  sessionStoreUnavailable?: boolean;
+  swarmEnabled?: boolean;
+  collect?: boolean;
+  requesterRunId?: string;
+};
+
+const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
+  {
+    name: "inherits requester thinking level when no spawn or subagent default is configured",
+    task: "inherit thinking",
+    requesterState: { thinkingLevel: "high" },
+    preferenceKey: "thinkingLevel",
+    expected: "high",
+  },
+  {
+    name: "inherits requester fast mode for collector children",
+    task: "inherit fast mode",
+    requesterState: { fastMode: "auto" },
+    preferenceKey: "fastMode",
+    expected: "auto",
+    swarmEnabled: true,
+    collect: true,
+    requesterRunId: "parent-run",
+  },
+  {
+    name: "inherits requester fast mode for ordinary children when Swarm is enabled",
+    task: "inherit ordinary fast mode",
+    requesterState: { fastMode: true },
+    preferenceKey: "fastMode",
+    expected: true,
+    swarmEnabled: true,
+  },
+  {
+    name: "persists inherited requester thinking off",
+    task: "inherit thinking off",
+    requesterState: { thinkingLevel: "off" },
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "inherits requester agent thinkingDefault when the caller session has no stored thinking",
+    task: "inherit agent thinking default",
+    requesterState: {},
+    requesterAgent: { thinkingDefault: "high" },
+    preferenceKey: "thinkingLevel",
+    expected: "high",
+  },
+  {
+    name: "falls back to requester agent thinkingDefault when caller session store cannot be read",
+    task: "inherit agent thinking default without session store",
+    requesterState: {},
+    requesterAgent: { thinkingDefault: "high" },
+    sessionStoreUnavailable: true,
+    preferenceKey: "thinkingLevel",
+    expected: "high",
+  },
+  {
+    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
+    task: "inherit global thinking default",
+    requesterState: {},
+    agentDefaults: { thinkingDefault: "medium" },
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+  {
+    name: "applies requester-agent subagent thinking before caller session thinking",
+    task: "requester policy thinking",
+    requesterState: { thinkingLevel: "high" },
+    requesterAgent: { subagents: { thinking: "medium" } },
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+];
+
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -1068,177 +1150,56 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  it("inherits requester thinking level when no spawn or subagent default is configured", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { thinkingLevel: "high" },
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "inherit thinking",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
-  });
-
-  it("inherits requester fast mode for collector children", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { fastMode: "auto" },
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      { task: "inherit fast mode", collect: true },
-      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.fastMode).toBe("auto");
-  });
-
-  it("inherits requester fast mode for ordinary children when Swarm is enabled", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { fastMode: true },
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      { task: "inherit ordinary fast mode" },
-      { agentSessionKey: "agent:main:main" },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.fastMode).toBe(true);
-  });
-
-  it("persists inherited requester thinking off", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { thinkingLevel: "off" },
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "inherit thinking off",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("off");
-  });
-
-  it("inherits requester agent thinkingDefault when the caller session has no stored thinking", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
+  it.each(inheritedSpawnPreferenceCases)(
+    "$name",
+    async ({
+      task,
+      requesterState,
+      preferenceKey,
+      expected,
+      agentDefaults,
+      requesterAgent,
+      sessionStoreUnavailable,
+      swarmEnabled,
+      collect,
+      requesterRunId,
+    }) => {
+      if (agentDefaults || requesterAgent || swarmEnabled) {
+        hoisted.configOverride = createConfigOverride({
+          ...(agentDefaults || requesterAgent
+            ? {
+                agents: {
+                  defaults: { workspace: os.tmpdir(), ...agentDefaults },
+                  list: [{ id: "main", workspace: "/tmp/workspace-main", ...requesterAgent }],
+                },
+              }
+            : {}),
+          ...(swarmEnabled ? { tools: { swarm: true } } : {}),
+        });
+      }
+      if (sessionStoreUnavailable) {
+        hoisted.loadSessionStoreMock.mockImplementation(() => {
+          throw new Error("store unavailable");
+        });
+      } else {
+        hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
+      }
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
         },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            thinkingDefault: "high",
-          },
-        ],
-      },
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": {},
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
+      });
 
-    const result = await spawnSubagentDirect(
-      {
-        task: "inherit agent thinking default",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
+      const result = await spawnSubagentDirect(
+        { task, ...(collect ? { collect: true } : {}) },
+        { agentSessionKey: "agent:main:main", ...(requesterRunId ? { requesterRunId } : {}) },
+      );
 
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
-  });
-
-  it("falls back to requester agent thinkingDefault when caller session store cannot be read", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            thinkingDefault: "high",
-          },
-        ],
-      },
-    });
-    hoisted.loadSessionStoreMock.mockImplementation(() => {
-      throw new Error("store unavailable");
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "inherit agent thinking default without session store",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
-  });
+      expect(result.status).toBe("accepted");
+      expect(persistedStore?.[result.childSessionKey as string]?.[preferenceKey]).toBe(expected);
+    },
+  );
 
   it("prefers requester agent thinkingDefault over selected-model thinking fallback", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
@@ -1438,45 +1399,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("low");
   });
 
-  it("inherits global thinkingDefault when caller session and agent have no stored thinking", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-          thinkingDefault: "medium",
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-          },
-        ],
-      },
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": {},
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "inherit global thinking default",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("medium");
-  });
-
   it("inherits provider/model thinking default when no caller-specific default exists", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
     hoisted.configOverride = createConfigOverride({
@@ -1521,47 +1443,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     const childSessionKey = result.childSessionKey as string;
     expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("low");
-  });
-
-  it("applies requester-agent subagent thinking before caller session thinking", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: {
-              thinking: "medium",
-            },
-          },
-        ],
-      },
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { thinkingLevel: "high" },
-    });
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "requester policy thinking",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const childSessionKey = result.childSessionKey as string;
-    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("medium");
   });
 
   it("keeps controller ownership separate from completion ownership", async () => {

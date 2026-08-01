@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   loadTranscriptEventsSync,
-  parseSqliteSessionFileMarker,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -188,6 +187,19 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("reads a requested agent session store", async () => {
+    const readEntries = vi.fn(() => []);
+
+    await expect(
+      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-agent-store" } } as never, {
+        agentId: "alternate",
+        readEntries,
+        retryDelaysMs: [],
+      }),
+    ).resolves.toEqual({});
+    expect(readEntries).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alternate" }));
+  });
+
   it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
     const readEntries = vi
       .fn()
@@ -268,11 +280,6 @@ describe("qa suite runtime agent session helpers", () => {
         origin: { label: "Seeded QA transcript" },
       },
     });
-    expect(parseSqliteSessionFileMarker(sessionStore[sessionKey]?.sessionFile)).toMatchObject({
-      agentId: "qa",
-      sessionId,
-    });
-
     const transcriptEvents = loadTranscriptEventsSync({
       agentId: "qa",
       env: qaSessionEnv(tempRoot),
@@ -356,7 +363,9 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 2,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "",
       hasDirectReplySelfMessage: false,
@@ -382,7 +391,9 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 3,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
@@ -436,7 +447,9 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 4,
+      userMessageCount: 1,
       successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
@@ -542,6 +555,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toMatchObject({
       assistantToolCallCounts: { update_plan: 2, write: 1 },
+      completedToolCallCounts: { update_plan: 2 },
       successfulToolCallCounts: { update_plan: 1 },
     });
   });
@@ -607,7 +621,9 @@ describe("qa suite runtime agent session helpers", () => {
       }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
+      completedToolCallCounts: {},
       eventCursor: 0,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "",
       hasDirectReplySelfMessage: false,

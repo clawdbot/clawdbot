@@ -1,23 +1,19 @@
 // Irc plugin module implements accounts behavior.
+import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/channel-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 type CredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
   { status: "configured_unavailable" }
 >["diagnostic"];
-
-const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
 
 export type ResolvedIrcAccount = {
   accountId: string;
@@ -37,13 +33,6 @@ export type ResolvedIrcAccount = {
   config: IrcAccountConfig;
 };
 
-function parseTruthy(value?: string): boolean {
-  if (!value) {
-    return false;
-  }
-  return TRUTHY_ENV.has(normalizeLowercaseStringOrEmpty(value));
-}
-
 function parseIntEnv(value?: string): number | undefined {
   if (!value?.trim()) {
     return undefined;
@@ -55,27 +44,21 @@ function parseIntEnv(value?: string): number | undefined {
   return parsed;
 }
 
-const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefaultIrcAccountId } =
-  createAccountListHelpers("irc", {
-    normalizeAccountId,
-    hasImplicitDefaultAccount: (cfg) =>
-      Boolean(
-        (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
-        (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
-      ),
-  });
+const {
+  listAccountIds: listIrcAccountIds,
+  resolveDefaultAccountId: resolveDefaultIrcAccountId,
+  resolveAccountConfig: mergeIrcAccountConfig,
+} = createAccountListHelpers<IrcAccountConfig>("irc", {
+  normalizeAccountId,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["nickserv"],
+  hasImplicitDefaultAccount: (cfg) =>
+    Boolean(
+      (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
+      (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
+    ),
+});
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
-
-function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  return resolveMergedAccountConfig<IrcAccountConfig>({
-    channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
-    accounts: cfg.channels?.irc?.accounts as Record<string, Partial<IrcAccountConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    normalizeAccountId,
-    nestedObjectKeys: ["nickserv"],
-  });
-}
 
 function resolvePassword(accountId: string, merged: IrcAccountConfig) {
   if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -162,7 +145,6 @@ export function resolveIrcAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
 }): ResolvedIrcAccount {
-  const hasExplicitAccountId = Boolean(params.accountId?.trim());
   const baseEnabled = params.cfg.channels?.irc?.enabled !== false;
 
   const resolve = (accountId: string) => {
@@ -174,7 +156,7 @@ export function resolveIrcAccount(params: {
       typeof merged.tls === "boolean"
         ? merged.tls
         : accountId === DEFAULT_ACCOUNT_ID && process.env.IRC_TLS
-          ? parseTruthy(process.env.IRC_TLS)
+          ? isTruthyEnvValue(process.env.IRC_TLS)
           : true;
 
     const envPort =
@@ -249,24 +231,13 @@ export function resolveIrcAccount(params: {
     } satisfies ResolvedIrcAccount;
   };
 
-  const normalized = normalizeAccountId(params.accountId);
-  const primary = resolve(normalized);
-  if (hasExplicitAccountId) {
-    return primary;
-  }
-  if (primary.configured) {
-    return primary;
-  }
-
-  const fallbackId = resolveDefaultIrcAccountId(params.cfg);
-  if (fallbackId === primary.accountId) {
-    return primary;
-  }
-  const fallback = resolve(fallbackId);
-  if (!fallback.configured) {
-    return primary;
-  }
-  return fallback;
+  return resolveAccountWithDefaultFallback({
+    accountId: params.accountId,
+    normalizeAccountId,
+    resolvePrimary: resolve,
+    hasCredential: (account) => account.configured,
+    resolveDefaultAccountId: () => resolveDefaultIrcAccountId(params.cfg),
+  });
 }
 
 export function listEnabledIrcAccounts(cfg: CoreConfig): ResolvedIrcAccount[] {

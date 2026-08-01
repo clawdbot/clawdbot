@@ -500,7 +500,6 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
         service,
-        port: expectedPort,
         json,
         stdout,
         warn,
@@ -600,7 +599,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const result = await repairLoadedGatewayServiceForStart({
         action: "restart",
         service,
-        port: configuredPort,
         json,
         stdout,
         warn,

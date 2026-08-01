@@ -324,14 +324,16 @@ describe("buildClawUpdatePlan", () => {
           path: "agent.sandbox.mode",
           desired: expect.objectContaining({ digest: expect.any(String) }),
           effect: expect.objectContaining({ path: "sandbox.mode" }),
-          requiresDistinctConsent: true,
+          classification: "reduction",
+          requiresDistinctConsent: false,
         }),
         expect.objectContaining({
           kind: "agent",
           path: "agent.tools.allow",
           desired: expect.objectContaining({ digest: expect.any(String) }),
           effect: expect.objectContaining({ path: "tools.allow" }),
-          requiresDistinctConsent: true,
+          classification: "reduction",
+          requiresDistinctConsent: false,
         }),
         expect.objectContaining({
           kind: "package",

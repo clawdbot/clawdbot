@@ -73,6 +73,46 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "missing"], root)).toThrow(/Could not resolve/u);
   });
 
+  it("compares against the fork budget when the base branch later shrinks", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-fork-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["branch", "release"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONE;\n");
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw",
+        "-c",
+        "user.email=test@openclaw.local",
+        "commit",
+        "-m",
+        "shrink main",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["branch", "moving-main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["checkout", "release"], { cwd: root, stdio: "ignore" });
+
+    expect(() => main(["--base", "moving-main"], root)).not.toThrow();
+  });
+
   it("rejects growth above the budget", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-grow-"));
     tempDirs.push(root);

@@ -63,6 +63,7 @@ const mockConfig = vi.hoisted(() => {
     path: "/tmp/openclaw.json",
     exists: true,
     config: initial as TestConfig,
+    sourceConfigBeforeMigrations: undefined as TestConfig | undefined,
     hash: "mock-hash-0" as string | undefined,
   };
   const cloneConfig = () => structuredClone(state.config);
@@ -73,6 +74,7 @@ const mockConfig = vi.hoisted(() => {
       exists: state.exists,
       raw: state.exists ? `${JSON.stringify(config)}\n` : null,
       parsed: state.exists ? config : undefined,
+      sourceConfigBeforeMigrations: structuredClone(state.sourceConfigBeforeMigrations ?? config),
       sourceConfig: config,
       resolved: config,
       valid: state.exists,
@@ -89,12 +91,14 @@ const mockConfig = vi.hoisted(() => {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
       state.config = {};
+      state.sourceConfigBeforeMigrations = undefined;
       state.hash = "mock-hash-0";
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
       state.config = {};
+      state.sourceConfigBeforeMigrations = undefined;
       state.hash = undefined;
     },
     currentConfig() {
@@ -102,6 +106,11 @@ const mockConfig = vi.hoisted(() => {
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
+      state.sourceConfigBeforeMigrations = undefined;
+    },
+    setResolvedConfig(config: TestConfig, sourceConfigBeforeMigrations: TestConfig) {
+      state.config = structuredClone(config);
+      state.sourceConfigBeforeMigrations = structuredClone(sourceConfigBeforeMigrations);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -329,140 +338,6 @@ describe("parseSystemAgentOperation", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
-  });
-
-  it("parses channel listing and connect requests", () => {
-    expect(parseSystemAgentOperation("channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("list channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("connect telegram")).toEqual({
-      kind: "channel-setup",
-      channel: "telegram",
-    });
-    expect(parseSystemAgentOperation("connect to WhatsApp")).toEqual({
-      kind: "channel-setup",
-      channel: "whatsapp",
-    });
-    expect(parseSystemAgentOperation("link discord channel")).toEqual({
-      kind: "channel-setup",
-      channel: "discord",
-    });
-    // Starting the wizard is not a write; the wizard collects explicit answers.
-    expect(isPersistentSystemAgentOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
-      false,
-    );
-    expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
-  });
-
-  it("parses anchored setup switches and channel info", () => {
-    for (const input of [
-      "open setup wizard",
-      "setup wizard",
-      "menu setup",
-      "use the setup wizard",
-      "use the wizard",
-    ]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "guided" });
-    }
-    for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "classic" });
-    }
-    expect(parseSystemAgentOperation("open channel wizard")).toEqual({
-      kind: "open-setup",
-      target: "channels",
-    });
-    expect(parseSystemAgentOperation("open channel wizard for Slack")).toEqual({
-      kind: "open-setup",
-      target: "channels",
-      channel: "slack",
-    });
-    expect(parseSystemAgentOperation("channel info Slack")).toEqual({
-      kind: "channel-info",
-      channel: "slack",
-    });
-    expect(parseSystemAgentOperation("about Telegram channel")).toEqual({
-      kind: "channel-info",
-      channel: "telegram",
-    });
-    expect(parseSystemAgentOperation("please open the setup wizard soon").kind).toBe("none");
-    expect(parseSystemAgentOperation("channel info slack please").kind).toBe("none");
-  });
-
-  it("prints one-shot setup pointers", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    for (const operation of [
-      { kind: "open-setup", target: "guided" } as const,
-      { kind: "open-setup", target: "classic" } as const,
-      { kind: "open-setup", target: "channels", channel: "slack" } as const,
-    ]) {
-      const result = await executeSystemAgentOperation(operation, runtime);
-      expect(result.applied).toBe(false);
-    }
-
-    const output = lines.join("\n");
-    expect(output).toContain("openclaw onboard`");
-    expect(output).toContain("openclaw onboard --classic");
-    expect(output).toContain("openclaw channels add --channel slack");
-  });
-
-  it("routes one-shot model setup through the verified OpenClaw flow", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
-
-    expect(result.applied).toBe(false);
-    expect(lines.join("\n")).toContain("Exit OpenClaw and run `openclaw onboard`");
-    expect(lines.join("\n")).not.toContain("openclaw configure --section model");
-  });
-
-  it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const entries = [
-      {
-        id: "telegram",
-        meta: {
-          label: "Telegram",
-          blurb: "Telegram bot messaging.",
-          docsPath: "/channels/telegram",
-        },
-      },
-      {
-        id: "slack",
-        meta: {
-          label: "Slack",
-          blurb: "Slack app messaging.",
-          docsPath: "/channels/slack",
-        },
-      },
-    ];
-    const deps = {
-      listChannelSetupPlugins: () => [{ id: "slack" }],
-      resolveChannelSetupEntries: () => ({
-        entries,
-        installedCatalogEntries: [],
-        installableCatalogEntries: [],
-        installedCatalogById: new Map(),
-        installableCatalogById: new Map(),
-      }),
-      isChannelConfigured: (_cfg: unknown, channel: string) => channel === "slack",
-    } as never;
-
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime, {
-      deps,
-    });
-    const knownOutput = lines.join("\n");
-    expect(knownOutput).toContain("Slack (slack)");
-    expect(knownOutput).toContain("Slack app messaging.");
-    expect(knownOutput).toContain("Configured: yes");
-    expect(knownOutput).toContain("Installed: yes");
-    expect(knownOutput).toContain("https://docs.openclaw.ai/channels/slack");
-    expect(knownOutput).toContain("open channel wizard for slack");
-
-    lines.length = 0;
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime, {
-      deps,
-    });
-    expect(lines.join("\n")).toContain("Known channels: slack, telegram");
   });
 
   it("parses agent creation requests", () => {
@@ -870,6 +745,45 @@ describe("parseSystemAgentOperation", () => {
     expect(runConfigSet).not.toHaveBeenCalled();
 
     // The same routing field on a non-default agent is an approved write.
+    const result = await executeSystemAgentOperation(
+      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+  });
+
+  it("resolves numeric legacy list indices from the authored array order", async () => {
+    const tempDir = opTempDirs.make("openclaw-numeric-agent-route-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setResolvedConfig(
+      {
+        agents: {
+          entries: {
+            "2": {},
+            "10": { default: true },
+          },
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "10", default: true }, { id: "2" }],
+        },
+      },
+    );
+    const { runtime } = createSystemAgentTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
+        runtime,
+        { approved: true, deps: { runConfigSet } },
+      ),
+    ).rejects.toThrow("openclaw onboard");
+    expect(runConfigSet).not.toHaveBeenCalled();
+
     const result = await executeSystemAgentOperation(
       { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
       runtime,

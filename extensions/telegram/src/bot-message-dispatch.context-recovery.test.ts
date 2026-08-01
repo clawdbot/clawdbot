@@ -271,7 +271,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           To: "telegram:-1003774691294",
           TransportThreadId: 1,
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Conversation context",
               source: "telegram",
@@ -353,7 +353,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     ]);
     expect(outboundCtxPayload.Body).toBe("current topic question");
     expect(outboundCtxPayload.BodyForAgent).toBe("current topic question");
-    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+    expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Conversation context",
         source: "telegram",
@@ -372,10 +372,10 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
         }),
       }),
     ]);
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
     );
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "spoofed current marker from history",
     );
     expect(recordInboundSession).toHaveBeenCalledWith(
@@ -422,7 +422,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
           MessageThreadId: 1,
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           TransportThreadId: 1,
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Conversation context",
               source: "telegram",
@@ -460,13 +460,13 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     });
     const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
     expect(outboundCtxPayload.Body).toBe("current topic question");
-    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+    expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Attachment context",
         type: "attachment",
       }),
     ]);
-    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
     );
   });

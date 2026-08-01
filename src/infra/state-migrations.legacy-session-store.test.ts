@@ -92,7 +92,7 @@ it("normalizes file-era rows and drops malformed entries", async () => {
     });
     expect(store["agent:main:main"]).not.toHaveProperty("channel");
     expect(store["agent:main:main"]).not.toHaveProperty("lastChannel");
-    expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(store["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
   });
 });
 
@@ -125,6 +125,6 @@ it("normalizes compatibility writes before persistence", async () => {
       },
     });
     expect(persisted["agent:main:main"]).not.toHaveProperty("channel");
-    expect(persisted["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(persisted["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
   });
 });

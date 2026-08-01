@@ -1,84 +1,90 @@
+import { html, nothing } from "lit";
+import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-  activeChatRunStartupStatus,
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  cancelQuestionPrompt,
-  chatPullRequestId,
-  clearChatHistory,
-  configureToolTitleFetcher,
-  createBackgroundTasksProps,
-  createPullRequestBranch,
-  createSessionWorkspaceProps,
-  dismissChatError,
-  dismissRealtimeTalkError,
-  findInlineApproval,
-  hasAbortableSessionRun,
-  hasOperatorAdminAccess,
-  hasOperatorWriteAccess,
-  hasSessionPresenceViewers,
-  html,
-  isGatewayMethodAdvertised,
-  nothing,
-  openSessionWorkspaceFile,
-  parseCatalogSessionKey,
-  pickFreshestObserverDigest,
-  readPresenceEntries,
-  refreshChatCommands,
-  refreshPageChat,
-  renderBoardSessionSurface,
-  renderChat,
-  renderChatControls,
-  resolveActiveRunOutputTokens,
-  resolveAssistantAttachmentAuthToken,
-  resolveBoardChatLayoutWidth,
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
-  resolveCurrentSelfUser,
-  resolveChatPaneObserverRunId,
-  retirePendingChatSideQuestion,
-  revealSessionWorkspaceFile,
-  scopedAgentParamsForSession,
-  submitQuestionPrompt,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-  t,
-  workspaceResultConflictFromPlacement,
-  type BoardViewCallbacks,
-  type ChatProps,
-  type DetailFullMessageResult,
-  type SessionObserverDigest,
-  type SidebarFullMessageRequest,
-} from "./chat-pane-deps.ts";
-import { ChatPaneHeaderRender } from "./chat-pane-header-render.ts";
+} from "../../lib/chat/follow-up-mode.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
-  DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
+  pickFreshestObserverDigest,
+  projectSessionObserverDigest,
+  resolveChatPaneObserverRunId,
+} from "../../lib/observer-digest.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { renderBoardSessionSurface } from "./board-session-surface.ts";
+import { clearChatHistory } from "./chat-history.ts";
+import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { ChatPaneHeader } from "./chat-pane-header.ts";
+import {
+  SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
 } from "./chat-pane-shared.ts";
+import {
+  createSidebarFullMessageLoader,
+  renderSidebarRegion,
+  resolveSidebarLayoutForBoard,
+  restoreHiddenSidebarChat,
+} from "./chat-pane-sidebar-layout.ts";
+import {
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
+} from "./chat-pane-state.ts";
+import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import {
+  resolveChatAgentId,
+  resolveChatAvatarUrl,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
+import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  revealSessionWorkspaceFile,
+} from "./components/chat-session-workspace.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPaneRender extends ChatPaneHeaderRender {
+export class ChatPane extends ChatPaneHeader {
   override render() {
     const state = this.state;
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    const selectedSession = selectedChatSessionRow(state);
+    const projectedObserverDigest = projectSessionObserverDigest(
+      selectedSession?.key ?? state.sessionKey,
+      selectedSession?.observerDigest,
     );
-    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
-      ? {
-          sessionKey: selectedSession.key,
-          runId: selectedSession.observerDigest.runId,
-          revision: selectedSession.observerDigest.revision,
-          updatedAt: selectedSession.observerDigest.updatedAt,
-          headline: selectedSession.observerDigest.headline,
-          health: selectedSession.observerDigest.health,
-        }
-      : null;
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,
       projectedObserverDigest,
@@ -96,18 +102,24 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         ? workspaceConflict
         : undefined;
     const board = this.resolveBoardView();
-    const runtimeConfigState = this.context.runtimeConfig.state;
-    const configSnapshot = runtimeConfigState.configSnapshot;
-    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
-      configNeedsApply: runtimeConfigState.configNeedsApply,
-      effectiveMode: state.chatEffectiveQueueMode,
-      sessionMetadataLoaded:
-        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-      sessionMode: state.chatQueueModeOverride,
+    const sidebarLayout = resolveSidebarLayoutForBoard({
+      board,
+      hasDetail: state.sidebarContent !== null,
+      layout: state.sidebarLayout,
+      paneWidth: this.paneWidth,
     });
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
-      serverQueueMode,
+      resolveControlUiServerQueueMode(
+        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
+        {
+          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
+          effectiveMode: state.chatEffectiveQueueMode,
+          sessionMetadataLoaded:
+            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+          sessionMode: state.chatQueueModeOverride,
+        },
+      ),
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
@@ -129,6 +141,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelSetupRequired = requiresChatModelSetup({
+      catalog: catalogKey !== null,
+      connected: state.connected,
+      agentsLoaded: this.context.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: agentDefaultModel,
+    });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
@@ -136,28 +155,29 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });
+    const gatewaySnapshot = this.context.gateway.snapshot;
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
       selectedSession?.visibility === "suggest" &&
       selectedSession.sharingRole === "viewer" &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.add") ===
-        true &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.list") === true;
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     const disabledReason =
       sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
         : null;
     const typingEnabled =
       multiIdentity &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
       !catalogKey &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.typing") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
         this.presencePayload,
-        this.context.gateway.snapshot.client?.instanceId,
+        gatewaySnapshot.selfUser?.id,
+        gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
     // Never flash "view-only" while metadata loads; after loading, anything short
@@ -168,13 +188,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const chatLayoutWidth = resolveBoardChatLayoutWidth({
-      paneWidth: this.paneWidth,
-      hasBoard: board.hasBoard,
-      face: board.face,
-      dock: board.dock,
-      dockWidth: this.boardChatDockSize.width,
-    });
+    const sidebarChatColumn = sidebarLayout.columns.find((column) =>
+      column.panels.some((panel) => panel.slot === "chat"),
+    );
+    const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
+    const chatLayoutWidth = sidebarRegionCollapsed
+      ? this.paneWidth
+      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -183,8 +203,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the side slot first; the tasks rail needs
-    // room for both columns before it may side-dock next to it.
+    // The workspace rail claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
@@ -194,11 +213,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Every side-docked rail narrows the room left for the chat + detail
-    // split; bottom strips do not.
+    // Only side-docked rails narrow the conversation region.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
-    const detailSplitWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
-    const gatewaySnapshot = this.context.gateway.snapshot;
+    const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const selectedSessionRailMode =
+      this.sessionRailModeSessionKey === state.sessionKey ? this.sessionRailMode : "hidden";
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -209,6 +228,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       activeRunIds: selectedSession?.activeRunIds,
       usageByRun: state.chatRunUsageById,
     });
+    const projectionRunId = resolveChatProjectionRunId({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      queue: state.chatQueue,
+    });
+    const attachmentReads = this.chatState.attachmentReads;
+    const attachmentReadSignal = attachmentReads.readSignal;
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -232,12 +258,28 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
       observerDigest: catalogKey ? null : observerDigest,
-      observerHudReady: !catalogKey && this.observerHudReady,
+      sessionRailReady: !catalogKey && this.sessionRailReady,
       observerRunId: catalogKey ? null : observerRunId,
       observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       observerLastReadAt: selectedSession?.lastReadAt,
-      onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
-      // Unconditional: catalog chats never render the HUD (observerHudReady is
+      sessionRailCompanion: catalogKey
+        ? undefined
+        : this.sessionCompanionThreads.view(state.sessionKey),
+      sessionRailOpenRequest:
+        this.sessionRailOpenSessionKey === state.sessionKey ? this.sessionRailOpenRequest : 0,
+      sessionRailMode: selectedSessionRailMode,
+      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
+      onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onSessionRailDraftChange: (draft) =>
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
+      onSessionRailClear: () => void this.clearSessionCompanion(),
+      onSessionRailModeChange: (mode) => {
+        if (state.sessionKey !== this.sessionRailModeSessionKey || mode !== this.sessionRailMode) {
+          this.sessionRailModeSessionKey = state.sessionKey;
+          this.sessionRailMode = mode;
+        }
+      },
+      // Unconditional: catalog chats never render the rail (sessionRailReady is
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
@@ -255,13 +297,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
               loading: this.loadingOlder,
             }
           : undefined,
-      sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
-      sideChatPending: catalogKey ? null : state.chatSideResultPending,
-      sideChatHidden: catalogKey ? true : state.chatSideChatHidden,
       toolMessages: catalogKey ? [] : state.chatToolMessages,
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runId: catalogKey ? null : projectionRunId,
       runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
@@ -288,16 +328,23 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
-        : !selectedSessionArchived && (!sessionParticipationBlocked || suggestionViewer),
+        : !modelSetupRequired &&
+          !selectedSessionArchived &&
+          (!sessionParticipationBlocked || suggestionViewer),
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
           ? {
+              kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
             }
-          : undefined,
+          : modelSetupRequired
+            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+            : undefined,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
@@ -320,6 +367,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      toolOverrides: selectedSession?.toolOverrides,
+      capabilityMenu: catalogKey
+        ? undefined
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+      swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,
@@ -411,9 +463,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
           void this.loadCatalogSession(catalogKey, false);
           return;
         }
-        state.chatSideChatTurns = [];
-        state.chatSideChatHidden = false;
-        retirePendingChatSideQuestion(state);
         state.resetToolStream();
         this.reconcileWaitingApprovalSnapshot();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
@@ -429,6 +478,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: attachmentReads.pendingReads,
+      getPendingAttachmentReads: () => attachmentReads.pendingReads,
+      readSignal: attachmentReadSignal,
+      onPendingReadsChange: (delta) => attachmentReads.updatePending(attachmentReadSignal, delta),
       onAttachmentsChange: (next) => {
         state.chatAttachments = next;
         state.requestUpdate?.();
@@ -472,38 +525,8 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onSideQuestion: (command, displayQuestion, onSendRejected) =>
-        void state.handleSendChat(command, {
-          ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
-          ...(onSendRejected ? { onSideQuestionSendRejected: onSendRejected } : {}),
-        }),
-      onSideChatClose: () => {
-        // Hide only: a pending run keeps going and its arriving answer (or a
-        // new question) reopens the panel with the conversation intact.
-        state.chatSideChatHidden = true;
-        state.requestUpdate?.();
-      },
-      onSideChatClear: () => {
-        const pendingRunId = state.chatSideResultPending?.runId;
-        state.chatSideChatTurns = [];
-        state.chatSideChatHidden = false;
-        // Retire (not just clear) so a discarded question's still-running
-        // detached run cannot leak its late reply into the transcript.
-        retirePendingChatSideQuestion(state);
-        // Best-effort targeted abort: trash means "stop the pending side
-        // question", not just hide it. The retire above already suppresses
-        // the run's late events, so a failed abort needs no fallback.
-        if (pendingRunId && state.client && state.connected) {
-          state.client
-            .request("chat.abort", {
-              sessionKey: state.sessionKey,
-              ...scopedAgentParamsForSession(state, state.sessionKey),
-              runId: pendingRunId,
-            })
-            .catch(() => {});
-        }
-        state.requestUpdate?.();
-      },
+      onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => {
         state.chatReplyTarget = null;
@@ -527,38 +550,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onSessionSelect: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
       },
-      onLoadSidebarFullMessage: catalogKey
-        ? undefined
-        : async (request: SidebarFullMessageRequest): Promise<DetailFullMessageResult | null> => {
-            if (!state.client || !state.connected) {
-              return null;
-            }
-            return state.client.request<DetailFullMessageResult>("chat.message.get", {
-              sessionKey: request.sessionKey,
-              ...(request.agentId ? { agentId: request.agentId } : {}),
-              messageId: request.messageId,
-              maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-            });
-          },
-      sidebarOpen: state.sidebarOpen,
-      sidebarContent: state.sidebarContent,
-      sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
-      splitRatio: state.splitRatio,
-      canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
+      canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
       onOpenSidebar: state.handleOpenSidebar,
-      onCloseSidebar: () => {
-        const content = state.sidebarContent;
-        if (content?.kind === "session-discussion") {
-          this.sessionDiscussionOpenUrls.delete(content.sessionKey);
-        }
-        state.handleCloseSidebar();
-      },
-      imageLightbox: state.imageLightbox,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,
-      onCloseImage: state.handleCloseImage,
-      onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
       userId: selfUser?.id ?? null,
@@ -569,20 +565,20 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const workboardCardChip = this.resolveWorkboardCardChip(board);
-    const content =
+    const primary =
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
-            sessions: this.swarmHydrator?.rows ?? state.sessionsResult?.sessions ?? [],
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(
-                this.resolveBoardSessionKey(board.snapshot.sessionKey),
+                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
               ),
               lastReadAt: selectedSession?.lastReadAt,
             },
@@ -591,9 +587,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             reopenDock: board.reopenDock,
             dockSize: this.boardChatDockSize,
             chat,
-            divider: this.renderBoardDivider(
-              board.dock === "hidden" ? board.reopenDock : board.dock,
-            ),
+            divider: this.renderBoardDivider("bottom"),
             canMutate: board.provider.canMutate,
             canGrant: board.provider.canGrant,
             callbacks: {
@@ -613,6 +607,96 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;
+    const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const panelTemplates = {
+      chat,
+      ...(state.sidebarContent
+        ? {
+            detail: html`<openclaw-chat-detail-panel
+              class="chat-sidebar"
+              .content=${state.sidebarContent}
+              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
+              .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
+              .embedSandboxMode=${state.embedSandboxMode}
+              .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
+              .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
+                openSessionWorkspaceFile(state, target)}
+              .onRevealInWorkspace=${(path: string) => revealSessionWorkspaceFile(state, path)}
+              .onOpenImage=${(item: Parameters<typeof state.handleOpenImage>[0]) =>
+                state.handleOpenImage(item, state.beginImageOpen())}
+              .embedded=${true}
+              @chat-detail-panel-close=${() => state.handleCloseSidebar()}
+            ></openclaw-chat-detail-panel>`,
+          }
+        : {}),
+      ...(discussion
+        ? {
+            discussion: html`<openclaw-session-discussion
+              .sessionKey=${discussion.sessionKey}
+              .canOpen=${discussion.canOpen}
+              .sourceGeneration=${this.connectionGeneration}
+              .loadInfo=${discussion.loadInfo}
+              .openDiscussion=${discussion.openDiscussion}
+              .onStateChange=${discussion.onStateChange}
+            ></openclaw-session-discussion>`,
+          }
+        : {}),
+    };
+    const sidebarCallbacks = {
+      activatePanel: (panelId: string) => {
+        state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+        state.updateSidebarActivePanel(panelId);
+      },
+      closeSlot: (slot: SidebarSlotId) => {
+        if (slot === "chat") {
+          this.handleBoardDockChange("hidden");
+          return;
+        }
+        if (slot === "discussion") {
+          this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim());
+        }
+        state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+      },
+      detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => {
+        const moved = restoreHiddenSidebarChat({
+          activatedPanelId: panelId,
+          movedLayout: detachPanelToColumn(sidebarLayout, panelId, side, columnIndex),
+          renderedLayout: sidebarLayout,
+          storedLayout: state.sidebarLayout,
+        });
+        this.commitSidebarPanelMove(moved, panelId, side, board);
+      },
+      mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => {
+        const target = sidebarLayout.columns.find((column) => column.id === targetColumnId);
+        const merged = restoreHiddenSidebarChat({
+          activatedPanelId: panelId,
+          movedLayout: mergePanelIntoColumn(sidebarLayout, panelId, targetColumnId, panelIndex),
+          renderedLayout: sidebarLayout,
+          storedLayout: state.sidebarLayout,
+        });
+        if (target) {
+          this.commitSidebarPanelMove(merged, panelId, target.side, board);
+        }
+      },
+      resizeColumn: (columnId: string, width: number) => {
+        this.commitSidebarColumnResize(sidebarLayout, columnId, width);
+      },
+    };
+    const content = renderSidebarRegion({
+      availableWidth: this.paneWidth,
+      callbacks: sidebarCallbacks,
+      discussionOpenUrl: discussion?.openUrl ?? null,
+      focusPanelId: state.sidebarFocusPanelId,
+      focusVersion: state.sidebarFocusVersion,
+      layout: sidebarLayout,
+      narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
+      panelMutationEnabled: {
+        chat: Boolean(board.activeTabId) && !board.activeTabReadOnly && board.provider.canMutate,
+      },
+      panelTemplates,
+      primary,
+      sessionKey: state.sessionKey,
+    });
     return html`${this.renderPaneHeader(
       sessionWorkspace,
       backgroundTasks,
@@ -620,6 +704,9 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       Boolean(catalogKey),
       selectedAgent?.workspace,
       selectedAgent?.workspaceGit === true,
-    )}${content}${this.renderResetConfirmation()}`;
+    )}${content}${renderChatImageLightbox(
+      state.imageLightbox,
+      state.handleCloseImage,
+    )}${this.renderResetConfirmation()}`;
   }
 }

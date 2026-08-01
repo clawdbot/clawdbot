@@ -83,7 +83,6 @@ export async function persistAbortedPartials(params: {
       message: snapshot.text,
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,

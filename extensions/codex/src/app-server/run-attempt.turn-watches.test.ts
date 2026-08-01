@@ -166,6 +166,10 @@ async function runClientCloseScenario(notifications: CodexServerNotification[]) 
 
 describe("createCodexAttemptTurnWatchController", () => {
   it("reschedules the attempt watch when notification progress shortens its timeout", async () => {
+    // Controller-only test, so the watch timers are the sole clock consumer and
+    // can be driven deterministically instead of raced against a real deadline.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     const onTimeout = vi.fn();
     const onAbort = vi.fn();
     const controller = createCodexAttemptTurnWatchController({
@@ -197,19 +201,18 @@ describe("createCodexAttemptTurnWatchController", () => {
 
     try {
       controller.armAttemptIdleWatch();
+      // Arms the default 200ms attempt watch at T=0.
       controller.touchActivity("turn:start", { attemptProgress: true });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      await vi.advanceTimersByTimeAsync(20);
+      // Progress at T=20 shortens the budget to 40ms, so the watch must be
+      // rescheduled from T=200 down to T=60 instead of keeping the old timer.
       controller.noteNotificationReceived("response.output_text.delta", {
         attemptProgress: true,
         attemptTimeoutMs: 40,
       });
 
-      await vi.waitFor(() => expect(onAbort).toHaveBeenCalledWith("turn_progress_idle_timeout"), {
-        interval: 5,
-        timeout: 120,
-      });
+      await vi.advanceTimersByTimeAsync(40);
+      expect(onAbort).toHaveBeenCalledWith("turn_progress_idle_timeout");
       expect(onTimeout).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "progress",
@@ -219,6 +222,7 @@ describe("createCodexAttemptTurnWatchController", () => {
       );
     } finally {
       controller.clearAllTimers();
+      vi.useRealTimers();
     }
   });
 });
@@ -762,16 +766,24 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("keeps a progressing active turn alive beyond the original attempt timeout", async () => {
+    // The attempt watch is armed from `turn:start` inside the attempt, tens of
+    // ms before anything this test can observe, so budget slack cannot be
+    // measured from here. Keep each progress gap an order of magnitude under
+    // the watchdog and drive the phase from wall clock: a loaded runner then
+    // stretches gaps without inverting the ratio into a false idle timeout.
+    const attemptIdleTimeoutMs = 1_000;
+    const progressIntervalMs = 50;
+    const progressPhaseMs = attemptIdleTimeoutMs + 200;
     const harness = createStartedThreadHarness();
     const params = createTestParams();
-    params.timeoutMs = 100;
+    params.timeoutMs = attemptIdleTimeoutMs;
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 300,
-      turnAssistantCompletionIdleTimeoutMs: 300,
-      turnTerminalIdleTimeoutMs: 300,
+      turnCompletionIdleTimeoutMs: attemptIdleTimeoutMs * 3,
+      turnAssistantCompletionIdleTimeoutMs: attemptIdleTimeoutMs * 3,
+      turnTerminalIdleTimeoutMs: attemptIdleTimeoutMs * 3,
     });
     await harness.waitForMethod("turn/start");
     await vi.waitFor(
@@ -782,28 +794,24 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
-    await harness.notify(
-      rawItemCompleted({
-        type: "message",
-        id: "raw-progress-1",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Still working." }],
-      }),
-    );
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
-    await harness.notify(
-      rawItemCompleted({
-        type: "message",
-        id: "raw-progress-2",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Almost done." }],
-      }),
-    );
+    const progressStartedAt = Date.now();
+    let sentProgressNotifications = 0;
+    let progressPhaseElapsedMs = 0;
+    while (progressPhaseElapsedMs < progressPhaseMs) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, progressIntervalMs);
+      });
+      sentProgressNotifications += 1;
+      await harness.notify(
+        rawItemCompleted({
+          type: "message",
+          id: `raw-progress-${sentProgressNotifications}`,
+          role: "assistant",
+          content: [{ type: "output_text", text: "Still working." }],
+        }),
+      );
+      progressPhaseElapsedMs = Date.now() - progressStartedAt;
+    }
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -815,11 +823,17 @@ describe("runCodexAppServerAttempt turn watches", () => {
       promptError: null,
     });
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    // Measured from after turn:start, so this understates the real idle span:
+    // without it the assertions above could pass on a turn that never outlived
+    // the original attempt timeout, i.e. proving nothing.
+    expect(progressPhaseElapsedMs).toBeGreaterThan(attemptIdleTimeoutMs);
     const progressReasons = onRunProgress.mock.calls.map(([info]) => info.reason);
     expect(progressReasons).toContain("turn:start");
+    // One progress reason per notification sent: still exact, just no longer
+    // pinned to a hardcoded count.
     expect(
       progressReasons.filter((reason) => reason === "notification:rawResponseItem/completed"),
-    ).toHaveLength(2);
+    ).toHaveLength(sentProgressNotifications);
   });
 
   it("does not count non-turn app-server requests as turn attempt progress", async () => {
@@ -1162,17 +1176,29 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("counts pending secret user input requests as turn attempt progress", async () => {
+    // `item/tool/requestUserInput` records attempt progress but never suppresses
+    // the attempt watch while pending, so this proves the turn outlives the
+    // deadline `turn:start` alone would have set. That needs
+    // preRequestIdleMs + pendingHoldMs > attemptIdleTimeoutMs > pendingHoldMs;
+    // both bounds are asserted below so load can never make it vacuous.
+    // The two request resets in run-attempt-server-requests.ts land ~20ms apart
+    // (`finally` runs at `return`, not when the bridge promise settles), so this
+    // cannot attribute survival to `:start` over `:response` — it guards the
+    // pair. Mutating either one alone still passes; mutating both fails.
+    const attemptIdleTimeoutMs = 1_000;
+    const preRequestIdleMs = 500;
+    const pendingHoldMs = 700;
     const harness = createStartedThreadHarness();
     const params = createTestParams();
-    params.timeoutMs = 250;
+    params.timeoutMs = attemptIdleTimeoutMs;
     params.onBlockReply = vi.fn();
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
 
     const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 600,
-      turnAssistantCompletionIdleTimeoutMs: 600,
-      turnTerminalIdleTimeoutMs: 600,
+      turnCompletionIdleTimeoutMs: attemptIdleTimeoutMs * 3,
+      turnAssistantCompletionIdleTimeoutMs: attemptIdleTimeoutMs * 3,
+      turnTerminalIdleTimeoutMs: attemptIdleTimeoutMs * 3,
     });
     await harness.waitForMethod("turn/start");
     await vi.waitFor(
@@ -1182,9 +1208,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       fastWait,
     );
+    // Later than the attempt's own turn:start, so every span derived from it
+    // understates the real idle time. Safe for the lower bound below.
+    const turnObservedAt = Date.now();
 
     await new Promise((resolve) => {
-      setTimeout(resolve, 75);
+      setTimeout(resolve, preRequestIdleMs);
     });
     const response = harness.handleServerRequest({
       id: "request-user-input",
@@ -1209,11 +1238,19 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    const pendingStartedAt = Date.now();
     await new Promise((resolve) => {
-      setTimeout(resolve, 125);
+      setTimeout(resolve, pendingHoldMs);
     });
+    const pendingElapsedMs = Date.now() - pendingStartedAt;
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    // Upper bound: the hold must stay inside one attempt budget, or a fired
+    // watch would be correct behavior rather than the regression under guard.
+    expect(pendingElapsedMs).toBeLessThan(attemptIdleTimeoutMs);
+    // Lower bound: the turn has now outlived the deadline turn:start alone set,
+    // so surviving proves the pending request moved it.
+    expect(Date.now() - turnObservedAt).toBeGreaterThan(attemptIdleTimeoutMs);
     expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },

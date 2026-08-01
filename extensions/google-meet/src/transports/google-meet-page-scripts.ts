@@ -14,6 +14,7 @@ export function meetStatusScript(params: {
 }) {
   return `async () => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const manualActionFor = (reason, message) => ({ reason, message });
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const captionSessionId = ${JSON.stringify(params.captionSessionId)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
@@ -312,27 +313,17 @@ export function meetStatusScript(params: {
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
     ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
     : undefined;
-  let manualActionReason;
-  let manualActionMessage;
+  let manualAction;
   if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
-    manualActionReason = "google-login-required";
-    manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
+    manualAction = manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.");
   } else if (!inCall && joinElsewhere) {
-    manualActionReason = "meet-session-conflict";
-    manualActionMessage = "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.";
+    manualAction = manualActionFor("meet-session-conflict", "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.");
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
-    manualActionReason = "meet-admission-required";
-    manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
+    manualAction = manualActionFor("meet-admission-required", "Admit the OpenClaw browser participant in Google Meet, then retry speech.");
   } else if (permissionNeeded) {
-    manualActionReason = "meet-permission-required";
-    manualActionMessage = allowMicrophone
-      ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry."
-      : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.";
+    manualAction = manualActionFor("meet-permission-required", allowMicrophone ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry." : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.");
   } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting/i.test(pageText)) {
-    manualActionReason = "meet-audio-choice-required";
-    manualActionMessage = allowMicrophone
-      ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry."
-      : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.";
+    manualAction = manualActionFor("meet-audio-choice-required", allowMicrophone ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry." : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.");
   }
   return JSON.stringify({
     clickedJoin: Boolean(join),
@@ -351,9 +342,7 @@ export function meetStatusScript(params: {
     audioOutputRouted,
     audioOutputDeviceLabel,
     audioOutputRouteError,
-    manualActionRequired: Boolean(manualActionReason),
-    manualActionReason,
-    manualActionMessage,
+    manualAction,
     title: document.title,
     url: pageUrl,
     notes

@@ -295,6 +295,7 @@ export function patchScopedAccountConfig(params: {
   accountId: string;
   patch: Record<string, unknown>;
   accountPatch?: Record<string, unknown>;
+  clearFields?: readonly string[];
   ensureChannelEnabled?: boolean;
   ensureAccountEnabled?: boolean;
   scopeDefaultToAccounts?: boolean;
@@ -312,6 +313,16 @@ export function patchScopedAccountConfig(params: {
   const ensureAccountEnabled = params.ensureAccountEnabled ?? ensureChannelEnabled;
   const patch = params.patch;
   const accountPatch = params.accountPatch ?? patch;
+  const clearFields = (record: Record<string, unknown>): Record<string, unknown> => {
+    if (!params.clearFields?.length) {
+      return record;
+    }
+    const cleared = { ...record };
+    for (const field of params.clearFields) {
+      delete cleared[field];
+    }
+    return cleared;
+  };
   if (accountId === DEFAULT_ACCOUNT_ID && !params.scopeDefaultToAccounts) {
     // Default accounts historically live at channel root unless the channel opts into accounts.default.
     return {
@@ -319,7 +330,7 @@ export function patchScopedAccountConfig(params: {
       channels: {
         ...params.cfg.channels,
         [params.channelKey]: {
-          ...base,
+          ...clearFields(base ?? {}),
           ...(ensureChannelEnabled ? { enabled: true } : {}),
           ...patch,
         },
@@ -328,7 +339,7 @@ export function patchScopedAccountConfig(params: {
   }
 
   const accounts = base?.accounts ?? {};
-  const existingAccount = accounts[accountId] ?? {};
+  const existingAccount = clearFields(accounts[accountId] ?? {});
   // Preserve an explicit disabled account while enabling newly created accounts by default.
   return {
     ...params.cfg,

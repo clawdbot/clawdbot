@@ -3,6 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
   setQwenChatTemplateThinking,
@@ -76,32 +77,6 @@ export function createVllmQwenThinkingWrapper(params: {
   );
 }
 
-function createVllmProviderThinkingWrapper(params: {
-  baseStreamFn: StreamFn | undefined;
-  qwenFormat?: VllmQwenThinkingFormat;
-  thinkingLevel: VllmThinkingLevel;
-}): StreamFn {
-  const qwenWrapped = params.qwenFormat
-    ? createVllmQwenThinkingWrapper({
-        baseStreamFn: params.baseStreamFn,
-        format: params.qwenFormat,
-        thinkingLevel: params.thinkingLevel,
-      })
-    : params.baseStreamFn;
-  return createPayloadPatchStreamWrapper(
-    qwenWrapped,
-    ({ payload: payloadObj }) => {
-      setNemotronThinkingOffChatTemplateKwargs(payloadObj);
-    },
-    {
-      shouldPatch: ({ model }) =>
-        model.api === "openai-completions" &&
-        params.thinkingLevel === "off" &&
-        isVllmNemotronModel(model),
-    },
-  );
-}
-
 export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   if (!isVllmProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
     return undefined;
@@ -117,9 +92,25 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   if (!qwenFormat && !shouldHandleNemotron) {
     return undefined;
   }
-  return createVllmProviderThinkingWrapper({
-    baseStreamFn: ctx.streamFn,
-    qwenFormat,
-    thinkingLevel: ctx.thinkingLevel,
-  });
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    qwenFormat &&
+      ((streamFn) =>
+        createVllmQwenThinkingWrapper({
+          baseStreamFn: streamFn,
+          format: qwenFormat,
+          thinkingLevel: ctx.thinkingLevel,
+        })),
+    (streamFn) =>
+      createPayloadPatchStreamWrapper(
+        streamFn,
+        ({ payload }) => setNemotronThinkingOffChatTemplateKwargs(payload),
+        {
+          shouldPatch: ({ model }) =>
+            model.api === "openai-completions" &&
+            ctx.thinkingLevel === "off" &&
+            isVllmNemotronModel(model),
+        },
+      ),
+  );
 }

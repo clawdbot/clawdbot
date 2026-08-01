@@ -77,6 +77,7 @@ export const UpdateRunParamsSchema = closedObject({
 const ConfigUiHintSchema = closedObject({
   label: Type.Optional(Type.String()),
   help: Type.Optional(Type.String()),
+  docsUrl: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
   group: Type.Optional(Type.String()),
   order: Type.Optional(Type.Integer()),

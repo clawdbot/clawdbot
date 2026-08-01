@@ -49,7 +49,14 @@ class OpenClawTileService :
                 protoLayoutResourceId = "openclaw_core_mascot",
               )
             },
-            labelContent = { text(getString(R.string.talk).uppercase().layoutString) },
+            labelContent = {
+              text(
+                wearUppercase(
+                  getString(R.string.talk),
+                  resources.configuration.locales[0],
+                ).layoutString,
+              )
+            },
             secondaryLabelContent = { text(getString(R.string.tile_phone_proxy).layoutString) },
           )
         },

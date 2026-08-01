@@ -12,10 +12,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_MEMORY_DREAMING_ENABLED = false;
+const DEFAULT_MEMORY_DREAMING_ENABLED = true;
 const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
@@ -36,12 +40,15 @@ const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
 const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
 const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
+// Deterministic calibration scores 3-day/3-query durable facts at 0.750-0.756,
+// versus repeated filler at 0.489-0.549 and high-relevance one-offs at 0.529-0.606.
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION = 0.25;
 
 const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
 const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
@@ -110,6 +117,7 @@ type MemoryDeepDreamingConfig = {
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
   maxPromotedSnippetTokens?: number;
+  maxPriorEntryLossFraction: number;
   sources: MemoryDeepDreamingSource[];
   recovery: MemoryDeepDreamingRecoveryConfig;
   execution: MemoryDreamingExecutionConfig;
@@ -422,6 +430,10 @@ export function resolveMemoryDreamingConfig(params: {
             : {}),
         maxPromotedSnippetTokens:
           maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+        maxPriorEntryLossFraction: normalizeScore(
+          deep?.maxPriorEntryLossFraction,
+          DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+        ),
         sources: normalizeStringArray(
           deep?.sources,
           ["daily", "memory", "sessions", "logs", "recall"] as const,
@@ -581,7 +593,7 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const configured = listAgentEntries(cfg);
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
   for (const entry of configured) {

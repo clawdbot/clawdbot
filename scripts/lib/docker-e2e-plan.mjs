@@ -11,6 +11,7 @@ import {
   allReleasePathLanes,
   mainLanes,
   normalizeReleaseProfile,
+  publicInstallerLanes,
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
@@ -99,6 +100,10 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "837ab1c89821d52519f385e0f3d2067e0b923f730e3a4791e67f578bf5d29f8e",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority auth-profile-v2026-7-2-beta-5",
+  ],
   [
     "10ea475027d8b320d6a704cd6e4dd0f7e984c57a93b327048db229a7e0132c8a",
     "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority",
@@ -492,6 +497,63 @@ function applyLiveRetries(poolLanes, retries) {
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
+const PNPM_NON_SCRIPT_COMMANDS = new Set([
+  "add",
+  "audit",
+  "config",
+  "dlx",
+  "exec",
+  "fetch",
+  "install",
+  "pack",
+  "publish",
+  "rebuild",
+  "remove",
+]);
+
+function candidatePackageScripts(candidatePackageRoot) {
+  if (!candidatePackageRoot) {
+    return undefined;
+  }
+  const packageJson = JSON.parse(
+    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
+  );
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    throw new Error("Candidate package manifest must be an object");
+  }
+  if (
+    packageJson.scripts !== undefined &&
+    (!packageJson.scripts ||
+      typeof packageJson.scripts !== "object" ||
+      Array.isArray(packageJson.scripts))
+  ) {
+    throw new Error("Candidate package manifest has an invalid scripts field");
+  }
+  return new Set(
+    Object.entries(packageJson.scripts ?? {})
+      .filter(([, command]) => typeof command === "string")
+      .map(([name]) => name),
+  );
+}
+
+function requiredPackageScripts(poolLane) {
+  return [...poolLane.command.matchAll(/\bpnpm\s+(?:run\s+)?([a-z][a-z0-9:-]*)/giu)]
+    .map(([, script]) => script)
+    .filter((script) => !PNPM_NON_SCRIPT_COMMANDS.has(script));
+}
+
+function filterUnavailableCandidateScriptLanes(poolLanes, candidatePackageRoot) {
+  const scripts = candidatePackageScripts(candidatePackageRoot);
+  if (!scripts) {
+    return poolLanes;
+  }
+  // The trusted catalog can add lanes before a frozen candidate has their scripts.
+  // Only schedule package-script commands the selected candidate can execute.
+  return poolLanes.filter((poolLane) =>
+    requiredPackageScripts(poolLane).every((script) => scripts.has(script)),
+  );
+}
+
 export function laneWeight(poolLane) {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -524,7 +586,12 @@ export function lanesNeedOpenClawPackage(poolLanes) {
 export function findLaneByName(name) {
   return dedupeLanes(
     expandUpgradeSurvivorBaselineLanes(
-      [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
+      [
+        ...allReleasePathLanes({ includeOpenWebUI: true }),
+        ...publicInstallerLanes,
+        ...mainLanes,
+        ...tailLanes,
+      ],
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
       undefined,
       process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
@@ -620,6 +687,7 @@ export function resolveDockerE2ePlan(options) {
       includeOpenWebUI: options.includeOpenWebUI,
       releaseProfile: "full",
     }),
+    ...publicInstallerLanes,
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);
@@ -715,8 +783,16 @@ export function resolveDockerE2ePlan(options) {
       : options.liveMode === "only"
         ? []
         : applyLiveMode(retriedTailLanes, options.liveMode);
-  const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
-  const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
+  const availableLanes = filterUnavailableCandidateScriptLanes(
+    configuredLanes,
+    options.candidatePackageRoot,
+  );
+  const availableTailLanes = filterUnavailableCandidateScriptLanes(
+    configuredTailLanes,
+    options.candidatePackageRoot,
+  );
+  const orderedLanes = options.orderLanes(availableLanes, options.timingStore);
+  const orderedTailLanes = options.orderLanes(availableTailLanes, options.timingStore);
   return {
     omittedUnsupportedLaneNames: [...omittedUnsupportedLaneNames],
     orderedLanes,

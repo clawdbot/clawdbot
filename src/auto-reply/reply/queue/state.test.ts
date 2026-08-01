@@ -21,6 +21,7 @@ function makeRun(): FollowupRun["run"] {
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",
     model: "claude-opus-4-6",
+    requestedRouteResolution: "resolved",
     authProfileId: "profile-a",
     authProfileIdSource: "user",
     timeoutMs: 30_000,
@@ -62,6 +63,7 @@ describe("refreshQueuedFollowupSession", () => {
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-4o",
+      nextRouteResolution: "resolved",
       nextAuthProfileId: undefined,
       nextAuthProfileIdSource: undefined,
     });
@@ -109,6 +111,7 @@ describe("refreshQueuedFollowupSession", () => {
       key: QUEUE_KEY,
       nextProvider: "ollama",
       nextModel: "qwen3.5:27b",
+      nextRouteResolution: "resolved",
       nextModelOverrideSource: "user",
     });
 
@@ -138,13 +141,19 @@ describe("refreshQueuedFollowupSession", () => {
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-5.6-luna",
-      nextThinking: { level: "ultra", agentRuntime: "codex" },
+      nextRouteResolution: "resolved",
+      nextThinking: {
+        level: "ultra",
+        catalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
+        agentRuntime: "codex",
+      },
     });
 
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
       thinkLevel: "max",
+      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
     });
   });
 
@@ -160,6 +169,7 @@ describe("refreshQueuedFollowupSession", () => {
       key: QUEUE_KEY,
       nextProvider: "custom",
       nextModel: "reasoner",
+      nextRouteResolution: "resolved",
       nextThinking: { level: "ultra", agentRuntime: "openclaw" },
     });
 
@@ -178,6 +188,7 @@ describe("refreshQueuedFollowupSession", () => {
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-5.6-sol",
+      nextRouteResolution: "resolved",
       nextThinking: { agentRuntime: "codex" },
     });
 

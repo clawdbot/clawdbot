@@ -8,6 +8,7 @@ import {
   imageFileExtensionForMimeType,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
@@ -589,16 +590,6 @@ function formatFalReferenceLimitError(
   return `${schema.referenceLimitLabel} supports at most ${limit} ${noun} (requested ${inputImageCount})`;
 }
 
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
-}
-
 async function fetchImageBuffer(
   url: string,
   deadline: ProviderOperationDeadline,
@@ -755,7 +746,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "image" });
       const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
-      const maxImageBytes = resolveGeneratedImageMaxBytes(req);
+      const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         ...(schema.supportsCount ? { num_images: req.count ?? 1 } : {}),

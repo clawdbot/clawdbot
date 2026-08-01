@@ -19,7 +19,7 @@ describe("QA runtime-pair scenario catalog", () => {
           .length,
       ]),
     );
-    expect(laneCounts).toEqual({ core: 39, extended: 8, soak: 2 });
+    expect(laneCounts).toEqual({ core: 38, extended: 8, soak: 2 });
   });
 
   it("declares every release agentic scenario in the core lane", () => {
@@ -51,7 +51,12 @@ describe("QA runtime-pair scenario catalog", () => {
       });
     }
 
-    expect(readQaScenarioById("gateway-restart-inflight-run").runtimePairLane).toBe("core");
+    expect(readQaScenarioById("gateway-restart-inflight-run").runtimePairLane).toBeUndefined();
+    expect(readQaScenarioById("gateway-restart-inflight-run").execution).toMatchObject({
+      kind: "flow",
+      runtime: "openclaw",
+      timeoutMs: 420_000,
+    });
     expect(readQaScenarioExecutionConfig("gateway-restart-inflight-run")).toMatchObject({
       requiredProviderMode: "mock-openai",
     });
@@ -71,5 +76,12 @@ describe("QA runtime-pair scenario catalog", () => {
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
     });
+    const longContextFlow = JSON.stringify(
+      readQaScenarioById("long-context-progress-watchdog").execution.flow,
+    );
+    expect(longContextFlow).toContain("agentRuntime: { id: config.harnessRuntime }, params: null");
+    expect(longContextFlow).toContain(
+      "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params === undefined",
+    );
   });
 });

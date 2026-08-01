@@ -9,6 +9,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -41,9 +42,17 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       ...fileDefaults,
       ...testState.agentConfig,
     };
-    const agents = testState.agentsConfig
-      ? { ...fileAgents, ...testState.agentsConfig, defaults }
-      : { ...fileAgents, defaults };
+    const testAgents = testState.agentsConfig;
+    const retainedFileAgents = { ...fileAgents };
+    if (testAgents && Object.hasOwn(testAgents, "list")) {
+      delete retainedFileAgents.entries;
+    }
+    if (testAgents && Object.hasOwn(testAgents, "entries")) {
+      delete retainedFileAgents.list;
+    }
+    const agents = testAgents
+      ? { ...retainedFileAgents, ...testAgents, defaults }
+      : { ...retainedFileAgents, defaults };
 
     const fileBindings = Array.isArray(baseConfig.bindings)
       ? (baseConfig.bindings as AgentBinding[])
@@ -131,7 +140,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     }
     const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
 
-    return {
+    const composed = {
       ...baseConfig,
       agents,
       bindings: testState.bindingsConfig ?? fileBindings,
@@ -141,6 +150,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       hooks,
       cron,
     } as OpenClawConfig;
+    return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
   };
 
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {

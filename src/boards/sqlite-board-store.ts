@@ -28,21 +28,26 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
+  type BoardSnapshotWithHtmlViewMetadata,
   type BoardWidgetHtmlDocument,
+  type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 import {
+  BOARD_WIDGET_SNAPSHOT_COLUMNS,
   createBoardWidgetContentFields,
   effectiveGrantState,
   parseDescriptor,
   parseManifest,
   parsePluginContent,
   rowToTab,
+  rowToHtmlViewMetadata,
   rowToWidget,
   serializeManifest,
   updateManifestHeightMode,
   type SelectedBoardTabRow,
   type SelectedBoardWidgetRow,
+  type SelectedBoardWidgetSnapshotRow,
 } from "./sqlite-board-codec.js";
 
 type BoardDatabase = Pick<
@@ -54,7 +59,8 @@ type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
 type StoredBoard = {
   snapshot: BoardSnapshot;
   tabRows: SelectedBoardTabRow[];
-  widgetRows: SelectedBoardWidgetRow[];
+  widgetRows: SelectedBoardWidgetSnapshotRow[];
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
@@ -126,24 +132,34 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
         database.db,
         db
           .selectFrom("board_widgets")
-          .selectAll()
+          .select(BOARD_WIDGET_SNAPSHOT_COLUMNS)
           .where("session_key", "=", sessionKey)
           .orderBy("tab_id", "asc")
           .orderBy("position", "asc")
           .orderBy("name", "asc"),
-      ).rows as SelectedBoardWidgetRow[];
+      ).rows as SelectedBoardWidgetSnapshotRow[];
+      const parsedWidgetRows = selectedWidgetRows.map((row) => ({
+        row,
+        manifest: parseManifest(row.manifest),
+      }));
       // Rows without the canonical authority snapshot predate this unreleased contract.
       // Keep them out of runtime state so they can never mint an interactive lease.
-      const widgetRows = selectedWidgetRows.filter((row) => {
+      const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
         if (row.content_kind !== "mcp-app") {
           return true;
         }
-        const manifest = parseManifest(row.manifest);
         return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
       });
+      const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
+      for (const { row, manifest } of admittedWidgetRows) {
+        const metadata = rowToHtmlViewMetadata(row, manifest);
+        if (metadata) {
+          htmlViewMetadata.set(row.name, metadata);
+        }
+      }
       const layout = normalizeBoardLayout({
         tabs: tabRows.map(rowToTab),
-        widgets: widgetRows.map(rowToWidget),
+        widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
       });
       return {
         snapshot: {
@@ -154,11 +170,33 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
           ...layout,
         },
         tabRows,
-        widgetRows,
+        widgetRows: admittedWidgetRows.map(({ row }) => row),
+        htmlViewMetadata,
       };
     },
     { databaseLabel: database.path, operationLabel: "board.read" },
   );
+}
+
+function rowToHtmlDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
+  >,
+): BoardWidgetHtmlDocument | undefined {
+  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
+    return undefined;
+  }
+  const manifest = parseManifest(row.manifest);
+  const declared = manifest.declared;
+  return {
+    html: Buffer.from(row.html).toString("utf8"),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    ...(declared ? { declared } : {}),
+  };
 }
 
 function upsertTabs(
@@ -375,6 +413,26 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
+    const resolved = this.resolve(sessionKey);
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
+          ? readStoredBoard(database, resolved.sessionKey)
+          : undefined,
+      {
+        agentId: resolved.agentId,
+        ...(resolved.path ? { path: resolved.path } : {}),
+        env: this.options.env,
+      },
+    );
+    const stored = result.found ? result.value : undefined;
+    return {
+      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(resolved.sessionKey)),
+      htmlViewMetadata: stored?.htmlViewMetadata ?? new Map(),
+    };
+  }
+
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
     if (ops.length === 0) {
       return this.getSnapshot(sessionKey);
@@ -587,19 +645,7 @@ export class SqliteBoardStore implements BoardStore {
         if (!row) {
           return undefined;
         }
-        if (row.content_kind === "html" && row.html !== null && row.view_generation !== null) {
-          const manifest = parseManifest(row.manifest);
-          const declared = manifest.declared;
-          return {
-            html: Buffer.from(row.html).toString("utf8"),
-            revision: row.revision,
-            sha256: row.sha256,
-            viewGeneration: row.view_generation,
-            grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
-            ...(declared ? { declared } : {}),
-          };
-        }
-        return undefined;
+        return rowToHtmlDocument(row);
       },
       {
         agentId: resolved.agentId,

@@ -5,7 +5,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
  * server-compaction, service-tier, and reasoning payload rules.
  */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { supportsOpenAIReasoningEffort } from "../internal/openai.js";
+import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;

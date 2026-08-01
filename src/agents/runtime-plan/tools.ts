@@ -122,20 +122,25 @@ export function normalizeAgentRuntimeTools<
     TSchemaType,
     TResult
   >[];
+  const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
+  // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
+  // runtime just to return the same empty list; runtime plans still receive their normal callback.
   const normalized =
-    params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
-    normalizeProviderToolSchemas({
-      tools: normalizableTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      runtimeHandle: params.runtimeHandle,
-      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
-    });
+    planNormalized ??
+    (normalizableTools.length === 0
+      ? normalizableTools
+      : normalizeProviderToolSchemas({
+          tools: normalizableTools,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env ?? process.env,
+          modelId: params.modelId,
+          modelApi: params.modelApi,
+          model: params.model,
+          runtimeHandle: params.runtimeHandle,
+          allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+        }));
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }

@@ -2,6 +2,7 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
@@ -390,10 +391,8 @@ function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): str
     channelIds.push(normalized);
   };
   pushTarget(config.agents?.defaults?.heartbeat?.target);
-  if (Array.isArray(config.agents?.list)) {
-    for (const agent of config.agents.list) {
-      pushTarget(agent?.heartbeat?.target);
-    }
+  for (const agent of listAgentEntries(config)) {
+    pushTarget(agent?.heartbeat?.target);
   }
   return sortUniquePluginIds(channelIds);
 }

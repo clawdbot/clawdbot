@@ -33,6 +33,7 @@ type WorkflowJob = {
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
   steps?: WorkflowStep[];
@@ -83,12 +84,24 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "1bf080f6dbf8800a3187591493f2551824e4ccc7";
+    const canonicalKovaRef = "517952b835640a368c4af6dfe6dc8365ae841b57";
+    const legacyKovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
+    const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
-    expect(workflow).toContain(`default: ${kovaRef}`);
-    expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
+    expect(workflow).toContain(`KOVA_LEGACY_LIST_CONFIG_REF: ${legacyKovaRef}`);
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref).toBe(
+      "${{ steps.resolve.outputs.kova_ref }}",
+    );
+    expect(resolveTarget.env?.KOVA_REF_INPUT).toBe("${{ inputs.kova_ref }}");
+    expect(resolveTarget.run).toContain("zod-schema.agent-defaults.ts?ref=${resolved_sha}");
+    expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
+    expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
+      "${{ needs.resolve_target.outputs.kova_ref }}",
+    );
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
     );
@@ -196,6 +209,15 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain("pnpm build");
     expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+  });
+
+  it("runs only gateway startup cases advertised by the frozen target", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain("scripts/bench-gateway-startup.ts --help");
+    expect(run).toContain('grep -Fxq "$startup_case"');
+    expect(run).toContain('"${startup_case_args[@]}"');
+    expect(run).toContain("required default case");
   });
 
   it("keeps source gateway health waits within one startup budget", () => {
@@ -707,7 +729,7 @@ esac
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([
-      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message",
+      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message",
       "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
       "scenario:agent-cold-warm-message",
     ]);
@@ -720,7 +742,7 @@ esac
     expect(runKova.run).toContain('--include "$INCLUDE_FILTERS"');
     expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
     expect(expectedReleaseEntries).toEqual([
-      "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
+      "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
       "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
       "agent-cold-warm-message:mock-openai-provider",
     ]);

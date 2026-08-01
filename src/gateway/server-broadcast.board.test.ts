@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -34,6 +35,26 @@ function makeClient(
     socket,
   };
 }
+
+describe("skills event scope guards", () => {
+  it("delivers skill invalidations only to read-capable operators", () => {
+    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+    const node = makeClient("node", "node", ["operator.read"]);
+    const read = makeClient("read", "operator", ["operator.read"]);
+    const write = makeClient("write", "operator", ["operator.write"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("skills.changed", { reason: "remote-node" });
+
+    expect(pairing.socket.events).toEqual([]);
+    expect(node.socket.events).toEqual([]);
+    expect(read.socket.events).toEqual(["skills.changed"]);
+    expect(write.socket.events).toEqual(["skills.changed"]);
+    expect(admin.socket.events).toEqual(["skills.changed"]);
+  });
+});
 
 describe("board event scope guards", () => {
   it("delivers board events only to read-capable operators", () => {
@@ -85,6 +106,32 @@ describe("board event scope guards", () => {
 });
 
 describe("collaboration event scope guards", () => {
+  it("uses the payload session scope for observer subscription filtering", () => {
+    const subscribed = makeClient("subscribed", "operator", ["operator.read"]);
+    const otherSession = makeClient("other-session", "operator", ["operator.read"]);
+    const unsubscribed = makeClient("unsubscribed", "operator", ["operator.read"]);
+    for (const entry of [subscribed, otherSession, unsubscribed]) {
+      entry.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe(subscribed.client.connId, "agent:main:main");
+    sessionMessageSubscribers.subscribe(otherSession.client.connId, "agent:main:other");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([subscribed.client, otherSession.client, unsubscribed.client]),
+      sessionMessageSubscribers,
+    });
+
+    broadcast(
+      "session.observer",
+      { sessionKey: "agent:main:main", revision: 1 },
+      { dropIfSlow: true },
+    );
+
+    expect(subscribed.socket.events).toEqual(["session.observer"]);
+    expect(otherSession.socket.events).toEqual([]);
+    expect(unsubscribed.socket.events).toEqual([]);
+  });
+
   it("guards suggestion and typing events and forwards payloads to visibility filtering", () => {
     const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
     const reader = makeClient("reader", "operator", ["operator.read"]);

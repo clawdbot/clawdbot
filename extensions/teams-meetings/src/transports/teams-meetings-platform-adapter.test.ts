@@ -1,8 +1,6 @@
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-} from "./teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   CONSUMER_URL,
   MEETING_STATE_KEY,
@@ -74,8 +72,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
         ...pending,
-        manualActionReason: "teams-session-conflict",
-        manualActionRequired: true,
+        manualAction: { reason: "teams-session-conflict", message: "Conflict" },
       }),
     ).toBe(false);
   });
@@ -164,7 +161,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
 
     expect(join.clicks).toBe(1);
-    expect(result).toMatchObject({ clickedJoin: true, manualActionRequired: false });
+    expect(result.clickedJoin).toBe(true);
+    expect(result.manualAction).toBeUndefined();
   });
 
   it("preserves a newer owner for a different meeting identity", async () => {
@@ -179,7 +177,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       priorMeeting,
     });
 
-    expect(result).toMatchObject({ manualActionReason: "teams-session-conflict" });
+    expect(result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
     expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
   });
 
@@ -194,7 +192,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       },
     });
 
-    expect(result).toMatchObject({ manualActionReason: "teams-session-conflict" });
+    expect(result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
   });
 
   it("does not unmute or join until BlackHole is visibly selected as the Teams input", async () => {
@@ -213,7 +211,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(result).toMatchObject({
       audioInputRouted: false,
       clickedJoin: false,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
       micMuted: true,
     });
     expect(microphone.clicks).toBe(0);
@@ -231,8 +229,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
 
     expect(result).toMatchObject({
-      manualActionReason: "teams-microphone-required",
-      manualActionRequired: true,
+      manualAction: { reason: "teams-microphone-required" },
     });
     expect(join.clicks).toBe(0);
   });
@@ -257,7 +254,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(result).toMatchObject({
       audioInputRouted: false,
       clickedJoin: false,
-      manualActionReason: "teams-audio-choice-required",
+      manualAction: { reason: "teams-audio-choice-required" },
     });
     expect(microphone.clicks).toBe(0);
   });
@@ -281,7 +278,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       meetingUrl: CONSUMER_URL,
     });
 
-    expect(result.manualActionRequired).toBe(false);
+    expect(result.manualAction).toBeUndefined();
     expect(window[MEETING_STATE_KEY]).toMatchObject({
       identity: "teams-consumer:9326458712345:p:abc",
       sessionId: "session-1",
@@ -297,7 +294,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toMatchObject({
       inCall: false,
-      manualActionReason: "teams-session-conflict",
+      manualAction: { reason: "teams-session-conflict" },
     });
     expect(window).not.toHaveProperty(MEETING_STATE_KEY);
   });
@@ -673,8 +670,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toMatchObject({
       inCall: true,
-      manualActionRequired: false,
     });
+    expect(result.manualAction).toBeUndefined();
   });
 
   it("classifies a stable device permission prompt outside the call", async () => {
@@ -685,8 +682,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toMatchObject({
       inCall: false,
-      manualActionReason: "teams-permission-required",
-      manualActionRequired: true,
+      manualAction: { reason: "teams-permission-required" },
     });
   });
 
@@ -698,7 +694,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       permissionPrompt: control({ label: "Device permission prompt" }),
     });
 
-    expect(result).toMatchObject({ manualActionRequired: false });
+    expect(result.manualAction).toBeUndefined();
     expect(continueWithoutDevices.clicks).toBe(1);
   });
 
@@ -714,7 +710,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
       microphoneDevice: control({ label: "BlackHole 2ch" }),
     });
 
-    expect(result).toMatchObject({ clickedJoin: true, manualActionRequired: false });
+    expect(result.clickedJoin).toBe(true);
+    expect(result.manualAction).toBeUndefined();
     expect(join.clicks).toBe(1);
   });
 
@@ -732,7 +729,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
       permissionPrompt: control({ label: "Camera permission warning" }),
     });
 
-    expect(result).toMatchObject({ clickedJoin: true, manualActionRequired: false });
+    expect(result.clickedJoin).toBe(true);
+    expect(result.manualAction).toBeUndefined();
     expect(join.clicks).toBe(1);
   });
 
@@ -746,7 +744,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("requires positive input and output route evidence before realtime", () => {
     expect(
-      isTeamsMeetingsRealtimeRouteReady("agent", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
         audioInputRouted: true,
         audioOutputRouted: true,
         inCall: true,
@@ -758,10 +756,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
       { audioInputRouted: true, inCall: true, micMuted: false },
       { audioInputRouted: true, audioOutputRouted: true, inCall: true },
     ]) {
-      expect(isTeamsMeetingsRealtimeRouteReady("agent", health)).toBe(false);
+      expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
     }
     expect(
-      isTeamsMeetingsRealtimeRouteReady("transcribe", {
+      MeetingPlatformAdapter.isRealtimeRouteReady("transcribe", {
         audioInputRouted: true,
         audioOutputRouted: true,
         inCall: true,
@@ -800,9 +798,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
       audioInputRouted: true,
       audioOutputRouted: true,
       inCall: true,
-      manualActionRequired: false,
       micMuted: false,
     });
+    expect(result.manualAction).toBeUndefined();
     expect(media.sinkId).toBe("blackhole-output");
   });
 
@@ -828,8 +826,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(result).toMatchObject({
       audioInputRouted: true,
       audioOutputRouted: true,
-      manualActionRequired: false,
     });
+    expect(result.manualAction).toBeUndefined();
   });
 
   it("routes a directly playable media element before its MediaStream is attached", async () => {
@@ -974,8 +972,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(result).toMatchObject({
       audioInputRouted: true,
       audioOutputRouted: true,
-      manualActionRequired: false,
     });
+    expect(result.manualAction).toBeUndefined();
     expect(bridge.sinkId).toBe("blackhole-output");
     expect(source.muted).toBe(true);
     expect(window).toHaveProperty("__openclawTeamsAudioOutputs");

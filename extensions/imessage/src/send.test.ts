@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
@@ -75,15 +76,22 @@ function createApprovalText(id = "approval-123"): string {
 }
 
 describe("sendMessageIMessage receipts", () => {
+  let openClawState: OpenClawTestState;
+
   beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-imessage-send-",
+    });
     await loadFreshSendModule();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearIMessageApprovalReactionTargetsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    await openClawState.cleanup();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -125,6 +133,25 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("rejects an unsuccessful RPC send instead of acknowledging a delivered message", async () => {
+    const client = createClient({ success: false, error: "recipient is not registered" });
+
+    await expect(
+      sendMessageIMessage("+15551234567", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("recipient is not registered");
+
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+        includePendingText: true,
+      }),
+    ).toBe(false);
   });
 
   it("drops reply metadata from text sends when reply actions are disabled", async () => {
@@ -286,11 +313,15 @@ describe("sendMessageIMessage receipts", () => {
       service: "SMS",
     });
 
-    await sendMessageIMessage("+1 (555) 000-4567", "hello", {
+    const result = await sendMessageIMessage("+1 (555) 000-4567", "hello", {
       config: IMESSAGE_TEST_CFG,
       client,
     });
 
+    expect(result).toMatchObject({
+      service: "sms",
+      chatGuid: "SMS;-;+15550004567",
+    });
     expect(
       findLatestIMessageEntryForChat({
         accountId: "default",
@@ -305,6 +336,23 @@ describe("sendMessageIMessage receipts", () => {
         isFromMe: true,
       }),
     );
+  });
+
+  it("infers the confirmed service from the provider chat GUID", async () => {
+    const client = createClient({
+      guid: "p:0/imsg-canonical-guid-only",
+      chat_guid: "SMS;-;+15550004567",
+    });
+
+    await expect(
+      sendMessageIMessage("+1 (555) 000-4567", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+      }),
+    ).resolves.toMatchObject({
+      service: "sms",
+      chatGuid: "SMS;-;+15550004567",
+    });
   });
 
   it("caches the provider-resolved GUID alongside an outbound chat ID", async () => {
@@ -544,6 +592,51 @@ describe("sendMessageIMessage receipts", () => {
     expect(client["request"]).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "media", audioAsVoice: false, sendTransport: "bridge" },
+    { name: "media", audioAsVoice: false, sendTransport: "applescript" },
+    { name: "voice", audioAsVoice: true, sendTransport: "bridge" },
+  ] as const)(
+    "honors the configured $sendTransport transport for $name attachment sends",
+    async ({ audioAsVoice, sendTransport }) => {
+      const client = createClient({ message_id: 12345 });
+      const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/configured-media-guid" });
+      const mediaPath = audioAsVoice ? "/tmp/voice.caf" : "/tmp/image.png";
+
+      await sendMessageIMessage("chat_guid:chat-1", "", {
+        config: {
+          channels: {
+            imessage: {
+              sendTransport: sendTransport === "bridge" ? "applescript" : "bridge",
+              accounts: { work: { sendTransport } },
+            },
+          },
+        },
+        accountId: "work",
+        client,
+        mediaUrl: mediaPath,
+        audioAsVoice,
+        resolveAttachmentImpl: async () => ({
+          path: mediaPath,
+          contentType: audioAsVoice ? "audio/x-caf" : "image/png",
+        }),
+        runCliJson,
+      });
+
+      expect(runCliJson).toHaveBeenCalledWith([
+        "send-attachment",
+        "--chat",
+        "chat-1",
+        "--file",
+        mediaPath,
+        ...(audioAsVoice ? ["--audio"] : []),
+        "--transport",
+        sendTransport === "bridge" ? "dylib" : sendTransport,
+      ]);
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves audioAsVoice media when replying to an iMessage thread", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/threaded-voice-guid" });
@@ -579,6 +672,54 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.replyToId).toBe("p:0/reply-guid");
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
     expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "p:0/reply-guid"])(
+    "rejects AppleScript voice notes without downgrading native audio (reply: %s)",
+    async (replyToId) => {
+      const client = createClient({ guid: "should-not-send" });
+      const runCliJson = vi.fn();
+
+      await expect(
+        sendMessageIMessage("chat_guid:chat-1", "", {
+          config: { channels: { imessage: { sendTransport: "applescript" } } },
+          client,
+          conversationReadOrigin: "direct-operator",
+          mediaUrl: "/tmp/voice.caf",
+          audioAsVoice: true,
+          replyToId,
+          resolveAttachmentImpl: async () => ({
+            path: "/tmp/voice.caf",
+            contentType: "audio/x-caf",
+          }),
+          runCliJson,
+        }),
+      ).rejects.toThrow("voice messages require bridge transport");
+
+      expect(runCliJson).not.toHaveBeenCalled();
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not downgrade voice notes when the native attachment bridge is unavailable", async () => {
+    const client = createClient({ guid: "should-not-send" });
+    const runCliJson = vi.fn().mockRejectedValueOnce(new Error("private API bridge unavailable"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/voice.caf",
+        audioAsVoice: true,
+        resolveAttachmentImpl: async () => ({
+          path: "/tmp/voice.caf",
+          contentType: "audio/x-caf",
+        }),
+        runCliJson,
+      }),
+    ).rejects.toThrow("private API bridge unavailable");
+
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
   it("drops reply metadata from media sends when reply actions are disabled", async () => {
@@ -905,8 +1046,6 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-send-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const client = createRejectingClient(new Error("caption failed"));
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 

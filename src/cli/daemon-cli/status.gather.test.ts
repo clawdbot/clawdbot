@@ -47,13 +47,34 @@ type PortUsageTestSummary = {
   hints: string[];
 };
 
-const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
-  async (port: number) => ({
-    port,
-    status: "free",
-    listeners: [],
-    hints: [],
-  }),
+type PortUsageInspectionOptions = { probeHosts?: readonly string[] };
+
+const inspectPortUsage = vi.fn<
+  (port: number, options?: PortUsageInspectionOptions) => Promise<PortUsageTestSummary>
+>(async (port: number) => ({
+  port,
+  status: "free",
+  listeners: [],
+  hints: [],
+}));
+const inspectPortUsages = vi.fn<
+  (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => Promise<Map<number, PortUsageTestSummary>>
+>(
+  async (ports) =>
+    new Map(
+      ports.map((port) => [
+        port,
+        {
+          port,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+      ]),
+    ),
 );
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
@@ -210,6 +231,10 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("../../gateway/net.js", () => ({
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
+  resolveGatewayRequiredListenHosts: (bindHost: string) =>
+    /^\d+\.\d+\.\d+\.\d+$/.test(bindHost) && bindHost !== "0.0.0.0" && bindHost !== "127.0.0.1"
+      ? [bindHost, "127.0.0.1"]
+      : [bindHost],
 }));
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
@@ -231,7 +256,12 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
 
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsage: (port: number, options?: PortUsageInspectionOptions) =>
+    inspectPortUsage(port, options),
+  inspectPortUsages: (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => inspectPortUsages(ports, options),
   formatPortDiagnostics: () => [],
 }));
 
@@ -299,6 +329,10 @@ describe("gatherDaemonStatus", () => {
       httpUrl: "https://10.211.55.3:19001/",
       wsUrl: "wss://10.211.55.3:19001",
     });
+    resolveGatewayBindHost.mockClear();
+    resolveGatewayBindHost.mockImplementation(async (bindMode?: string) =>
+      bindMode === "loopback" ? "127.0.0.1" : "0.0.0.0",
+    );
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
@@ -314,6 +348,20 @@ describe("gatherDaemonStatus", () => {
       listeners: [],
       hints: [],
     }));
+    inspectPortUsages.mockReset();
+    inspectPortUsages.mockImplementation(async (ports: readonly number[]) => {
+      return new Map(
+        ports.map((port) => [
+          port,
+          {
+            port,
+            status: "free" as const,
+            listeners: [],
+            hints: [],
+          },
+        ]),
+      );
+    });
     inspectPortConnections.mockClear();
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
@@ -380,6 +428,22 @@ describe("gatherDaemonStatus", () => {
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("batches daemon and CLI port status inspection when ports differ", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["0.0.0.0"]]]),
+      }),
+    );
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("reports the heap limit from the installed Gateway service", async () => {
@@ -493,6 +557,12 @@ describe("gatherDaemonStatus", () => {
 
     expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
     expect(status.gateway?.bindMode).toBe("loopback");
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["127.0.0.1"]]]),
+      }),
+    );
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
@@ -1149,12 +1219,19 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
+    inspectPortUsages.mockResolvedValueOnce(
+      new Map([
+        [
+          19001,
+          {
+            port: 19001,
+            status: "busy",
+            listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+            hints: [],
+          },
+        ],
+      ]),
+    );
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://127.0.0.1:19001",
@@ -1185,12 +1262,6 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("does not read local gateway errors for an explicit probe URL", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",
@@ -1215,12 +1286,6 @@ describe("gatherDaemonStatus", () => {
         auth: { token: "daemon-token" },
       },
     };
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",

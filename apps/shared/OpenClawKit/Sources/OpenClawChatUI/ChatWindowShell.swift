@@ -28,6 +28,7 @@ public struct OpenClawChatWindowShell: View {
     private let talkControl: OpenClawChatTalkControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
@@ -39,7 +40,8 @@ public struct OpenClawChatWindowShell: View {
         emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
-        speech: OpenClawChatSpeechController? = nil)
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
         self.userAccent = userAccent
@@ -49,6 +51,7 @@ public struct OpenClawChatWindowShell: View {
         self.talkControl = talkControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
     }
 
     public var body: some View {
@@ -68,7 +71,8 @@ public struct OpenClawChatWindowShell: View {
                 emptyAssistantPrompts: self.emptyAssistantPrompts,
                 talkControl: self.talkControl,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: self.mediaPlaybackAllowed)
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }

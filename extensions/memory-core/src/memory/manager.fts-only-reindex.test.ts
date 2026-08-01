@@ -8,15 +8,45 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { closeAllMemoryIndexManagers, type MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
+let providerConstructionError: Error | null = null;
+let providerConstructionGate: Promise<void> | null = null;
+let providerAvailable = false;
+let providerEmbeddingError: Error | null = null;
+let providerQueryCalls = 0;
 const createEmbeddingProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    requestedProvider: "auto",
-    provider: null,
-    providerUnavailableReason: "No embeddings provider available.",
-  })),
+  vi.fn(async () => {
+    await providerConstructionGate;
+    if (providerConstructionError) {
+      throw providerConstructionError;
+    }
+    if (providerAvailable) {
+      return {
+        requestedProvider: "auto",
+        provider: {
+          id: "openai",
+          model: "mock-embed",
+          embedBatch: async (texts: string[]) => {
+            if (providerEmbeddingError) {
+              throw providerEmbeddingError;
+            }
+            return texts.map(() => [1, 0]);
+          },
+          embedQuery: async () => {
+            providerQueryCalls += 1;
+            return [1, 0];
+          },
+        },
+      };
+    }
+    return {
+      requestedProvider: "auto",
+      provider: null,
+      providerUnavailableReason: "No embeddings provider available.",
+    };
+  }),
 );
 const originalFtsOnlyStateDir = process.env.OPENCLAW_STATE_DIR;
 
@@ -54,6 +84,11 @@ describe("memory manager FTS-only reindex", () => {
 
   beforeEach(async () => {
     createEmbeddingProviderMock.mockClear();
+    providerConstructionError = null;
+    providerConstructionGate = null;
+    providerAvailable = false;
+    providerEmbeddingError = null;
+    providerQueryCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -148,6 +183,393 @@ describe("memory manager FTS-only reindex", () => {
     const secondStatus = memoryManager.status();
     expect(secondStatus.chunks).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("returns keyword matches when optional provider construction fails during search bootstrap", async () => {
+    providerConstructionError = Object.assign(
+      new Error(
+        'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+      ),
+      {
+        name: "MissingProviderAuthError",
+        code: "missing-api-key",
+        provider: "openai",
+      },
+    );
+    const memoryManager = await createManager();
+    const debug: Array<{ embeddingBootstrap?: unknown }> = [];
+
+    const results = await memoryManager.search("Alpha topic", {
+      onDebug: (entry) => debug.push(entry),
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        path: "MEMORY.md",
+        snippet: expect.stringContaining("Alpha topic"),
+        source: "memory",
+      }),
+    ]);
+    expect(debug).toContainEqual({
+      backend: "builtin",
+      embeddingBootstrap: {
+        ok: false,
+        provider: "openai",
+        reason:
+          'MissingProviderAuthError: No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        degradedTo: "keyword-only",
+      },
+    });
+    expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+
+    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns keyword matches when the first bootstrap embedding request fails", async () => {
+    providerAvailable = true;
+    providerEmbeddingError = new Error("embedding request failed during bootstrap");
+    const memoryManager = await createManager();
+    const debug: unknown[] = [];
+
+    const results = await memoryManager.search("Alpha topic", {
+      onDebug: (entry) => debug.push(entry),
+    });
+
+    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+    expect(providerQueryCalls).toBe(0);
+    expect(debug).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          embeddingBootstrap: expect.objectContaining({
+            degradedTo: "keyword-only",
+            provider: "openai",
+            reason: expect.stringContaining("embedding request failed during bootstrap"),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps explicit required providers fail-closed when construction fails", async () => {
+    providerConstructionError = Object.assign(
+      new Error(
+        'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+      ),
+      {
+        name: "MissingProviderAuthError",
+        code: "missing-api-key",
+        provider: "openai",
+      },
+    );
+    const memoryManager = await createManager({ provider: "openai" });
+
+    await expect(memoryManager.search("Alpha topic")).rejects.toThrow(
+      'No API key resolved for provider "openai"',
+    );
+    expect(countChunksContaining("Alpha topic")).toBe(0);
+  });
+
+  it("uses keyword search when provider construction fails against an existing semantic index", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerAvailable = true;
+      const firstManager = await createManager();
+      await firstManager.sync({ force: true });
+      await expect(firstManager.probeVectorAvailability()).resolves.toBe(true);
+      await firstManager.close();
+      manager = null;
+      await closeAllMemorySearchManagers();
+      await closeAllMemoryIndexManagers();
+      providerAvailable = false;
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      const debug: unknown[] = [];
+
+      await expect(
+        memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
+      ).resolves.toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+      expect(debug).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            embeddingBootstrap: expect.objectContaining({ degradedTo: "keyword-only" }),
+          }),
+        ]),
+      );
+      expect(
+        memoryManager as unknown as {
+          embeddingBootstrapFailure?: unknown;
+          provider?: { id: string } | null;
+        },
+      ).toMatchObject({
+        embeddingBootstrapFailure: expect.objectContaining({ degradedTo: "keyword-only" }),
+        provider: null,
+      });
+      expect(memoryManager.status()).toMatchObject({
+        provider: "none",
+        vector: { semanticAvailable: false },
+        custom: { indexIdentity: { status: "valid" }, searchMode: "fts-only" },
+      });
+
+      providerConstructionError = null;
+      providerAvailable = true;
+      nowSpy.mockReturnValue(now + 31_000);
+      await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      expect(providerQueryCalls).toBeGreaterThan(0);
+      expect(memoryManager.status()).toMatchObject({
+        provider: "openai",
+        vector: { semanticAvailable: true },
+        custom: { providerState: { mode: "active", providerId: "openai" } },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("retries expired bootstrap failures through probes and rebuilds the fallback index", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+      const callsBeforeProbe = createEmbeddingProviderMock.mock.calls.length;
+
+      providerConstructionError = null;
+      providerAvailable = true;
+      nowSpy.mockReturnValue(now + 31_000);
+      await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      const callsAfterProbe = createEmbeddingProviderMock.mock.calls.length;
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      expect(callsAfterProbe).toBeGreaterThan(callsBeforeProbe);
+      expect(memoryManager.status()).toMatchObject({
+        provider: "openai",
+        custom: {
+          indexIdentity: { status: "valid" },
+          providerState: { mode: "active", providerId: "openai" },
+        },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("caches a normal no-provider result after an expired bootstrap failure", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      providerConstructionError = null;
+      nowSpy.mockReturnValue(now + 31_000);
+      const debug: unknown[] = [];
+      await expect(
+        memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
+      ).resolves.toHaveLength(1);
+      const callsAfterRetry = createEmbeddingProviderMock.mock.calls.length;
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(callsAfterRetry);
+      expect(JSON.stringify(debug)).toContain("No embeddings provider available.");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("degrades concurrent bootstrap waiters to the same keyword index", async () => {
+    let releaseProviderConstruction!: () => void;
+    providerConstructionGate = new Promise<void>((resolve) => {
+      releaseProviderConstruction = resolve;
+    });
+    providerConstructionError = Object.assign(
+      new Error(
+        'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+      ),
+      {
+        name: "MissingProviderAuthError",
+        code: "missing-api-key",
+        provider: "openai",
+      },
+    );
+    const memoryManager = await createManager();
+
+    const backgroundSync = memoryManager.sync({ reason: "startup" }).catch((err: unknown) => err);
+    await vi.waitFor(() => expect(createEmbeddingProviderMock).toHaveBeenCalledOnce());
+    const firstSearch = memoryManager.search("Alpha topic");
+    const secondSearch = memoryManager.search("Alpha topic");
+    releaseProviderConstruction();
+
+    await expect(backgroundSync).resolves.toBe(providerConstructionError);
+    const results = await Promise.all([firstSearch, secondSearch]);
+    expect(results).toEqual([
+      [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],
+      [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],
+    ]);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+  });
+
+  it("serializes provider construction when concurrent probes retry an expired failure", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+      const callsBeforeRetry = createEmbeddingProviderMock.mock.calls.length;
+
+      providerConstructionError = null;
+      providerAvailable = true;
+      nowSpy.mockReturnValue(now + 31_000);
+      let releaseProviderConstruction!: () => void;
+      providerConstructionGate = new Promise<void>((resolve) => {
+        releaseProviderConstruction = resolve;
+      });
+      const firstProbe = memoryManager.probeEmbeddingAvailability();
+      const secondProbe = memoryManager.probeEmbeddingAvailability();
+      await vi.waitFor(() =>
+        expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(callsBeforeRetry + 1),
+      );
+      releaseProviderConstruction();
+
+      await expect(Promise.all([firstProbe, secondProbe])).resolves.toEqual([
+        { ok: true },
+        { ok: true },
+      ]);
+      expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(callsBeforeRetry + 1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps keyword results when semantic recovery reindex fails", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      providerConstructionError = null;
+      providerAvailable = true;
+      nowSpy.mockReturnValue(now + 31_000);
+      await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      providerEmbeddingError = new Error("embedding request failed during rebuild");
+      const debug: unknown[] = [];
+
+      await expect(
+        memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
+      ).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBe(0);
+      expect(debug).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            embeddingBootstrap: expect.objectContaining({
+              degradedTo: "keyword-only",
+              reason: expect.stringContaining("embedding request failed during rebuild"),
+            }),
+          }),
+        ]),
+      );
+      expect(JSON.stringify(debug)).not.toContain("No API key resolved");
+      expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        "Gamma fallback refresh\n\nIndexed while embeddings remain degraded.",
+      );
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBe(0);
+
+      nowSpy.mockReturnValue(now + 62_000);
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        "Delta fallback refresh\n\nRetry remains keyword-only while embeddings still fail.",
+      );
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBe(0);
+
+      providerEmbeddingError = null;
+      nowSpy.mockReturnValue(now + 93_000);
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBeGreaterThan(0);
+      const recoveredStatus = memoryManager.status();
+      expect(recoveredStatus.custom?.providerState).toEqual({
+        mode: "active",
+        providerId: "openai",
+      });
+      expect(recoveredStatus.custom?.providerUnavailableReason).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("redacts credential material from bootstrap debug reasons", async () => {
+    const credential = "sk-test-abcdefghijklmnopqrstuvwxyz123456";
+    providerConstructionError = Object.assign(new Error(`apiKey=${credential}`), {
+      name: "MissingProviderAuthError",
+      code: "missing-api-key",
+      provider: "openai",
+    });
+    const memoryManager = await createManager();
+    const debug: unknown[] = [];
+
+    await memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) });
+
+    expect(JSON.stringify(debug)).not.toContain(credential);
   });
 
   it("syncs explicit provider-none memory without resolving an embedding provider", async () => {

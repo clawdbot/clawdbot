@@ -40,6 +40,7 @@ type QuestionManagerRequest = {
   questions: Question[];
   agentId?: string;
   sessionKey?: string;
+  runId?: string;
   timeoutMs: number;
   onResolved?: (event: QuestionResolvedEvent) => void;
 };
@@ -108,6 +109,7 @@ export class QuestionManager {
       questions: params.questions,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.runId ? { runId: params.runId } : {}),
       createdAtMs,
       expiresAtMs,
       status: "pending",

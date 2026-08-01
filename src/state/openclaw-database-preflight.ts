@@ -7,7 +7,10 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  describeRunningOpenClawBuild,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -44,7 +47,8 @@ type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases"
 export class OpenClawDatabaseSchemaPreflightError extends Error {
   constructor(readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[]) {
     super(
-      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
+        `Refused by ${describeRunningOpenClawBuild()}. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
     );
     this.name = "OpenClawDatabaseSchemaPreflightError";
   }

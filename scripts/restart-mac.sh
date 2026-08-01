@@ -172,7 +172,11 @@ fi
 acquire_lock
 
 kill_all_openclaw() {
-  for _ in {1..10}; do
+  local max_attempts=20
+  local poll_seconds=0.3
+  # The app's signal watcher forces exit after 3s. Keep a scheduling margin, then
+  # fail closed if a truly stuck process still survives the bounded grace period.
+  for ((attempt=0; attempt<max_attempts; attempt++)); do
     local pids=""
     pids="$(openclaw_process_pids)"
     if [[ -z "${pids}" ]]; then
@@ -181,7 +185,7 @@ kill_all_openclaw() {
     while IFS= read -r pid; do
       kill "${pid}" 2>/dev/null || true
     done <<< "${pids}"
-    sleep 0.3
+    sleep "${poll_seconds}"
   done
   [[ -z "$(openclaw_process_pids)" ]]
 }

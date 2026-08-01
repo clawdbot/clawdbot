@@ -23,8 +23,12 @@ window.renderMath = async (job) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const finalBounds = container.getBoundingClientRect();
     const height = Math.ceil(Math.max(finalBounds.height, container.scrollHeight));
-    ChatMathBridge.onRenderComplete(job.id, width, height, true);
+    window.ChatMathBridge.postMessage(
+      JSON.stringify({ id: job.id, widthCssPx: width, heightCssPx: height, success: true }),
+    );
   } catch (_) {
-    ChatMathBridge.onRenderComplete(job.id, 0, 0, false);
+    window.ChatMathBridge.postMessage(
+      JSON.stringify({ id: job.id, widthCssPx: 0, heightCssPx: 0, success: false }),
+    );
   }
 };

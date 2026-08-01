@@ -7,6 +7,7 @@ type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  linked?: boolean;
   restartPending?: boolean;
   busy?: boolean;
   activeRuns?: number;
@@ -18,6 +19,7 @@ type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  ingressUnavailable?: true;
   terminalDisconnect?: boolean;
 };
 
@@ -30,7 +32,8 @@ type ChannelHealthEvaluationReason =
   | "stuck"
   | "startup-connect-grace"
   | "disconnected"
-  | "stale-socket";
+  | "stale-socket"
+  | "ingress-unavailable";
 
 export type ChannelHealthEvaluation = {
   healthy: boolean;
@@ -44,10 +47,16 @@ export type ChannelHealthPolicy = {
   channelConnectGraceMs: number;
 };
 
-type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
+type ChannelRestartReason =
+  | "gave-up"
+  | "stopped"
+  | "stale-socket"
+  | "stuck"
+  | "disconnected"
+  | "ingress-unavailable";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false;
+  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
@@ -65,6 +74,15 @@ export function evaluateChannelHealth(
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
+  }
+  // Transport liveness and inbound admission are independent failure domains: a
+  // channel can hold a healthy socket and still admit nothing. This outranks the
+  // lifecycle windows below -- including not-running, which is the state a failed
+  // ingress start actually lands in -- so the cause survives instead of collapsing
+  // into a generic crash. Absence is "unknown", never "fine"; readiness owns its
+  // own restart-backoff tolerance in server/readiness.ts.
+  if (snapshot.ingressUnavailable === true) {
+    return { healthy: false, reason: "ingress-unavailable" };
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
@@ -152,6 +170,12 @@ export function resolveChannelRestartReason(
   // categories, while detailed channel state stays in the health snapshot.
   if (evaluation.reason === "stale-socket") {
     return "stale-socket";
+  }
+  // Restarting is also the only way to re-prove ingress: `ingressUnavailable`
+  // describes the last start attempt and is cleared by the next one. Naming the
+  // reason keeps a repeating restart readable as dead inbound rather than "stuck".
+  if (evaluation.reason === "ingress-unavailable") {
+    return "ingress-unavailable";
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";

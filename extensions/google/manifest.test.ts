@@ -3,6 +3,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  providerAuthChoices?: Array<{
+    provider?: string;
+    method?: string;
+    choiceLabel?: string;
+    choiceHint?: string;
+    groupHint?: string;
+  }>;
   modelIdNormalization?: {
     providers?: Record<
       string,
@@ -67,6 +74,21 @@ function loadManifest(): GoogleManifest {
 }
 
 describe("google manifest model catalog", () => {
+  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+    const choices = loadManifest().providerAuthChoices ?? [];
+
+    expect(choices).toEqual([
+      expect.objectContaining({
+        provider: "google",
+        method: "api-key",
+        choiceLabel: "Google AI Studio API key",
+        choiceHint: "Supported API-key access from aistudio.google.com/apikey",
+        groupHint: "Supported API-key setup",
+      }),
+    ]);
+    expect(choices.some((choice) => choice.provider === "google-gemini-cli")).toBe(false);
+  });
+
   it("suppresses retired Gemini chat model identifiers for all Google chat providers", () => {
     const manifest = loadManifest();
     const suppressionRefs = new Set(

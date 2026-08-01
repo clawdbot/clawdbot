@@ -27,6 +27,7 @@ vi.mock("../subagent-registry-state.js", () => ({
   },
 }));
 
+import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
 import { testing } from "./agents-wait-tool.test-support.js";
 
@@ -193,6 +194,7 @@ describe("agents_wait", () => {
         { runId: "missing", error: "not_found" },
       ],
     });
+    expect(isToolResultError(first)).toBe(false);
   });
 
   it("authorizes a snapshotted ancestor after the ordinary spawner row is archived", async () => {
@@ -293,8 +295,77 @@ describe("agents_wait", () => {
       completed: [],
       pending: [],
       errors: [{ runId: "routed", error: "not_owner" }],
+      success: false,
     });
+    expect(isToolResultError(denied)).toBe(true);
   });
+
+  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
+
+    expect(result.details).toEqual({
+      completed: [],
+      pending: [],
+      errors: [{ runId: "missing", error: "not_found" }],
+      success: false,
+    });
+    expect(isToolResultError(result)).toBe(true);
+  });
+
+  it("rejects collector batches containing only blank run ids", async () => {
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    await expect(tool.execute("call", { ids: [" ", "\t"], timeoutSeconds: 0 })).rejects.toThrow(
+      "at least one non-empty run id",
+    );
+  });
+
+  it.each(["before", "during", "registration"] as const)(
+    "rejects when the wait is aborted %s collector polling",
+    async (abortTiming) => {
+      records.set("pending", collectorRun("pending", "agent:main:main"));
+      const tool = createAgentsWaitTool({
+        agentSessionKey: "agent:main:main",
+        agentId: "main",
+        config: { tools: { swarm: true } },
+      });
+      const controller = new AbortController();
+      if (abortTiming === "before") {
+        controller.abort();
+      }
+      if (abortTiming === "registration") {
+        const addEventListener = controller.signal.addEventListener.bind(controller.signal);
+        vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
+          controller.abort();
+          addEventListener(...args);
+        });
+      }
+
+      const result = tool.execute(
+        "call",
+        { ids: ["pending"], timeoutSeconds: 1 },
+        controller.signal,
+      );
+      if (abortTiming === "during") {
+        controller.abort();
+      }
+
+      await expect(result).rejects.toMatchObject({
+        name: "AbortError",
+        message: "agents_wait aborted.",
+      });
+    },
+  );
 
   it("rejects oversized wait batches before polling", async () => {
     const tool = createAgentsWaitTool({

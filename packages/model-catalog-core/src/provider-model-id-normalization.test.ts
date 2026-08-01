@@ -49,6 +49,13 @@ describe("provider model id policy normalization", () => {
     ).toBe("claude-haiku-4-5");
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus")).toBe("claude-opus-5");
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-5")).toBe("claude-opus-5");
+    // Bare family aliases track the current default for that family; pinned
+    // version aliases keep resolving to their own model.
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus")).toBe("claude-opus-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-5")).toBe("claude-opus-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-4.8")).toBe(
+      "claude-opus-4-8",
+    );
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet")).toBe(
       "claude-sonnet-5",
     );

@@ -1157,50 +1157,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("inherits legacy parent channel progress mode for account commentary overrides", () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-account-legacy-commentary-enabled",
-      parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-account-legacy-commentary-enabled",
-      agentId: "codex",
-      cfg: {
-        channels: {
-          forum: {
-            streaming: "progress",
-            accounts: {
-              work: {
-                streaming: {
-                  progress: {
-                    commentary: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      deliveryContext: {
-        ...progressCommentaryDeliveryContext,
-        accountId: "work",
-      },
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-    });
-
-    emitAgentEvent({
-      runId: "run-account-legacy-commentary-enabled",
-      stream: "assistant",
-      data: {
-        delta: "checking legacy progress config.",
-        phase: "commentary",
-      },
-    });
-    vi.advanceTimersByTime(15);
-
-    expectTextWithFragment(collectedTexts(), "codex: checking legacy progress config.");
-    relay.dispose();
-  });
-
   it("relays ACP status progress when progress commentary and tag visibility are enabled", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-enabled",

@@ -20,7 +20,6 @@ import {
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
@@ -34,21 +33,17 @@ const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createLiveConfig(): OpenClawConfig {
-  const cfg = getRuntimeConfig();
   return {
-    ...cfg,
     models: {
-      ...cfg.models,
       providers: {
-        ...cfg.models?.providers,
         xai: {
-          ...cfg.models?.providers?.xai,
           apiKey: XAI_API_KEY,
           baseUrl: "https://api.x.ai/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createReferencePng(): Buffer {

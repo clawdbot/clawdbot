@@ -1,3 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
+export { isRecord };
+
 export function formatError(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
@@ -9,8 +13,4 @@ export function formatError(error: unknown): string {
     return error.message.trim();
   }
   return "Unknown workboard error.";
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

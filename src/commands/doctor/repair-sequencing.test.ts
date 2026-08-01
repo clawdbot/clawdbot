@@ -6,7 +6,6 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
-  collectActiveToolSchemaProjectionWarnings: vi.fn(),
   collectChannelDoctorCompatibilityMutations: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
@@ -26,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   maybeRepairStalePluginConfig: vi.fn(),
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
+  repairStaleAgentModelRefs: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
@@ -57,6 +57,10 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+}));
+
+vi.mock("./shared/stale-agent-model-ref-repair.js", () => ({
+  repairStaleAgentModelRefs: mocks.repairStaleAgentModelRefs,
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
@@ -132,10 +136,6 @@ vi.mock("./shared/allowlist-policy-repair.js", () => ({
 
 vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
   maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
-}));
-
-vi.mock("./shared/active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: mocks.collectActiveToolSchemaProjectionWarnings,
 }));
 
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
@@ -284,11 +284,15 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
       changes: [],
       warnings: [],
     });
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
     mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
@@ -323,6 +327,34 @@ describe("doctor repair sequencing", () => {
     });
     expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
     expect(result.warningNotes).toContain("Migration warning.");
+  });
+
+  it("sanitizes ordered plugin repair changes, warnings, notices, and migration notes", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ["Installed \u001B[31mplugin\u001B[0m\r\nnext."],
+      warnings: ["Plugin \u001B[31mwarning\u001B[0m\r\nnext."],
+      notices: ["Plugin \u001B[31mnotice\u001B[0m\r\nnext."],
+    });
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValueOnce({
+      changes: ["Migrated \u001B[31mrecommendations\u001B[0m\r\nnext."],
+      warnings: ["Migration \u001B[31mwarning\u001B[0m\r\nnext."],
+    });
+    const candidate = {} as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual(["Installed pluginnext.", "Migrated recommendationsnext."]);
+    expect(result.warningNotes).toEqual([
+      "Plugin warningnext.",
+      "Plugin noticenext.",
+      "Migration warningnext.",
+    ]);
+    const emittedNotes = [...result.changeNotes, ...result.warningNotes].join("\n");
+    expect(emittedNotes).not.toContain("\u001B");
+    expect(emittedNotes).not.toContain("\r");
   });
 
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {
@@ -586,37 +618,6 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
   });
 
-  it("emits active tool schema projection warnings during doctor repair", async () => {
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    ]);
-
-    const result = await runDoctorRepairSequence({
-      state: {
-        cfg: {
-          tools: { allow: ["fuzzplugin_move_angles"] },
-        } as OpenClawConfig,
-        candidate: {
-          tools: { allow: ["fuzzplugin_move_angles"] },
-        } as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.changeNotes).toStrictEqual([]);
-    expect(result.warningNotes).toContain(
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    );
-    expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
-      cfg: {
-        tools: { allow: ["fuzzplugin_move_angles"] },
-      },
-      env: process.env,
-    });
-  });
-
   it("auto-enables newly installed configured plugins after doctor repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Installed missing configured plugin "brave" from @openclaw/brave-plugin.'],
@@ -660,6 +661,102 @@ describe("doctor repair sequencing", () => {
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
       "brave web search provider selected, enabled automatically.",
     ]);
+  });
+
+  it("installs an external provider before validating configured model references", async () => {
+    let mistralInstalled = false;
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
+      mistralInstalled = true;
+      return {
+        changes: ['Installed missing configured plugin "mistral" from @openclaw/mistral-provider.'],
+        warnings: [],
+        repairedPluginIds: ["mistral"],
+      };
+    });
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => ({
+      config: mistralInstalled
+        ? cfg
+        : {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults: {
+                ...cfg.agents?.defaults,
+                model: { primary: "openai/gpt-5.6-sol" },
+              },
+            },
+          },
+      changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
+      warnings: [],
+    }));
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.repairStaleAgentModelRefs.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
+  });
+
+  it("preserves external provider model references when plugin install repair fails", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "mistral" from @openclaw/mistral-provider: package install failed',
+      ],
+      failedPluginIds: ["mistral"],
+    });
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.repairStaleAgentModelRefs).not.toHaveBeenCalled();
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
   });
 
   it("applies doctor contracts exposed by newly installed plugins", async () => {

@@ -259,7 +259,7 @@ describe("plugin session attachments", () => {
         config: {
           session: { store: storePath },
           agents: {
-            list: [{ id: "main", workspace: workspaceDir }],
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
         },
       });

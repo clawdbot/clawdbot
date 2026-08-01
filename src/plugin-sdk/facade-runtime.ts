@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { PluginLruCache } from "../plugins/plugin-cache-primitives.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
@@ -46,6 +48,11 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+const facadeModuleLocationCache = new PluginLruCache<FacadeModuleLocation>(128);
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  facadeModuleLocationCache.clear();
+});
 
 function createFacadeResolutionKey(params: {
   dirName: string;
@@ -97,7 +104,21 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return resolveFacadeModuleLocationUncached(params);
+  // Custom environments may select different installed-plugin profiles, so
+  // their facade locations must not enter the process-wide gateway cache.
+  if (params.env !== undefined && params.env !== process.env) {
+    return resolveFacadeModuleLocationUncached(params);
+  }
+  const resolutionKey = createFacadeResolutionKey(params);
+  const cached = facadeModuleLocationCache.get(resolutionKey);
+  if (cached) {
+    return cached;
+  }
+  const location = resolveFacadeModuleLocationUncached(params);
+  if (location) {
+    facadeModuleLocationCache.set(resolutionKey, location);
+  }
+  return location;
 }
 
 type BundledPluginPublicSurfaceParams = {
@@ -282,6 +303,7 @@ export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends
 /** Reset facade runtime caches and activation-check test overrides. */
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
+  facadeModuleLocationCache.clear();
   facadeActivationCheckRuntimeModule = undefined;
   facadeActivationCheckRuntimeLoaders.clear();
 }

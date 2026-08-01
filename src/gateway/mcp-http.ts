@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -340,7 +341,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner,
           toolCount: scopedTools.toolSchema.length,
-          cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
+          cronVisible: scopedTools.toolSchema.some((tool) => isAutomationsToolName(tool.name)),
         });
         const responses: object[] = [];
         for (const [messageIndex, message] of messages.entries()) {

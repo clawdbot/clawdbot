@@ -264,6 +264,12 @@ function patchSessionRow(
   sessionKey: string,
   patch: Partial<SessionsListResult["sessions"][number]>,
 ) {
+  // Mirror into the capability snapshot first: publishes replace the host copy
+  // wholesale, so without the mirror any mid-flight publish reverts this patch
+  // until the post-patch list refresh lands (visible slider snap-back that can
+  // swallow the next keyboard commit). The host copy still updates directly so
+  // hosts without a live capability subscription stay coherent.
+  host.sessions.patchRowLocal(sessionKey, patch);
   const current = host.sessionsResult;
   if (!current) {
     return;

@@ -7,9 +7,15 @@ import {
   registerConversationAddresses,
   resolveConversation,
 } from "../../config/sessions/conversation-registry.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntry,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import {
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { bindOutboundSessionEntry } from "./outbound-session.js";
 
 describe("outbound session persistence", () => {
@@ -114,6 +120,52 @@ describe("outbound session persistence", () => {
       sessionKey,
       role: "primary",
       target: "reef:peer-agent",
+    });
+  });
+
+  it("persists a group ingress origin without rewriting its native channel target", async () => {
+    const channelId = "private-room-123";
+    const sessionKey = `agent:main:reef:group:${channelId}`;
+    const from = `reef:group:${channelId}`;
+    const to = `channel:${channelId}`;
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "group",
+      peerId: from,
+      deliveryTarget: to,
+      nativeChannelId: channelId,
+    });
+    expect(identity).not.toBeNull();
+    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
+
+    await bindOutboundSessionEntry({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      channel: "reef",
+      accountId: "default",
+      route: {
+        sessionKey,
+        baseSessionKey: sessionKey,
+        peer: { kind: "group", id: channelId },
+        chatType: "group",
+        from,
+        to,
+      },
+    });
+
+    const persisted = loadExactSessionEntry({ agentId: "main", sessionKey, storePath });
+    expect(sessionDeliveryOrigin(persisted?.entry)).toMatchObject({
+      provider: "reef",
+      accountId: "default",
+      from,
+    });
+    expect(
+      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+    ).toMatchObject({
+      kind: "group",
+      nativeChannelId: channelId,
+      sessionKey,
+      target: to,
     });
   });
 });

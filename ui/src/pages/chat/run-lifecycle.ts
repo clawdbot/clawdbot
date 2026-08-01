@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -59,7 +60,6 @@ type RunLifecycleHost = Omit<
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
   chatRunStartup?: ChatRunStartupState | null;
-  chatSideResultTerminalRuns?: Set<string>;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
@@ -84,7 +84,6 @@ type ReconcileOptions = {
   clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
-  clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
@@ -262,6 +261,9 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     : null;
   const pendingAbort = disconnectedIntent?.runId ? disconnectedIntent : null;
   if (!host.connected && !pendingAbort) {
+    // Session-only stops cannot be replayed safely against a later run.
+    // Explain the blocked action instead of leaving the visible Stop inert.
+    setChatError(host, t("chat.questions.disconnected"));
     return;
   }
   if (!opts?.preserveDraft) {
@@ -435,9 +437,6 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearLocalRun) {
     host.chatRunId = null;
-  }
-  if (options.clearSideResultTerminalRuns) {
-    host.chatSideResultTerminalRuns?.clear();
   }
   if (options.clearToolStream && canResetToolStream(host)) {
     resetToolStream(host);

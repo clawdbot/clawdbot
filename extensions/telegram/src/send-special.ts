@@ -1,24 +1,13 @@
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
-  buildTelegramThreadReplyParams,
-  resolveTelegramSendThreadSpec,
-} from "./reply-parameters.js";
-import {
-  createRequestWithChatNotFound,
-  createTelegramNonIdempotentRequestWithDiag,
-  resolveAndPersistChatId,
   resolveTelegramApiContext,
-  resolveTelegramMessageIdOrThrow,
   withTelegramApiContextLease,
   type TelegramApiContext,
   type TelegramApiOverride,
 } from "./send-context.js";
 import type { TelegramSendResult } from "./send-message-types.js";
+import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
 import { normalizePollInput, type OpenClawConfig, type PollInput } from "./send.runtime.js";
-import { recordSentMessage } from "./sent-message-cache.js";
-import { parseTelegramTarget } from "./targets.js";
 
 type TelegramSendPollParams = Parameters<TelegramApiContext["api"]["sendPoll"]>[3];
 
@@ -64,66 +53,30 @@ async function sendStickerTelegramWithContext(
   opts: TelegramStickerOpts,
   context: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = context;
-  const target = parseTelegramTarget(to);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: target.chatId,
-    persistTarget: to,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
+  const { api } = context;
+  const prepared = await prepareTelegramOutbound({
+    to,
+    context,
+    opts,
+    thread: {
+      messageThreadId: opts.messageThreadId,
+      replyToMessageId: opts.replyToMessageId,
+    },
+    request: { kind: "nonIdempotent", useApiErrorLogging: false },
   });
-  const threadSpec = resolveTelegramSendThreadSpec({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
-  });
-  const threadParams = buildTelegramThreadReplyParams({
-    thread: threadSpec,
-    replyToMessageId: opts.replyToMessageId,
-  });
-  const hasThreadParams = Object.keys(threadParams).length > 0;
+  const stickerParams =
+    Object.keys(prepared.threadParams).length > 0 ? prepared.threadParams : undefined;
 
-  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-    useApiErrorLogging: false,
-  });
-  const requestWithChatNotFound = createRequestWithChatNotFound({
-    requestWithDiag,
-    chatId,
-    input: to,
-  });
-
-  const stickerParams = hasThreadParams ? threadParams : undefined;
-
-  const result = await requestWithChatNotFound(
-    () => api.sendSticker(chatId, fileId.trim(), stickerParams),
+  const result = await prepared.request(
+    () => api.sendSticker(prepared.chatId, fileId.trim(), stickerParams),
     "sticker",
   );
-
-  const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
-  const resolvedChatId = String(result?.chat?.id ?? chatId);
-  recordSentMessage(chatId, messageId, opts.cfg);
-  await recordOutboundMessageForPromptContext({
-    cfg,
-    account,
-    chatId,
-    message: result,
-    messageId,
-    ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
-    ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
+  return finalizeTelegramOutbound({
+    context,
+    prepared,
+    result,
+    resultContext: "sticker send",
   });
-  recordChannelActivity({
-    channel: "telegram",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  return { messageId: String(messageId), chatId: resolvedChatId };
 }
 
 type TelegramPollOpts = {
@@ -165,43 +118,19 @@ async function sendPollTelegramWithContext(
   opts: TelegramPollOpts,
   context: TelegramApiContext,
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
-  const { cfg, account, api } = context;
-  const target = parseTelegramTarget(to);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: target.chatId,
-    persistTarget: to,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
+  const { api } = context;
+  const prepared = await prepareTelegramOutbound({
+    to,
+    context,
+    opts,
+    thread: {
+      messageThreadId: opts.messageThreadId,
+      replyToMessageId: opts.replyToMessageId,
+    },
+    request: { kind: "nonIdempotent" },
   });
 
-  // Normalize the poll input (validates question, options, maxSelections)
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });
-  const threadSpec = resolveTelegramSendThreadSpec({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
-  });
-  const threadParams = buildTelegramThreadReplyParams({
-    thread: threadSpec,
-    replyToMessageId: opts.replyToMessageId,
-  });
-
-  // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])
-  const pollOptions = normalizedPoll.options;
-
-  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-  });
-  const requestWithChatNotFound = createRequestWithChatNotFound({
-    requestWithDiag,
-    chatId,
-    input: to,
-  });
 
   const durationSeconds = normalizedPoll.durationSeconds;
   if (durationSeconds === undefined && normalizedPoll.durationHours !== undefined) {
@@ -213,40 +142,27 @@ async function sendPollTelegramWithContext(
     throw new Error("Telegram poll durationSeconds must be between 5 and 600");
   }
 
-  // Build poll parameters following Grammy's api.sendPoll signature
-  // sendPoll(chat_id, question, options, other?, signal?)
   const pollParams: TelegramSendPollParams = {
     allows_multiple_answers: normalizedPoll.maxSelections > 1,
     is_anonymous: opts.isAnonymous ?? true,
     ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
-    ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
+    ...(Object.keys(prepared.threadParams).length > 0 ? prepared.threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
 
-  const result = await requestWithChatNotFound(
-    () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, pollParams),
+  const result = await prepared.request(
+    () =>
+      api.sendPoll(prepared.chatId, normalizedPoll.question, normalizedPoll.options, pollParams),
     "poll",
   );
-
-  const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
-  const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
-  recordSentMessage(chatId, messageId, opts.cfg);
-  await recordOutboundMessageForPromptContext({
-    cfg,
-    account,
-    chatId,
-    message: result,
-    messageId,
-    ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
-    ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
-  });
-
-  recordChannelActivity({
-    channel: "telegram",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  return { messageId: String(messageId), chatId: resolvedChatId, pollId };
+  return {
+    ...(await finalizeTelegramOutbound({
+      context,
+      prepared,
+      result,
+      resultContext: "poll send",
+    })),
+    pollId,
+  };
 }

@@ -30,7 +30,14 @@ jobs:
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
           endsWith(github.actor, '[bot]') &&
-          (github.event.action == 'labeled' || github.event.action == 'unlabeled')
+          (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+          !(
+            github.event_name == 'issues' &&
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'stale' &&
+            contains(github.event.issue.labels.*.name, 'bug') &&
+            (github.actor_id == '257215752' || github.actor_id == '264559031')
+          )
         )
       }}
     env:

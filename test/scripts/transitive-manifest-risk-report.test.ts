@@ -238,7 +238,7 @@ describe("transitive-manifest-risk-report", () => {
 
     expect(fetchCalls).toEqual([
       {
-        url: "https://registry.example.test/@scope%2fpackage",
+        url: "https://registry.example.test/@scope%2Fpackage",
         accept: "application/json",
         signal: expect.any(AbortSignal),
       },

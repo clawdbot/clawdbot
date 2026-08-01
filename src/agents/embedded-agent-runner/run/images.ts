@@ -9,7 +9,7 @@ import {
   normalizeMediaFacts,
   readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
-  resolveMediaFacts,
+  readPersistedMediaFacts,
   type MediaFact,
 } from "../../../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
@@ -39,7 +39,6 @@ import {
   countMissingLayoutInlineSlots,
   readPersistedImageBlockFactIndexes,
   readPersistedMediaImageLayout,
-  readPersistedPromptMediaFacts,
   resolveLayoutInlineFactIndexes,
 } from "./prompt-image-metadata.js";
 
@@ -607,11 +606,8 @@ export async function hydratePromptMediaMessages(
       continue;
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
-    const media =
-      runtimeMedia ??
-      resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]);
     const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-    const resolvedMedia = runtimeMedia ?? readPersistedPromptMediaFacts(message) ?? media;
+    const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
     if (!resolvedMedia.length) {

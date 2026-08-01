@@ -4,6 +4,7 @@ export {
   appendRegularFile,
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
+  buildChannelMetadata,
   buildUntrustedChannelMetadata,
   canonicalPathFromExistingAncestor,
   compileSafeRegexDetailed,

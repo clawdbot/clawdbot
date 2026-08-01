@@ -482,6 +482,29 @@ describe("proxy cli runtime", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])(
+    "preserves exit code $exitCode when the proxied child exits from $signal",
+    async (testCase) => {
+      spawnMock.mockImplementation(() => {
+        const child = new EventEmitter();
+        queueMicrotask(() => {
+          child.emit("exit", null, testCase.signal);
+        });
+        return child;
+      });
+
+      const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
+
+      await runDebugProxyRunCommand({ commandArgs: ["example-command"] });
+
+      expect(process.exitCode).toBe(testCase.exitCode);
+      expect(serverStopSpy).toHaveBeenCalledOnce();
+    },
+  );
+
   it("stops the proxy server and ends the session when child spawn fails", async () => {
     spawnMock.mockImplementation(() => {
       const child = new EventEmitter();

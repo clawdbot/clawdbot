@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,7 +30,6 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -60,19 +60,27 @@ import {
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
-import { getCliSessionBinding } from "../cli-session.js";
+import {
+  getCliSessionBinding,
+  resolveCliSessionClearReason,
+  shouldClearFailedCliSessionBinding,
+} from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
-import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+  resolveSessionWriteLockTargetKey,
+} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import {
@@ -95,20 +103,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
-  if (readErrorName(err) === "AbortError") {
-    return true;
-  }
-  return err instanceof FailoverError;
-}
-
-function resolveClearedCliSessionReason(err: unknown): string {
-  if (err instanceof FailoverError) {
-    return err.reason;
-  }
-  return readErrorName(err) || "error";
-}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -156,6 +150,7 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipAssistantTurn?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -274,7 +269,7 @@ async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
-  const replyText = params.finalText;
+  const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
   const userMessage =
     params.userMessage ??
     (promptText
@@ -314,11 +309,13 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+      shouldAppend: async (
+        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
+      ) => {
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+        const latest = await readTailAssistantTextFromSessionTranscript(context, {
           excludeTranscriptOnlyOpenClawAssistant: true,
         });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
@@ -416,6 +413,7 @@ export async function persistCliTurnTranscript(params: {
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
+  skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -423,29 +421,65 @@ export async function persistCliTurnTranscript(params: {
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || params.skipUserTurn === true;
 
-  return await persistTextTurnTranscript({
-    body: skipUserTurn ? "" : params.body,
-    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-    finalText: replyText,
+  const persist = async () =>
+    await persistTextTurnTranscript({
+      body: skipUserTurn ? "" : params.body,
+      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
+      finalText: replyText,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionAgentId: params.sessionAgentId,
+      threadId: params.threadId,
+      sessionCwd: params.sessionCwd,
+      config: params.config,
+      embeddedAssistantGapFill: gapFill,
+      assistant: {
+        api: "cli",
+        provider,
+        model,
+        usage: params.result.meta.agentMeta?.usage,
+      },
+      skipAssistantTurn: params.skipAssistantTurn,
+    });
+  if (!gapFill) {
+    return await persist();
+  }
+
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: params.sessionAgentId,
+    config: params.config,
+    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    sessionAgentId: params.sessionAgentId,
-    threadId: params.threadId,
-    sessionCwd: params.sessionCwd,
-    config: params.config,
-    embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      usage: params.result.meta.agentMeta?.usage,
+    sessionTarget: {
+      agentId: params.sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     },
   });
+  const sessionLock =
+    (await acquireOwnedSessionTranscriptWriteLock({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      sessionTarget,
+    })) ??
+    (await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+      targetKind: "session-key",
+      ...resolveSessionWriteLockOptions(params.config),
+    }));
+  try {
+    return await persist();
+  } finally {
+    await sessionLock.release();
+  }
 }
 
 export function runAgentAttempt(params: {
@@ -714,16 +748,15 @@ export function runAgentAttempt(params: {
       activeCliSessionBinding = cliSessionBinding,
     ) => {
       const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
-      if (
-        forkCliSessionOnResume &&
-        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
-          agentId: params.sessionAgentId,
-        })?.config.forkArg
-      ) {
+      const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+        agentId: params.sessionAgentId,
+      });
+      const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
+      if (forkCliSessionOnResume && !supportsCliSessionFork) {
         throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
       }
       const forkStoreParams =
-        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
+        supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
           ? {
               provider: cliExecutionProvider,
               expectedCliSessionId: nextCliSessionId,
@@ -839,9 +872,9 @@ export function runAgentAttempt(params: {
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
             allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
-            ...(mutableCliSessionStore && !forkCliSessionOnResume
+            ...(forkStoreParams && !forkCliSessionOnResume
               ? {
-                  onBeforeFreshCliSessionRetry: async (retry) => {
+                  onBeforeForkedCliSessionRetry: async (retry) => {
                     if (
                       hasNewGeneratedMediaTaskForSessionKey(
                         params.sessionKey,
@@ -853,14 +886,39 @@ export function runAgentAttempt(params: {
                     }
 
                     log.warn(
+                      `CLI session stalled, arming forked recovery: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${forkStoreParams.sessionKey}`,
+                    );
+
+                    const armed = await restoreCliSessionForkInStore(forkStoreParams);
+                    if (armed) {
+                      params.sessionEntry = armed;
+                    }
+                    return Boolean(armed);
+                  },
+                }
+              : {}),
+            ...(mutableCliSessionStore
+              ? {
+                  onBeforeFreshCliSessionRetry: async (retry) => {
+                    if (
+                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                    ) {
+                      return false;
+                    }
+
+                    log.warn(
                       `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
                     );
 
-                    params.sessionEntry =
-                      (await clearCliSessionInStore({
-                        provider: cliExecutionProvider,
-                        ...mutableCliSessionStore,
-                      })) ?? params.sessionEntry;
+                    const cleared = await clearCliSessionInStore({
+                      provider: cliExecutionProvider,
+                      expectedCliSessionId: retry.sessionId,
+                      ...mutableCliSessionStore,
+                    });
+                    if (!cleared) {
+                      return false;
+                    }
+                    params.sessionEntry = cleared;
                     return true;
                   },
                 }
@@ -872,21 +930,32 @@ export function runAgentAttempt(params: {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
+        const failedCliSessionBinding = getCliSessionBinding(
+          params.sessionEntry,
+          cliExecutionProvider,
+        );
+        const failedCliSessionId = failedCliSessionBinding?.sessionId;
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
-          !activeCliSessionBinding?.forkNextResume &&
-          shouldClearReusedCliSessionAfterError(err) &&
-          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
-          activeCliSessionBinding?.sessionId &&
+          shouldClearFailedCliSessionBinding({
+            error: err,
+            binding: failedCliSessionBinding,
+            hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+              params.sessionKey,
+              mediaTaskIdsBefore,
+            ),
+          }) &&
+          failedCliSessionId &&
           mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
           );
 
           params.sessionEntry =
             (await clearCliSessionInStore({
               provider: cliExecutionProvider,
+              expectedCliSessionId: failedCliSessionId,
               ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
         }
@@ -950,6 +1019,7 @@ export function runAgentAttempt(params: {
     bashElevated: params.opts.bashElevated,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
@@ -970,6 +1040,7 @@ export function runAgentAttempt(params: {
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
+    forceCodeModeTools: params.opts.forceCodeModeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,

@@ -20,11 +20,15 @@ Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
 authored message-routing probes,
 agent workspace access, sandbox posture, data-handling posture, secret
-provider/auth profile posture, and governed tool metadata (`TOOLS.md`). Use it
+provider/auth profile posture, and governed tool metadata (the `## Tools` section of `AGENTS.md`). Use it
 when a workspace needs a durable, checkable statement such as "Telegram must
 not be enabled" or "governed tools must declare risk and owner metadata." If
 you only need local behavior with no attestation or drift detection, plain
 config is enough.
+
+Separately, [`openclaw agent exec`](/cli/agent#agent-exec) applies an isolated
+implicit policy config for each run: the agent sandbox is off, Gateway-host
+execution is fully allowed, and filesystem tools are restricted to `--cwd`.
 
 ## Quick start
 
@@ -190,17 +194,17 @@ Cross-cutting notes not obvious from the rule tables below:
 - `agents.workspace.denyTools` accepts `exec`, `process`, `write`, `edit`,
   `apply_patch`. The config tool-deny groups `group:fs` (file mutation) and
   `group:runtime` (shell/process) satisfy the equivalent posture.
-- Exec-approvals checks read the live `exec-approvals.json` artifact only when
+- Exec-approvals checks read the live SQLite approvals document only when
   an `execApprovals` rule is present; a missing or invalid artifact is
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
   per-agent credential stores such as `auth-profiles.json`.
-- Data-handling evidence is config-level posture only (redaction mode,
-  telemetry capture toggle, session maintenance mode, transcript-indexing
-  setting). It does not inspect logs, telemetry exports, transcripts, or
-  memory files, and a clean result does not prove that no personal data or
-  secrets exist in them.
+- Data-handling evidence is config-level posture (telemetry capture toggle,
+  session maintenance mode, transcript-indexing setting) plus the always-on log
+  redaction invariant. It does not inspect logs, telemetry exports,
+  transcripts, or memory files, and a clean result does not prove that no
+  personal data or secrets exist in them.
 - Routing probes reuse OpenClaw's runtime binding resolver. Routing evidence
   records only the probe id, resolved agent, match kind, and redacted binding
   metadata. It never records peer, account, guild, team, or role identifiers.
@@ -296,10 +300,15 @@ more restrictive; a weaker duplicate claim is rejected (allow-lists are
 subsets, deny-lists are supersets, required booleans are fixed).
 
 Container posture rules (`sandbox.containers.*`) are checked only against
-evidence the matched agent's sandbox backend can expose. If a backend cannot
-observe a rule you enabled for it, policy reports
+evidence the matched agent's sandbox backend can expose. The Docker and Podman
+backends expose the same `sandbox.docker.*` container posture settings. If a
+backend cannot observe a rule you enabled for it, policy reports
 `policy/sandbox-container-posture-unobservable` instead of passing; scope
 container rules to the agent groups that use a backend which can expose them.
+
+Backend authorization uses the configured identity. `backend: "docker"`
+requires `allowBackends: ["docker"]`, while `backend: "podman"` requires
+`allowBackends: ["podman"]`.
 
 Top-level `ingress.session.requireDmScope` stays global; `session.dmScope` is
 not channel-attributable evidence, so it cannot be scoped by `channelIds`.
@@ -365,17 +374,17 @@ private messages.
 
 #### Gateway
 
-| Policy field                            | Observed state                                 | Use when                                                                             |
-| --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `gateway.exposure.allowNonLoopbackBind` | `gateway.bind`                                 | Set to `false` to require loopback Gateway binding.                                  |
-| `gateway.exposure.allowTailscaleFunnel` | Tailscale serve/funnel Gateway posture         | Set to `false` to deny Tailscale Funnel exposure.                                    |
-| `gateway.auth.requireAuth`              | `gateway.auth.mode`                            | Set to `true` to reject disabled Gateway auth.                                       |
-| `gateway.auth.requireExplicitRateLimit` | `gateway.auth.rateLimit`                       | Set to `true` to require explicit auth rate-limit config.                            |
-| `gateway.controlUi.allowInsecure`       | Control UI insecure auth/device/origin toggles | Set to `false` to deny insecure Control UI exposure toggles.                         |
-| `gateway.remote.allow`                  | Remote Gateway mode/config                     | Set to `false` to deny remote Gateway mode.                                          |
-| `gateway.http.denyEndpoints`            | Gateway HTTP API endpoints                     | Deny endpoint ids such as `chatCompletions` or `responses`.                          |
-| `gateway.http.requireUrlAllowlists`     | Gateway HTTP URL-fetch inputs                  | Set to `true` to require URL allowlists on URL-fetch inputs.                         |
-| `gateway.nodes.denyCommands`            | `gateway.nodes.commands.deny`                  | Require exact node command ids such as `system.run` to be denied in OpenClaw config. |
+| Policy field                            | Observed state                                | Use when                                                                             |
+| --------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `gateway.exposure.allowNonLoopbackBind` | `gateway.bind`                                | Set to `false` to require loopback Gateway binding.                                  |
+| `gateway.exposure.allowTailscaleFunnel` | Tailscale serve/funnel Gateway posture        | Set to `false` to deny Tailscale Funnel exposure.                                    |
+| `gateway.auth.requireAuth`              | `gateway.auth.mode`                           | Set to `true` to reject disabled Gateway auth.                                       |
+| `gateway.auth.requireExplicitRateLimit` | `gateway.auth.rateLimit`                      | Set to `true` to require explicit auth rate-limit config.                            |
+| `gateway.controlUi.allowInsecure`       | Device-identity invariant and origin fallback | Set to `false` to require device identity and deny Host-header origin fallback.      |
+| `gateway.remote.allow`                  | Remote Gateway mode/config                    | Set to `false` to deny remote Gateway mode.                                          |
+| `gateway.http.denyEndpoints`            | Gateway HTTP API endpoints                    | Deny endpoint ids such as `chatCompletions` or `responses`.                          |
+| `gateway.http.requireUrlAllowlists`     | Gateway HTTP URL-fetch inputs                 | Set to `true` to require URL allowlists on URL-fetch inputs.                         |
+| `gateway.nodes.denyCommands`            | `gateway.nodes.commands.deny`                 | Require exact node command ids such as `system.run` to be denied in OpenClaw config. |
 
 `gateway.nodes.denyCommands` is an exact, case-sensitive policy deny-superset rule.
 Use it when policy must prove that privileged node commands are explicitly
@@ -392,16 +401,16 @@ node command should update `policy.jsonc` after review instead of relying on
 
 #### Sandbox posture
 
-| Policy field                                          | Observed state                                          | Use when                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
-| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`. |
-| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker`.         |
-| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                        |
-| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.              |
-| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                |
-| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                          |
-| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                   |
-| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.        |
+| Policy field                                          | Observed state                                          | Use when                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`.     |
+| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker` or `podman`. |
+| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                            |
+| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.                  |
+| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                    |
+| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                              |
+| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                       |
+| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.            |
 
 Policy treats missing `sandbox.mode` as its implicit default `off`, so
 `sandbox.requireMode` reports a fresh or unconfigured sandbox as outside an
@@ -411,7 +420,7 @@ allowlist such as `["all"]`.
 
 | Policy field                                        | Observed state                                                                                     | Use when                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                                          | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                      | Set to `true` to record the requirement; OpenClaw always satisfies it. |
 | `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                  | Set to `true` to reject telemetry content capture.                     |
 | `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                         | Set to `true` to require effective session maintenance mode `enforce`. |
 | `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled`, `memory.search.experimental.sessionMemory`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
@@ -426,9 +435,11 @@ allowlist such as `["all"]`.
 
 #### Exec approvals
 
-Exec-approvals checks read the runtime `exec-approvals.json` artifact:
-`~/.openclaw/exec-approvals.json` by default, or
-`$OPENCLAW_STATE_DIR/exec-approvals.json` when `OPENCLAW_STATE_DIR` is set.
+Exec-approvals checks read the runtime `exec_approvals_config` singleton row in
+`~/.openclaw/state/openclaw.sqlite` by default, or the same database under
+`$OPENCLAW_STATE_DIR/state` when `OPENCLAW_STATE_DIR` is set. Findings keep the
+stable `oc://exec-approvals.json/...` URI scheme; it now denotes paths within
+the authoritative JSON document stored in that row.
 Posture rules under `execApprovals.defaults.*` or `execApprovals.agents.*`
 require readable artifact evidence; a missing or invalid artifact reports as
 unobservable evidence rather than a best-effort pass. Once readable, omitted
@@ -440,7 +451,7 @@ missing agent security inherits that default. Evidence includes `defaults`,
 
 | Policy field                                | Observed state                                                                         | Use when                                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.requireFile`                 | Active runtime `exec_approvals_config` row                                             | Set to `true` to require the approvals document to exist and parse.                     |
 | `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
 | `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
 | `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
@@ -494,9 +505,9 @@ only reviewed exec approval posture for selected agents.
 
 #### Tool metadata
 
-| Policy field            | Observed state                   | Use when                                                                                   |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------ |
-| `tools.requireMetadata` | Governed `TOOLS.md` declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
+| Policy field            | Observed state                         | Use when                                                                                   |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `tools.requireMetadata` | Governed `AGENTS.md` tool declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
 
 #### Tool posture
 
@@ -735,7 +746,7 @@ Example JSON output:
     "tools": [
       {
         "id": "deploy",
-        "source": "oc://TOOLS.md/tools/deploy",
+        "source": "oc://AGENTS.md/tools/deploy",
         "line": 12,
         "risk": "critical",
         "sensitivity": "restricted",
@@ -845,7 +856,6 @@ the interval.
 | `policy/sandbox-container-runtime-socket-mount`          | A container-backed sandbox or browser mount exposes the container runtime socket. |
 | `policy/sandbox-container-unconfined-profile`            | Container sandbox profile is unconfined when policy denies it.                    |
 | `policy/sandbox-browser-cdp-source-range-missing`        | Sandbox browser CDP source range is missing when policy requires one.             |
-| `policy/data-handling-redaction-disabled`                | Sensitive logging redaction is disabled when policy requires it.                  |
 | `policy/data-handling-telemetry-content-capture`         | Telemetry content capture is enabled when policy denies it.                       |
 | `policy/data-handling-session-retention-not-enforced`    | Session retention maintenance is not enforced when policy requires it.            |
 | `policy/data-handling-session-transcript-memory-enabled` | Session transcript memory indexing is enabled when policy denies it.              |
@@ -854,8 +864,8 @@ the interval.
 | `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
 | `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
 | `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
-| `policy/exec-approvals-missing`                          | Policy requires `exec-approvals.json`, but the artifact is missing.               |
-| `policy/exec-approvals-invalid`                          | The configured exec approvals artifact cannot be parsed.                          |
+| `policy/exec-approvals-missing`                          | Policy requires the SQLite exec approvals document, but its row is missing.       |
+| `policy/exec-approvals-invalid`                          | The configured SQLite exec approvals document cannot be parsed.                   |
 | `policy/exec-approvals-default-security-unapproved`      | Exec approval defaults use a security mode outside the policy allowlist.          |
 | `policy/exec-approvals-agent-security-unapproved`        | A per-agent effective exec approval security mode is outside the allowlist.       |
 | `policy/exec-approvals-auto-allow-skills-enabled`        | An exec approval agent implicitly auto-allows skill CLIs when policy denies it.   |
@@ -892,12 +902,12 @@ Example findings:
 {
   "checkId": "policy/tools-missing-risk-level",
   "severity": "error",
-  "message": "TOOLS.md tool 'deploy' has no explicit risk classification.",
+  "message": "AGENTS.md tool 'deploy' has no explicit risk classification.",
   "source": "policy",
-  "path": "TOOLS.md",
+  "path": "AGENTS.md",
   "line": 12,
-  "ocPath": "oc://TOOLS.md/tools/deploy",
-  "target": "oc://TOOLS.md/tools/deploy",
+  "ocPath": "oc://AGENTS.md/tools/deploy",
+  "target": "oc://AGENTS.md/tools/deploy",
   "requirement": "oc://policy.jsonc/tools/requireMetadata"
 }
 ```
@@ -1005,16 +1015,21 @@ workspace config:
   denies open group ingress
 - set reported channel ingress `requireMention` paths to `true` when policy
   requires group mentions
-- set `logging.redactSensitive=tools` when policy requires sensitive logging
-  redaction
 - set `diagnostics.otel.captureContent=false`, or
   `diagnostics.otel.captureContent.enabled=false` for object-form telemetry
   capture settings, when policy denies telemetry content capture
 
 Scoped elevated-tools repairs are detect-only. Scoped data-handling repairs are
-also skipped when the finding reports shared logging or telemetry config,
-because changing the shared setting would affect more than the scoped policy
-target.
+also skipped when the finding reports shared telemetry config, because changing
+the shared setting would affect more than the scoped policy target.
+
+`dataHandling.sensitiveLogging.requireRedaction` has no check and no repair.
+Sensitive log redaction is unconditional in OpenClaw, so nothing can report it
+as disabled. The key stays a supported policy rule: `openclaw policy` validates
+its shape, `openclaw policy compare` still requires a candidate policy to be at
+least as strict as the baseline for it, and `openclaw policy check` records the
+runtime invariant `oc://openclaw.invariant/logging/redaction` in the
+`dataHandling` evidence and attestation as proof the requirement is satisfied.
 
 Scoped required-deny repairs are skipped when the finding reports inherited
 root `tools.deny`, because adding the required tool to root config would affect

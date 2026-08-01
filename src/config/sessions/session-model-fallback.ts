@@ -4,6 +4,7 @@ export type AgentPatchedSessionModelFallback = {
   prevModelOverride?: string;
   prevProviderOverride?: string;
   prevModelOverrideSource?: "auto" | "user";
+  prevModelOverrideRouteResolution?: "resolved";
   prevModelOverrideFallbackOriginProvider?: string;
   prevModelOverrideFallbackOriginModel?: string;
   prevAuthProfileOverride?: string;
@@ -22,6 +23,7 @@ export function createAgentPatchedSessionModelFallback(params: {
     modelOverride?: string;
     providerOverride?: string;
     modelOverrideSource?: "auto" | "user";
+    modelOverrideRouteResolution?: "resolved";
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
     authProfileOverride?: string;
@@ -38,6 +40,9 @@ export function createAgentPatchedSessionModelFallback(params: {
     ...(entry.modelOverride ? { prevModelOverride: entry.modelOverride } : {}),
     ...(entry.providerOverride ? { prevProviderOverride: entry.providerOverride } : {}),
     ...(entry.modelOverrideSource ? { prevModelOverrideSource: entry.modelOverrideSource } : {}),
+    ...(entry.modelOverrideRouteResolution
+      ? { prevModelOverrideRouteResolution: entry.modelOverrideRouteResolution }
+      : {}),
     ...(entry.modelOverrideFallbackOriginProvider
       ? { prevModelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider }
       : {}),

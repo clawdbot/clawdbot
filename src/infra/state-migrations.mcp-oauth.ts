@@ -1,54 +1,46 @@
 // Doctor-only import for retired per-server MCP OAuth JSON stores.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+  type LegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
+import {
+  legacyMigrationPathMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-mcp-oauth-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const MAX_LEGACY_STORE_BYTES = 4 * 1024 * 1024;
 const LEGACY_STORE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,29}-[0-9a-f]{16}\.json$/u;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-type McpOAuthMigrationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "mcp_oauth_stores" | "migration_runs" | "migration_sources"
->;
+type McpOAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_stores">;
 
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-  store: Record<string, unknown>;
-};
-
-type MigrationReceipt = {
-  sourceKey: string;
-  removedSource: boolean;
-};
+type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & { store: Record<string, unknown> };
 
 function exactLegacyBaseName(name: string): string | null {
   const baseName = name.endsWith(DOCTOR_CLAIM_SUFFIX)
@@ -87,15 +79,6 @@ async function listLegacySourcePathsFromRoot(params: {
   );
 }
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 /** Detect exact retired MCP OAuth filenames only for an explicit Doctor flow. */
 export function detectLegacyMcpOAuthStores(params: {
   stateDir: string;
@@ -109,21 +92,12 @@ export function detectLegacyMcpOAuthStores(params: {
     const sourcePaths = listLegacySourcePaths(sourceDir);
     return { sourceDir, sourcePaths, hasLegacy: sourcePaths.length > 0 };
   } catch {
-    return { sourceDir, sourcePaths: [], hasLegacy: pathMayExist(sourceDir) };
+    return { sourceDir, sourcePaths: [], hasLegacy: legacyMigrationPathMayExist(sourceDir) };
   }
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy MCP OAuth path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "MCP OAuth", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -132,37 +106,18 @@ async function readLegacySourceSnapshot(
   sourcePath: string,
   options: { parseStore?: boolean } = {},
 ): Promise<LegacySourceSnapshot> {
-  const opened = await stateRoot.read(relativeLegacyPath(stateDir, sourcePath), {
-    hardlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
+    sourcePath,
     maxBytes: MAX_LEGACY_STORE_BYTES,
-    symlinks: "reject",
+    label: "MCP OAuth",
   });
-  if (opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error("legacy MCP OAuth store changed while it was being read");
-  }
   const parsed =
     options.parseStore === false
       ? {}
-      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(opened.buffer)));
-  return {
-    sourcePath,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-    size: opened.stat.size,
-    store: parsed,
-  };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(snapshot.buffer)));
+  return { ...snapshot, store: parsed };
 }
 
 function storeKeyForSource(sourcePath: string): string {
@@ -173,42 +128,19 @@ function storeKeyForSource(sourcePath: string): string {
   return fileName.slice(0, -".json".length);
 }
 
-function receiptSourceKey(sourcePath: string): string {
-  return `mcp-oauth-json:${createHash("sha256").update(path.resolve(sourcePath)).digest("hex")}`;
-}
-
-function readMigrationReceipt(sourcePath: string, env: NodeJS.ProcessEnv): MigrationReceipt | null {
-  const sourceKey = receiptSourceKey(sourcePath);
-  const { db } = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<McpOAuthMigrationDatabase>(db)
-      .selectFrom("migration_sources")
-      .select("removed_source")
-      .where("source_key", "=", sourceKey),
-  );
-  return row ? { sourceKey, removedSource: row.removed_source === 1 } : null;
-}
-
 function importAndRecordReceipt(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
 }): { sourceKey: string; imported: boolean } {
-  const sourceKey = receiptSourceKey(params.sourcePath);
+  const sourceKey = resolveLegacyMigrationSourceKey("mcp-oauth-json", params.sourcePath);
   const storeKey = storeKeyForSource(params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<McpOAuthMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("migration_sources")
-          .select("source_key")
-          .where("source_key", "=", sourceKey),
-      );
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
       if (existingReceipt) {
         return { sourceKey, imported: false };
       }
@@ -275,51 +207,21 @@ function importAndRecordReceipt(params: {
         importedRecordCount: importedLegacyState ? 1 : 0,
         preservedSqliteRecordCount: existingStore ? 1 : 0,
       });
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_sources").values({
-          source_key: sourceKey,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.sourcePath,
-          target_table: "mcp_oauth_stores",
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: 1,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "mcp_oauth_stores",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: 1,
+        runId,
+        now,
+        reportJson,
+      });
       return { sourceKey, imported: importedLegacyState };
     },
     { env: params.env },
-  );
-}
-
-function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<McpOAuthMigrationDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
   );
 }
 
@@ -340,7 +242,7 @@ async function cleanupReceiptAuthoritativeSources(params: {
   stateRoot: Root;
   stateDir: string;
   sourcePath: string;
-  receipt: MigrationReceipt;
+  receipt: LegacyMigrationReceipt;
   env: NodeJS.ProcessEnv;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<number> {
@@ -356,7 +258,7 @@ async function cleanupReceiptAuthoritativeSources(params: {
     removed += 1;
   }
   if (!params.receipt.removedSource || removed > 0) {
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   return removed;
 }
@@ -395,7 +297,10 @@ async function migrateOneStore(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
-  const receipt = readMigrationReceipt(params.sourcePath, params.env);
+  const receipt = readLegacyMigrationReceipt(
+    resolveLegacyMigrationSourceKey("mcp-oauth-json", params.sourcePath),
+    params.env,
+  );
   if (receipt) {
     try {
       const removed = await cleanupReceiptAuthoritativeSources({ ...params, receipt });
@@ -488,7 +393,7 @@ async function migrateOneStore(params: {
     if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath))) {
       throw new Error("legacy MCP OAuth Doctor claim remains after cleanup");
     }
-    markSourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     warnings.push(`MCP OAuth state is in SQLite, but legacy cleanup failed: ${String(error)}`);
     return { changes, warnings };
@@ -564,61 +469,19 @@ export async function migrateLegacyMcpOAuthStores(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy MCP OAuth stores: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: [
-        "Failed migrating legacy MCP OAuth stores: exclusive state ownership unavailable.",
-      ],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy MCP OAuth stores",
+    releaseLabel: "MCP OAuth",
+    errorLabel: "Failed reading legacy MCP OAuth state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_STORE_BYTES,
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy MCP OAuth state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `MCP OAuth migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+      return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+    },
+  });
 }

@@ -222,21 +222,22 @@ export async function createGatewayRuntimeState(params: {
       pathContext,
       dispatchContext,
     ) => {
+      if (loadedPluginRequestHandler) {
+        return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+      }
       const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
-      if (!loadedPluginRequestHandler) {
-        // Route registries can be re-pinned after bootstrap; keep the handler lazy and route
-        // lookup dynamic so plugin HTTP routes follow the active registry snapshot.
-        const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
-        loadedPluginRequestHandler = createGatewayPluginRequestHandler({
-          registry: params.pluginRegistry,
-          getRouteRegistry: resolvePluginRouteRegistry,
-          log: params.logPlugins,
-          getGatewayRequestContext: params.getGatewayRequestContext,
-        });
-      }
+      // Route registries can be re-pinned after bootstrap; the loaded handler owns dynamic
+      // lookup, while this wrapper only avoids importing it for route-free gateways.
+      const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
+      loadedPluginRequestHandler = createGatewayPluginRequestHandler({
+        registry: params.pluginRegistry,
+        getRouteRegistry: resolvePluginRouteRegistry,
+        log: params.logPlugins,
+        getGatewayRequestContext: params.getGatewayRequestContext,
+      });
       return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
     };
     const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
@@ -246,21 +247,22 @@ export async function createGatewayRuntimeState(params: {
       pathContext,
       dispatchContext,
     ) => {
+      if (loadedPluginUpgradeHandler) {
+        return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
+      }
       const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
-      if (!loadedPluginUpgradeHandler) {
-        // WebSocket upgrades share the same dynamic route registry as HTTP requests; this keeps
-        // reloads from serving stale plugin upgrade handlers.
-        const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
-        loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
-          registry: params.pluginRegistry,
-          getRouteRegistry: resolvePluginRouteRegistry,
-          log: params.logPlugins,
-          getGatewayRequestContext: params.getGatewayRequestContext,
-        });
-      }
+      // WebSocket upgrades share the loaded handler's dynamic route registry, so reloads still
+      // follow the active snapshot without a duplicate wrapper lookup on every upgrade.
+      const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
+      loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
+        registry: params.pluginRegistry,
+        getRouteRegistry: resolvePluginRouteRegistry,
+        log: params.logPlugins,
+        getGatewayRequestContext: params.getGatewayRequestContext,
+      });
       return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
     };
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {

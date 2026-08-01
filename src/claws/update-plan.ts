@@ -59,6 +59,7 @@ function manualState(state: string): boolean {
 export async function buildClawUpdatePlan(params: {
   agentId: string;
   targetManifest: ClawManifest;
+  targetClawMarkdownBody?: Buffer;
   targetOpenClawProfile?: ClawOpenClawProfile;
   targetSource: ClawSourceIdentity;
   config: OpenClawConfig;
@@ -81,7 +82,8 @@ export async function buildClawUpdatePlan(params: {
 }): Promise<ClawUpdatePlan> {
   const ownsDatabase = !params.stateOptions?.database;
   const database =
-    params.stateOptions?.database ?? openExistingOpenClawStateDatabaseReadOnly(params.stateOptions);
+    params.stateOptions?.database ??
+    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
   if (!database) {
     return makeEmptyClawUpdatePlan({
       agentId: params.agentId,
@@ -203,6 +205,7 @@ export async function buildClawUpdatePlan(params: {
     >();
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
+      clawMarkdownBody: params.targetClawMarkdownBody,
       openClawProfile: params.targetOpenClawProfile,
       source: params.targetSource,
       diagnostics: params.diagnostics,

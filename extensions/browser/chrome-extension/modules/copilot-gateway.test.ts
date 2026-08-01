@@ -54,14 +54,19 @@ function controllableStorageArea() {
 class FakeWebSocket {
   static OPEN = 1;
   static instances: FakeWebSocket[] = [];
+  static autoOpen = true;
 
   readyState = 0;
   sent: Array<Record<string, unknown>> = [];
+  closeCalls: Array<{ code: number; reason: string }> = [];
   private listeners = new Map<string, Set<(event: Record<string, unknown>) => void>>();
 
   constructor() {
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => {
+      if (!FakeWebSocket.autoOpen || this.readyState === 3) {
+        return;
+      }
       this.readyState = FakeWebSocket.OPEN;
       this.emit("open", {});
     });
@@ -78,9 +83,13 @@ class FakeWebSocket {
   }
 
   close(code = 1000, reason = "") {
+    if (code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new DOMException("Invalid WebSocket close code", "InvalidAccessError");
+    }
     if (this.readyState === 3) {
       return;
     }
+    this.closeCalls.push({ code, reason });
     this.readyState = 3;
     queueMicrotask(() => this.emit("close", { code, reason }));
   }
@@ -264,7 +273,7 @@ describe("browser copilot Gateway custody", () => {
       first?.message({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "first-nonce" },
+        payload: { nonce: "first-nonce", ts: 1_777_777_777_000 },
       });
       await vi.waitFor(() => expect(first?.sent).toHaveLength(1));
       const firstConnect = first?.sent[0] as {
@@ -294,7 +303,7 @@ describe("browser copilot Gateway custody", () => {
       second?.message({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "second-nonce" },
+        payload: { nonce: "second-nonce", ts: 1_777_777_778_000 },
       });
       await vi.waitFor(() => expect(second?.sent).toHaveLength(1));
       const secondConnect = second?.sent[0] as { params?: { auth?: { token?: string } } };
@@ -303,6 +312,109 @@ describe("browser copilot Gateway custody", () => {
     } finally {
       releaseClear?.();
       client.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reconnects after a malformed challenge with a browser-valid policy close", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    FakeWebSocket.autoOpen = true;
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.advanceTimersByTimeAsync(0);
+      const first = FakeWebSocket.instances[0];
+      expect(first).toBeDefined();
+
+      first?.message({ type: "event", event: "connect.challenge", payload: {} });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(first?.closeCalls).toContainEqual({
+        code: 4008,
+        reason: "connect challenge missing nonce",
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      client.stop();
+      FakeWebSocket.autoOpen = true;
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a device challenge with a malformed Gateway timestamp", async () => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket?.message({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "invalid-time", ts: "not-a-number" },
+      });
+      await vi.waitFor(() =>
+        expect(socket?.closeCalls).toContainEqual({
+          code: 4008,
+          reason: "connect failed",
+        }),
+      );
+      expect(socket?.sent).toHaveLength(0);
+    } finally {
+      client.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("closes and reconnects when the browser socket never opens", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    FakeWebSocket.autoOpen = false;
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+    const statuses: Array<Record<string, unknown>> = [];
+    client.onStatus((status) => {
+      statuses.push(status);
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(statuses).toContainEqual(
+        expect.objectContaining({
+          state: "error",
+          label: "Gateway WebSocket opening timed out after 15000ms",
+        }),
+      );
+      expect(FakeWebSocket.instances[0]?.closeCalls).toEqual([{ code: 1000, reason: "" }]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      client.stop();
+      FakeWebSocket.autoOpen = true;
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });

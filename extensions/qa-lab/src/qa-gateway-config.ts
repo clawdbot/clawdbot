@@ -1,4 +1,5 @@
 // Qa Lab helper module supports qa gateway config behavior.
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -113,18 +114,37 @@ export function buildQaGatewayConfig(params: {
       .map((pluginId) => pluginId.trim())
       .filter((pluginId) => pluginId.length > 0),
   );
-  const selectedPluginIds = usesCodexMockAppServer
+  const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
     : provider.usesModelProviderPlugins
       ? uniqueStrings(
           (params.enabledPluginIds?.length ?? 0) > 0 ? configuredPluginIds : selectedProviderIds,
         )
       : configuredPluginIds;
+  // A forced Codex cell must stage its harness even when the provider owner is
+  // selected independently; otherwise its QA-only sandbox never takes effect.
+  const selectedPluginIds =
+    params.forcedRuntime === "codex"
+      ? uniqueStrings([...providerSelectedPluginIds, "codex"])
+      : providerSelectedPluginIds;
   const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(
-    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+    selectedPluginIds.map((pluginId) => [
+      pluginId,
+      params.forcedRuntime === "codex" && pluginId === "codex"
+        ? {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "workspace-write",
+                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+              },
+            },
+          }
+        : { enabled: true },
+    ]),
   );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
@@ -189,6 +209,9 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
+    meta: {
+      lastTouchedVersion: OPENCLAW_VERSION,
+    },
     memory: {
       backend: "builtin",
       search: {

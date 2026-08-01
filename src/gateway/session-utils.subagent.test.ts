@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { canonicalSubagentRunFixtures } from "../agents/subagent-registry.persistence.test-support.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -16,21 +17,31 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
+import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+});
+
 async function seedSessionEntry(
   storePath: string,
   sessionKey: string,
   entry: SessionEntry,
+  agentId?: string,
 ): Promise<void> {
-  await replaceSessionEntry({ sessionKey, storePath }, entry);
+  await replaceSessionEntry({ ...(agentId ? { agentId } : {}), sessionKey, storePath }, entry);
 }
 
 describe("listSessionsFromStore subagent metadata", () => {
@@ -162,6 +173,81 @@ describe("listSessionsFromStore subagent metadata", () => {
       entryId: "entry-source",
     });
     expect(row.previousSessionId).toBe("sess-previous");
+  });
+
+  test("discovers controlled children through both navigation and runtime owners", () => {
+    const now = Date.now();
+    const navigationParentKey = "agent:main:dashboard:navigation-parent";
+    const controlParentKey = "agent:main:subagent:runtime-controller";
+    const staleParentKey = "agent:main:subagent:stale-controller";
+    const childSessionKey = "agent:main:subagent:controlled-child";
+    const store: Record<string, SessionEntry> = {
+      [navigationParentKey]: {
+        sessionId: "sess-navigation-parent",
+        updatedAt: now - 2_000,
+      } as SessionEntry,
+      [controlParentKey]: {
+        sessionId: "sess-runtime-controller",
+        updatedAt: now - 1_000,
+      } as SessionEntry,
+      [childSessionKey]: {
+        sessionId: "sess-controlled-child",
+        updatedAt: now,
+        spawnedBy: staleParentKey,
+        parentSessionKey: navigationParentKey,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-controlled-child-dual-owner",
+      childSessionKey,
+      controllerSessionKey: controlParentKey,
+      requesterSessionKey: controlParentKey,
+      requesterDisplayKey: "runtime-controller",
+      task: "controlled child",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+    });
+
+    const listForOwner = (ownerSessionKey: string) =>
+      listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { spawnedBy: ownerSessionKey },
+      });
+
+    const navigationChildren = listForOwner(navigationParentKey).sessions;
+    expect(navigationChildren.map((session) => session.key)).toEqual([childSessionKey]);
+    expect(navigationChildren[0]?.parentSessionKey).toBe(navigationParentKey);
+    expect(navigationChildren[0]?.controlOwnerSessionKey).toBe(controlParentKey);
+    expect(listForOwner(controlParentKey).sessions.map((session) => session.key)).toEqual([
+      childSessionKey,
+    ]);
+    expect(listForOwner(staleParentKey).sessions).toEqual([]);
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    expect(
+      all.sessions.find((session) => session.key === navigationParentKey)?.childSessions,
+    ).toEqual([childSessionKey]);
+    expect(all.sessions.find((session) => session.key === controlParentKey)?.childSessions).toEqual(
+      [childSessionKey],
+    );
+
+    expect(
+      buildSingleRowStoreChildSessionsByKey({
+        store,
+        storePath: "/tmp/sessions.json",
+        key: navigationParentKey,
+        now,
+      }).get(navigationParentKey),
+    ).toEqual([childSessionKey]);
   });
 
   test("includes subagent status timing and direct child session keys", () => {
@@ -820,7 +906,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -911,7 +997,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           return listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -1301,6 +1387,143 @@ describe("listSessionsFromStore subagent metadata", () => {
 });
 
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("fixed stores retain a colliding unsuffixed database on the default owner", async () => {
+    await withStateDirEnv("openclaw-fixed-store-collision-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "ops.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: {
+            main: { default: true },
+            ops: {},
+          },
+        },
+      } as OpenClawConfig;
+
+      await seedSessionEntry(
+        storePath,
+        "main",
+        { sessionId: "s-main-unscoped", updatedAt: 100 },
+        "main",
+      );
+
+      const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]?.sessionId).toBe("s-main-unscoped");
+      expect(store["agent:ops:main"]).toBeUndefined();
+      expect(diagnostics).toContainEqual(
+        expect.stringContaining(
+          'owner "main" selected by database-registry; suffixed owner(s): "ops"',
+        ),
+      );
+    });
+  });
+
+  test("fixed stores preserve a registered suffix while the default keeps the unsuffixed target", async () => {
+    await withStateDirEnv("openclaw-fixed-store-registered-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "ops.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: {
+            main: { default: true },
+            ops: {},
+          },
+        },
+      } as OpenClawConfig;
+
+      await seedSessionEntry(
+        storePath,
+        "main",
+        { sessionId: "s-ops-registered", updatedAt: 100 },
+        "ops",
+      );
+
+      const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:ops:main"]?.sessionId).toBe("s-ops-registered");
+      expect(store["agent:main:main"]).toBeUndefined();
+      expect(diagnostics).toContainEqual(
+        expect.stringContaining(
+          'owner "main" selected by configured-default; suffixed owner(s): "ops"',
+        ),
+      );
+    });
+  });
+
+  test("fixed stores merge every configured agent's partition", async () => {
+    await withStateDirEnv("openclaw-fixed-store-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "shared-sessions.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: {
+            ops: { default: true },
+            worker: {},
+          },
+        },
+      } as OpenClawConfig;
+
+      await seedSessionEntry(
+        storePath,
+        "agent:ops:main",
+        { sessionId: "s-ops", updatedAt: 100 },
+        "ops",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:worker:main",
+        { sessionId: "s-worker", updatedAt: 200 },
+        "worker",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:dynamic:main",
+        { sessionId: "s-dynamic", updatedAt: 300 },
+        "dynamic",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:ops:legacy",
+        { sessionId: "s-legacy-ops", spawnedBy: "agent:ops:main", updatedAt: 400 },
+        "ops",
+      );
+      const dynamicIncognitoKey = "dashboard:incognito-dynamic";
+      await seedSessionEntry(
+        resolveIncognitoOpenClawAgentSqlitePath({ agentId: "dynamic" }),
+        dynamicIncognitoKey,
+        { incognito: true, sessionId: "s-incognito-dynamic", updatedAt: 500 },
+        "dynamic",
+      );
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:ops:main"]?.sessionId).toBe("s-ops");
+      expect(store["agent:worker:main"]?.sessionId).toBe("s-worker");
+      expect(store["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
+
+      const configuredOnly = loadCombinedSessionStoreForGateway(cfg, {
+        configuredAgentsOnly: true,
+      }).store;
+      expect(configuredOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
+      expect(configuredOnly["agent:ops:legacy"]?.spawnedBy).toBe("agent:ops:main");
+      expect(configuredOnly["agent:dynamic:main"]).toBeUndefined();
+      expect(configuredOnly[dynamicIncognitoKey]).toBeUndefined();
+
+      const opsOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "ops" }).store;
+      expect(opsOnly["agent:ops:main"]?.sessionId).toBe("s-ops");
+      expect(opsOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
+      expect(opsOnly["agent:worker:main"]).toBeUndefined();
+      expect(opsOnly["agent:dynamic:main"]).toBeUndefined();
+
+      const explicitDynamic = loadCombinedSessionStoreForGateway(cfg, {
+        agentId: "dynamic",
+        configuredAgentsOnly: true,
+      }).store;
+      expect(explicitDynamic["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
+
+      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      expect(mainOnly["agent:ops:legacy"]).toBeUndefined();
+    });
+  });
+
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
     await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
       const customRoot = path.join(stateDir, "custom-state");
@@ -1370,6 +1593,9 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(path.resolve(storePath)).toBe(path.resolve(codexStorePath));
       expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
       expect(store["agent:main:main"]).toBeUndefined();
+
+      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      expect(mainOnly["agent:main:main"]?.sessionId).toBe("s-main");
     });
   });
 });

@@ -1360,10 +1360,10 @@ describe("runHeartbeatOnce", () => {
     },
   );
 
-  it("does not surface a trailing legacy reasoning payload as the reply when includeReasoning is unset", async () => {
-    // With includeReasoning unset, a legacy "Reasoning:"-prefixed payload after
-    // the final answer must not become the visible heartbeat reply, and no
-    // separate Thinking message is sent. (#92242 review follow-up)
+  it("keeps a trailing legacy reasoning payload internal", async () => {
+    // A legacy "Reasoning:"-prefixed payload after the final answer must not
+    // become the visible heartbeat reply, and no separate Thinking message is
+    // sent. (#92242 review follow-up)
     const replySpy = vi.fn();
     try {
       const tmpDir = await createCaseDir("hb-legacy-reasoning-unset");

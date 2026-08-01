@@ -1,4 +1,5 @@
 // Openai provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -29,7 +30,6 @@ import {
 } from "./tts.js";
 
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
@@ -182,16 +182,6 @@ function readOpenAIOverrides(
   };
 }
 
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-}
-
 function isCustomOpenAITtsBaseUrl(baseUrl: string | undefined): boolean {
   if (baseUrl !== undefined) {
     return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
@@ -319,7 +309,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       const fileExtension = responseFormatToFileExtension(responseFormat);
       return {
@@ -351,7 +341,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat: outputFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },

@@ -13,10 +13,32 @@ import type {
 } from "../state/openclaw-agent-db.generated.js";
 import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import { BoardValidationError } from "./board-layout.js";
-import { createBoardDeclaredSummary } from "./board-store.js";
+import { createBoardDeclaredSummary, type BoardWidgetHtmlViewMetadata } from "./board-store.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
 export type SelectedBoardWidgetRow = Selectable<BoardWidgetRow>;
+export type SelectedBoardWidgetSnapshotRow = Omit<SelectedBoardWidgetRow, "html">;
+
+export const BOARD_WIDGET_SNAPSHOT_COLUMNS = [
+  "session_key",
+  "name",
+  "tab_id",
+  "title",
+  "content_kind",
+  "descriptor_json",
+  "sha256",
+  "view_generation",
+  "revision",
+  "size_w",
+  "size_h",
+  "position",
+  "manifest",
+  "grant_state",
+  "granted_sha",
+  "created_by",
+  "created_at",
+  "updated_at",
+] as const;
 
 const BOARD_GRANT_SEMANTICS_VERSION = 2;
 
@@ -222,8 +244,10 @@ export function rowToTab(row: SelectedBoardTabRow): BoardTab {
   };
 }
 
-export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
-  const manifest = parseManifest(row.manifest);
+export function rowToWidget(
+  row: SelectedBoardWidgetSnapshotRow,
+  manifest: ReturnType<typeof parseManifest> = parseManifest(row.manifest),
+): BoardWidget {
   const declared = manifest.declared;
   const declaredSummary = createBoardDeclaredSummary(declared);
   const pluginContent =
@@ -252,6 +276,26 @@ export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
     revision: row.revision,
     ...(instanceId ? { instanceId } : {}),
     ...(declaredSummary ? { declaredSummary } : {}),
+    ...(declared ? { declared } : {}),
+  };
+}
+
+export function rowToHtmlViewMetadata(
+  row: Pick<
+    SelectedBoardWidgetSnapshotRow,
+    "content_kind" | "revision" | "sha256" | "view_generation" | "grant_state"
+  >,
+  manifest: ReturnType<typeof parseManifest>,
+): BoardWidgetHtmlViewMetadata | undefined {
+  if (row.content_kind !== "html" || row.view_generation === null) {
+    return undefined;
+  }
+  const declared = manifest.declared;
+  return {
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
     ...(declared ? { declared } : {}),
   };
 }

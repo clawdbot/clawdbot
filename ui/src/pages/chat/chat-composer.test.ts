@@ -196,11 +196,15 @@ describe("renderChatComposer controls", () => {
     expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
   });
 
-  it("renders and invokes the archived-session banner action", () => {
+  it("replaces the composer with the archived-session notice", () => {
     const onAction = vi.fn();
+    const onAbort = vi.fn();
     const { container } = renderComposer({
       canSend: false,
+      canAbort: true,
+      onAbort,
       disabledBanner: {
+        kind: "composer-replacement",
         text: "This session is archived. Unarchive it to continue the conversation.",
         actionLabel: "Unarchive",
         onAction,
@@ -209,8 +213,23 @@ describe("renderChatComposer controls", () => {
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("This session is archived.");
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();
+    button(container, t("chat.runControls.stopGenerating")).click();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the disabled composer mounted for a catalog read-only state", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This catalog session is read-only.",
+    });
+
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
   it("switches the primary action between voice, send, queue, and stop", () => {
@@ -838,6 +857,11 @@ describe("renderChatComposer status", () => {
     );
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
+    );
+    expect(
+      container.querySelector(".compaction-indicator--fallback")?.getAttribute("aria-label"),
+    ).toBe(
+      "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
     );
   });
 

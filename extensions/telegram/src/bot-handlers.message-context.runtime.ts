@@ -1,5 +1,6 @@
 // Telegram reply-chain cache and prompt-context projection.
 import type { Message } from "grammy/types";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
@@ -55,7 +56,11 @@ export function createTelegramMessageContextRuntime({
   "cfg" | "accountId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
   const messageCache = createTelegramMessageCache({
-    scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
+    scope: resolveTelegramMessageCacheScope(
+      telegramDeps.resolveStorePath(cfg.session?.store, {
+        agentId: cfg.agents ? resolveDefaultAgentId(cfg) : "main",
+      }),
+    ),
   });
   const resolvePromptSender = (
     node: TelegramCachedMessageNode,

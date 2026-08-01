@@ -234,23 +234,37 @@ export async function startGatewayService(
     };
   }
 
+  let nextState: GatewayServiceState;
   try {
     await service.start({ ...args, env: state.env });
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    return {
-      outcome: "started",
-      state: nextState,
-    };
+    nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    if (!nextState.installed) {
+    const recoveryState = await readGatewayServiceState(service, { env: state.env });
+    if (!recoveryState.installed) {
       return {
         outcome: "missing-install",
-        state: nextState,
+        state: recoveryState,
       };
     }
     throw err;
   }
+
+  const runtime = nextState.runtime;
+  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
+  const newFailedExit =
+    runtime?.status === "stopped" &&
+    typeof runtime.lastExitStatus === "number" &&
+    runtime.lastExitStatus !== 0 &&
+    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
+  if (failedState || newFailedExit) {
+    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
+    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
+  }
+
+  return {
+    outcome: "started",
+    state: nextState,
+  };
 }
 
 export function describeGatewayServiceRestart(

@@ -275,8 +275,8 @@ describe("agents add command", () => {
   it("uses the explicit agent target and skips catalog validation", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
-      config: { agents: { entries: {} } },
-      sourceConfig: { agents: { entries: {} } },
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
     });
     wizardMocks.createClackPrompter.mockReturnValue({
       intro: vi.fn(),
@@ -470,8 +470,8 @@ describe("agents add command", () => {
     it("delegates creation to the canonical service", async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         ...baseConfigSnapshot,
-        config: { agents: { list: [] } },
-        sourceConfig: { agents: { list: [] } },
+        config: { agents: { list: [{ id: "main", default: true }] } },
+        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
       });
 
       await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
@@ -491,8 +491,8 @@ describe("agents add command", () => {
     it("reports a duplicate rejected by the canonical service", async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         ...baseConfigSnapshot,
-        config: { agents: { list: [] } },
-        sourceConfig: { agents: { list: [] } },
+        config: { agents: { list: [{ id: "main", default: true }] } },
+        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
       });
       createAgentMock.mockResolvedValueOnce({
         status: "error",
@@ -515,18 +515,18 @@ describe("agents add command", () => {
         .mockResolvedValueOnce({
           ...baseConfigSnapshot,
           hash: "hash-1",
-          config: { agents: { list: [] } },
-          sourceConfig: { agents: { list: [] } },
+          config: { agents: { list: [{ id: "main", default: true }] } },
+          sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
         })
         .mockResolvedValueOnce({
           ...baseConfigSnapshot,
           hash: "hash-2",
           config: {
-            agents: { list: [{ id: "other-agent" }] },
+            agents: { list: [{ id: "other-agent", default: true }] },
             bindings: [{ type: "route", agentId: "other-agent", match: { channel: "telegram" } }],
           },
           sourceConfig: {
-            agents: { list: [{ id: "other-agent" }] },
+            agents: { list: [{ id: "other-agent", default: true }] },
             bindings: [{ type: "route", agentId: "other-agent", match: { channel: "telegram" } }],
           },
         });

@@ -47,14 +47,6 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
-    "scripts/repro/code-mode-namespace-live.ts": [
-      "exports",
-      "nsExports",
-      "types",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
     "src/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     "test/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
   },

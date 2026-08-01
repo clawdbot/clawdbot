@@ -53,7 +53,7 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-.new-session-page__incognito {
+.new-session-page__visibility {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -68,25 +68,25 @@ openclaw-new-session-page {
   cursor: pointer;
 }
 
-.new-session-page__incognito:hover:not(:disabled),
-.new-session-page__incognito--active {
+.new-session-page__visibility:hover:not(:disabled),
+.new-session-page__visibility--active {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
 }
 
-.new-session-page__incognito--active {
+.new-session-page__visibility--active {
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
   font-weight: 650;
 }
 
-.new-session-page__incognito:disabled {
+.new-session-page__visibility:disabled {
   cursor: default;
   opacity: 0.55;
 }
 
-.new-session-page__incognito svg {
+.new-session-page__visibility svg {
   width: 12px;
   height: 12px;
   fill: none;
@@ -175,21 +175,6 @@ openclaw-new-session-page {
 }
 
 .new-session-page__trigger:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.new-session-page__draft-toggle {
-  gap: 6px;
-  cursor: pointer;
-}
-
-.new-session-page__draft-toggle input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.new-session-page__draft-toggle:has(input:disabled) {
   cursor: default;
   opacity: 0.6;
 }
@@ -351,6 +336,19 @@ wa-popover.new-session-page__place-popover::part(body) {
   position: relative;
   margin-top: 0;
   border-radius: var(--radius-md);
+}
+
+/* Keep a long first prompt visible before scrolling. The shared auto-height
+   controller measures content; this surface owns its ten-line visual cap. */
+.new-session-page__composer .new-session-page__message {
+  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  --scrollbar-size: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -575,6 +573,21 @@ wa-popover.new-session-page__place-popover::part(body) {
   .new-session-page__triggers {
     position: relative;
     gap: 4px 2px;
+  }
+
+  /* The shared chat footer becomes a three-column grid on mobile, but a new
+     session has visibility pills instead of the chat settings slot. Keep
+     those pills intrinsic and let the model picker use the remaining width. */
+  .new-session-page__composer .agent-chat__composer-controls {
+    display: flex;
+    gap: 4px;
+  }
+
+  .new-session-page__composer .chat-composer-model-control {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: 100%;
+    margin-left: auto;
   }
 
   .new-session-page__select {

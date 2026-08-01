@@ -276,6 +276,7 @@ describe("resolvePluginWebFetchProviders", () => {
       config: rawConfig,
       workspaceDir: "/tmp/runtime-workspace",
       env,
+      candidates: [],
       diagnostics: [],
       installRecords: {},
     });

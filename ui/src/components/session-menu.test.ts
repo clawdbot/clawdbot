@@ -333,7 +333,12 @@ describe("session menu", () => {
       menuItem(submenu, "Projects").querySelector(".session-menu__shortcut")?.textContent,
     ).toBe("2");
 
-    const keydown = new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true });
+    const keydown = new KeyboardEvent("keydown", {
+      key: "٢",
+      code: "Digit2",
+      bubbles: true,
+      cancelable: true,
+    });
     document.dispatchEvent(keydown);
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
     expect(keydown.defaultPrevented).toBe(true);
@@ -406,7 +411,12 @@ describe("session menu", () => {
     expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
     expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();
 
-    const keydown = new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true });
+    const keydown = new KeyboardEvent("keydown", {
+      key: "з",
+      code: "KeyP",
+      bubbles: true,
+      cancelable: true,
+    });
     document.dispatchEvent(keydown);
     expect(calls).toEqual(["close", "toggle-pin"]);
     expect(keydown.defaultPrevented).toBe(true);

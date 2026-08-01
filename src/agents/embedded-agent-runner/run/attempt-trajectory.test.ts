@@ -31,6 +31,12 @@ function createInput(disableTrajectory = false) {
       runId: "run-1",
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:session-1",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: "/tmp/openclaw-agent.sqlite",
+      },
       thinkLevel: "medium",
       trigger: "user",
       workspaceDir: "/tmp/workspace",
@@ -67,6 +73,12 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
         runId: "run-1",
         sessionFile: "/tmp/trajectory.jsonl",
         sessionId: "session-1",
+        sessionTarget: expect.objectContaining({
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          storePath: "/tmp/openclaw-agent.sqlite",
+        }),
       }),
     );
     expect(recorder.recordEvent).toHaveBeenNthCalledWith(

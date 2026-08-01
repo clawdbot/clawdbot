@@ -61,6 +61,6 @@ describe("connection user profile helpers", () => {
         42,
         "https://gateway.example.test/control/profile",
       ),
-    ).toBeNull();
+    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=42");
   });
 });

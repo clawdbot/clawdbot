@@ -156,16 +156,8 @@ export async function initializeMemoryWikiVault(
       },
     });
   }
-  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
-  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
-  activateMemoryWikiCompiledCacheOwner(
-    config,
-    vaultGeneration,
-    identity.compiledCachePublicationId,
-  );
-  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
-    loadMemoryWikiValidatedVaultIdentity(rootDir),
-  );
+  await ensureMemoryWikiVaultGeneration(rootDir);
+  await activateExistingMemoryWikiVault(config);
 
   return {
     rootDir,
@@ -173,4 +165,22 @@ export async function initializeMemoryWikiVault(
     createdDirectories,
     createdFiles,
   };
+}
+
+export async function activateExistingMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+): Promise<void> {
+  const rootDir = config.vault.path;
+  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+  if (!identity.vaultGeneration) {
+    throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
+  }
+  activateMemoryWikiCompiledCacheOwner(
+    config,
+    identity.vaultGeneration,
+    identity.compiledCachePublicationId,
+  );
+  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
+    loadMemoryWikiValidatedVaultIdentity(rootDir),
+  );
 }

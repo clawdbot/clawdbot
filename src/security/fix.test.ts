@@ -344,6 +344,32 @@ describe("security fix", () => {
     ]);
   });
 
+  it("tightens the live legacy main auth store for a named default roster", async () => {
+    const stateDir = await createStateDir("named-default-legacy-auth");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
+      "utf-8",
+    );
+    const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
+    await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");
+    await fs.chmod(legacyAuthPath, 0o644);
+
+    const result = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins: [],
+    });
+
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ kind: "chmod", ok: true, path: legacyAuthPath, mode: 0o600 }),
+    );
+    expectPerms((await fs.stat(legacyAuthPath)).mode & 0o777, 0o600);
+  });
+
   it.runIf(process.platform !== "win32")(
     "tightens only includes accepted by the config include resolver",
     async () => {

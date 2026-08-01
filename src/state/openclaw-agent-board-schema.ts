@@ -26,6 +26,7 @@ function splitBoardSchema(sql: string): { board: string; withoutBoard: string } 
 const boardSchema = splitBoardSchema(OPENCLAW_AGENT_SCHEMA_SQL);
 
 const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = boardSchema.board;
+export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
 export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = boardSchema.withoutBoard;
 
 function canonicalBoardWidgetsCreateSql(): string {
@@ -59,10 +60,7 @@ function normalizeBoardWidgetsCreateSql(sql: string): string {
     .trim();
 }
 
-/**
- * Repairs the unreleased v13 board table shape without advancing the agent DB version.
- * Delete this same-version bridge when the lazy board schema folds into the next natural bump.
- */
+/** Repair the v14 board constraint inside the caller's schema/write transaction. */
 export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): void {
   if (!db.isTransaction) {
     throw new Error("board schema ensure requires an active transaction");

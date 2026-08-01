@@ -206,6 +206,35 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 
+  it("omits deltas for existing-session snapshots without stable document identity", async () => {
+    chromeMcpMocks.takeChromeMcpSnapshot
+      .mockResolvedValueOnce({
+        id: "root-1",
+        role: "document",
+        name: "Example",
+        children: [{ id: "save-1", role: "button", name: "Save" }],
+      })
+      .mockResolvedValueOnce({
+        id: "root-2",
+        role: "document",
+        name: "Example",
+        children: [
+          { id: "save-2", role: "button", name: "Save" },
+          { id: "alert-2", role: "alert", name: "Required" },
+        ],
+      });
+    const handler = getSnapshotGetHandler();
+    const first = createBrowserRouteResponse();
+    const second = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai" } }, first.res);
+    await handler?.({ params: {}, query: { format: "ai" } }, second.res);
+
+    const body = requireRecord(second.body, "second snapshot body");
+    expect(body.snapshot).not.toContain("[new]");
+    expect(body.newElements).toBeUndefined();
+  });
+
   it("labels and returns only Chrome MCP refs inside the final snapshot budget", async () => {
     chromeMcpMocks.takeChromeMcpSnapshot.mockResolvedValueOnce({
       id: "root",

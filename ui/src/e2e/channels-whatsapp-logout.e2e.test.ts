@@ -59,6 +59,12 @@ describeControlUiE2e("Control UI WhatsApp logout mocked Gateway E2E", () => {
           channelAccounts: {},
           channelDefaultAccountId: {},
         },
+        "channels.pairing.list": {
+          accounts: [],
+          requests: [],
+          commandOwnerConfigured: true,
+          limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+        },
         "web.login.start": {
           connected: false,
           message: "Scan this QR.",

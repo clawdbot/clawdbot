@@ -1,9 +1,9 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import { isSqliteLockError } from "./sqlite-transaction.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -27,25 +27,6 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
-}
-
-export function resolveNodeSqliteReadOnlyLocation(
-  pathname: string,
-  hasWalSidecars: boolean,
-): string {
-  if (process.platform === "win32") {
-    const resolvedPath = path.resolve(pathname);
-    // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
-    // preserve UNC and already-namespaced locations through the Windows VFS.
-    if (hasWalSidecars || resolvedPath.startsWith("\\\\")) {
-      return path.toNamespacedPath(resolvedPath);
-    }
-    return `${pathToFileURL(resolvedPath).href}?mode=ro&immutable=1`;
-  }
-  if (hasWalSidecars) {
-    return pathname;
-  }
-  return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -115,4 +96,30 @@ export function openNodeSqliteDatabase(
   return options === undefined
     ? new sqlite.DatabaseSync(resolvedLocation)
     : new sqlite.DatabaseSync(resolvedLocation, options);
+}
+
+/** Hold a raw exclusive transaction until release for cross-process coordination. */
+export function tryAcquireExclusiveSqliteCoordinator(
+  location: string,
+): { release: () => void } | null {
+  const database = openNodeSqliteDatabase(location);
+  try {
+    // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
+    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+  } catch (error) {
+    database.close();
+    if (isSqliteLockError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  return {
+    release: () => {
+      try {
+        database.exec("ROLLBACK");
+      } finally {
+        database.close();
+      }
+    },
+  };
 }

@@ -225,12 +225,33 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
     : false;
 }
 
+function resolveFoundryOpenAIModelTokenLimits(
+  normalized: string | undefined,
+): { contextWindow: number; maxTokens: number } | undefined {
+  if (!normalized) {
+    return undefined;
+  }
+  // Foundry publishes provider-native capacities. Keep exact families here so
+  // older GPT and continuously updated chat models retain their separate caps.
+  if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
+    return { contextWindow: 1_050_000, maxTokens: 128_000 };
+  }
+  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+    return { contextWindow: 400_000, maxTokens: 128_000 };
+  }
+  return undefined;
+}
+
 function resolveFoundryModelTokenLimits(value?: string | null): {
   contextWindow: number;
   maxTokens: number;
 } {
   const normalized = normalizeFoundryModelName(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
+  const foundryOpenAILimits = resolveFoundryOpenAIModelTokenLimits(normalized);
+  if (foundryOpenAILimits) {
+    return foundryOpenAILimits;
+  }
   if (
     normalized &&
     (supportsClaudeAdaptiveThinking({ id: normalized }) ||

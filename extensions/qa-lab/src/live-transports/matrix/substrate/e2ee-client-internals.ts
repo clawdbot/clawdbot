@@ -90,13 +90,5 @@ export async function prepareMatrixQaE2eeStorage(params: {
   await fs.mkdir(storage.accountDir, { mode: 0o700, recursive: true });
   await fs.chmod(storage.rootDir, 0o700);
   await fs.chmod(storage.accountDir, 0o700);
-  await fs
-    .writeFile(storage.idbSnapshotPath, "[]\n", { flag: "wx", mode: 0o600 })
-    .catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-    });
-  await fs.chmod(storage.idbSnapshotPath, 0o600);
   return storage;
 }

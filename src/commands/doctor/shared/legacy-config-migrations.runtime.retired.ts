@@ -22,6 +22,7 @@ import {
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
+import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -50,6 +51,22 @@ function moveKey(
     changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
   }
   delete owner[legacyKey];
+}
+
+function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
+  const compaction = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.compaction);
+  if (!compaction || !Object.hasOwn(compaction, "truncateAfterCompaction")) {
+    return;
+  }
+  if (
+    compaction.truncateAfterCompaction === false &&
+    Object.hasOwn(compaction, "maxActiveTranscriptBytes")
+  ) {
+    delete compaction.maxActiveTranscriptBytes;
+    changes.push("Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.");
+  }
+  delete compaction.truncateAfterCompaction;
+  changes.push("Removed retired agents.defaults.compaction.truncateAfterCompaction.");
 }
 
 function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
@@ -198,42 +215,9 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const slack = getRecord(getRecord(raw.channels)?.slack);
-  moveKey(slack, "identity", "postAs", "channels.slack", changes);
-  const slackAccounts = getRecord(slack?.accounts);
-  if (slackAccounts) {
-    for (const [accountId, value] of Object.entries(slackAccounts)) {
-      moveKey(
-        getRecord(value),
-        "identity",
-        "postAs",
-        `channels.slack.accounts.${accountId}`,
-        changes,
-      );
-    }
-  }
-}
-
-function visitChannelEntries(
-  raw: Record<string, unknown>,
-  channelId: string,
-  visitor: (entry: Record<string, unknown>, path: string) => void,
-): void {
-  const channel = getRecord(getRecord(raw.channels)?.[channelId]);
-  if (!channel) {
-    return;
-  }
-  visitor(channel, `channels.${channelId}`);
-  const accounts = getRecord(channel.accounts);
-  if (!accounts) {
-    return;
-  }
-  for (const [accountId, value] of Object.entries(accounts)) {
-    const account = getRecord(value);
-    if (account) {
-      visitor(account, `channels.${channelId}.accounts.${accountId}`);
-    }
-  }
+  visitChannelEntries(raw, "slack", (entry, path) => {
+    moveKey(entry, "identity", "postAs", path, changes);
+  });
 }
 
 function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
@@ -532,6 +516,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["tools", "message", "allowCrossContextSend"],
         "tools.message.allowCrossContextSend moved to tools.message.crossContext.",
       ),
+      rule(["tools", "experimental"], "tools.experimental.planTool moved to tools.updatePlan."),
       rule(
         ["talk", "realtime", "voice"],
         "talk.realtime.voice moved to talk.realtime.speakerVoice.",
@@ -546,8 +531,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         "Legacy Deepgram options moved to providerOptions.deepgram.",
         hasMediaDeepgram,
       ),
+      rule(
+        ["agents", "defaults", "compaction", "truncateAfterCompaction"],
+        "agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone.",
+      ),
     ],
     apply: (raw, changes) => {
+      migrateTruncateAfterCompaction(raw, changes);
       if (Object.hasOwn(raw, "tui")) {
         delete raw.tui;
         changes.push("Removed retired tui config; the footer uses the default compact display.");
@@ -592,6 +582,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
           changes.push("Removed tools.message.allowCrossContextSend.");
         }
         delete messageTool.allowCrossContextSend;
+      }
+      // planTool was the only tools.experimental member, so the strict schema now
+      // rejects the whole container; lift the value, then drop the empty parent.
+      const tools = getRecord(raw.tools);
+      const experimentalTools = getRecord(tools?.experimental);
+      if (tools && experimentalTools) {
+        if (Object.hasOwn(experimentalTools, "planTool") && tools.updatePlan === undefined) {
+          tools.updatePlan = experimentalTools.planTool;
+          changes.push("Moved tools.experimental.planTool → tools.updatePlan.");
+        } else {
+          changes.push("Removed tools.experimental; tools.updatePlan now owns the switch.");
+        }
+        delete tools.experimental;
       }
       const talkRealtime = getRecord(getRecord(raw.talk)?.realtime);
       if (talkRealtime) {

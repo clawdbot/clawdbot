@@ -63,6 +63,9 @@ export const pluginSdkDocMetadata = {
   "channel-setup": {
     category: "channel",
   },
+  "channel-dm-policy": {
+    category: "channel",
+  },
   "command-auth": {
     category: "channel",
   },

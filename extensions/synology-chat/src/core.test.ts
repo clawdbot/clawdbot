@@ -170,6 +170,13 @@ describe("synology-chat account resolution", () => {
     expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });
 
+  it("does not discover an env account when the channel is not installed", () => {
+    process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
+
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
+  });
+
   it("lists the default account when base config has a token", () => {
     const cfg = { channels: { "synology-chat": { token: "abc" } } };
     expect(listAccountIds(cfg)).toEqual(["default"]);

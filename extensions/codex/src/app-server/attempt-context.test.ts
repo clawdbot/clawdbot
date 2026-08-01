@@ -12,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexOpenClawPromptContext,
+  buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
@@ -92,7 +94,6 @@ describe("Codex app-server attempt context", () => {
         bootstrapFiles: [],
         contextFiles: [],
         promptContextFiles: [],
-        developerInstructionFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -249,5 +250,48 @@ describe("Codex app-server attempt context", () => {
       project: true,
       reason: "dynamic-tools-mismatch",
     });
+  });
+
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+    const attempt = { config: {} } as EmbeddedRunAttemptParams;
+
+    expect(
+      buildCodexOpenClawPromptContext({
+        params: attempt,
+        watchedSessionsContext: [
+          "## Watched Sessions",
+          "- agent:main:telegram:group:beta — Family group",
+        ].join("\n"),
+      }),
+    ).toContain("## Watched Sessions");
+
+    // No ambient watches (and no state) must render nothing, not an empty section.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt,
+        dynamicTools: [
+          {
+            type: "function",
+            name: "sessions_history",
+            description: "history",
+            inputSchema: {},
+          },
+        ],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
+
+    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt: {
+          config: {},
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "cron",
+        } as EmbeddedRunAttemptParams,
+        dynamicTools: [],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
   });
 });

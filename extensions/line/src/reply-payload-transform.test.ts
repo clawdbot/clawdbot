@@ -450,6 +450,33 @@ describe("parseLineDirectives", () => {
     });
   });
 
+  describe("overlong action payloads", () => {
+    it("keeps the card visible but disables a callback that cannot round-trip", () => {
+      const deviceName = `${"a".repeat(280)}_living_room`;
+      const result = parseLineDirectives({
+        text: `[[device: ${deviceName} | Streaming Box | Playing | Play/Pause:toggle]]`,
+      });
+      const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "long device name");
+      const footer = flexMessage.contents?.footer as {
+        contents?: Array<{
+          contents?: Array<{
+            action?: { type?: string; data?: string; label?: string; text?: string };
+          }>;
+        }>;
+      };
+      const action = (footer?.contents ?? [])
+        .flatMap((row) => row.contents ?? [])
+        .find((button) => button.action)?.action;
+
+      expect(flexMessage.altText).toContain("living_room");
+      expect(action).toEqual({
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      });
+    });
+  });
+
   describe("appletv_remote", () => {
     it("parses appletv remote variants", () => {
       const cases = [

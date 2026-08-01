@@ -16,7 +16,10 @@ MUTED='\033[38;2;90;100;128m'       # text-muted    #5a6480
 NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
-NODE_DEFAULT_MAJOR=24
+NODE_DEFAULT_MAJOR=26
+# Homebrew ships the current Node line as plain "node" (no versioned node@26
+# formula exists); versioned formulas only cover LTS lines like node@24.
+NODE_BREW_FORMULA="node"
 NODE_MIN_MAJOR=22
 NODE_22_MIN_MINOR=22
 NODE_22_MIN_PATCH=3
@@ -1768,8 +1771,11 @@ promote_supported_node_binary() {
         "/usr/bin/node"
         "/usr/local/bin/node"
         "/opt/homebrew/bin/node"
-        "/opt/homebrew/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
-        "/usr/local/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
+        "/opt/homebrew/opt/${NODE_BREW_FORMULA}/bin/node"
+        "/usr/local/opt/${NODE_BREW_FORMULA}/bin/node"
+        # Keep-alive for installs provisioned when node@24 was the default.
+        "/opt/homebrew/opt/node@24/bin/node"
+        "/usr/local/opt/node@24/bin/node"
     )
 
     for candidate in "${candidates[@]}"; do
@@ -1826,7 +1832,7 @@ ensure_macos_default_node_active() {
 
     local brew_node_prefix=""
     if command -v brew &> /dev/null; then
-        brew_node_prefix="$(brew --prefix "node@${NODE_DEFAULT_MAJOR}" 2>/dev/null || true)"
+        brew_node_prefix="$(brew --prefix "${NODE_BREW_FORMULA}" 2>/dev/null || true)"
         if [[ -n "$brew_node_prefix" && -x "${brew_node_prefix}/bin/node" ]]; then
             export PATH="${brew_node_prefix}/bin:$PATH"
             refresh_shell_command_cache
@@ -1842,9 +1848,9 @@ ensure_macos_default_node_active() {
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
-        ui_error "Homebrew node@${NODE_DEFAULT_MAJOR} is not installed on disk"
+        ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
-        echo "Re-run 'brew install node@${NODE_DEFAULT_MAJOR}' directly or rerun the installer with --verbose to see the underlying error."
+        echo "Re-run 'brew install ${NODE_BREW_FORMULA}' directly or rerun the installer with --verbose to see the underlying error."
         return 1
     fi
 
@@ -1990,11 +1996,11 @@ install_node_with_apk() {
 install_node() {
     if [[ "$OS" == "macos" ]]; then
         ui_info "Installing Node.js via Homebrew"
-        if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then
-            echo "Re-run with --verbose or run 'brew install node@${NODE_DEFAULT_MAJOR}' directly, then rerun the installer."
+        if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then
+            echo "Re-run with --verbose or run 'brew install ${NODE_BREW_FORMULA}' directly, then rerun the installer."
             exit 1
         fi
-        brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force 2>/dev/null || true
+        brew link "${NODE_BREW_FORMULA}" --overwrite --force 2>/dev/null || true
         if ! ensure_macos_default_node_active; then
             exit 1
         fi

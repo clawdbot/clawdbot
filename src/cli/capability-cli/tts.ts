@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import {
   emitJsonOrText,
@@ -26,6 +27,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     .requiredOption("--text <text>", "Input text")
     .option("--channel <id>", "Channel hint")
     .option("--voice <id>", "Voice hint")
+    .option("--provider <id>", "Speech provider id")
     .option("--model <provider/model>", "Model override")
     .option("--output <path>", "Output path")
     .option("--local", "Force local execution", false)
@@ -43,11 +45,20 @@ export function registerTtsCapabilityCommands(capability: Command): void {
         if (opts.model && !modelRef.provider) {
           throw new Error("TTS model overrides must use the form <provider/model>.");
         }
+        const provider = normalizeSpeechProviderId(
+          typeof opts.provider === "string" && opts.provider.trim()
+            ? opts.provider.trim()
+            : modelRef.provider,
+        );
+        const modelProvider = normalizeSpeechProviderId(modelRef.provider);
+        if (provider && modelProvider && provider !== modelProvider) {
+          throw new Error("TTS --provider must match the provider in --model.");
+        }
         const result = await runTtsConvert({
           text: String(opts.text),
           channel: opts.channel as string | undefined,
-          provider: modelRef.provider,
-          modelId: modelRef.provider ? modelRef.model : undefined,
+          provider,
+          modelId: modelProvider ? modelRef.model : undefined,
           voiceId: opts.voice as string | undefined,
           output: opts.output as string | undefined,
           transport,

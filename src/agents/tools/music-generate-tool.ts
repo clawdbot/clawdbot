@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -58,7 +59,7 @@ import {
   readBooleanToolParam,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
@@ -82,7 +83,6 @@ import {
 } from "./music-generate-tool.actions.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   type AnyAgentTool,
   type SandboxFsBridge,
   type ToolFsPolicy,
@@ -94,6 +94,9 @@ const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "w
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
 const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
+const GENERATED_MUSIC_PROBE_BUDGET_MS = 3000;
+const GENERATED_MUSIC_PROBE_CONCURRENCY = 2;
+const MAX_GENERATED_MUSIC_PROBES = 8;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -334,27 +337,12 @@ async function loadReferenceImages(params: {
       : inputRaw.startsWith("~")
         ? resolveUserPath(inputRaw)
         : inputRaw;
-    const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-      ? { resolved: "" }
-      : params.sandboxConfig
-        ? await resolveSandboxedBridgeMediaPath({
-            sandbox: params.sandboxConfig,
-            mediaPath: resolvedInput,
-            inboundFallbackDir: "media/inbound",
-          })
-        : {
-            resolved: resolvedInput.startsWith("file://")
-              ? resolvedInput.slice("file://".length)
-              : resolvedInput,
-          };
-    const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-    const localRoots = resolveMediaToolLocalRoots(
-      params.workspaceDir,
-      {
-        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
-      },
-      resolvedPath ? [resolvedPath] : undefined,
-    );
+    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+      input: resolvedInput,
+      isDataUrl,
+      workspaceDir: params.workspaceDir,
+      sandbox: params.sandboxConfig,
+    });
     const media = isDataUrl
       ? decodeDataUrl(resolvedInput)
       : params.sandboxConfig
@@ -392,7 +380,7 @@ async function loadReferenceImages(params: {
         fileName,
       },
       resolvedInput,
-      ...(resolvedPathInfo.rewrittenFrom ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom } : {}),
+      ...(rewrittenFrom ? { rewrittenFrom } : {}),
     });
   }
 
@@ -493,11 +481,24 @@ async function executeMusicGenerationJob(params: {
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
       : undefined;
+  const savedTrackMetadata = await probeMediaFilesWithinBudget(
+    savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
+    {
+      budgetMs: GENERATED_MUSIC_PROBE_BUDGET_MS,
+      concurrency: GENERATED_MUSIC_PROBE_CONCURRENCY,
+      maxProbes: MAX_GENERATED_MUSIC_PROBES,
+    },
+  );
   const attachments: AgentGeneratedAttachment[] = savedTracks.map((track, index) => ({
     type: "audio",
     path: track.path,
     mimeType: track.contentType,
     name: result.tracks[index]?.fileName,
+    sizeBytes: track.size,
+    ...(typeof appliedDurationSeconds === "number"
+      ? { durationMs: appliedDurationSeconds * 1000 }
+      : {}),
+    ...savedTrackMetadata[index],
   }));
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
@@ -621,7 +622,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
+      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;

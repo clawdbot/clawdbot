@@ -2,7 +2,10 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  sortPromptCacheToolsByName,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
 import {
   asDateTimestampMs,
@@ -213,7 +216,7 @@ function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,

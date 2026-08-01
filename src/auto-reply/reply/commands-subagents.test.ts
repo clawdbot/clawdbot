@@ -7,6 +7,7 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import {
   countPendingDescendantRunsFromRuns,
@@ -26,6 +27,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import { extractMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
+import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
 import { resolveFocusTargetSession } from "./commands-subagents/shared.js";
 import {
@@ -232,6 +234,62 @@ describe("subagents info", () => {
     expect(text).toContain("TaskStatus: succeeded");
     expect(text).toContain("Task summary: Completed the requested task");
   });
+
+  it.each([
+    {
+      name: "a killed run despite its provider error",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a killed run despite its earlier successful result",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a failed run",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      expectedStatus: "failed",
+    },
+    {
+      name: "a timed-out run",
+      outcome: { status: "timeout" } as const,
+      expectedStatus: "timeout",
+    },
+  ])(
+    "keeps /subagents info and list aligned for $name",
+    ({ endedReason, outcome, expectedStatus }) => {
+      const now = Date.now();
+      const run = {
+        runId: `commands-subagents-status-${expectedStatus}`,
+        childSessionKey: `agent:main:subagent:commands-status-${expectedStatus}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "report the actual child outcome",
+        cleanup: "keep",
+        createdAt: now - 2_000,
+        startedAt: now - 2_000,
+        endedAt: now - 1_000,
+        ...(endedReason ? { endedReason } : {}),
+        outcome,
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(run);
+      const context = buildInfoContext({
+        cfg: buildCommandTestConfig(),
+        runs: [run],
+        restTokens: ["1"],
+      });
+
+      expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
+        `Status: ${expectedStatus}`,
+      );
+      expect(requireReplyText(handleSubagentsListAction(context).reply)).toContain(
+        ` ${expectedStatus}`,
+      );
+    },
+  );
 
   it("omits Date-invalid subagent timestamps", () => {
     const runId = "commands-subagents-info-invalid-date-run";

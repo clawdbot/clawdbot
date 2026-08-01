@@ -20,10 +20,13 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdpMocks = vi.hoisted(() => ({
+  getMainFrameDocumentIdentityViaCdp: vi.fn<() => Promise<string | undefined>>(
+    async () => "cdp:test-document",
+  ),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "private", depth: 0 }],
   })),
-  snapshotRoleViaCdp: vi.fn(async () => ({
+  snapshotRoleViaCdp: vi.fn(async (_opts: unknown) => ({
     snapshot: '- link "private" [ref=e1]',
     refs: { e1: { role: "link", name: "private" } },
     stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
@@ -40,6 +43,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
+  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
 }));
@@ -115,6 +119,7 @@ function getSnapshotGetHandler() {
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    cdpMocks.getMainFrameDocumentIdentityViaCdp.mockReset().mockResolvedValue("cdp:test-document");
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
@@ -170,5 +175,54 @@ describe("local-managed browser snapshot routes", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({ maxChars: 123 }),
     );
+  });
+
+  it("rejects a snapshot when the main-frame loader changes during capture", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
+    cdpMocks.getMainFrameDocumentIdentityViaCdp
+      .mockResolvedValueOnce("cdp:before")
+      .mockResolvedValueOnce("cdp:after");
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: "Frame changed while its browser snapshot was being captured; retry.",
+    });
+  });
+
+  it("disables deltas when no stable document identity is available", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    cdpMocks.getMainFrameDocumentIdentityViaCdp.mockResolvedValue(undefined);
+    const handler = getSnapshotGetHandler();
+    const first = createBrowserRouteResponse();
+    const second = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, first.res);
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, second.res);
+
+    const calls = cdpMocks.snapshotRoleViaCdp.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0]).toMatchObject({ delta: undefined });
+    expect(calls[1]?.[0]).toMatchObject({ delta: undefined });
+    expect(second.body).not.toHaveProperty("newElements");
+    expect(second.body).not.toHaveProperty("snapshot", expect.stringContaining("[new]"));
+  });
+
+  it("reuses delta keys when the stable document identity is unchanged", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    const handler = getSnapshotGetHandler();
+    const first = createBrowserRouteResponse();
+    const second = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, first.res);
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, second.res);
+
+    const secondCall = cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0];
+    expect(secondCall).toMatchObject({
+      delta: { mode: "role", previousKeys: expect.any(Set) },
+    });
   });
 });

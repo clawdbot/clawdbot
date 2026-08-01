@@ -8,7 +8,9 @@ const slackTestState = getSlackTestState();
 describe("slack socket reconnect loop", () => {
   beforeEach(() => {
     resetSlackTestState();
-    vi.useFakeTimers();
+    // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
+    // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
 
   afterEach(() => {

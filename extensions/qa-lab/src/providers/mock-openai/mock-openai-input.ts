@@ -24,6 +24,21 @@ export function extractLastUserText(input: ResponsesInputItem[]) {
   return "";
 }
 
+export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
+  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item?.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    const text = extractInputText(item.content);
+    if (text && !isInternalRuntimeContextCarrierText(text) && matcher.test(text)) {
+      return { index, text };
+    }
+  }
+  return null;
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>
@@ -41,7 +56,7 @@ function isInternalRuntimeContextCarrierText(text: string) {
   );
 }
 
-function isToolOutputContinuationText(text: string) {
+function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
@@ -100,15 +115,19 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
+function isResponsesToolCallOutput(item: ResponsesInputItem) {
+  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+}
+
 function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   return stringifyFunctionCallOutput(item.output);
 }
 
 function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   const record = item as {
@@ -124,7 +143,7 @@ function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
 }
 
 function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return false;
   }
   return item.is_error === true || item.isError === true;
@@ -148,7 +167,7 @@ export function extractToolOutput(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return output;
       }
@@ -176,7 +195,7 @@ export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return functionCallOutputIsStructuredError(candidateItem);
       }
@@ -203,7 +222,7 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return extractFunctionCallOutputCallId(candidateItem);
       }
@@ -272,25 +291,39 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
   return texts;
 }
 
-export function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
+export function extractSlackMpimRetainedBotNonce(
+  prompt: string,
+  botReplyPrefix: string,
+): string | undefined {
+  const historyHeader = "[Thread history - for context]\n";
+  const historyStart = prompt.indexOf(historyHeader);
+  if (historyStart < 0) {
+    return undefined;
+  }
+  const historyBodyStart = historyStart + historyHeader.length;
+  const currentTurnStart = prompt.lastIndexOf("Slack MPIM assistant-history recall check.");
+  if (currentTurnStart < historyBodyStart) {
+    return undefined;
+  }
+  for (const line of prompt.slice(historyBodyStart, currentTurnStart).split(/\r?\n/u)) {
+    const headerEnd = line.indexOf("] ");
+    if (headerEnd < 0) {
       continue;
     }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
+    const header = line.slice(0, headerEnd);
+    if (!header.startsWith("[Slack ") || !header.includes(" (this assistant) (assistant) ")) {
       continue;
     }
-    if (!Array.isArray(item.content)) {
+    const reply = line.slice(headerEnd + 2);
+    if (!reply.startsWith(botReplyPrefix)) {
       continue;
     }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
+    const nonce = reply.slice(botReplyPrefix.length);
+    if (/^[A-Z0-9]{8,32}$/u.test(nonce)) {
+      return nonce;
     }
   }
-  return texts.join("\n");
+  return undefined;
 }
 
 export function extractAllInputTexts(input: ResponsesInputItem[]) {

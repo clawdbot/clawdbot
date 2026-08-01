@@ -4,6 +4,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
@@ -37,6 +38,11 @@ import "./elapsed-time.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
+  readonly sessionDataContext:
+    | {
+        gateway: { snapshot: { selfUser?: AuthenticatedUser | null } };
+      }
+    | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -48,6 +54,8 @@ export interface SessionListHost {
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
+    | "refreshSessionCatalogs"
+    | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
   readonly fullyShownChildSessionKeys: ReadonlySet<string>;
@@ -55,19 +63,22 @@ export interface SessionListHost {
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
     SessionOrganizerController,
-    | "draggingSessionGroup"
+    | "draggingSidebarSection"
     | "draggingSessionKey"
     | "sessionDropTarget"
-    | "sessionGroupDropTarget"
+    | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogViewMenuPosition"
+    | "catalogViewMenuTrigger"
     | "openSessionGroupMenu"
     | "openSessionMenu"
     | "sessionGroupMenu"
     | "sessionMenu"
     | "sessionSortMenuPosition"
+    | "toggleCatalogViewMenu"
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -98,8 +109,8 @@ export interface SessionListHost {
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
   sectionDrop(event: DragEvent, sectionId: string, group?: string): void;
-  startSessionGroupDrag(group: string): void;
-  finishSessionGroupDrag(): void;
+  startSidebarSectionDrag(sectionId: string): void;
+  finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
@@ -108,7 +119,6 @@ export interface SessionListHost {
   handleSessionListDragLeave(event: DragEvent): void;
   handleSessionListDrop(event: DragEvent): void;
   dismissSessionMutationError(): void;
-  toggleCatalogProjectGrouping(): void;
   openCatalogMenu(
     request: CatalogSessionMenuRequest,
     x: number,
@@ -155,7 +165,7 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
+  const { running, leadingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
@@ -261,6 +271,7 @@ export function renderRecentSession(params: {
           : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${host.sessionData.presencePayload}
+          .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
           .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
           .maxVisible=${3}
@@ -274,7 +285,6 @@ export function renderRecentSession(params: {
             session.key,
           ),
         })}
-        ${pinnedState}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button
@@ -307,7 +317,7 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-trail" id=${metaId ?? nothing}
           >${session.isChild && session.runtimeMs != null
-            ? session.hasActiveRun || session.status === "running"
+            ? session.hasActiveRun
               ? html`<openclaw-elapsed-time
                   .startMs=${session.runtimeSampledAt! - session.runtimeMs}
                 ></openclaw-elapsed-time>`

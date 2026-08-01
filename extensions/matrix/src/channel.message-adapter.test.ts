@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./matrix/send.js", () => ({
+  editMessageMatrix: vi.fn(),
+  reactMatrixMessage: vi.fn(),
+  resolveMatrixRoomId: vi.fn(),
   sendMessageMatrix: mocks.sendMessageMatrix,
   sendPollMatrix: vi.fn(),
   sendTypingMatrix: vi.fn(),
@@ -63,6 +66,77 @@ describe("matrix channel message adapter", () => {
 
   it("declares Matrix markdown rendering support for shared reply payloads", () => {
     expect(matrixPlugin.meta.markdownCapable).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "the current room with reply quoting disabled",
+      to: "room:!room:example",
+      replyToMode: "off" as const,
+      expectedThreadId: "$thread",
+    },
+    {
+      name: "an equivalent room target prefix",
+      to: "matrix:channel:!room:example",
+      replyToMode: "all" as const,
+      expectedThreadId: "$thread",
+    },
+    {
+      name: "a different room",
+      to: "room:!another:example",
+      replyToMode: "all" as const,
+      expectedThreadId: undefined,
+    },
+    {
+      name: "a direct user target without proven room identity",
+      to: "user:@alice:example",
+      replyToMode: "all" as const,
+      expectedThreadId: undefined,
+    },
+  ])("routes a native Matrix message action in $name", async (testCase) => {
+    const threading = matrixPlugin.threading;
+    const handleAction = matrixPlugin.actions?.handleAction;
+    if (!threading?.resolveAutoThreadId || !handleAction) {
+      throw new Error("Expected Matrix threaded message action adapters");
+    }
+    const toolContext = {
+      currentChannelProvider: "matrix" as const,
+      currentChannelId: "room:!room:example",
+      currentThreadTs: "$thread",
+      currentMessageId: "$reply",
+      replyToMode: testCase.replyToMode,
+      hasRepliedRef: { value: true },
+    };
+    const threadId = threading.resolveAutoThreadId({
+      cfg,
+      accountId: "default",
+      to: testCase.to,
+      toolContext,
+      replyToId: "$explicit-reply",
+    });
+
+    await handleAction({
+      cfg,
+      channel: "matrix",
+      action: "send",
+      accountId: "default",
+      toolContext,
+      params: {
+        to: testCase.to,
+        message: "threaded native action",
+        replyTo: "$explicit-reply",
+        ...(threadId ? { threadId } : {}),
+      },
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe(testCase.to);
+    expect(lastMatrixSendOptions()).toMatchObject({
+      cfg,
+      accountId: "default",
+      replyToId: "$explicit-reply",
+      threadId: testCase.expectedThreadId,
+    });
   });
 
   beforeEach(() => {

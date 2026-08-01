@@ -10,6 +10,15 @@ export type ModelCandidate = {
   model: string;
 };
 
+export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
+export type ModelFallbackRouteResolution = "raw" | "resolved";
+
+/** A runnable route plus the selection edge and resolution state it arrived with. */
+export type ModelFallbackCandidate = ModelCandidate & {
+  routeOrigin: ModelFallbackRouteOrigin;
+  routeResolution: ModelFallbackRouteResolution;
+};
+
 export type FallbackAttempt = {
   provider: string;
   model: string;

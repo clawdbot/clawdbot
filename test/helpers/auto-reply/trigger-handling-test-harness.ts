@@ -173,7 +173,7 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
 }));
 
 const installModelFallbackMock = () =>
-  vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
+  vi.doMock("../../../src/agents/model-fallback-runner.js", () => modelFallbackMocks);
 
 installModelFallbackMock();
 

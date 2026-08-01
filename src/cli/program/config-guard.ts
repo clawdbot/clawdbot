@@ -12,6 +12,7 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
+import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -126,10 +127,13 @@ function hasLegacyStateMigrationInputs(): boolean {
     path.join(stateDir, "plugin-state", "state.sqlite"),
     path.join(stateDir, "tasks", "runs.sqlite"),
   ];
+  const legacyExecApprovalsPath = resolveExecApprovalsPath(process.env);
   return (
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
+      legacyExecApprovalsPath,
+      `${legacyExecApprovalsPath}.doctor-importing`,
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "restart-sentinel.json"),
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),
@@ -185,7 +189,7 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
   );
 }
 
-async function getConfigSnapshot(options?: { observe: false }) {
+async function getConfigSnapshot(options?: { observe: false; skipPluginValidation?: true }) {
   if (options?.observe === false) {
     return readConfigFileSnapshot(options);
   }
@@ -264,10 +268,14 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status performs a second non-observing read for its materialized/source pair;
-  // keep the startup guard from recording config health before the command begins.
+  // Read-only diagnostics must not record config health; logs also skips plugin
+  // metadata discovery because opening the shared state DB creates SQLite sidecars.
   const configSnapshotOptions =
-    commandName === "status" ? ({ observe: false } as const) : undefined;
+    commandName === "logs"
+      ? ({ observe: false, skipPluginValidation: true } as const)
+      : commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+        ? ({ observe: false } as const)
+        : undefined;
   let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&

@@ -1,4 +1,7 @@
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,6 +16,7 @@ import { probeLocalCommand } from "./probes.js";
 import {
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
   supportsSetupTextInference,
 } from "./setup-inference-auth-options.js";
 import {
@@ -28,6 +32,31 @@ import {
 } from "./setup-inference-core.js";
 import { parseRef } from "./setup-inference-plan-helpers.js";
 
+function resolveConfiguredCandidateKind(
+  config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
+  modelRef: string | undefined,
+): SetupInferenceCandidate["kind"] | undefined {
+  if (!modelRef) {
+    return undefined;
+  }
+  const ref = parseRef(modelRef);
+  const runtime = normalizeOptionalAgentRuntimeId(
+    resolveModelRuntimePolicy({
+      config,
+      provider: ref.provider,
+      modelId: ref.model,
+      agentId: resolveDefaultAgentId(config ?? {}),
+    }).policy?.id,
+  );
+  if (runtime === "codex") {
+    return "codex-cli";
+  }
+  if (runtime === "claude-cli") {
+    return "claude-cli";
+  }
+  return undefined;
+}
+
 /**
  * Manual setup options only — no CLI probing, no credential discovery. Used
  * when guarded onboarding declines the "look around" step: the option lists
@@ -36,14 +65,17 @@ import { parseRef } from "./setup-inference-plan-helpers.js";
 export async function listManualSetupInferenceOptions(
   deps: DetectSetupInferenceDeps = {},
 ): Promise<
-  Pick<SetupInferenceDetection, "manualProviders" | "authOptions" | "workspace" | "setupComplete">
+  Pick<
+    SetupInferenceDetection,
+    "manualProviders" | "authOptions" | "prepareOptions" | "workspace" | "setupComplete"
+  >
 > {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -61,6 +93,7 @@ export async function listManualSetupInferenceOptions(
   return {
     manualProviders: listSetupInferenceManualProviders(authChoices),
     authOptions: listSetupInferenceAuthOptions(authChoices),
+    prepareOptions: listSetupInferencePrepareOptions(authChoices),
     workspace,
     // Derived from config only (no probing): a pre-existing default model must
     // keep classifying the install as configured even when scanning declined.
@@ -76,37 +109,14 @@ export async function detectSetupInference(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
-  // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
-  // overridden by admin policy and do not stop discovery or MCP startup.
-  // Keep normal agent support, but never offer it for the setup safety probe.
-  const unavailableCandidates: SetupInferenceUnavailableCandidate[] = detected
-    .filter((candidate) => candidate.kind === "gemini-cli")
-    .map((candidate) => ({
-      id: candidate.kind,
-      label: candidate.label,
-      detail: candidate.detail,
-      reason:
-        "Can't be auto-tested safely here. Use 'Gemini CLI OAuth' or a Gemini API key instead.",
-    }));
+  const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
+  const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [antigravity, pi, opencode] = await Promise.all([
-    probe("agy"),
-    probe("pi"),
-    probe("opencode"),
-  ]);
-  if (antigravity.found && !antigravity.timedOut) {
-    unavailableCandidates.push({
-      id: "antigravity-cli",
-      label: "Antigravity CLI",
-      detail: "installed",
-      reason:
-        "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
-    });
-  }
+  const [pi, opencode] = await Promise.all([probe("pi"), probe("opencode")]);
   if (pi.found && !pi.timedOut) {
-    unavailableCandidates.push({
+    deferredUnavailableCandidates.push({
       id: "pi-cli",
       label: "Pi CLI",
       detail: "installed",
@@ -115,7 +125,7 @@ export async function detectSetupInference(
     });
   }
   if (opencode.found && !opencode.timedOut) {
-    unavailableCandidates.push({
+    deferredUnavailableCandidates.push({
       id: "opencode-cli",
       label: "OpenCode CLI",
       detail: "installed",
@@ -123,7 +133,19 @@ export async function detectSetupInference(
         "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
     });
   }
-  const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
+  const configuredModel = detected.find(
+    (candidate) => candidate.kind === "existing-model",
+  )?.modelRef;
+  const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
+  const raw = detected.filter(
+    (candidate) =>
+      candidate.kind !== "gemini-cli" &&
+      !(
+        candidate.kind === configuredCandidateKind &&
+        configuredModel &&
+        areRuntimeModelRefsEquivalent(candidate.modelRef, configuredModel, { config: cfg })
+      ),
+  );
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -138,6 +160,10 @@ export async function detectSetupInference(
   }).filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
+  const manualProviders = listSetupInferenceManualProviders(authChoices);
+  const authOptions = listSetupInferenceAuthOptions(authChoices);
+  const prepareOptions = listSetupInferencePrepareOptions(authChoices);
+  unavailableCandidates.push(...deferredUnavailableCandidates);
   const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
     // Released macOS clients require this field. Keep it false so the wire
     // contract remains decodable without expressing a provider preference.
@@ -147,9 +173,6 @@ export async function detectSetupInference(
       resolveCandidatePresentation(candidate, authChoices),
     ),
   );
-  const configuredModel = candidates.find(
-    (candidate) => candidate.kind === "existing-model",
-  )?.modelRef;
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
@@ -231,8 +254,9 @@ export async function detectSetupInference(
   return {
     candidates,
     unavailableCandidates,
-    manualProviders: listSetupInferenceManualProviders(authChoices),
-    authOptions: listSetupInferenceAuthOptions(authChoices),
+    manualProviders,
+    authOptions,
+    prepareOptions,
     recommendedInstalls: listRecommendedToolInstalls(),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),

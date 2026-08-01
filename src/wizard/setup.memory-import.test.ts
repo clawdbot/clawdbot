@@ -109,8 +109,9 @@ describe("runSetupMemoryImportStep", () => {
   it("shows no prompts when no memory providers are available", async () => {
     const prompter = createWizardPrompter();
 
-    await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
+    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
 
+    expect(outcome).toEqual({ status: "nothing-to-import", providers: [] });
     expect(prompter.note).not.toHaveBeenCalled();
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
@@ -124,8 +125,9 @@ describe("runSetupMemoryImportStep", () => {
     });
     const prompter = createWizardPrompter();
 
-    await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
+    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
 
+    expect(outcome).toEqual({ status: "nothing-to-import", providers: [] });
     expect(prompter.note).not.toHaveBeenCalled();
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
@@ -139,8 +141,9 @@ describe("runSetupMemoryImportStep", () => {
     });
     const prompter = createWizardPrompter({ confirm: vi.fn(async () => false) });
 
-    await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
+    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
 
+    expect(outcome).toEqual({ status: "skipped", providers: [] });
     expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
@@ -170,7 +173,7 @@ describe("runSetupMemoryImportStep", () => {
       disableBackNavigation: vi.fn(),
     });
 
-    await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
+    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
 
     expect(multiselect).toHaveBeenCalledWith(
       expect.objectContaining({ initialValues: ["codex", "claude"] }),
@@ -184,6 +187,108 @@ describe("runSetupMemoryImportStep", () => {
         preflightPlan: codexPlan,
       }),
     );
+    expect(outcome).toEqual({
+      status: "completed",
+      providers: [{ providerId: "codex", label: "Codex", migrated: 2, skipped: 0 }],
+    });
+  });
+
+  it("runs the host authority guard immediately before every provider apply", async () => {
+    const codex = provider("codex", "Codex");
+    const claude = provider("claude", "Claude");
+    mocks.providers = [codex, claude];
+    mocks.planProviderMemoryImport.mockImplementation(async ({ provider: selectedProvider }) => {
+      const plan = planFor(selectedProvider.id);
+      return { detection: { found: true, source: plan.source }, plan };
+    });
+    const order: string[] = [];
+    const beforeApply = vi.fn(async () => {
+      order.push("guard");
+    });
+    mocks.applyProviderMemoryImport.mockImplementation(async ({ preflightPlan }) => {
+      order.push(`apply:${preflightPlan.providerId}`);
+      return applied(preflightPlan);
+    });
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true),
+      multiselect: vi.fn(async () => ["codex", "claude"]) as WizardPrompter["multiselect"],
+    });
+
+    await runSetupMemoryImportStep({
+      config,
+      prompter,
+      runtime: runtime(),
+      beforeApply,
+    });
+
+    expect(beforeApply).toHaveBeenCalledTimes(2);
+    expect(order).toEqual(["guard", "apply:codex", "guard", "apply:claude"]);
+  });
+
+  it("stops before copying when the host authority recheck fails", async () => {
+    const codex = provider("codex", "Codex");
+    mocks.providers = [codex];
+    mocks.planProviderMemoryImport.mockResolvedValue({
+      detection: { found: true, source: "/source/codex" },
+      plan: planFor("codex"),
+    });
+    const stop = vi.fn();
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop })),
+    });
+
+    await expect(
+      runSetupMemoryImportStep({
+        config,
+        prompter,
+        runtime: runtime(),
+        beforeApply: async () => {
+          throw new Error("inference authority changed");
+        },
+      }),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a confirmed outcome when later rendering fails", async () => {
+    const codex = provider("codex", "Codex");
+    mocks.providers = [codex];
+    mocks.planProviderMemoryImport.mockResolvedValue({
+      detection: { found: true, source: "/source/codex" },
+      plan: planFor("codex"),
+    });
+    mocks.applyProviderMemoryImport.mockImplementation(async ({ preflightPlan }) =>
+      applied(preflightPlan),
+    );
+    const onProviderOutcome = vi.fn();
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({
+        update: vi.fn(),
+        stop: () => {
+          throw new Error("progress renderer failed");
+        },
+      })),
+    });
+
+    await expect(
+      runSetupMemoryImportStep({
+        config,
+        prompter,
+        runtime: runtime(),
+        onProviderOutcome,
+      }),
+    ).rejects.toThrow("progress renderer failed");
+
+    expect(onProviderOutcome).toHaveBeenCalledWith({
+      providerId: "codex",
+      label: "Codex",
+      migrated: 1,
+      skipped: 0,
+    });
   });
 
   it("continues applying remaining providers after one fails", async () => {
@@ -202,11 +307,18 @@ describe("runSetupMemoryImportStep", () => {
       multiselect: vi.fn(async () => ["codex", "claude"]) as WizardPrompter["multiselect"],
     });
 
-    await expect(
-      runSetupMemoryImportStep({ config, prompter, runtime: runtime() }),
-    ).resolves.toBeUndefined();
+    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
 
     expect(mocks.applyProviderMemoryImport).toHaveBeenCalledTimes(2);
+    expect(outcome.providers).toEqual([
+      {
+        providerId: "codex",
+        label: "Codex",
+        failure: "copy unavailable",
+        copiesIndeterminate: true,
+      },
+      { providerId: "claude", label: "Claude", migrated: 1, skipped: 0 },
+    ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("copy unavailable");
     expect(notes).toContain("Claude: 1 migrated");

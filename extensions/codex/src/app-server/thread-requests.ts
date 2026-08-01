@@ -186,8 +186,7 @@ export function buildThreadStartParams(
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-    // Canonical typed specs (`type: "function" | "namespace"`); the 0.142 floor
-    // accepts them natively (codex-rs normalize_dynamic_tool_specs).
+    // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
     // Codex `ephemeral` skips rollout/state DB writes while loaded threads remain reusable

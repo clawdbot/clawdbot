@@ -24,6 +24,7 @@ import {
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { resolveHeartbeatAgents, resolveHeartbeatSession } from "../infra/heartbeat-runner.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
@@ -36,10 +37,6 @@ import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbe
 const HEARTBEAT_TASK_MIGRATION_CHECK_ID = "core/doctor/heartbeat-task-cron-migration";
 
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 type ValidatedHeartbeatTask = {
   task: LegacyHeartbeatTask;
@@ -85,7 +82,7 @@ function migrationFinding(params: {
     path: params.storePath,
     target: params.agentId,
     requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into cron jobs.`,
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
   };
 }
 

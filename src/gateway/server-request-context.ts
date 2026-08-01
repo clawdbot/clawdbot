@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -21,8 +22,12 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
@@ -158,6 +163,9 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
+    sessionViewerPresence: params.runtimeState.sessionViewerPresence,
+    sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
@@ -312,7 +320,12 @@ export function createGatewayRequestContext(
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
-    unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
+    unsubscribeAllSessionEvents: (connId) => {
+      params.unsubscribeAllSessionEvents(connId);
+      // PR replace-sets share this websocket cleanup boundary with session events.
+      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+      params.runtimeState.sessionViewerPresence?.unsubscribe(connId);
+    },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,

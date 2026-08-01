@@ -1,7 +1,11 @@
+import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -13,9 +17,10 @@ import {
 } from "../agents/model-selection-shared.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { formatCliCommand } from "./command-format.js";
 
 type TouchedModelRef = {
@@ -37,15 +42,6 @@ type ConfigModelRefCheckResult = {
   refsTotal: number;
   errors: string[];
 };
-
-type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
-
-function resolveAgentEntries(config: OpenClawConfig): AgentEntriesConfig | undefined {
-  const entries: unknown = config.agents?.entries;
-  return entries && typeof entries === "object" && !Array.isArray(entries)
-    ? (entries as AgentEntriesConfig)
-    : undefined;
-}
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
@@ -102,20 +98,17 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
     model: config.agents?.defaults?.model,
     path: "agents.defaults.model",
   });
-  const agentEntries = resolveAgentEntries(config);
-  if (agentEntries) {
-    for (const [agentId, agent] of Object.entries(agentEntries)) {
-      if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
-        continue;
-      }
-      refs.push(
-        ...collectTextModelConfigRefs({
-          model: (agent as { model?: unknown }).model,
-          path: `agents.entries.${agentId}.model`,
-          agentId,
-        }),
-      );
-    }
+  for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
+    const agentId = agent.id;
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    refs.push(
+      ...collectTextModelConfigRefs({
+        model: agent.model,
+        path: `${agentPath}.model`,
+        agentId,
+      }),
+    );
   }
   for (const ref of refs) {
     // Runtime preserves an auth-profile suffix only for configured primaries. Fallback
@@ -133,8 +126,8 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
 
 function modelRefComparisonKey(ref: TouchedModelRef): string {
   if (ref.agentId) {
-    const prefix = `agents.entries.${ref.agentId}.`;
-    const relativePath = ref.path.startsWith(prefix) ? ref.path.slice(prefix.length) : ref.path;
+    const modelOffset = ref.path.indexOf(".model");
+    const relativePath = modelOffset >= 0 ? ref.path.slice(modelOffset + 1) : ref.path;
     return `agent:${normalizeAgentId(ref.agentId)}:${relativePath}`;
   }
   return `path:${ref.path}`;
@@ -145,6 +138,12 @@ function collectTouchedTextModelRefs(params: {
   previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
 }): TouchedModelRef[] {
+  const listedAgentEntries = listAgentEntriesWithSource(params.config);
+  const agentEntries = listedAgentEntries.map(({ entry }) => entry);
+  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
+    // Draft validation runs before roster schema errors are reported.
+    return [];
+  }
   const defaultPrimaryPath = ["agents", "defaults", "model", "primary"];
   const defaultPrimaryTouched = params.touchedPaths.some(
     (touchedPath) =>
@@ -158,11 +157,18 @@ function collectTouchedTextModelRefs(params: {
   const previousRefsByIdentity = previousRefs
     ? new Map(previousRefs.map((ref) => [modelRefComparisonKey(ref), ref]))
     : undefined;
+  const previousDefaultAgentId = params.previousConfig
+    ? tryResolveDefaultAgentId(params.previousConfig)
+    : undefined;
   const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
     (!previousRefs ||
+      previousDefaultAgentId === undefined ||
       resolveDefaultModelForAgent({ cfg: params.config }).provider !==
-        resolveDefaultModelForAgent({ cfg: params.previousConfig ?? {} }).provider);
+        resolveDefaultModelForAgent({
+          cfg: params.previousConfig!,
+          agentId: previousDefaultAgentId,
+        }).provider);
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
       const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
@@ -196,44 +202,16 @@ function collectTouchedTextModelRefs(params: {
     return previousRef?.value !== ref.value || ownerChanged;
   });
   const defaultRefs = refs.filter((ref) => ref.agentId === undefined);
-  const agentEntries = resolveAgentEntries(params.config);
   if (defaultRefs.length === 0) {
     return touchedRefs;
   }
-  if (!agentEntries || Object.keys(agentEntries).length === 0) {
-    const entriesPath = ["agents", "entries"];
-    const entriesTouched = params.touchedPaths.some(
-      (touchedPath) =>
-        isPathPrefix(touchedPath, entriesPath) || isPathPrefix(entriesPath, touchedPath),
-    );
-    const previousEntries = params.previousConfig
-      ? resolveAgentEntries(params.previousConfig)
-      : undefined;
-    if (!entriesTouched || !previousEntries || Object.keys(previousEntries).length === 0) {
-      return touchedRefs;
-    }
-    const previousDefaultAgentId = resolveDefaultAgentId(params.previousConfig ?? {});
-    for (const defaultRef of defaultRefs) {
-      const sameOwner = normalizeAgentId(previousDefaultAgentId) === DEFAULT_AGENT_ID;
-      const previouslyInherited =
-        sameOwner && params.previousConfig
-          ? defaultRef.fallback
-            ? resolveAgentModelFallbacksOverride(params.previousConfig, previousDefaultAgentId) ===
-              undefined
-            : resolveAgentExplicitModelPrimary(params.previousConfig, previousDefaultAgentId) ===
-              undefined
-          : false;
-      const alreadySelected = touchedRefs.some(
-        (ref) => ref.agentId === undefined && ref.path === defaultRef.path,
-      );
-      if (!previouslyInherited && !alreadySelected) {
-        touchedRefs.push({ ...defaultRef, dependency: true });
-      }
-    }
-    return touchedRefs;
-  }
-  for (const agentId of Object.keys(agentEntries)) {
-    const agentEntryPath = ["agents", "entries", agentId];
+  for (const { entry, source } of listedAgentEntries) {
+    const agentId = entry.id;
+    const agentEntryPath = [
+      "agents",
+      source.kind,
+      source.kind === "entries" ? source.key : String(source.index),
+    ];
     const agentModelPath = [...agentEntryPath, "model"];
     const ownershipTouched = params.touchedPaths.some(
       (touchedPath) =>
@@ -249,9 +227,9 @@ function collectTouchedTextModelRefs(params: {
       const inherits = defaultRef.fallback
         ? resolveAgentModelFallbacksOverride(params.config, agentId) === undefined
         : resolveAgentExplicitModelPrimary(params.config, agentId) === undefined;
-      const previousAgentExists = Object.keys(
-        params.previousConfig ? (resolveAgentEntries(params.previousConfig) ?? {}) : {},
-      ).some((entryId) => normalizeAgentId(entryId) === normalizeAgentId(agentId));
+      const previousAgentExists = (
+        params.previousConfig ? listAgentEntries(params.previousConfig) : []
+      ).some((previousEntry) => normalizeAgentId(previousEntry.id) === normalizeAgentId(agentId));
       const previouslyInherited =
         previousAgentExists && params.previousConfig
           ? defaultRef.fallback
@@ -333,8 +311,8 @@ function expandInheritedDefaultRefs(
   config: OpenClawConfig,
   refs: TouchedModelRef[],
 ): TouchedModelRef[] {
-  const agentEntries = resolveAgentEntries(config);
-  if (!agentEntries) {
+  const agentEntries = listAgentEntries(config);
+  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
     return refs;
   }
   const defaultAgentId = resolveDefaultAgentId(config);
@@ -352,8 +330,8 @@ function expandInheritedDefaultRefs(
       push(ref);
       continue;
     }
-    const defaultAgentConfigured = Object.keys(agentEntries).some(
-      (agentId) => normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId),
+    const defaultAgentConfigured = agentEntries.some(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId),
     );
     const defaultAgentInherits =
       !defaultAgentConfigured ||
@@ -363,7 +341,7 @@ function expandInheritedDefaultRefs(
     if (defaultAgentInherits) {
       push(ref);
     }
-    for (const agentId of Object.keys(agentEntries)) {
+    for (const { id: agentId } of agentEntries) {
       if (normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }
@@ -415,19 +393,19 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     ]));
 
   return async ({ config, ref }) => {
-    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
-    const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
-    const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const resolvedRef = ref.fallback
       ? resolveCanonicalFallbackRef(config, ref.value)
       : resolveCanonicalPrimaryRef(config, ref.value);
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
-    // CLI backends own model validation; their model ids do not need embedded catalog rows.
+    // CLI backends validate their own ids and do not require a roster-owned catalog.
     if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
       return undefined;
     }
+    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
+    const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
+    const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedCatalog] = await loadModelModules();
 
     let prepared = preparedByAgent.get(targetAgentId);
@@ -453,6 +431,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
         authStorage: stores.authStorage,
         ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
         modelRegistry: stores.modelRegistry,
+        preparedModelRuntime: prepared,
         workspaceDir,
       },
     );
@@ -485,7 +464,18 @@ export async function checkTouchedTextModelRefs(params: {
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
-  const authoredRefs = collectTouchedTextModelRefs(params);
+  // Config mutation validation sees authored pre-roster objects, unlike normal
+  // runtime callers. Materialize only the absent-roster compatibility shape;
+  // explicit empty or malformed rosters must remain visible to schema repair.
+  const config = hasAgentRosterProperty(params.config)
+    ? params.config
+    : (migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig);
+  const previousConfig =
+    params.previousConfig && !hasAgentRosterProperty(params.previousConfig)
+      ? (migratePersistedImplicitMainRoster(params.previousConfig).config as OpenClawConfig)
+      : params.previousConfig;
+  const validationParams = { ...params, config, previousConfig };
+  const authoredRefs = collectTouchedTextModelRefs(validationParams);
   const authoredValuesByPath = new Map(
     collectTextModelRefs(params.config).map((ref) => [ref.path, ref.value]),
   );
@@ -530,10 +520,17 @@ export async function checkTouchedTextModelRefs(params: {
   const validationRefsByPath = new Map(
     collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref]),
   );
+  const validationRosterConfig = hasAgentRosterProperty(validationConfig)
+    ? validationConfig
+    : (migratePersistedImplicitMainRoster(validationConfig).config as OpenClawConfig);
+  const validationPreviousRosterConfig =
+    validationPreviousConfig && !hasAgentRosterProperty(validationPreviousConfig)
+      ? (migratePersistedImplicitMainRoster(validationPreviousConfig).config as OpenClawConfig)
+      : validationPreviousConfig;
   const refsByKey = new Map(
     collectTouchedTextModelRefs({
-      config: validationConfig,
-      previousConfig: validationPreviousConfig,
+      config: validationRosterConfig,
+      previousConfig: validationPreviousRosterConfig,
       touchedPaths: params.touchedPaths,
     }).map((ref) => [modelRefComparisonKey(ref), ref]),
   );
@@ -555,7 +552,7 @@ export async function checkTouchedTextModelRefs(params: {
       ...(authoredRef.dependency || expandedRef?.dependency ? { dependency: true } : {}),
     });
   }
-  const refs = expandInheritedDefaultRefs(validationConfig, [...refsByKey.values()]);
+  const refs = expandInheritedDefaultRefs(validationRosterConfig, [...refsByKey.values()]);
   if (refs.length === 0) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }

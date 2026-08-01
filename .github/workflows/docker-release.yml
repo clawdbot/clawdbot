@@ -359,7 +359,6 @@ jobs:
               cat "${temp_root}/out.log"
               exit 1
             fi
-            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
             if [ "${status}" -ne 0 ]; then
               cat "${temp_root}/out.log"
             fi
@@ -568,7 +567,6 @@ jobs:
               cat "${temp_root}/out.log"
               exit 1
             fi
-            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
             if [ "${status}" -ne 0 ]; then
               cat "${temp_root}/out.log"
             fi

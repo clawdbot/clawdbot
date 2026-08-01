@@ -8,12 +8,15 @@ import {
 } from "../commands/agents.config.js";
 import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
+import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -22,9 +25,11 @@ import {
 } from "./identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js";
 
+const RESERVED_BOOTSTRAP_AGENT_ID = "main";
+
 type CreateAgentResult =
   | {
-      status: "created";
+      status: "created" | "existing";
       agentId: string;
       name: string;
       workspace: string;
@@ -38,6 +43,7 @@ type CreateAgentResult =
       reason:
         | "invalid-name"
         | "reserved-id"
+        | "default-conflict"
         | "already-exists"
         | "deletion-pending"
         | "invalid-bindings"
@@ -47,19 +53,25 @@ type CreateAgentResult =
     };
 
 type CreateError = Extract<CreateAgentResult, { status: "error" }>;
+type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+type CreateAgentEntry = AgentEntryConfig & { id: string };
 
 type CreateAgentParams = {
-  name: string;
+  name?: string;
+  entry?: CreateAgentEntry;
   workspace?: string;
   model?: string;
   emoji?: unknown;
   avatar?: unknown;
   agentDir?: string;
+  skipBootstrap?: boolean;
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
 };
 
 class DuplicateAgentError extends Error {}
+class DefaultAgentConflictError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
 function createError(
@@ -68,6 +80,19 @@ function createError(
   agentId?: string,
 ): CreateError {
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
+}
+
+/** True when raw user input contains a character that can survive agent-id normalization. */
+function hasValidRawAgentIdCharacters(value: string): boolean {
+  return /[a-z0-9]/iu.test(value);
+}
+
+function isInjectedBootstrapMainEntry(entry: CreateAgentEntry | undefined): boolean {
+  return (
+    entry?.id === RESERVED_BOOTSTRAP_AGENT_ID &&
+    entry.default === true &&
+    Object.keys(entry).every((key) => key === "id" || key === "default")
+  );
 }
 
 async function writeIdentityFile(params: {
@@ -92,27 +117,38 @@ async function writeIdentityFile(params: {
 }
 
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {
-  const rawName = params.name.trim();
+  const rawName = (params.entry?.name?.trim() || params.entry?.id || params.name || "").trim();
   if (!rawName) {
     return createError("invalid-name", "agent name is required");
   }
-  const agentId = normalizeAgentId(rawName);
-  if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+  const rawId = params.entry?.id ?? rawName;
+  if (!hasValidRawAgentIdCharacters(rawId)) {
+    return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
+  }
+  const agentId = normalizeAgentId(rawId);
+  const isBootstrapMain = agentId === RESERVED_BOOTSTRAP_AGENT_ID && params.entry?.default === true;
+  if (
+    (!isBootstrapMain && agentId === RESERVED_BOOTSTRAP_AGENT_ID) ||
+    isReservedSystemAgentId(agentId)
+  ) {
     return createError("reserved-id", `"${agentId}" is reserved`, agentId);
   }
 
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = createAgentIdentityConfig({
-    name: safeName,
-    emoji: params.emoji,
-    avatar: params.avatar,
-  }) ?? { name: safeName };
-  const explicitWorkspace = params.workspace?.trim()
-    ? resolveUserPath(params.workspace.trim())
+  const identity = params.entry?.identity ??
+    createAgentIdentityConfig({
+      name: safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
+    }) ?? { name: safeName };
+  const requestedWorkspace = params.entry?.workspace ?? params.workspace;
+  const explicitWorkspace = requestedWorkspace?.trim()
+    ? resolveUserPath(requestedWorkspace.trim())
     : undefined;
-  const explicitAgentDir = params.agentDir?.trim()
-    ? resolveUserPath(params.agentDir.trim())
+  const requestedAgentDir = params.entry?.agentDir ?? params.agentDir;
+  const explicitAgentDir = requestedAgentDir?.trim()
+    ? resolveUserPath(requestedAgentDir.trim())
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
 
@@ -139,22 +175,83 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       const committed = await transformConfig<CreateAgentResult>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
-        transform: async (currentConfig) => {
-          if (findAgentEntryIndex(listAgentEntries(currentConfig), agentId) >= 0) {
+        transform: async (currentConfig, context) => {
+          const currentEntries = listAgentEntries(currentConfig);
+          const existingIndex = findAgentEntryIndex(currentEntries, agentId);
+          const existingEntry = currentEntries[existingIndex];
+          const currentDefaults = currentEntries.filter((entry) => entry.default === true);
+          const stagedDefaultMatchesCurrent =
+            existingEntry?.default === true && currentDefaults.length === 1;
+          if (
+            params.entry?.default === true &&
+            currentEntries.length > 0 &&
+            !stagedDefaultMatchesCurrent
+          ) {
+            throw new DefaultAgentConflictError();
+          }
+          if (existingIndex >= 0 && !isBootstrapMain) {
             throw new DuplicateAgentError();
+          }
+
+          if (
+            existingIndex >= 0 &&
+            isBootstrapMain &&
+            (!isInjectedBootstrapMainEntry(existingEntry) || context.snapshot.exists)
+          ) {
+            return {
+              nextConfig: currentConfig,
+              result: {
+                status: "existing",
+                agentId,
+                name: existingEntry?.name ?? safeName,
+                workspace: resolveAgentWorkspaceDir(currentConfig, agentId),
+                agentDir: resolveAgentDir(currentConfig, agentId),
+                bootstrapPending: false,
+              },
+            };
           }
 
           const workspaceDir =
             explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
           const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
-          let nextConfig = applyAgentConfig(currentConfig, {
-            agentId,
-            name: safeName,
-            workspace: workspaceDir,
-            agentDir,
-            model,
-            identity,
-          });
+          const materializeInjectedMain =
+            existingIndex >= 0 &&
+            isBootstrapMain &&
+            isInjectedBootstrapMainEntry(existingEntry) &&
+            !context.snapshot.exists;
+          let nextConfig =
+            existingIndex < 0 || materializeInjectedMain
+              ? applyAgentConfig(currentConfig, {
+                  agentId,
+                  name: safeName,
+                  workspace: workspaceDir,
+                  agentDir,
+                  model,
+                  identity,
+                })
+              : currentConfig;
+          if (params.entry) {
+            const list = listAgentEntries(nextConfig);
+            const index = findAgentEntryIndex(list, agentId);
+            list[index] = {
+              ...list[index],
+              ...params.entry,
+              id: agentId,
+              name: safeName,
+              workspace: workspaceDir,
+              agentDir,
+              identity,
+              ...(list.length === 1 ? { default: true } : {}),
+            };
+            const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
+            nextConfig = {
+              ...nextConfig,
+              agents: {
+                ...agentsConfig,
+                entries: toAgentEntriesRecord(list),
+              },
+            };
+          }
           const bindingParse = parseBindingSpecs({
             agentId,
             specs: params.bindingSpecs,
@@ -172,14 +269,30 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           // finishes before the final entry becomes visible to readers or delete flows.
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
-            ensureBootstrapFiles: !nextConfig.agents?.defaults?.skipBootstrap,
-            skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+            ensureBootstrapFiles:
+              params.skipBootstrap === undefined
+                ? !nextConfig.agents?.defaults?.skipBootstrap
+                : !params.skipBootstrap,
+            skipOptionalBootstrapFiles:
+              params.skipOptionalBootstrapFiles ??
+              nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
           });
           if (workspace.dir !== workspaceDir) {
-            nextConfig = applyAgentConfig(nextConfig, {
-              agentId,
-              workspace: workspace.dir,
-            });
+            const entries = listAgentEntries(nextConfig);
+            const entryIndex = findAgentEntryIndex(entries, agentId);
+            const currentEntry = entries[entryIndex];
+            if (entryIndex >= 0 && currentEntry) {
+              entries[entryIndex] = {
+                ...currentEntry,
+                id: agentId,
+                workspace: workspace.dir,
+              };
+              const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
+              nextConfig = {
+                ...nextConfig,
+                agents: { ...agentsConfig, entries: toAgentEntriesRecord(entries) },
+              };
+            }
           }
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.
@@ -191,7 +304,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           return {
             nextConfig,
             result: {
-              status: "created",
+              status: existingIndex >= 0 ? "existing" : "created",
               agentId,
               name: safeName,
               workspace: workspace.dir,
@@ -216,6 +329,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
+    }
+    if (error instanceof DefaultAgentConflictError) {
+      return createError(
+        "default-conflict",
+        `Cannot create agent "${agentId}" with default=true while a roster already exists. Reassign the default separately.`,
+        agentId,
+      );
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);

@@ -81,11 +81,7 @@ export type SlackChannelStreamingConfig = {
 };
 export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
-export type SlackCapabilitiesConfig =
-  | string[]
-  | {
-      interactiveReplies?: boolean;
-    };
+export type SlackCapabilitiesConfig = string[];
 
 export type SlackActionConfig = {
   reactions?: boolean;

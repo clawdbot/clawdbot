@@ -1,4 +1,5 @@
 // Nodes page owns these pure view helpers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import {
   GATEWAY_CLIENT_IDS,
@@ -16,28 +17,22 @@ type ConfigAgentOption = {
   id: string;
   name?: string;
   isDefault: boolean;
-  index: number;
   record: Record<string, unknown>;
 };
 
 export function resolveConfigAgents(config: Record<string, unknown> | null): ConfigAgentOption[] {
-  const agentsNode = (config?.agents ?? {}) as Record<string, unknown>;
-  const list = Array.isArray(agentsNode.list) ? agentsNode.list : [];
+  const agentsNode = isRecord(config?.agents) ? config.agents : null;
+  const entries = isRecord(agentsNode?.entries) ? agentsNode.entries : {};
   const agents: ConfigAgentOption[] = [];
 
-  list.forEach((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      return;
+  for (const [id, entry] of Object.entries(entries)) {
+    if (!isRecord(entry)) {
+      continue;
     }
-    const record = entry as Record<string, unknown>;
-    const id = normalizeOptionalString(record.id) ?? "";
-    if (!id) {
-      return;
-    }
-    const name = normalizeOptionalString(record.name);
-    const isDefault = record.default === true;
-    agents.push({ id, name, isDefault, index, record });
-  });
+    const name = normalizeOptionalString(entry.name);
+    const isDefault = entry.default === true;
+    agents.push({ id, name, isDefault, record: entry });
+  }
 
   return agents;
 }

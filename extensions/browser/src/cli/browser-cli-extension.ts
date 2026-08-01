@@ -30,12 +30,18 @@ function resolveChromeExtensionDir(pluginRoot?: string): string {
   return path.resolve(here, "..", "..", "chrome-extension");
 }
 
-function firstExtensionProfile(): { name: string; relayPort: number } | null {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+function firstExtensionProfile(
+  resolved: ReturnType<typeof resolveBrowserConfig>,
+): { name: string; relayPort: number } | null {
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
-      return { name, relayPort: profile.cdpPort ?? resolved.extensionRelayDefaultPort };
+      return {
+        name,
+        relayPort:
+          profile.cdpPort ??
+          resolved.extensionRelayPorts[name] ??
+          resolved.extensionRelayDefaultPort,
+      };
     }
   }
   return null;
@@ -65,18 +71,18 @@ function buildRemoteGatewayRelayUrl(raw: string): string {
   return url.toString();
 }
 
-function buildPairingString(gatewayUrl?: string): {
+async function buildPairingString(gatewayUrl?: string): Promise<{
   pairing: string;
   relayPort: number;
   remote: boolean;
-} {
+}> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
-  const token = ensureExtensionRelayToken();
-  const profile = firstExtensionProfile();
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
   const gateway = gatewayUrl?.trim();
@@ -136,15 +142,13 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString(opts.gatewayUrl);
+          const result = await buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote

@@ -5,7 +5,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
-import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed") {

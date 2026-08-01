@@ -8,18 +8,13 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { modelKey, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import {
-  adoptPersistedSessionSnapshot,
-  sessionModelOverrideChangesApplied,
-  sessionSnapshotChangesApplied,
-} from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { applySessionModelSelectionToEntry } from "../../model-picker/apply-session-model-selection.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -32,14 +27,15 @@ import {
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
+  applySessionDirectiveFields,
   canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
+  persistSessionDirectiveSnapshot,
   resolveDirectiveTouchedSessionFields,
 } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ThinkLevel } from "./directives.js";
 import { resolveContextTokens } from "./model-selection.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
@@ -67,6 +63,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
   messageProvider?: string;
   surface?: string;
@@ -105,14 +102,7 @@ export async function persistInlineDirectives(params: {
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
   let sessionChangesApplied = true;
-  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
-    messageProvider: params.messageProvider,
-    surface: params.surface,
-    gatewayClientScopes: params.gatewayClientScopes,
-    commandAuthorized: params.commandAuthorized,
-    senderIsOwner: params.senderIsOwner,
-  });
-  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
+  const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
@@ -121,8 +111,7 @@ export async function persistInlineDirectives(params: {
   });
   const touchedSessionFields = resolveDirectiveTouchedSessionFields({
     directives,
-    allowInternalExecPersistence,
-    allowInternalVerbosePersistence,
+    allowPrivilegedPersistence,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
@@ -197,112 +186,41 @@ export async function persistInlineDirectives(params: {
 
   if (!errorText && sessionEntry && sessionStore && sessionKey) {
     const initialSessionEntry = { ...sessionEntry };
-    let appliedSessionEntry = sessionEntry;
-    const prevElevatedLevel =
-      (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
-      (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
-    const prevReasoningLevel = (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-    let elevatedChanged =
+    const appliedSessionEntry = sessionEntry;
+    const elevatedChanged =
       directives.hasElevatedDirective &&
       directives.elevatedLevel !== undefined &&
       elevatedEnabled &&
       elevatedAllowed;
-    let reasoningChanged =
+    const reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
-    let updated = false;
-
-    if (directives.clearThinkLevel) {
-      if (sessionEntry.thinkingLevel) {
-        delete sessionEntry.thinkingLevel;
-        updated = true;
-      }
-    } else if (directives.hasThinkDirective && directives.thinkLevel) {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-      updated = true;
-    }
-    if (directives.clearFastMode) {
-      if (sessionEntry.fastMode !== undefined) {
-        delete sessionEntry.fastMode;
-        updated = true;
-      }
-    }
-    if (
-      directives.hasVerboseDirective &&
-      directives.verboseLevel &&
-      allowInternalVerbosePersistence
-    ) {
-      applyVerboseOverride(sessionEntry, directives.verboseLevel);
-      updated = true;
-    }
-    if (
-      directives.hasTraceDirective &&
-      directives.traceLevel &&
-      (params.senderIsOwner || delegatedTraceAllowed)
-    ) {
-      applyTraceOverride(sessionEntry, directives.traceLevel);
-      updated = true;
-    }
-    if (directives.hasReasoningDirective && directives.reasoningLevel) {
-      if (directives.reasoningLevel === "off") {
-        // Persist explicit off so it overrides model-capability defaults.
-        sessionEntry.reasoningLevel = "off";
-      } else {
-        sessionEntry.reasoningLevel = directives.reasoningLevel;
-      }
-      reasoningChanged =
-        reasoningChanged ||
-        (directives.reasoningLevel !== prevReasoningLevel &&
-          directives.reasoningLevel !== undefined);
-      updated = true;
-    }
-    if (
-      directives.hasElevatedDirective &&
-      directives.elevatedLevel &&
-      elevatedEnabled &&
-      elevatedAllowed
-    ) {
-      // Persist "off" explicitly so inline `/elevated off` overrides defaults.
-      sessionEntry.elevatedLevel = directives.elevatedLevel;
-      elevatedChanged =
-        elevatedChanged ||
-        (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
-      updated = true;
-    }
-    if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
-      if (directives.execHost) {
-        sessionEntry.execHost = directives.execHost;
-        updated = true;
-      }
-      if (directives.execSecurity) {
-        sessionEntry.execSecurity = directives.execSecurity;
-        updated = true;
-      }
-      if (directives.execAsk) {
-        sessionEntry.execAsk = directives.execAsk;
-        updated = true;
-      }
-      if (directives.execNode) {
-        sessionEntry.execNode = directives.execNode;
-        updated = true;
-      }
-    }
+    let updated = applySessionDirectiveFields({
+      directives,
+      sessionEntry,
+      allowPrivilegedPersistence,
+      allowTracePersistence: params.senderIsOwner === true || delegatedTraceAllowed,
+      allowElevatedPersistence: elevatedEnabled && elevatedAllowed,
+      persistDirectiveOnlyFields: false,
+    });
 
     let modelUpdated = false;
     let modelApplied = true;
     let modelSwitchEvent: { alias?: string; label: string } | undefined;
     if (modelDirective && modelResolution?.modelSelection) {
-      const appliedModelOverride = applyModelOverrideToSessionEntry({
+      if (modelRuntimeResolution.kind === "invalid") {
+        throw new Error("invalid model runtime reached persistence");
+      }
+      const appliedSelection = applySessionModelSelectionToEntry({
         entry: sessionEntry,
-        selection: modelResolution.modelSelection,
-        profileOverride: modelResolution.profileOverride,
+        request: {
+          ...modelResolution.modelSelection,
+          profileOverride: modelResolution.profileOverride,
+          runtime: modelRuntimeResolution,
+        },
+        runtime: modelRuntimeResolution,
         markLiveSwitchPending: params.markLiveSwitchPending,
       });
-      const appliedRuntimeOverride = applyModelRuntimeDirective(
-        sessionEntry,
-        modelRuntimeResolution,
-      );
-      modelUpdated = appliedModelOverride.updated || appliedRuntimeOverride.updated;
+      modelUpdated = appliedSelection.changed;
       provider = modelResolution.modelSelection.provider;
       model = modelResolution.modelSelection.model;
       const thinkingRuntime = resolveEffectiveAgentRuntime({
@@ -355,62 +273,25 @@ export async function persistInlineDirectives(params: {
       // winner check when their value matches the local snapshot.
       updated = true;
     }
-    if (directives.hasQueueDirective && directives.queueReset) {
-      delete sessionEntry.queueMode;
-      delete sessionEntry.queueDebounceMs;
-      delete sessionEntry.queueCap;
-      delete sessionEntry.queueDrop;
-      updated = true;
-    }
-
     if (updated) {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        const persistence = await persistReplySessionEntry({
+        const persistence = await persistSessionDirectiveSnapshot({
           storePath,
           sessionKey,
           initialEntry: initialSessionEntry,
-          entry: sessionEntry,
+          sessionEntry,
+          sessionStore,
+          hasModelSelection: Boolean(modelDirective),
           reassertLiveModelSwitchPending:
             modelUpdated &&
             params.markLiveSwitchPending === true &&
             sessionEntry.liveModelSwitchPending === true,
           touchedFields: touchedSessionFields,
         });
-        if (persistence.status === "current") {
-          const persistedEntry = persistence.entry;
-          sessionStore[sessionKey] = persistedEntry;
-          sessionChangesApplied = sessionSnapshotChangesApplied({
-            initial: initialSessionEntry,
-            next: sessionEntry,
-            current: persistedEntry,
-            touchedFields: touchedSessionFields,
-          });
-          if (modelDirective) {
-            modelApplied =
-              sessionChangesApplied &&
-              sessionModelOverrideChangesApplied({
-                initial: initialSessionEntry,
-                next: sessionEntry,
-                current: persistedEntry,
-                reassertLiveModelSwitchPending:
-                  modelUpdated &&
-                  params.markLiveSwitchPending === true &&
-                  sessionEntry.liveModelSwitchPending === true,
-              });
-          }
-          adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
-          appliedSessionEntry = sessionEntry;
-        } else {
-          if (persistence.entry) {
-            sessionStore[sessionKey] = persistence.entry;
-          }
-          sessionChangesApplied = false;
-          if (modelDirective) {
-            modelApplied = false;
-          }
-        }
+        sessionChangesApplied = persistence.sessionChangesApplied;
+        modelApplied = persistence.modelSelectionApplied;
       }
       if (modelDirective && !modelApplied) {
         sessionChangesApplied = false;
@@ -418,6 +299,18 @@ export async function persistInlineDirectives(params: {
         provider = persistedEntry?.providerOverride?.trim() || defaultProvider;
         model = persistedEntry?.modelOverride?.trim() || defaultModel;
         thinkingRemap = undefined;
+      }
+      if (
+        modelDirective &&
+        modelResolution?.modelSelection &&
+        modelApplied &&
+        !modelResolution.modelSelection.isDefault &&
+        params.canPersistStickyModelSelection === true
+      ) {
+        persistStickyModelSelectionBestEffort({
+          agentId: activeAgentId,
+          model: `${provider}/${model}`,
+        });
       }
       if (modelDirective && modelUpdated && modelApplied) {
         triggerSessionPatchHook({
@@ -430,6 +323,7 @@ export async function persistInlineDirectives(params: {
           key: sessionKey,
           nextProvider: provider,
           nextModel: model,
+          nextRouteResolution: "resolved",
           nextModelOverrideSource: "user",
           nextAuthProfileId: appliedSessionEntry.authProfileOverride,
           nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,

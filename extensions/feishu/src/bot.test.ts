@@ -1,3 +1,4 @@
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 // Feishu tests cover bot plugin behavior.
 import type {
   ensureConfiguredBindingRouteReady,
@@ -302,6 +303,7 @@ const {
   mockTranscribeFirstAudio,
   mockMaybeCreateDynamicAgent,
   mockBuildChannelInboundEventContext,
+  mockFormatAgentEnvelope,
   mockDispatchInboundMessage,
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
@@ -342,6 +344,7 @@ const {
   mockTranscribeFirstAudio: vi.fn(),
   mockMaybeCreateDynamicAgent: vi.fn(),
   mockBuildChannelInboundEventContext: vi.fn(),
+  mockFormatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
   mockDispatchInboundMessage: vi
     .fn()
     .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
@@ -356,7 +359,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
-    formatAgentEnvelope: ({ body }: { body: string }) => body,
+    formatAgentEnvelope: mockFormatAgentEnvelope,
     resolveEnvelopeFormatOptions: () => ({}),
     buildChannelInboundEventContext: (
       params: Parameters<typeof actual.buildChannelInboundEventContext>[0],
@@ -700,6 +703,39 @@ describe("handleFeishuMessage ACP routing", () => {
       to: "user:ou_sender_1",
       accountId: "default",
     });
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "oc_dm",
+        sendTarget: "chat:oc_dm",
+      }),
+    );
+  });
+
+  it("keeps synthetic Feishu DM reply targets sender-scoped", async () => {
+    setFeishuRuntime(createFeishuBotRuntime());
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-dm-synthetic-target",
+          chat_id: "p2p:ou_sender_1",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "p2p:ou_sender_1",
+        sendTarget: "user:ou_sender_1",
+      }),
+    );
   });
 
   it("pins shared Feishu DM last-route updates to the configured owner", async () => {
@@ -1393,7 +1429,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
   });
 
-  it("uses message create_time as Timestamp instead of Date.now()", async () => {
+  it("uses message create_time for the inbound context and model envelope", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     await dispatchMessage({
       cfg: createFeishuTestConfig({ dmPolicy: "open" }),
@@ -1406,6 +1442,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     const context = mockCallArg<{ Timestamp?: number }>(mockFinalizeInboundContext, 0, 0);
     expect(context.Timestamp).toBe(1700000000000);
+    const envelope = mockCallArg<{ timestamp?: number | Date }>(mockFormatAgentEnvelope, 0, 0);
+    expect(envelope.timestamp).toBe(1700000000000);
   });
 
   it.each([
@@ -3383,15 +3421,23 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
         debounce: {
           resolveInboundDebounceMs: vi.fn(() => 10),
           createInboundDebouncer: vi.fn(
-            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => {
+            (options: {
+              onFlush: (
+                entries: FeishuMessageEvent[],
+                createFlush: typeof createTestInboundDebounceFlush,
+              ) => { completion: Promise<void> };
+            }) => {
               const entries: FeishuMessageEvent[] = [];
               return {
                 enqueue: async (event: FeishuMessageEvent) => {
                   entries.push(event);
                   if (entries.length === 2) {
-                    await options.onFlush(entries);
+                    await options.onFlush(entries, createTestInboundDebounceFlush).completion;
                   }
                 },
+                flushKey: async () => {},
+                cancelKey: () => false,
+                drain: async () => {},
               };
             },
           ),
@@ -3441,10 +3487,18 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
         debounce: {
           resolveInboundDebounceMs: vi.fn(() => 0),
           createInboundDebouncer: vi.fn(
-            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => ({
+            (options: {
+              onFlush: (
+                entries: FeishuMessageEvent[],
+                createFlush: typeof createTestInboundDebounceFlush,
+              ) => { completion: Promise<void> };
+            }) => ({
               enqueue: async (event: FeishuMessageEvent) => {
-                await options.onFlush([event]);
+                await options.onFlush([event], createTestInboundDebounceFlush).completion;
               },
+              flushKey: async () => {},
+              cancelKey: () => false,
+              drain: async () => {},
             }),
           ),
         },

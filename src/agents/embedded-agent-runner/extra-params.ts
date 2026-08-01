@@ -178,7 +178,6 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   topP?: number;
-  responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;

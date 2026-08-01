@@ -42,4 +42,4 @@ export function runCommandForTest(
   args: unknown,
   cwd: unknown,
   options?: Record<string, unknown>,
-): Promise<unknown>;
+): Promise<string>;

@@ -11,8 +11,11 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
-import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import {
+  DEFAULT_RESET_TRIGGERS,
+  type SessionEntry,
+  type SessionScope,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -27,15 +30,15 @@ import type {
   FinalizedTemplateContext as TemplateContext,
 } from "../templating.js";
 import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
-import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 import {
   isCompleteReplyConfig,
   markReplyConfigRuntimeMode,
   usesFullReplyRuntime,
 } from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { resolveSessionResetCommand } from "./session-reset-command.js";
 import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -49,17 +52,22 @@ function resolveFastSessionKey(params: {
   ctx: MsgContext;
   sessionScope: SessionScope;
   mainKey?: string;
+  agentId: string;
 }): string {
   const { ctx } = params;
   const nativeCommandTarget = resolveCommandTurnTargetSessionKey(ctx) ?? "";
   if (nativeCommandTarget) {
     return nativeCommandTarget;
   }
-  return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
+  return resolveSessionKey(params.sessionScope, ctx, params.mainKey, params.agentId);
 }
 
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
   return markReplyConfigRuntimeMode(config, "full");
+}
+
+export function withPublishedRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
+  return markReplyConfigRuntimeMode(config, "published");
 }
 
 export function resolveGetReplyConfig(params: {
@@ -180,6 +188,7 @@ export function initFastReplySessionState(params: {
     ctx,
     sessionScope,
     mainKey: cfg.session?.mainKey,
+    agentId,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
@@ -187,34 +196,32 @@ export function initFastReplySessionState(params: {
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.commandText ?? "";
-  const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
-    ? commandSource.trim()
-    : stripStructuralPrefixes(commandSource).trim();
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
-  const strippedForReset = isGroup
-    ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
-    : triggerBodyNormalized;
-  const normalizedResetBody = normalizeCommandBody(strippedForReset, {
-    botUsername: ctx.BotUsername,
+  const resetCommand = resolveSessionResetCommand({
+    commandText: commandSource,
+    rawText: ctx.rawText,
+    resetTriggers: cfg.session?.resetTriggers?.length
+      ? cfg.session.resetTriggers
+      : DEFAULT_RESET_TRIGGERS,
+    ctx,
+    cfg,
+    agentId,
+    isGroup,
+    resetAuthorized: commandAuthorized,
   });
-  const softReset = parseSoftResetCommand(normalizedResetBody);
-  const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
-  const resetTriggered = Boolean(resetMatch) && !softReset.matched;
+  const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
+    ? commandSource.trim()
+    : resetCommand.triggerBodyNormalized;
+  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   if (resetTriggered && isModelSelectionLocked(existingEntry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered
-    ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
-    : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
   const now = Date.now();
-  const sessionFile =
-    !resetTriggered && existingEntry?.sessionFile
-      ? existingEntry.sessionFile
-      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -238,7 +245,6 @@ export function initFastReplySessionState(params: {
           subagentControlScope: existingEntry.subagentControlScope,
         }
       : {}),
-    sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
