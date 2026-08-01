@@ -72,6 +72,13 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
 }
 
+/** Runs detached work without inheriting a completed transcript write-lock owner. */
+export async function runWithoutOwnedSessionTranscriptWrites<T>(
+  run: () => Promise<T> | T,
+): Promise<T> {
+  return await ownedTranscriptWriteContext.exit(run);
+}
+
 export async function runWithOwnedSessionTranscriptWriteLock<T>(
   params: {
     sessionFile?: string;

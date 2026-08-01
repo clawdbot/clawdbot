@@ -4,6 +4,7 @@
  * Image, video, and music generation use this to track tasks, wake sessions, and deliver generated media.
  */
 import crypto from "node:crypto";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -421,7 +422,7 @@ export function scheduleMediaGenerationTaskCompletion<
   run: () => Promise<T>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  params.scheduleBackgroundWork(async () => {
+  const runBackgroundWork = async () => {
     let executed: T;
     try {
       executed = await withMediaGenerationTaskKeepalive({
@@ -533,7 +534,9 @@ export function scheduleMediaGenerationTaskCompletion<
         error,
       });
     }
-  });
+  };
+  // Detached completion needs its own transcript lock after the parent attempt exits.
+  params.scheduleBackgroundWork(() => runWithoutOwnedSessionTranscriptWrites(runBackgroundWork));
 }
 
 async function wakeMediaGenerationTaskCompletion(params: {

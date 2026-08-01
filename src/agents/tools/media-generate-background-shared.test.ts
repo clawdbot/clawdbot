@@ -1,6 +1,10 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -61,6 +65,80 @@ describe("shouldDetachMediaGenerationTask", () => {
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {
+  it("runs detached completion outside a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:qa:image-generate";
+    let disposed = false;
+    let releaseBackground!: () => void;
+    const backgroundReady = new Promise<void>((resolve) => {
+      releaseBackground = resolve;
+    });
+    let scheduled: Promise<void> | undefined;
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const wakeTaskCompletion = vi.fn(async () => {
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return true;
+    });
+    const completeTaskRun = vi.fn();
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun,
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion,
+    };
+    const run = vi.fn(async () => ({
+      provider: "openai",
+      model: "gpt-image-1",
+      count: 1,
+      paths: ["/tmp/qa-lighthouse.png"],
+      wakeResult: "generated" as const,
+    }));
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle,
+          handle: {
+            taskId: "task-image-disposed-owner",
+            runId: "tool:image_generate:disposed-owner",
+            requesterSessionKey: sessionKey,
+            taskLabel: "QA lighthouse",
+          },
+          scheduleBackgroundWork: (work) => {
+            scheduled = backgroundReady.then(work);
+          },
+          progressSummary: "Generating image",
+          toolName: "Image generation",
+          onWakeFailure: vi.fn(),
+          run,
+        });
+      },
+    );
+
+    disposed = true;
+    releaseBackground();
+    if (!scheduled) {
+      throw new Error("expected scheduled media work");
+    }
+    await scheduled;
+
+    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledOnce();
+    expect(freshTranscriptWrite).toHaveBeenCalledOnce();
+    expect(wakeTaskCompletion).toHaveBeenCalledOnce();
+    expect(completeTaskRun).toHaveBeenCalledOnce();
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+  });
+
   it("keeps a generated media task active until completion delivery finishes", async () => {
     // Mark completion only after the requester wake has been attempted; otherwise
     // task status can say done before the visible media reaches the requester.
