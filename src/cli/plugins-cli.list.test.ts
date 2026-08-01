@@ -100,6 +100,55 @@ describe("plugins cli list", () => {
     expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
+  it.each([
+    {
+      description: "a required plugin is missing",
+      diagnostic: {
+        level: "warn" as const,
+        pluginId: "calendar",
+        message: 'plugin "calendar" requires plugin "contacts"; install "contacts" to use it',
+      },
+      expected: 'calendar: plugin "calendar" requires plugin "contacts"',
+    },
+    {
+      description: "discovery cannot read an extensions directory",
+      diagnostic: {
+        level: "warn" as const,
+        message: "failed to read extensions dir: /tmp/plugins (permission denied)",
+      },
+      expected: "failed to read extensions dir: /tmp/plugins (permission denied)",
+    },
+  ])(
+    "reports actionable discovery warnings when $description",
+    async ({ diagnostic, expected }) => {
+      buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
+
+      await runPluginsCommand(["plugins", "doctor"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain("Diagnostics:");
+      expect(output).toContain(expected);
+      expect(output).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("keeps actionable discovery warnings alongside existing errors", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        { level: "error", pluginId: "broken", message: "plugin manifest invalid" },
+        { level: "warn", pluginId: "calendar", message: "required plugin contacts is missing" },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("broken: plugin manifest invalid");
+    expect(output).toContain("calendar: required plugin contacts is missing");
+    expect(output).not.toContain(cleanDoctorMessage);
+  });
+
   it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
     const sourceConfig = {
       plugins: {

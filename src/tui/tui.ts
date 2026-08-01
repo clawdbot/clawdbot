@@ -1513,6 +1513,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const deferredFinish = createDeferredTuiFinish();
+  // The backend can own requestExit before the editor/coalescer exists.
+  let disposeSubmitBurst = () => {};
   const forceExit = () => {
     try {
       process.stderr.write("openclaw tui forcing exit\n");
@@ -1527,6 +1529,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     exitRequested = true;
+    // Exit owns the input boundary before transport teardown can race a buffered submit.
+    disposeSubmitBurst();
     connectionGeneration += 1;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
@@ -1618,13 +1622,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     admitMessage: resolveMessageAdmission,
     onBlockedMessageSubmit: reportBlockedMessageSubmit,
   });
-  editor.onSubmit = createSubmitBurstCoalescer({
+  const submitBurst = createSubmitBurstCoalescer({
     submit: submitHandler,
     captureSnapshot: captureMessageAdmission,
     enabled: opts.submitBurstWindowMs !== undefined || shouldEnableWindowsGitBashPasteFallback(),
     burstWindowMs: opts.submitBurstWindowMs,
     onCapture: opts.onSubmitBurstCaptured,
   });
+  disposeSubmitBurst = submitBurst.dispose;
+  editor.onSubmit = submitBurst;
 
   editor.onEscape = () => {
     if (chatLog.hasVisibleBtw()) {

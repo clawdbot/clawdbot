@@ -10,14 +10,11 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
-  maybeRepairCanonicalApiKeyFieldAlias: vi.fn(async (params: { cfg: unknown }) => params.cfg),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
   }),
-  maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
-  maybeRepairOpenAICodexAuthProfileStores: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
