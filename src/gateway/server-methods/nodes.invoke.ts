@@ -397,7 +397,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               false,
               undefined,
               errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: { code: "NOT_CONNECTED" },
+                details: {
+                  code: "NOT_CONNECTED",
+                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                  nodeCommandDispatched: false,
+                },
               }),
             );
             return;
