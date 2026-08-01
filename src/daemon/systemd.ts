@@ -18,6 +18,7 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -1545,7 +1546,21 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  await execSystemctlUser(env, ["disable", "--now", unitName]);
+  const disabled = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  if (disabled.code !== 0) {
+    const detail = readSystemctlDetail(disabled);
+    const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
+    const alreadyMissingOrInactive = new RegExp(
+      `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
+        `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
+        `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
+        `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
+      "u",
+    ).test(normalizeLowercaseStringOrEmpty(detail));
+    if (!alreadyMissingOrInactive) {
+      throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
+    }
+  }
 
   const unitPath = resolveSystemdUnitPath(env);
   let removed = false;
@@ -1593,11 +1608,11 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
-    if (params.action === "restart") {
+    if (params.action !== "stop") {
       // systemd latches a unit into failed/start-limit-hit after it crashes faster
       // than StartLimitBurst allows and then stops auto-restarting it. Clear the
-      // latch first so an operator restart can recover a crash-looped gateway;
-      // reset-failed is idempotent and a no-op on a healthy unit.
+      // latch before start/restart so an operator can recover a crash-looped
+      // gateway with the natural start command. Idempotent on healthy units.
       await execSystemctl(["reset-failed", unitName], env);
     }
     const res = await execSystemctl([params.action, unitName], env);
@@ -1611,10 +1626,8 @@ async function runSystemdServiceAction(params: {
   await assertSystemdAvailable(env);
   if (params.action !== "stop") {
     await assertNoSystemGatewayOwnership(env);
-  }
-  if (params.action === "restart") {
-    // Clear any failed/start-limit-hit latch before restart so a crash-looped
-    // gateway recovers (see system-scope branch above). Idempotent on healthy units.
+    // Clear the same latch for user-scope start/restart after the ownership
+    // guard, so a conflicting system unit is never mutated.
     await execSystemctlUser(env, ["reset-failed", unitName]);
   }
   const res = await execSystemctlUser(env, [params.action, unitName]);

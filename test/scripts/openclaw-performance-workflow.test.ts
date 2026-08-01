@@ -211,6 +211,15 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
+  it("runs only gateway startup cases advertised by the frozen target", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain("scripts/bench-gateway-startup.ts --help");
+    expect(run).toContain('grep -Fxq "$startup_case"');
+    expect(run).toContain('"${startup_case_args[@]}"');
+    expect(run).toContain("required default case");
+  });
+
   it("keeps source gateway health waits within one startup budget", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
     const deadline = "gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))";
@@ -720,7 +729,7 @@ esac
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([
-      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message",
+      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message",
       "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
       "scenario:agent-cold-warm-message",
     ]);
@@ -733,7 +742,7 @@ esac
     expect(runKova.run).toContain('--include "$INCLUDE_FILTERS"');
     expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
     expect(expectedReleaseEntries).toEqual([
-      "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
+      "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
       "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
       "agent-cold-warm-message:mock-openai-provider",
     ]);

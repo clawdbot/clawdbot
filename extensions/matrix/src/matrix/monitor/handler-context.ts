@@ -334,7 +334,6 @@ export async function resolveMatrixInboundContext(config: {
         isDirect: isDirectMessage,
         isGroup: isRoom,
         isMentionableGroup: isRoom,
-        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,

@@ -7,6 +7,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import {
@@ -22,10 +23,14 @@ import type {
 } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
+import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { CommandLane } from "../../process/lanes.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
@@ -147,6 +152,45 @@ function createSessionKeyedHookDispatchQueue() {
       }
     });
     return run;
+  };
+}
+
+function validateHookAgentDeliveryAccount(params: {
+  cfg: OpenClawConfig;
+  value: HookAgentDispatchPayload;
+}): HookAgentDispatchPayload {
+  // Mapped hooks can defer partial/last targets to cron and cannot select an account.
+  // Bind only direct hook announces whose destination is already complete.
+  if (
+    params.value.delivery.mode !== "announce" ||
+    params.value.delivery.channel === "last" ||
+    !params.value.delivery.to
+  ) {
+    return params.value;
+  }
+  const accountId = params.value.delivery.accountId
+    ? validateExplicitMessageAccountSelection({
+        cfg: params.cfg,
+        channel: params.value.delivery.channel,
+        accountId: params.value.delivery.accountId,
+      })
+    : (() => {
+        const plugin = resolveOutboundChannelPlugin({
+          channel: params.value.delivery.channel,
+          cfg: params.cfg,
+        });
+        if (!plugin) {
+          throw new Error(`Channel ${params.value.delivery.channel} is unavailable.`);
+        }
+        return resolveChannelDefaultAccountId({ plugin, cfg: params.cfg });
+      })();
+  if (!accountId) {
+    throw new Error(`Channel ${params.value.delivery.channel} did not resolve an account.`);
+  }
+  return {
+    ...params.value,
+    accountId,
+    delivery: { ...params.value.delivery, accountId },
   };
 }
 
@@ -280,7 +324,19 @@ export function createGatewayHooksRequestHandler(params: {
       void runWithGatewayIndependentRootWorkContinuation(async () => reportHookFailure(err));
       return createHookAdmissionFailure({ runId });
     }
-    const agentId = value.agentId ?? resolveDefaultAgentId(dispatchCfg);
+    let acceptedValue: HookAgentDispatchPayload;
+    try {
+      acceptedValue = validateHookAgentDeliveryAccount({ cfg: dispatchCfg, value });
+      job.delivery = acceptedValue.delivery;
+    } catch (err) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: formatErrorMessage(err),
+        runId,
+      };
+    }
+    const agentId = acceptedValue.agentId ?? resolveDefaultAgentId(dispatchCfg);
     const queueKey = resolveCronAgentSessionKey({
       sessionKey,
       agentId,
@@ -329,11 +385,22 @@ export function createGatewayHooksRequestHandler(params: {
         }
         try {
           const cfg = getRuntimeConfig();
+          try {
+            validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
+          } catch (err) {
+            settleAdmission({
+              ok: false,
+              statusCode: 400,
+              error: formatErrorMessage(err),
+              runId,
+            });
+            return;
+          }
           // Keep an omitted agent omitted for event routing so global session scope
           // stays global; runner identity is frozen separately via accepted agentId.
           hookEventSessionKey = resolveHookEventSessionKey({
             cfg,
-            agentId: value.agentId,
+            agentId: acceptedValue.agentId,
           });
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           // Lazy module loading is the last Gateway-owned async boundary before
@@ -345,12 +412,16 @@ export function createGatewayHooksRequestHandler(params: {
             cfg,
             deps,
             job,
-            message: value.message,
+            message: acceptedValue.message,
             sessionKey,
             // Isolated runs derive their lifecycle key from random jobId (or an
             // already-stable cron: key), so accepted agentId closes reload drift.
             agentId,
-            lane: "cron",
+            // Hook agent runs get their own lane rather than sharing
+            // `cron-nested` with cron inner work, so a saturated cron budget
+            // cannot starve them. Aggregate capacity stays bounded by the lane
+            // group that owns both lanes.
+            lane: CommandLane.HookDispatch,
             abortSignal: startupAbortController.signal,
             onExecutionStarted: () => {
               // Existing runner-entry callbacks are the final owner-boundary fence:

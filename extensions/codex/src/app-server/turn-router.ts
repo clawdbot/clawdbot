@@ -100,7 +100,6 @@ type Route = {
 type NativeTurnCompletionWatcher = {
   turnId: string;
   finish: (completed: boolean) => void;
-  touch: () => void;
 };
 
 const routers = new WeakMap<CodexAppServerClient, ClientTurnRouter>();
@@ -203,10 +202,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       clearTimeout(timeout);
       settle(completed);
     };
-    const touch = () => {
-      timeout.refresh();
-    };
-    const watcher = { turnId, finish, touch };
+    const watcher = { turnId, finish };
     watchers.add(watcher);
     const timeout = setTimeout(() => finish(false), Math.max(1, options.timeoutMs));
     timeout.unref?.();
@@ -309,12 +305,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     const terminal = isCodexTerminalTurnNotification(notification);
     if (scope.turnId && watchers) {
       for (const watcher of watchers) {
-        if (watcher.turnId === scope.turnId) {
-          if (terminal) {
-            watcher.finish(true);
-          } else {
-            watcher.touch();
-          }
+        if (watcher.turnId === scope.turnId && notification.method === "turn/completed") {
+          watcher.finish(true);
         }
       }
     }

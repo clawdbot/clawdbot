@@ -1773,6 +1773,66 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(providerPrompts[0]).toContain("[User]: summarize me");
   });
 
+  it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
+    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      api: "test-api" as never,
+      baseUrl: "",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "error",
+          errorMessage: "Cannot convert undefined or null to object",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    };
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = {
+      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
+      streamFn,
+    };
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+    const transcriptBefore = structuredClone(event.preparation.messagesToSummarize);
+
+    const result = await compactionHandler(event, mockContext);
+
+    expect(result).toEqual({ cancel: true });
+    expect(result).not.toHaveProperty("compaction");
+    expect(event.preparation.messagesToSummarize).toStrictEqual(transcriptBefore);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toContain(
+      "Cannot convert undefined or null to object",
+    );
+  });
+
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(summaryResult("summary missing headings"));

@@ -15,6 +15,7 @@ import {
 } from "../../infra/agent-events.js";
 import {
   collectTrackedActiveSessionRuns,
+  hasTrackedActiveSessionRun,
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
@@ -90,6 +91,38 @@ it("matches session-id-only gateway runs during archive admission", () => {
       requestedKey: "agent:main:child",
       canonicalKey: "agent:main:child",
       sessionId: "session-1",
+    }),
+  ).toBe(true);
+});
+
+it("excludes the replacement run from an internal active-session check", () => {
+  const sessionKey = "agent:main:main";
+  const context = {
+    chatAbortControllers: new Map([
+      [
+        "replacement-run",
+        {
+          sessionKey,
+          controlUiVisible: true,
+          projectSessionActive: true,
+        },
+      ],
+    ]),
+  } as never;
+
+  expect(
+    hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      excludeRunIds: new Set(["replacement-run"]),
+    }),
+  ).toBe(false);
+  expect(
+    hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
     }),
   ).toBe(true);
 });

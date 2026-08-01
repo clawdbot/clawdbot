@@ -727,7 +727,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | ssh | openshell
+        backend: "docker", // docker (default) | podman | openshell | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -946,7 +946,7 @@ noVNC observer access is password-protected and brokered through a one-time, aut
 
 </Accordion>
 
-Browser sandboxing and `sandbox.docker.binds` are Docker-only.
+Browser sandboxing requires the Docker engine. `sandbox.docker.binds` applies to both the Docker and Podman backends.
 
 Build images (from a source checkout):
 
@@ -1331,6 +1331,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
+- `group-mentions` acks group messages that mention the agent, including in groups with `requireMention: false`. Use `group-all` to ack every group message.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.

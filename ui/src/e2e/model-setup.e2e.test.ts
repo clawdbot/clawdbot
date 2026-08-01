@@ -16,6 +16,31 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const localPrepareOptions = [
+  {
+    id: "ollama",
+    brandId: "ollama",
+    label: "Ollama",
+    hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
+  },
+  {
+    id: "llama-cpp",
+    brandId: "llama-cpp",
+    label: "Local model (llama.cpp)",
+    hint: "Download and run a private GGUF model",
+    actionLabel: "Review download",
+  },
+  {
+    id: "lmstudio",
+    brandId: "lmstudio",
+    label: "LM Studio",
+    hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
+    icon: "https://cdn.simpleicons.org/lmstudio",
+    website: "https://lmstudio.ai/download",
+  },
+];
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -94,7 +119,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
       const candidate = page.locator('[data-candidate-kind="codex-cli"]');
       await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
       await candidate.getByRole("button", { name: "Test & use" }).click();
@@ -235,7 +260,260 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     }
   });
 
-  it("turns an unverifiable Gemini CLI login into direct recovery actions", async () => {
+  it("recovers Ollama setup in place after the local server starts", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const initialDetection = {
+      candidates: [],
+      manualProviders: [],
+      prepareOptions: localPrepareOptions,
+      recommendedInstalls: [
+        {
+          id: "ollama",
+          brandId: "ollama",
+          label: "Ollama",
+          hint: "Run open models locally",
+          website: "https://ollama.com/download",
+        },
+      ],
+      workspace: "/tmp/openclaw-e2e",
+      setupComplete: false,
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "openclaw.setup.detect",
+        "openclaw.setup.activate",
+        "openclaw.setup.prepare.start",
+        "wizard.next",
+      ],
+      methodResponses: {
+        "openclaw.setup.detect": initialDetection,
+        "openclaw.setup.prepare.start": {
+          sessionId: "ollama-prepare-session",
+          done: false,
+          status: "running",
+        },
+        "openclaw.setup.activate": {
+          ok: true,
+          modelRef: "ollama/qwen3:0.6b",
+          latencyMs: 284,
+          lines: ["Model ready"],
+        },
+        "wizard.next": {
+          sequence: [
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-mode",
+                type: "select",
+                message: "Ollama mode",
+                options: [
+                  {
+                    value: "cloud-local",
+                    label: "Cloud + Local",
+                    hint: "Route cloud and local models through your Ollama host",
+                  },
+                  { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models" },
+                  { value: "local-only", label: "Local only", hint: "Local models only" },
+                ],
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-base-url",
+                type: "text",
+                message: "Ollama base URL",
+                initialValue: "http://127.0.0.1:11434",
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-retry",
+                type: "note",
+                title: "Ollama",
+                message: [
+                  "Ollama could not be reached at http://127.0.0.1:11434.",
+                  "Start or restart the Ollama server for this address.",
+                  "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+                  "",
+                  "Continue when it is running. OpenClaw will retry this address.",
+                ].join("\n"),
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "ollama-retry-confirm",
+                type: "confirm",
+                message: "Retry this Ollama address now?",
+                initialValue: true,
+              },
+            },
+            { done: true, status: "done" },
+          ],
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
+      expect(response?.status()).toBe(200);
+      const localProviderIcons = page.locator(
+        [
+          '[data-prepare-choice="ollama"] [data-provider-icon="ollama"]',
+          '[data-prepare-choice="llama-cpp"] [data-provider-icon="llamacpp"]',
+          '[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]',
+        ].join(","),
+      );
+      await expect.poll(() => localProviderIcons.count()).toBe(3);
+      const localProviderIconColors = await localProviderIcons.evaluateAll((icons) =>
+        icons.map((icon) => getComputedStyle(icon).color),
+      );
+      expect(localProviderIconColors).toHaveLength(3);
+      expect(new Set(localProviderIconColors).size).toBe(1);
+      await page
+        .locator('[data-prepare-choice="ollama"]')
+        .getByRole("button", { name: "Choose connection" })
+        .click();
+
+      const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
+      expect(start.params).toMatchObject({ authChoice: "ollama" });
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-mode-select-desktop.png"),
+        });
+      }
+
+      await page.getByRole("radio", { name: /Local only/u }).check();
+      await page.getByRole("button", { name: "Continue" }).click();
+      const baseUrl = page.getByLabel("Ollama base URL");
+      await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-host-desktop.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Submit" }).click();
+      await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
+      await page
+        .getByText("Continue when it is running. OpenClaw will retry this address.")
+        .waitFor();
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-recovery-desktop.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByText("Retry this Ollama address now?").waitFor();
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [
+          {
+            kind: "provider-auto:ollama",
+            brandId: "ollama",
+            label: "Ollama",
+            detail: "qwen3:0.6b at http://127.0.0.1:11434",
+            modelRef: "ollama/qwen3:0.6b",
+            recommended: true,
+            credentials: true,
+          },
+        ],
+        recommendedInstalls: [],
+      });
+      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain("ollama/qwen3:0.6b");
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain("Verified in 284 ms");
+      await expect
+        .poll(() => page.locator('.model-setup-success [data-provider-icon="ollama"]').count())
+        .toBe(1);
+
+      const activate = await gateway.waitForRequest("openclaw.setup.activate");
+      expect(activate.params).toEqual({
+        kind: "provider-auto:ollama",
+        modelRef: "ollama/qwen3:0.6b",
+      });
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-ready-desktop.png"),
+        });
+      }
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [],
+        configuredModel: "ollama/qwen3:0.6b",
+        recommendedInstalls: [],
+        setupComplete: true,
+      });
+      await page.getByRole("button", { name: "Stay in settings" }).click();
+      const currentConnection = page.locator(".model-setup__current");
+      await currentConnection.getByText("ollama/qwen3:0.6b", { exact: true }).waitFor();
+      await expect
+        .poll(() => currentConnection.locator('[data-provider-icon="ollama"]').count())
+        .toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-main-desktop.png"),
+        });
+      }
+
+      const wizardRequests = await gateway.getRequests("wizard.next");
+      expect(wizardRequests).toHaveLength(5);
+      expect(wizardRequests[2]?.params).toMatchObject({
+        answer: {
+          stepId: "ollama-base-url",
+          value: "http://127.0.0.1:11434",
+        },
+      });
+      expect(wizardRequests[3]?.params).toMatchObject({
+        answer: { stepId: "ollama-retry" },
+      });
+      expect(wizardRequests[4]?.params).toMatchObject({
+        answer: { stepId: "ollama-retry-confirm", value: true },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("offers supported Google setup in an accessible provider picker", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -249,24 +527,12 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         "chat.startup",
         "openclaw.setup.detect",
         "openclaw.setup.activate",
-        "openclaw.setup.auth.start",
         "openclaw.setup.prepare.start",
       ],
       methodResponses: {
         "openclaw.setup.detect": {
           candidates: [],
-          unavailableCandidates: [
-            {
-              id: "gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI",
-              detail: "installed; login status unavailable",
-              reason:
-                "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
-              authOptionId: "google-gemini-cli",
-              manualProviderId: "gemini-api-key",
-            },
-          ],
+          unavailableCandidates: [],
           manualProviders: [
             {
               id: "qwen-cn",
@@ -292,20 +558,11 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
               id: "gemini-api-key",
               brandId: "google",
               groupLabel: "Google",
-              label: "Google Gemini API key",
-              hint: "Use an AI Studio API key.",
+              label: "Google AI Studio API key",
+              hint: "Supported API-key access from aistudio.google.com/apikey",
             },
           ],
-          authOptions: [
-            {
-              id: "google-gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI OAuth",
-              groupLabel: "Google",
-              kind: "oauth",
-              featured: true,
-            },
-          ],
+          authOptions: [],
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
@@ -315,20 +572,15 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           latencyMs: 412,
           lines: ["Model ready"],
         },
-        "openclaw.setup.auth.start": {
-          sessionId: "gemini-oauth-session",
-          done: false,
-          status: "running",
-        },
       },
     });
 
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Found, but needs attention" }).waitFor();
-      await page.getByRole("button", { name: "Sign in with Google" }).waitFor();
-      await page.getByRole("button", { name: "Use API key" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
+      await expect.poll(() => page.getByText("Found, but needs attention").count()).toBe(0);
 
       const providerPicker = page.locator(".model-setup-provider-select");
       const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
@@ -452,11 +704,16 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         .toBe(true);
 
       await accessValue.fill("sk-old-provider-secret");
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHidden = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHidden;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
+      await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
       await expect.poll(() => accessValue.inputValue()).toBe("");
       await expect
-        .poll(() => accessValue.evaluate((element) => element === document.activeElement))
+        .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
         .toBe(true);
 
       await providerTrigger.click();
@@ -518,21 +775,13 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
         .toBe(detectCountBeforeDismiss + 1);
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHiddenAfterDismiss = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHiddenAfterDismiss;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
-
-      const detectCount = (await gateway.getRequests("openclaw.setup.detect")).length;
-      await page
-        .locator('[data-unavailable-candidate="gemini-cli"]')
-        .getByRole("button", { name: "Check again" })
-        .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-        .toBe(detectCount + 1);
-
-      await page.getByRole("button", { name: "Sign in with Google" }).click();
-      const start = await gateway.waitForRequest("openclaw.setup.auth.start");
-      expect(start.params).toMatchObject({ authChoice: "google-gemini-cli" });
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
     } finally {
       await context.close();
     }

@@ -14,6 +14,7 @@ import type {
   CronJobsSortBy,
   CronSortDir,
 } from "../../api/types.ts";
+import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { icon, icons } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import {
@@ -653,25 +654,14 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
             (job) => job.id,
             (job) => renderJobRow(job, props),
           )}
-      <div class="cron-table__footer">
-        <span class="muted">
-          ${t("cron.list.shownOf", {
-            shown: String(props.jobs.length),
-            total: String(Math.max(props.jobsTotal, props.jobs.length)),
-          })}
-        </span>
-        ${props.jobsHasMore
-          ? html`
-              <button
-                class="btn btn--sm cron-load-more"
-                ?disabled=${props.loading || props.jobsLoadingMore}
-                @click=${props.onLoadMoreJobs}
-              >
-                ${props.jobsLoadingMore ? t("cron.list.loading") : t("cron.list.loadMore")}
-              </button>
-            `
-          : nothing}
-      </div>
+      ${renderCronJobsPagination({
+        jobsShown: props.jobs.length,
+        jobsTotal: props.jobsTotal,
+        hasMore: props.jobsHasMore,
+        loading: props.loading,
+        loadingMore: props.jobsLoadingMore,
+        onLoadMore: props.onLoadMoreJobs,
+      })}
     </div>
   `;
 }

@@ -42,6 +42,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -437,6 +438,43 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const taskTyping = createMockTypingController({ isActive: vi.fn(() => true) });
+    bindReplyOperationTyping(active, taskTyping);
+    const { run, typing } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        NativeChannelId: "123",
+        MessageSid: "steer-telegram",
+      },
+      runOverrides: { agentId: "main", messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(taskTyping.startTypingLoop).toHaveBeenCalledOnce();
+    expect(taskTyping.cleanup).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+
+    active.complete();
+
+    expect(taskTyping.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("dispatches a declined steer once with its source-turn identity", async () => {
     const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(

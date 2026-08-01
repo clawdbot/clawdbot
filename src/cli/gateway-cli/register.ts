@@ -191,10 +191,15 @@ async function runGatewayCommand(
     await action();
   } catch (err) {
     if (opts?.json) {
-      const { formatGatewayClientRequestErrorJson, formatGatewayTransportErrorJson } =
-        await import("../../gateway/call.js");
+      const {
+        formatGatewayAuthErrorJson,
+        formatGatewayClientRequestErrorJson,
+        formatGatewayTransportErrorJson,
+      } = await import("../../gateway/call.js");
       const payload =
-        formatGatewayClientRequestErrorJson(err) ?? formatGatewayTransportErrorJson(err);
+        formatGatewayAuthErrorJson(err) ??
+        formatGatewayClientRequestErrorJson(err) ??
+        formatGatewayTransportErrorJson(err);
       if (payload) {
         defaultRuntime.writeJson(payload);
         defaultRuntime.exit(1);
@@ -837,17 +842,21 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     .option("--no-stability-bundle", "Skip persisted stability bundle lookup")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      await runGatewayCommand(async () => {
-        const rpcOpts = resolveGatewayRpcOptions(opts, command);
-        await writeSupportExportFromCli({
-          json: opts.json,
-          output: opts.output,
-          logLines: opts.logLines,
-          logBytes: opts.logBytes,
-          stabilityBundle: opts.stabilityBundle === false ? false : "latest",
-          rpc: rpcOpts,
-        });
-      }, "Gateway diagnostics export failed");
+      await runGatewayCommand(
+        async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          await writeSupportExportFromCli({
+            json: opts.json,
+            output: opts.output,
+            logLines: opts.logLines,
+            logBytes: opts.logBytes,
+            stabilityBundle: opts.stabilityBundle === false ? false : "latest",
+            rpc: rpcOpts,
+          });
+        },
+        "Gateway diagnostics export failed",
+        { json: Boolean(opts.json) },
+      );
     });
 
   gateway
@@ -865,17 +874,21 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     .option("--timeout <ms>", "Overall probe budget in ms", "3000")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      await runGatewayCommand(async () => {
-        const rpcOpts = resolveGatewayRpcOptions(opts, command);
-        const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(
-          {
-            ...rpcOpts,
-            port: opts.port ?? inheritOptionFromParent(command, "port"),
-          },
-          defaultRuntime,
-        );
-      });
+      await runGatewayCommand(
+        async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const { gatewayStatusCommand } = await loadGatewayStatusModule();
+          await gatewayStatusCommand(
+            {
+              ...rpcOpts,
+              port: opts.port ?? inheritOptionFromParent(command, "port"),
+            },
+            defaultRuntime,
+          );
+        },
+        undefined,
+        { json: Boolean(opts.json) },
+      );
     });
 
   gateway
@@ -884,80 +897,85 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     .option("--timeout <ms>", "Per-command timeout in ms", "2000")
     .option("--json", "Output JSON", false)
     .action(async (opts: GatewayDiscoverOpts) => {
-      await runGatewayCommand(async () => {
-        const [
-          { readSourceConfigBestEffort },
-          { discoverGatewayBeacons },
-          { resolveWideAreaDiscoveryDomain },
-          {
-            dedupeBeacons,
-            parseDiscoverTimeoutMs,
-            pickBeaconHost,
-            pickGatewayPort,
-            renderBeaconLines,
-          },
-          { withProgress },
-        ] = await Promise.all([
-          loadConfigModule(),
-          loadBonjourDiscoveryModule(),
-          loadWideAreaDnsModule(),
-          import("./discover.js"),
-          import("../progress.js"),
-        ]);
-        const cfg = await readSourceConfigBestEffort();
-        const wideAreaDomain = resolveWideAreaDiscoveryDomain({
-          configDomain: cfg.discovery?.wideArea?.domain,
-        });
-        const timeoutMs = parseDiscoverTimeoutMs(opts.timeout, 2000);
-        const domains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
-        const beacons = await withProgress(
-          {
-            label: "Scanning for gateways…",
-            indeterminate: true,
-            enabled: opts.json !== true,
-            delayMs: 0,
-          },
-          async () => await discoverGatewayBeacons({ timeoutMs, wideAreaDomain }),
-        );
-
-        const deduped = dedupeBeacons(beacons).toSorted((a, b) =>
-          (a.displayName || a.instanceName).localeCompare(b.displayName || b.instanceName),
-        );
-
-        if (opts.json) {
-          const enriched = deduped.map((b) => {
-            const host = pickBeaconHost(b);
-            const port = pickGatewayPort(b);
-            return { ...b, wsUrl: host ? `ws://${host}:${port}` : null };
+      await runGatewayCommand(
+        async () => {
+          const [
+            { readSourceConfigBestEffort },
+            { discoverGatewayBeacons },
+            { resolveWideAreaDiscoveryDomain },
+            {
+              dedupeBeacons,
+              parseDiscoverTimeoutMs,
+              pickBeaconHost,
+              pickGatewayPort,
+              renderBeaconLines,
+            },
+            { withProgress },
+          ] = await Promise.all([
+            loadConfigModule(),
+            loadBonjourDiscoveryModule(),
+            loadWideAreaDnsModule(),
+            import("./discover.js"),
+            import("../progress.js"),
+          ]);
+          const cfg = await readSourceConfigBestEffort();
+          const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+            configDomain: cfg.discovery?.wideArea?.domain,
           });
-          defaultRuntime.writeJson({
-            timeoutMs,
-            domains,
-            count: enriched.length,
-            beacons: enriched,
-          });
-          return;
-        }
+          const timeoutMs = parseDiscoverTimeoutMs(opts.timeout, 2000);
+          const domains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
+          const beacons = await withProgress(
+            {
+              label: "Scanning for gateways…",
+              indeterminate: true,
+              enabled: opts.json !== true,
+              delayMs: 0,
+            },
+            async () => await discoverGatewayBeacons({ timeoutMs, wideAreaDomain }),
+          );
 
-        const rich = isRich();
-        defaultRuntime.log(colorize(rich, theme.heading, "Gateway Discovery"));
-        defaultRuntime.log(
-          colorize(
-            rich,
-            theme.muted,
-            `Found ${deduped.length} gateway(s) · domains: ${domains.join(", ")}`,
-          ),
-        );
-        if (deduped.length === 0) {
-          return;
-        }
+          const deduped = dedupeBeacons(beacons).toSorted((a, b) =>
+            (a.displayName || a.instanceName).localeCompare(b.displayName || b.instanceName),
+          );
 
-        for (const beacon of deduped) {
-          for (const line of renderBeaconLines(beacon, rich)) {
-            defaultRuntime.log(line);
+          if (opts.json) {
+            const enriched = deduped.map((b) => {
+              const host = pickBeaconHost(b);
+              const port = pickGatewayPort(b);
+              const scheme = b.gatewayTls === true ? "wss" : "ws";
+              return { ...b, wsUrl: host ? `${scheme}://${host}:${port}` : null };
+            });
+            defaultRuntime.writeJson({
+              timeoutMs,
+              domains,
+              count: enriched.length,
+              beacons: enriched,
+            });
+            return;
           }
-        }
-      }, "gateway discover failed");
+
+          const rich = isRich();
+          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Discovery"));
+          defaultRuntime.log(
+            colorize(
+              rich,
+              theme.muted,
+              `Found ${deduped.length} gateway(s) · domains: ${domains.join(", ")}`,
+            ),
+          );
+          if (deduped.length === 0) {
+            return;
+          }
+
+          for (const beacon of deduped) {
+            for (const line of renderBeaconLines(beacon, rich)) {
+              defaultRuntime.log(line);
+            }
+          }
+        },
+        "gateway discover failed",
+        { json: Boolean(opts.json) },
+      );
     });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

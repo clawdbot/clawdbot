@@ -138,6 +138,28 @@ describe("tools.fs.workspaceOnly", () => {
     });
   });
 
+  it("preserves unrelated Unicode bytes through the real sandbox edit bridge", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original =
+        "const value\u00A0= 1; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const expected =
+        "const value = 2; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original, "utf8");
+      await editTool.execute("sandbox-edit-fuzzy-unicode", {
+        path: "source.txt",
+        edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      });
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
   it("rejects invalid UTF-8 before sandbox edit or patch bridge writes", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
       const filePath = path.join(sandboxRoot, "source.txt");

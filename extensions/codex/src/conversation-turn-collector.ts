@@ -13,9 +13,18 @@ import {
 
 const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
 
+/** Identifies a timer that expired in the bound-turn collector itself. */
+export class CodexConversationTurnTimeoutError extends Error {
+  constructor() {
+    super("codex app-server bound turn timed out");
+    this.name = "CodexConversationTurnTimeoutError";
+  }
+}
+
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
   let completed = false;
+  let terminalReceived = false;
   let failedError: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
@@ -23,6 +32,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
   const pendingNotificationsByTurnId = new Map<string, CodexServerNotification[]>();
   let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
+  let resolveTerminal: (() => void) | undefined;
 
   const rememberItem = (itemId: string) => {
     if (!assistantOrder.includes(itemId)) {
@@ -98,11 +108,17 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "turn/completed") {
+      terminalReceived = true;
+      resolveTerminal?.();
       const turn = isJsonObject(params.turn) ? params.turn : undefined;
       const status = readString(turn, "status");
       if (status === "failed") {
         failedError =
           readString(readRecord(turn?.error), "message") ?? "codex app-server turn failed";
+      } else if (status === "interrupted") {
+        // Codex reports an interrupted turn as a terminal completion without a
+        // final answer; streamed partial text must not become a successful reply.
+        failedError = "codex app-server turn interrupted";
       }
       const items = Array.isArray(turn?.items) ? turn.items : [];
       for (const item of items) {
@@ -130,6 +146,26 @@ export function createCodexConversationTurnCollector(threadId: string) {
       }
     },
     handleNotification,
+    waitForTerminal(params: { timeoutMs: number }): Promise<void> {
+      if (terminalReceived) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => {
+        const terminalTimeout = setTimeout(
+          () => {
+            resolveTerminal = undefined;
+            reject(new Error("codex app-server interrupted turn did not complete"));
+          },
+          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
+        );
+        terminalTimeout.unref?.();
+        resolveTerminal = () => {
+          clearTimeout(terminalTimeout);
+          resolveTerminal = undefined;
+          resolve();
+        };
+      });
+    },
     wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
       if (completed) {
         return failedError
@@ -142,7 +178,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
         timeout = setTimeout(
           () => {
             completed = true;
-            reject(new Error("codex app-server bound turn timed out"));
+            reject(new CodexConversationTurnTimeoutError());
             clearWaitState();
           },
           resolveTimerTimeoutMs(params.timeoutMs, 100, 100),

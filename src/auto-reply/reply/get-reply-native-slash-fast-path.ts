@@ -339,7 +339,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     skillFilter: params.skillFilter,
   });
   if (directiveResult.kind === "reply") {
-    params.typing.cleanup();
+    // The canonical directive owner already finalizes typing for every terminal reply.
     return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
   }
 

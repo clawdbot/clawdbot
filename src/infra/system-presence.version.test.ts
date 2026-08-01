@@ -98,18 +98,7 @@ describe("system-presence version fallback", () => {
     );
   });
 
-  it("still prefers runtime VERSION over npm_package_version when service markers are blank", async () => {
-    await expectSelfVersion(
-      {
-        OPENCLAW_VERSION: " ",
-        OPENCLAW_SERVICE_VERSION: "\t",
-        npm_package_version: "1.0.0-package",
-      },
-      runtimeVersion,
-    );
-  });
-
-  it("uses runtime VERSION when OPENCLAW_VERSION and OPENCLAW_SERVICE_VERSION are blank", async () => {
+  it("uses runtime VERSION when service markers are blank despite npm_package_version", async () => {
     await expectSelfVersion(
       {
         OPENCLAW_VERSION: " ",

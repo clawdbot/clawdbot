@@ -2,7 +2,7 @@ import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
@@ -404,6 +404,15 @@ export function resolveChatAgentId(state: ChatPageHost) {
       scopedAgentParamsForSession(state, state.sessionKey).agentId ??
       resolveUiSelectedGlobalAgentId(state),
   );
+}
+
+export function patchChatSessionLabel(
+  state: ChatPageHost,
+  sessions: Pick<SessionCapability, "patch">,
+  sessionKey: string,
+  label: string | null,
+) {
+  return sessions.patch(sessionKey, { label }, { agentId: resolveChatAgentId(state) });
 }
 
 export function resolveChatAvatarUrl(state: ChatPageHost): string | null {

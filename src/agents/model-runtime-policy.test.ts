@@ -224,6 +224,95 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+  it.each([
+    {
+      name: "provider-owned model id",
+      modelId: "anthropic/claude-opus-4.6",
+    },
+    {
+      name: "provider-qualified model id",
+      modelId: "openrouter/anthropic/claude-opus-4.6",
+    },
+  ])("honors the OpenRouter agent model policy for a $name", ({ modelId }) => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-opus-4.6": {
+              agentRuntime: { id: "openclaw" },
+            },
+            "anthropic/claude-opus-4.6": {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "openrouter",
+        modelId,
+      }),
+    ).toEqual({
+      policy: { id: "openclaw" },
+      source: "model",
+      matchedProvider: "openrouter",
+    });
+  });
+
+  it.each([
+    {
+      name: "provider-owned model id",
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4.6",
+      matchedProvider: undefined,
+    },
+    {
+      name: "provider-qualified model id",
+      provider: "openrouter",
+      modelId: "openrouter/anthropic/claude-opus-4.6",
+      matchedProvider: undefined,
+    },
+    {
+      name: "inferred provider and provider-owned model id",
+      provider: "",
+      modelId: "openrouter/anthropic/claude-opus-4.6",
+      matchedProvider: "openrouter",
+    },
+  ])(
+    "honors the OpenRouter provider model policy for a $name",
+    ({ provider, modelId, matchedProvider }) => {
+      const config = {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              agentRuntime: { id: "codex" },
+              models: [createModelConfig("openclaw", "anthropic/claude-opus-4.6")],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveModelRuntimePolicy({ config, provider, modelId })).toEqual({
+        policy: { id: "openclaw" },
+        source: "model",
+        ...(matchedProvider ? { matchedProvider } : {}),
+      });
+    },
+  );
+
   it("uses provider-qualified model ids to resolve provider model runtime policies", () => {
     const config = {
       models: {

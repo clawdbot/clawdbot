@@ -78,7 +78,7 @@
     "agents_list",
     "message",
     "sessions_spawn",
-    "cron",
+    "automations",
     "gateway",
     "nodes",
     "session_status",
@@ -222,24 +222,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62661,
-    "roughTokens": 15666
+    "chars": 62682,
+    "roughTokens": 15671
   },
   "openClawDeveloperInstructions": {
-    "chars": 2695,
-    "roughTokens": 674
+    "chars": 2702,
+    "roughTokens": 676
   },
   "totalTextOnly": {
-    "chars": 27136,
-    "roughTokens": 6784
+    "chars": 27130,
+    "roughTokens": 6783
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89799,
-    "roughTokens": 22450
+    "chars": 89814,
+    "roughTokens": 22454
   },
   "userInputText": {
-    "chars": 1284,
-    "roughTokens": 321
+    "chars": 1271,
+    "roughTokens": 318
   }
 }
 ```
@@ -422,7 +422,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -507,7 +507,7 @@ Conversation info: ⟦openclaw:ctx⟧
 {"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 ```
 
-Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
 ````
 
 ### Tools: Dynamic Tool Catalog
@@ -521,7 +521,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "agents_list",
   "message",
   "sessions_spawn",
-  "cron",
+  "automations",
   "gateway",
   "nodes",
   "session_status",
@@ -695,7 +695,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "scratch": {
-          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
           "type": "string"
         },
         "summary": {

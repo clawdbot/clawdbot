@@ -37,12 +37,12 @@ export function createSlackReadClient(token: string, options: WebClientOptions =
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
-  // Startup degrades after auth.test fails, so terminate this one-shot request without
-  // imposing the same short deadline on Bolt's long-lived client.
+  // Startup identity stays degraded until restart after auth.test fails. Retry two transient
+  // transport failures before committing that state, without delaying on Slack rate limits.
   return createSlackWebClient(token, {
     ...options,
     rejectRateLimitedCalls: true,
-    retryConfig: { retries: 0 },
+    retryConfig: { retries: 2, minTimeout: 0 },
     timeout: 10_000,
   });
 }

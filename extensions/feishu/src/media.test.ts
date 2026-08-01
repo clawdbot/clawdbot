@@ -22,6 +22,10 @@ const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
+const validPngImage = Buffer.from(
+  "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
+  "hex",
+);
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -447,7 +451,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
-      mediaBuffer: Buffer.from("image"),
+      mediaBuffer: validPngImage,
       fileName: "photo.png",
     });
 
@@ -475,7 +479,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     const send = sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
-      mediaBuffer: Buffer.from("image"),
+      mediaBuffer: validPngImage,
       fileName: "photo.png",
     });
 
@@ -534,7 +538,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     const result = await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
-      mediaBuffer: Buffer.from("image"),
+      mediaBuffer: validPngImage,
       fileName: "photo.png",
       replyToMessageId: "om_parent",
     });

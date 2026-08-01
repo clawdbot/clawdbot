@@ -175,6 +175,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(call.targetRequesterSessionKey).toBe(REQUESTER);
     expect(call.requesterIsSubagent).toBe(false);
     expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireDirectDelivery).toBe(true);
     expect(call.directIdempotencyKey).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
@@ -318,11 +319,17 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("does not wake while other children still await settle", async () => {
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(true);
 
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: children[1] }),
+    );
 
     expect(woke).toBe(false);
+    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledOnce();
+    expect(transitionBatchSpy).not.toHaveBeenCalled();
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 

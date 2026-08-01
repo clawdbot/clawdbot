@@ -71,6 +71,18 @@ export function createCodexAttemptNotificationController(
       }
       return;
     }
+    if (
+      (state.timedOut || state.localCompletionRequested) &&
+      notification.method === "turn/completed" &&
+      readCodexTurnCompletedNotification(notification.params)?.turn.status === "interrupted"
+    ) {
+      // Our cleanup interrupt proves the native turn ended; it must not replace
+      // an already-owned final answer, yield result, or recorded response usage.
+      state.completed = true;
+      turnWatches.clearAllTimers();
+      state.resolveCompletion?.();
+      return;
+    }
     const notificationState = applyCodexTurnNotificationState({
       notification,
       threadId: resourceState.thread.threadId,

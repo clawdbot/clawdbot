@@ -249,6 +249,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     // The complete Control UI and model catalog both cold-load broad graphs;
     // pairing them starves model visibility and repeatedly hits its timeout.
     expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
+    expect(jobOf("core-runtime-media-ui")).not.toBe(jobOf("core-unit-src-security"));
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
@@ -312,13 +313,36 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
-    const embeddedAgentJob = compact.find((shard) =>
-      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
+    const largeJobs = compact.filter(
+      (shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
     );
-    expect(embeddedAgentJob?.groups).toHaveLength(1);
-    expect(embeddedAgentJob?.groups[0]?.env).toEqual({
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
-    });
+    expect(largeJobs).toHaveLength(8);
+    const embeddedAgentGroups = compact
+      .flatMap((shard) => shard.groups)
+      .filter((group) => group.shard_name.startsWith("agentic-agents-embedded-"));
+    expect(embeddedAgentGroups.map((group) => group.shard_name).toSorted()).toEqual([
+      "agentic-agents-embedded-base",
+      "agentic-agents-embedded-incomplete-turn",
+      "agentic-agents-embedded-overflow-compaction",
+      "agentic-agents-embedded-run",
+    ]);
+    expect(
+      compact.some((shard) =>
+        shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
+      ),
+    ).toBe(false);
+    expect(embeddedAgentGroups.flatMap((group) => group.configs).toSorted()).toEqual(
+      embeddedAgentVitestProjectOwners.map((owner) => owner.config).toSorted(),
+    );
+    expect(
+      embeddedAgentGroups.every(
+        (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
+      ),
+    ).toBe(true);
+    const embeddedBaseJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded-base"),
+    );
+    expect(embeddedBaseJob?.groups).toHaveLength(1);
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))

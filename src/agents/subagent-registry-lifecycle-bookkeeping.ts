@@ -84,7 +84,7 @@ export function createSubagentRegistryLifecycleBookkeeping(
       // Preserve only the collector result tombstone for waits and group caps.
       cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
       cleanupParams.entry.requesterSettleWake = undefined;
-      params.persist();
+      params.persist(cleanupParams.runId);
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
     }
@@ -99,7 +99,7 @@ export function createSubagentRegistryLifecycleBookkeeping(
       }
       if (cleanupParams.skipRequesterSettleWake) {
         params.runs.delete(cleanupParams.runId);
-        params.persist();
+        params.persist(cleanupParams.runId);
         retryDeferredCompletedAnnounces(cleanupParams.runId);
         return;
       }
@@ -117,7 +117,7 @@ export function createSubagentRegistryLifecycleBookkeeping(
       });
     } else {
       cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
-      params.persist();
+      params.persist(cleanupParams.runId);
     }
     retryDeferredCompletedAnnounces(cleanupParams.runId);
     if (!cleanupParams.skipRequesterSettleWake) {

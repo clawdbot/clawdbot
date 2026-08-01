@@ -399,6 +399,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       };
       this.waitForOutboundSequence = async (input) =>
         await waitForQaTransportOutboundSequence({
+          accountId: this.accountId,
           input,
           readEvents: () => this.#state.getOutboundEvents(),
         });

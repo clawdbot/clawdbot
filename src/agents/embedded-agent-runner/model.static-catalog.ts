@@ -17,6 +17,7 @@ import {
   normalizePluginDiscoveryResult,
   resolveRuntimePluginDiscoveryProviders,
   runProviderStaticCatalog,
+  type PreparedProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -26,7 +27,11 @@ import {
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
-import { staticModelIdMatches } from "./model.static-id.js";
+import {
+  createStaticModelIdMatcher,
+  staticModelIdMatches,
+  type StaticModelIdMatcher,
+} from "./model.static-id.js";
 
 export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
@@ -38,8 +43,9 @@ function rowMatchesModel(params: {
   row: NormalizedModelCatalogRow;
   provider: string;
   modelId: string;
+  matchesStaticModelId: StaticModelIdMatcher;
 }): boolean {
-  return staticModelIdMatches({
+  return params.matchesStaticModelId({
     candidateId: params.row.id,
     provider: params.provider,
     modelId: params.modelId,
@@ -92,10 +98,14 @@ function modelFromProviderStaticCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
   model: ModelProviderConfig["models"][number];
+  providerMetadataOwners?: PluginMetadataSnapshot["owners"];
 }): ProviderRuntimeModel {
-  const [model] = buildInlineProviderModels({
-    [params.provider]: { ...params.providerConfig, models: [params.model] },
-  });
+  const [model] = buildInlineProviderModels(
+    {
+      [params.provider]: { ...params.providerConfig, models: [params.model] },
+    },
+    { providerMetadataOwners: params.providerMetadataOwners },
+  );
   return {
     ...model,
     id: model?.id ?? params.model.id,
@@ -275,6 +285,8 @@ type BundledProviderStaticCatalogResolverParams = {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerIds?: readonly string[];
 };
 
@@ -295,6 +307,9 @@ export function createBundledStaticCatalogModelResolver(params?: {
     ...(params?.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params?.workspaceDir,
   };
+  const matchesStaticModelId = params?.metadataSnapshot
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    : staticModelIdMatches;
   let standaloneState: BundledStaticCatalogState | undefined;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -335,6 +350,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
           row: candidate,
           provider,
           modelId: lookup.modelId,
+          matchesStaticModelId,
         }),
       );
       if (row) {
@@ -403,25 +419,50 @@ async function loadBundledProviderStaticCatalogModels(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
+  providerMetadataOwners?: PluginMetadataSnapshot["owners"];
 }): Promise<Map<string, ProviderRuntimeModel[]>> {
-  const providers = await resolveRuntimePluginDiscoveryProviders({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    onlyPluginIds: params.pluginIds,
-    includeUntrustedWorkspacePlugins: false,
-    requireCompleteDiscoveryEntryCoverage: true,
-    discoveryEntriesOnly: true,
-    includeManifestModelCatalogProviders: false,
-  });
+  const pluginIds = new Set(params.pluginIds);
+  const preparedProviders = (params.preparedStaticProviderCatalog?.providers ?? []).filter(
+    (provider) => provider.pluginId !== undefined && pluginIds.has(provider.pluginId),
+  );
+  const preparedPluginIds = new Set(
+    preparedProviders.flatMap((provider) => (provider.pluginId ? [provider.pluginId] : [])),
+  );
+  const missingPluginIds = params.pluginIds.filter((pluginId) => !preparedPluginIds.has(pluginId));
+  // Prepared provider lists are complete only for the plugin ids they name. Full catalog reads
+  // must still discover omitted plugins, while reusing cached hook results for covered providers.
+  const discoveredProviders =
+    missingPluginIds.length === 0
+      ? []
+      : await resolveRuntimePluginDiscoveryProviders({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          onlyPluginIds: missingPluginIds,
+          includeUntrustedWorkspacePlugins: false,
+          requireCompleteDiscoveryEntryCoverage: true,
+          discoveryEntriesOnly: true,
+          includeManifestModelCatalogProviders: false,
+        });
+  const providers = [...preparedProviders, ...discoveredProviders];
+  const preparedEntries = params.preparedStaticProviderCatalog?.entries.filter(
+    ({ provider }) => provider.pluginId !== undefined && pluginIds.has(provider.pluginId),
+  );
+  const preparedResults = preparedEntries
+    ? new Map(
+        preparedEntries.map(({ provider, result }) => [
+          `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+          result,
+        ]),
+      )
+    : undefined;
   const modelsByProvider = new Map<string, ProviderRuntimeModel[]>();
   for (const catalogProvider of providers) {
-    const result = await runProviderStaticCatalog({
-      provider: catalogProvider,
-      config: params.cfg ?? {},
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+    const preparedResultKey = `${catalogProvider.pluginId ?? ""}\0${normalizeProviderId(catalogProvider.id)}`;
+    const result = preparedResults?.has(preparedResultKey)
+      ? preparedResults.get(preparedResultKey)
+      : await runProviderStaticCatalog({ provider: catalogProvider });
     const normalized = normalizePluginDiscoveryResult({
       provider: catalogProvider,
       result,
@@ -438,6 +479,9 @@ async function loadBundledProviderStaticCatalogModels(params: {
             provider,
             providerConfig,
             model,
+            ...(params.providerMetadataOwners
+              ? { providerMetadataOwners: params.providerMetadataOwners }
+              : {}),
           }),
         ),
       );
@@ -455,6 +499,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
   const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot({
     cfg: params.cfg,
     env,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   });
   const discoveryEntryPluginIds = new Set(
@@ -499,6 +544,10 @@ export async function loadBundledProviderStaticCatalogContextModels(
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           env,
+          ...(params.preparedStaticProviderCatalog
+            ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
+            : {}),
+          ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
         }),
     ),
   );
@@ -514,6 +563,9 @@ function createScopedBundledProviderStaticCatalogModelResolver(
   scopedPluginIds?: string[],
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
+  const matchesStaticModelId = params.metadataSnapshot
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();
   return async (lookup, scopedPluginIds) => {
@@ -549,7 +601,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
       pluginCatalogs.set(catalogKey, catalog);
     }
     return ((await catalog).get(provider) ?? []).find((candidate) =>
-      staticModelIdMatches({
+      matchesStaticModelId({
         candidateId: candidate.id,
         provider,
         modelId: lookup.modelId,

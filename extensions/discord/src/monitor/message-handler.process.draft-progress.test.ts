@@ -95,7 +95,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.retarget).toHaveBeenCalledWith("thread-1");
     expect(draftStream.update).toHaveBeenLastCalledWith(
       expect.stringMatching(
-        /^Investigating\n\n🛠️ Exec\n.*Checked the pipeline\.\n-# .*🛠️ 1 tool call.*⏱️ 5s$/,
+        /^Investigating\n\n🛠️ Exec\n.*Checked the pipeline\.\n-# .*🛠️ 1 tool call.*⏱️ 2s$/,
       ),
     );
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
@@ -143,7 +143,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         kind: "block",
         replies: [
           expect.objectContaining({
-            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 2s$/),
           }),
         ],
       }),
@@ -185,7 +185,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         kind: "block",
         replies: [
           expect.objectContaining({
-            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 2s$/),
           }),
         ],
       }),

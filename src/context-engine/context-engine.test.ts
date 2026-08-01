@@ -298,40 +298,47 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: {
-        summary: "summary",
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 100,
-        tokensAfter: 40,
-        details: undefined,
-        sessionId: "s3-successor",
-        sessionFile: "sqlite:main:s3-successor:/tmp/openclaw-agent.sqlite",
-      },
-    });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
+    const storePath = path.join(root, "openclaw-agent.sqlite");
+    try {
+      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        reason: undefined,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          tokensAfter: 40,
+          details: undefined,
+          sessionId: "s3-successor",
+          sessionFile: `sqlite:main:s3-successor:${storePath}`,
+        },
+      });
 
-    const result = await delegateCompactionToRuntime({
-      sessionId: "s3",
-      sessionKey: "agent:main:s3",
-      tokenBudget: 4096,
-      runtimeContext: {
-        workspaceDir: "/tmp/workspace",
-      },
-    });
-
-    expect(result.result).toMatchObject({
-      sessionId: "s3-successor",
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "s3-successor",
+      const result = await delegateCompactionToRuntime({
+        sessionId: "s3",
         sessionKey: "agent:main:s3",
-        storePath: "/tmp/openclaw-agent.sqlite",
-      },
-    });
-    expect(result.result).not.toHaveProperty("sessionFile");
+        tokenBudget: 4096,
+        runtimeContext: {
+          workspaceDir: "/tmp/workspace",
+        },
+      });
+
+      expect(result.result).toMatchObject({
+        sessionId: "s3-successor",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "s3-successor",
+          sessionKey: "agent:main:s3",
+          storePath,
+        },
+      });
+      expect(result.result).not.toHaveProperty("sessionFile");
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("allows the caller key to rebind to a legacy successor session", async () => {

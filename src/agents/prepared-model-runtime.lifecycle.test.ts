@@ -4,16 +4,26 @@ type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
 
 const mocks = vi.hoisted(() => ({
-  authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
+  authStorage: {
+    getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })),
+    getOAuthProviders: vi.fn(() => []),
+  },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
     getAll: vi.fn(() => []),
+    find: vi.fn(() => null),
   },
-  discoverAuthStorage: vi.fn(),
+  resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
+  discoverAuthStorage: vi.fn((..._args: unknown[]) => undefined as unknown),
   discoverModels: vi.fn(),
   ensureOpenClawModelsJson: vi.fn(async (..._args: unknown[]) => ({
     agentDir: "/tmp/agent",
     wrote: false,
+  })),
+  planOpenClawModelsJsonSource: vi.fn(async (...args: unknown[]) => ({
+    agentDir: String(args[1]),
+    modelsJsonContents: null,
+    pluginCatalogs: [],
   })),
   buildPreparedModelCatalogSnapshot: vi.fn(async (..._args: unknown[]) => ({
     entries: [],
@@ -21,8 +31,11 @@ const mocks = vi.hoisted(() => ({
   })),
   ensureRuntimePluginsLoaded: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
+  prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
   resolveStaticCatalogModel: vi.fn(() => undefined),
   configuredAgentIds: [] as string[],
+  configuredAgentDirs: new Map<string, string>(),
+  configuredWorkspaces: new Map<string, string>(),
   warn: vi.fn(),
   mutationListener: undefined as
     | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
@@ -34,23 +47,37 @@ vi.mock("./model-catalog.js", () => ({
     mocks.buildPreparedModelCatalogSnapshot(...args),
 }));
 
+vi.mock("./agent-auth-discovery.js", () => ({
+  resolveAmbientAgentCredentialsForDiscovery: (...args: unknown[]) =>
+    mocks.resolveAmbientCredentials(...args),
+}));
+
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => {
-    mocks.discoverAuthStorage(...args);
-    return mocks.authStorage;
+    return mocks.discoverAuthStorage(...args) ?? mocks.authStorage;
   },
   discoverModels: (...args: unknown[]) => {
     mocks.discoverModels(...args);
     return mocks.modelRegistry;
   },
+  discoverModelsFromCapturedSources: (...args: unknown[]) => {
+    mocks.discoverModels(...args);
+    return mocks.modelRegistry;
+  },
+}));
+
+vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
+    mocks.configuredAgentDirs.get(agentId) ??
+    (agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`),
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
+    mocks.configuredWorkspaces.get(agentId) ??
+    (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
 }));
@@ -70,6 +97,11 @@ vi.mock("./model-discovery-context.js", () => ({
 
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => mocks.ensureOpenClawModelsJson(...args),
+  planOpenClawModelsJsonSource: (...args: unknown[]) => mocks.planOpenClawModelsJsonSource(...args),
+}));
+
+vi.mock("./models-config.providers.implicit.js", () => ({
+  prepareImplicitProviderStaticCatalog: (...args: unknown[]) => mocks.prepareStaticCatalog(...args),
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
@@ -108,15 +140,28 @@ describe("prepared model runtime snapshots", () => {
   beforeEach(() => {
     getTesting().resetPreparedModelRuntimeSnapshotsForTest();
     mocks.discoverAuthStorage.mockClear();
+    mocks.resolveAmbientCredentials.mockClear();
+    mocks.discoverAuthStorage.mockImplementation(() => mocks.authStorage);
     mocks.discoverModels.mockClear();
     mocks.ensureOpenClawModelsJson.mockReset();
     mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/agent", wrote: false });
+    mocks.planOpenClawModelsJsonSource.mockReset();
+    mocks.planOpenClawModelsJsonSource.mockImplementation(async (_config, agentDir) => ({
+      agentDir: String(agentDir),
+      modelsJsonContents: null,
+      pluginCatalogs: [],
+    }));
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
     mocks.ensureRuntimePluginsLoaded.mockClear();
     mocks.loadStaticCatalog.mockClear();
+    mocks.prepareStaticCatalog.mockClear();
+    mocks.resolveStaticCatalogModel.mockClear();
     mocks.modelRegistry.fork.mockClear();
+    mocks.modelRegistry.find.mockClear();
     mocks.warn.mockClear();
     mocks.configuredAgentIds = [];
+    mocks.configuredAgentDirs.clear();
+    mocks.configuredWorkspaces.clear();
   });
 
   it("does not discover missing owners from a gateway request", async () => {
@@ -754,8 +799,9 @@ describe("prepared model runtime snapshots", () => {
   it("does not replay an auth mutation that occurs before the first owner is registered", async () => {
     getTesting().setModelRuntimeBuildTimeoutMsForTest(100);
     mocks.configuredAgentIds = ["default"];
-    mocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       mocks.mutationListener?.({ affectsInheritedStores: true });
+      return { entries: [] };
     });
     mocks.ensureOpenClawModelsJson
       .mockResolvedValueOnce({ agentDir: "/tmp/unused-agent", wrote: false })
@@ -764,7 +810,10 @@ describe("prepared model runtime snapshots", () => {
     await expect(
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });
 
   it("awaits auth invalidation queued during lifecycle publication", async () => {
@@ -841,6 +890,31 @@ describe("prepared model runtime snapshots", () => {
       agentDir,
     });
     expect(mocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a deduplicated caller when an auth refresh is superseded", async () => {
+    const config = {};
+    const agentDir = "/tmp/prepared-model-runtime-auth-pending-superseded";
+    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
+    let finishFirstRefresh: (() => void) | undefined;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(
+      async () =>
+        await new Promise<{ agentDir: string; wrote: false }>((resolve) => {
+          finishFirstRefresh = () => resolve({ agentDir, wrote: false });
+        }),
+    );
+
+    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
+    const deduplicated = publishPreparedModelRuntimeSnapshot({ config, agentDir });
+    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
+    finishFirstRefresh?.();
+
+    await expect(deduplicated).rejects.toThrow("superseded");
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
+    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.toMatchObject({
+      agentDir,
+    });
   });
 
   it("does not let a superseded owner hide a genuine sibling refresh failure", async () => {
@@ -1011,110 +1085,5 @@ describe("prepared model runtime snapshots", () => {
       agentDir,
       expect.objectContaining({ workspaceDir: "/tmp/explicit-workspace" }),
     );
-  });
-
-  it("finds the configured gateway owner when request config omits its launch workspace", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
-    });
-    const snapshot = await prepareModelRuntimeSnapshot({
-      config,
-      agentDir: "/tmp/unused-agent",
-    });
-
-    expect(snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-  });
-
-  it("does not substitute a configured owner captured from another environment", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
-    });
-
-    await expect(
-      prepareModelRuntimeSnapshot({
-        config,
-        agentDir: "/tmp/unused-agent",
-        env: { ...process.env, OPENCLAW_PREPARED_RUNTIME_TEST_SCOPE: "different" },
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
-  });
-
-  it("does not substitute a configured owner for an explicit workspace", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
-    });
-
-    await expect(
-      prepareModelRuntimeSnapshot({
-        config,
-        agentDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/other-explicit-workspace",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
-  });
-
-  it("does not choose between configured owners sharing one agent directory", async () => {
-    const config = {};
-    const agentDir = "/tmp/shared-configured-agent";
-    await publishPreparedModelRuntimeSnapshot(
-      { config, agentDir, workspaceDir: "/tmp/shared-workspace-a" },
-      { provenance: "configured" },
-    );
-    await publishPreparedModelRuntimeSnapshot(
-      { config, agentDir, workspaceDir: "/tmp/shared-workspace-b" },
-      { provenance: "configured" },
-    );
-
-    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).rejects.toThrow(
-      "prepared model runtime owner was not published",
-    );
-  });
-
-  it("selects a configured owner by agent id when directories are shared", async () => {
-    const config = {};
-    const agentDir = "/tmp/shared-agent-id-directory";
-    await publishPreparedModelRuntimeSnapshot(
-      { agentId: "agent-a", config, agentDir, workspaceDir: "/tmp/shared-agent-id-workspace" },
-      { provenance: "configured" },
-    );
-    const selected = await publishPreparedModelRuntimeSnapshot(
-      { agentId: "agent-b", config, agentDir, workspaceDir: "/tmp/shared-agent-id-workspace" },
-      { provenance: "configured" },
-    );
-
-    await expect(
-      prepareModelRuntimeSnapshot({ agentId: "agent-b", config, agentDir }),
-    ).resolves.toBe(selected);
-  });
-
-  it("retires configured owners removed by config reload", async () => {
-    mocks.configuredAgentIds = ["default", "removed"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config);
-    mocks.configuredAgentIds = ["default"];
-
-    await refreshPreparedModelRuntimeSnapshots(config);
-
-    await expect(
-      prepareModelRuntimeSnapshot({
-        config,
-        agentDir: "/tmp/configured-removed",
-        inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/workspace-removed",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
   });
 });

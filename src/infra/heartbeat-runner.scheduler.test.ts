@@ -12,6 +12,7 @@ import {
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler,
@@ -62,6 +63,86 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(31 * 60_000);
     expect(runOnce).not.toHaveBeenCalled();
     runner.stop();
+  });
+
+  it("starts stopped when its owner signal is already aborted", async () => {
+    useFakeHeartbeatTime();
+    const owner = new AbortController();
+    owner.abort();
+    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce,
+      abortSignal: owner.signal,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runOnce).not.toHaveBeenCalled();
+
+    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const disposeDrain = setHeartbeatWakeHandler(drain);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(drain).toHaveBeenCalledOnce();
+    disposeDrain();
+    runner.stop();
+  });
+
+  it("removes its owner abort listener on manual stop", () => {
+    const owner = new AbortController();
+    const removeListener = vi.spyOn(owner.signal, "removeEventListener");
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      abortSignal: owner.signal,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    runner.stop();
+
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("aborts an active wake when the runner stops", async () => {
+    useFakeHeartbeatTime();
+    let finishWake: (() => void) | undefined;
+    const wakeFinished = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    let wakeSignal: AbortSignal | undefined;
+    const runOnce = vi.fn(async () => {
+      wakeSignal = getHeartbeatWakeAbortSignal();
+      await wakeFinished;
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    const runner = startDefaultRunner(runOnce);
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wakeSignal?.aborted).toBe(false);
+
+    runner.stop();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(wakeSignal?.aborted).toBe(true);
+    finishWake?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const disposeDrain = setHeartbeatWakeHandler(drain);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(drain).toHaveBeenCalledOnce();
+    disposeDrain();
   });
 
   function resolveDueFromNow(nowMs: number, intervalMs: number, agentId: string) {

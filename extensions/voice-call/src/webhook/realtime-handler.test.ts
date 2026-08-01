@@ -14,6 +14,7 @@ import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
+import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
@@ -199,6 +200,17 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
@@ -1477,6 +1489,359 @@ describe("RealtimeCallHandler path routing", () => {
       }
     } finally {
       await server.close();
+    }
+  });
+
+  it("does not deliver a forced consult after its realtime session closes", async () => {
+    let callbacks:
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const sendUserMessage = vi.fn();
+    const closeBridge = vi.fn();
+    const bridge = makeBridge({ close: closeBridge, sendUserMessage });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const handler = makeHandler(
+      { consultPolicy: "always" },
+      {
+        manager: {
+          getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-forced-close")),
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const consultResult = createDeferred<{ text: string }>();
+    const consult = vi.fn(() => consultResult.promise);
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-forced-close", callSid: "CA-forced-close" },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(createBridge).toHaveBeenCalledTimes(1);
+      });
+
+      callbacks?.onTranscript?.("user", "Check the deployment.", true);
+      await waitForRealtimeTest(() => {
+        expect(consult).toHaveBeenCalledTimes(1);
+      });
+      expect(clearAudio).toHaveBeenCalledTimes(1);
+
+      const closed = waitForClose(ws);
+      ws.close();
+      await closed;
+      await waitForRealtimeTest(() => {
+        expect(closeBridge).toHaveBeenCalledTimes(1);
+      });
+
+      consultResult.resolve({ text: "The deployment is healthy." });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(clearAudio).toHaveBeenCalledTimes(1);
+      expect(sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      clearAudio.mockRestore();
+      await server.close();
+    }
+  });
+
+  it("keeps a replacement session's forced consult when the old result resolves late", async () => {
+    const sessionHarnesses: RealtimeVoiceSessionHarness[] = [];
+    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
+      sessionHarnesses.push(harness);
+    };
+    const callbacks: RealtimeBridgeRequest[] = [];
+    const oldSendUserMessage = vi.fn();
+    const replacementSendUserMessage = vi.fn();
+    const oldSubmitToolResult = vi.fn();
+    const oldCloseBridge = vi.fn();
+    const replacementCloseBridge = vi.fn();
+    const bridges = [
+      makeBridge({
+        close: oldCloseBridge,
+        sendUserMessage: oldSendUserMessage,
+        submitToolResult: oldSubmitToolResult,
+      }),
+      makeBridge({
+        close: replacementCloseBridge,
+        sendUserMessage: replacementSendUserMessage,
+      }),
+    ];
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks.push(request);
+        const bridge = bridges[callbacks.length - 1];
+        if (!bridge) {
+          throw new Error("unexpected replacement bridge");
+        }
+        return bridge;
+      },
+    );
+    const handler = makeHandler(
+      { consultPolicy: "always" },
+      {
+        manager: {
+          getCallByProviderCallId: vi.fn((providerCallId: string) =>
+            makeCallRecord(providerCallId),
+          ),
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const oldResult = createDeferred<{ text: string }>();
+    const replacementResult = createDeferred<{ text: string }>();
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementationOnce(() => replacementResult.promise);
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
+    const oldServer = await startRealtimeServer(handler);
+    let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
+    let oldWs: WebSocket | undefined;
+
+    try {
+      oldWs = await connectWs(oldServer.url);
+      oldWs.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-forced-old", callSid: "CA-forced-old" },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(callbacks).toHaveLength(1);
+      });
+      callbacks[0]?.onTranscript?.("user", "Check the old deployment.", true);
+      await waitForRealtimeTest(() => {
+        expect(consult).toHaveBeenCalledTimes(1);
+      });
+      const oldCoordinator = expectDefined(
+        sessionHarnesses[0],
+        "old voice-call realtime session harness",
+      ).forcedConsults;
+      const oldForcedHandle = expectDefined(
+        oldCoordinator.handles().find((handle) => handle.question === "Check the old deployment."),
+        "old forced consult handle",
+      );
+      const stalePendingHandle = expectDefined(
+        oldCoordinator.prepare("Pending work from the old session."),
+        "stale pending forced consult handle",
+      );
+      const stalePendingRun = vi.fn();
+      oldCoordinator.schedule(stalePendingHandle, 60_000, stalePendingRun);
+      callbacks[0]?.onToolCall?.({
+        itemId: "item-old-native",
+        callId: "old-native-consult",
+        name: "openclaw_agent_consult",
+        args: { question: "Check the old deployment." },
+      });
+      expect(consult).toHaveBeenCalledTimes(1);
+
+      replacementServer = await startRealtimeServer(handler);
+      const replacementWs = await connectWs(replacementServer.url);
+      try {
+        replacementWs.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-forced-replacement", callSid: "CA-forced-replacement" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(callbacks).toHaveLength(2);
+        });
+        expect(oldCoordinator.handles()).not.toContainEqual(stalePendingHandle);
+        expect(stalePendingRun).not.toHaveBeenCalled();
+        callbacks[1]?.onTranscript?.("user", "Check the new deployment.", true);
+        await waitForRealtimeTest(() => {
+          expect(consult).toHaveBeenCalledTimes(2);
+        });
+        expect(clearAudio).toHaveBeenCalledTimes(2);
+
+        callbacks[0]?.onToolCall?.({
+          itemId: "item-stale-native",
+          callId: "stale-native-consult",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the old deployment." },
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(oldSubmitToolResult).not.toHaveBeenCalled();
+        expect(consult).toHaveBeenCalledTimes(2);
+
+        oldResult.resolve({ text: "The old deployment is healthy." });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(clearAudio).toHaveBeenCalledTimes(2);
+        expect(oldSendUserMessage).not.toHaveBeenCalled();
+        expect(oldCoordinator.handles()).toContainEqual(oldForcedHandle);
+        expect(oldCoordinator.isCancelled(oldForcedHandle)).toBe(true);
+
+        const oldClosed = waitForClose(oldWs);
+        oldWs.close();
+        await oldClosed;
+        await waitForRealtimeTest(() => {
+          expect(oldCloseBridge).toHaveBeenCalledTimes(1);
+        });
+
+        replacementResult.resolve({ text: "The new deployment is healthy." });
+        await waitForRealtimeTest(() => {
+          expect(replacementSendUserMessage).toHaveBeenCalledTimes(1);
+        });
+        expect(clearAudio).toHaveBeenCalledTimes(3);
+      } finally {
+        if (
+          replacementWs.readyState !== WebSocket.CLOSED &&
+          replacementWs.readyState !== WebSocket.CLOSING
+        ) {
+          replacementWs.close();
+        }
+      }
+    } finally {
+      if (
+        oldWs &&
+        oldWs.readyState !== WebSocket.CLOSED &&
+        oldWs.readyState !== WebSocket.CLOSING
+      ) {
+        oldWs.close();
+      }
+      clearAudio.mockRestore();
+      await replacementServer?.close();
+      await oldServer.close();
+    }
+  });
+
+  it("does not share a native consult with a replacement realtime session", async () => {
+    const callbacks: RealtimeBridgeRequest[] = [];
+    const oldSubmitToolResult = vi.fn();
+    const replacementSubmitToolResult = vi.fn();
+    const bridges = [
+      makeBridge({
+        supportsToolResultContinuation: true,
+        submitToolResult: oldSubmitToolResult,
+      }),
+      makeBridge({
+        supportsToolResultContinuation: true,
+        submitToolResult: replacementSubmitToolResult,
+      }),
+    ];
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks.push(request);
+      const bridge = bridges[callbacks.length - 1];
+      if (!bridge) {
+        throw new Error("unexpected replacement bridge");
+      }
+      return bridge;
+    });
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn((providerCallId: string) => makeCallRecord(providerCallId)),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const oldResult = createDeferred<{ text: string }>();
+    const replacementResult = createDeferred<{ text: string }>();
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementationOnce(() => replacementResult.promise);
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const oldServer = await startRealtimeServer(handler);
+    let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
+    let oldWs: WebSocket | undefined;
+
+    try {
+      oldWs = await connectWs(oldServer.url);
+      oldWs.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-native-old", callSid: "CA-native-old" },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(callbacks).toHaveLength(1);
+      });
+      callbacks[0]?.onToolCall?.({
+        itemId: "item-native-old",
+        callId: "native-old",
+        name: "openclaw_agent_consult",
+        args: { question: "Check the old deployment." },
+      });
+      await waitForRealtimeTest(() => {
+        expect(consult).toHaveBeenCalledTimes(1);
+        expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
+      });
+
+      replacementServer = await startRealtimeServer(handler);
+      const replacementWs = await connectWs(replacementServer.url);
+      try {
+        replacementWs.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-native-replacement", callSid: "CA-native-replacement" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(callbacks).toHaveLength(2);
+        });
+        callbacks[1]?.onToolCall?.({
+          itemId: "item-native-replacement",
+          callId: "native-replacement",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the new deployment." },
+        });
+        await waitForRealtimeTest(() => {
+          expect(consult).toHaveBeenCalledTimes(2);
+        });
+
+        oldResult.resolve({ text: "The old deployment is healthy." });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
+
+        replacementResult.resolve({ text: "The new deployment is healthy." });
+        await waitForRealtimeTest(() => {
+          expect(replacementSubmitToolResult).toHaveBeenLastCalledWith(
+            "native-replacement",
+            { text: "The new deployment is healthy." },
+            undefined,
+          );
+        });
+      } finally {
+        if (
+          replacementWs.readyState !== WebSocket.CLOSED &&
+          replacementWs.readyState !== WebSocket.CLOSING
+        ) {
+          replacementWs.close();
+        }
+      }
+    } finally {
+      if (
+        oldWs &&
+        oldWs.readyState !== WebSocket.CLOSED &&
+        oldWs.readyState !== WebSocket.CLOSING
+      ) {
+        oldWs.close();
+      }
+      await replacementServer?.close();
+      await oldServer.close();
     }
   });
 

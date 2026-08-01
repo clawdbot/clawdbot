@@ -2522,6 +2522,14 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
+.data-table-sort-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
 .data-table-sort-icon {
   display: inline-flex;
   vertical-align: middle;
@@ -5745,6 +5753,12 @@ td.data-table-key-col {
 
 .provider-brand-icon[data-provider-icon="gemini"] {
   color: #4285f4;
+}
+
+.provider-brand-icon[data-provider-icon="llamacpp"],
+.provider-brand-icon[data-provider-icon="lmstudio"],
+.provider-brand-icon[data-provider-icon="ollama"] {
+  color: var(--text-strong);
 }
 
 .provider-brand-icon[data-provider-icon="opencode"],

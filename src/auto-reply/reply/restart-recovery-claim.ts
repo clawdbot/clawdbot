@@ -4,7 +4,6 @@ import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
-  sameRestartRecoveryTerminalRunIds,
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,7 +11,8 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -86,6 +86,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
     abortedLastRun: entry.abortedLastRun,
+    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -99,39 +101,7 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
-}
-
-function matchesExpectedSessionState(
-  entry: SessionEntry,
-  sessionId: string,
-  expected: SessionTranscriptTurnExpectedState,
-): boolean {
-  return (
-    entry.sessionId === sessionId &&
-    entry.abortedLastRun === expected.abortedLastRun &&
-    entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
-    entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
-    entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
-    entry.restartRecoveryDeliveryRequestFingerprint ===
-      expected.restartRecoveryDeliveryRequestFingerprint &&
-    entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
-    entry.restartRecoveryDeliverySourceRunId === expected.restartRecoveryDeliverySourceRunId &&
-    entry.restartRecoveryRequesterAccountId === expected.restartRecoveryRequesterAccountId &&
-    entry.restartRecoveryRequesterSenderId === expected.restartRecoveryRequesterSenderId &&
-    entry.restartRecoverySameChannelThreadRequired ===
-      expected.restartRecoverySameChannelThreadRequired &&
-    entry.restartRecoverySourceIngress === expected.restartRecoverySourceIngress &&
-    entry.restartRecoverySourceReplyDeliveryMode ===
-      expected.restartRecoverySourceReplyDeliveryMode &&
-    sameRestartRecoveryTerminalRunIds(
-      entry.restartRecoveryTerminalRunIds,
-      expected.restartRecoveryTerminalRunIds,
-    ) &&
-    entry.status === expected.status &&
-    entry.updatedAt === expected.updatedAt
-  );
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
@@ -189,7 +159,10 @@ export function createReplyRestartRecoveryClaimController(params: {
     const persisted = await updateSessionEntry(
       { storePath: options.storePath, sessionKey: options.sessionKey },
       (current) =>
-        matchesExpectedSessionState(current, options.sessionId, expectedSessionState)
+        sessionMatchesExpectedTranscriptTurn(
+          { entry: current },
+          { expectedSessionId: options.sessionId, expectedSessionState },
+        )
           ? options.patch
           : null,
     );

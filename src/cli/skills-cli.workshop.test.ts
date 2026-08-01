@@ -126,6 +126,32 @@ describe("skills workshop cli", () => {
     await tempDirs.cleanup();
   });
 
+  it("renders workshop parent help successfully without creating workshop state", async () => {
+    const helpOutput: string[] = [];
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: (value) => helpOutput.push(value),
+      writeOut: (value) => helpOutput.push(value),
+    });
+    registerSkillsCli(program);
+
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      await program.parseAsync(["skills", "workshop"], { from: "user" });
+
+      expect(process.exitCode).toBe(0);
+      expect(helpOutput.join("")).toContain("Manage pending skill proposals");
+      expect(helpOutput.join("")).toContain("propose-create");
+      expect(mocks.runtimeStdout).toEqual([]);
+      expect(mocks.runtimeErrors).toEqual([]);
+      await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
   it("creates, lists, inspects, and applies a skill proposal", async () => {
     const draftPath = path.join(mocks.workspaceDir, "proposal-draft");
     await fs.mkdir(path.join(draftPath, "references"), { recursive: true });

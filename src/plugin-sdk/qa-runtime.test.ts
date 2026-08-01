@@ -118,6 +118,30 @@ describe("plugin-sdk qa-runtime", () => {
     expect(module.isQaRuntimeAvailable()).toBe(false);
   });
 
+  it("runs a plugin-owned transport through the private QA suite host", async () => {
+    const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      runLiveTransportQaSuiteCommand,
+    });
+    const module = await import("./qa-runtime.js");
+    const options = { providerMode: "mock-openai" };
+    const selectScenarioIds = vi.fn(() => ["channel-canary"]);
+
+    await module.runLiveTransportQaSuiteCommand({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+  });
+
   it("registers shared live transport QA CLI options", async () => {
     const module = await import("./qa-runtime.js");
     const run = vi.fn(async () => {});
@@ -126,6 +150,7 @@ describe("plugin-sdk qa-runtime", () => {
     module
       .createLiveTransportQaCliRegistration({
         commandName: "telegram",
+        credentialFileHelp: "Private JSON credential file",
         credentialOptions: {
           sourceDescription: "Credential source for Telegram QA",
           roleDescription: "Credential role for Telegram QA",
@@ -172,6 +197,8 @@ describe("plugin-sdk qa-runtime", () => {
       "--fail-fast",
       "--sut-account",
       "sut-2",
+      "--credential-file",
+      "/secure/telegram-qa.json",
       "--credential-source",
       "convex",
       "--credential-role",
@@ -191,6 +218,7 @@ describe("plugin-sdk qa-runtime", () => {
       scenarioIds: ["alpha", "beta"],
       listScenarios: true,
       sutAccountId: "sut-2",
+      credentialFile: "/secure/telegram-qa.json",
       credentialSource: "convex",
       credentialRole: "maintainer",
     });

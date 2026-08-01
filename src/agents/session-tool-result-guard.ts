@@ -4,6 +4,7 @@
  * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
  */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -200,15 +201,11 @@ function redactPersistedDetailString(
   )} original chars omitted]`;
 }
 
-function isSensitivePersistedDetailKey(key: string | undefined): boolean {
-  return Boolean(key && isSensitiveFieldKey(key));
-}
-
 function selectPersistedDetailRedactionKey(
   key: string,
   inheritedKey: string | undefined,
 ): string | undefined {
-  return isSensitivePersistedDetailKey(key) ? key : inheritedKey;
+  return isSensitiveFieldKey(key) ? key : inheritedKey;
 }
 
 function redactedOriginalDetailKeys(
@@ -287,6 +284,26 @@ function redactPersistedSummaryField(
   );
 }
 
+function copyPersistedSummaryFields(params: {
+  target: Record<string, unknown>;
+  source: Record<string, unknown>;
+  keys: readonly string[];
+  maxChars: number;
+  redactionConfig?: ToolResultDetailRedactionConfig;
+}): void {
+  for (const key of params.keys) {
+    const value = params.source[key];
+    if (value !== undefined) {
+      params.target[key] = redactPersistedSummaryField(
+        key,
+        value,
+        params.maxChars,
+        params.redactionConfig,
+      );
+    }
+  }
+}
+
 function sanitizePersistedSessionDetail(
   value: unknown,
   redactionConfig?: ToolResultDetailRedactionConfig,
@@ -296,24 +313,25 @@ function sanitizePersistedSessionDetail(
   }
   const src = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const key of [
-    "sessionId",
-    "status",
-    "pid",
-    "startedAt",
-    "endedAt",
-    "runtimeMs",
-    "cwd",
-    "name",
-    "truncated",
-    "exitCode",
-    "exitSignal",
-  ]) {
-    const field = src[key];
-    if (field !== undefined) {
-      out[key] = redactPersistedSummaryField(key, field, 500, redactionConfig);
-    }
-  }
+  copyPersistedSummaryFields({
+    target: out,
+    source: src,
+    keys: [
+      "sessionId",
+      "status",
+      "pid",
+      "startedAt",
+      "endedAt",
+      "runtimeMs",
+      "cwd",
+      "name",
+      "truncated",
+      "exitCode",
+      "exitSignal",
+    ],
+    maxChars: 500,
+    redactionConfig,
+  });
   if (typeof src.command === "string") {
     out.command = redactPersistedDetailString(src.command, 500, redactionConfig);
   }
@@ -357,28 +375,24 @@ function buildPersistedDetailsFallback(
   }
   if (src) {
     fallback.originalDetailKeys = redactedOriginalDetailKeys(src, redactionConfig);
-    for (const key of [
-      "status",
-      "sessionId",
-      "pid",
-      "exitCode",
-      "exitSignal",
-      "truncated",
-      "spill",
-      "fullOutputPath",
-      "spilledChars",
-      "spillTruncated",
-    ]) {
-      const field = src[key];
-      if (field !== undefined) {
-        fallback[key] = redactPersistedSummaryField(
-          key,
-          field,
-          MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
-          redactionConfig,
-        );
-      }
-    }
+    copyPersistedSummaryFields({
+      target: fallback,
+      source: src,
+      keys: [
+        "status",
+        "sessionId",
+        "pid",
+        "exitCode",
+        "exitSignal",
+        "truncated",
+        "spill",
+        "fullOutputPath",
+        "spilledChars",
+        "spillTruncated",
+      ],
+      maxChars: MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
+      redactionConfig,
+    });
     copyPersistedResultStateFields(
       fallback,
       src,
@@ -390,21 +404,23 @@ function buildPersistedDetailsFallback(
 }
 
 function enforcePersistedDetailsByteCap(
-  value: Record<string, unknown>,
-  src: Record<string, unknown> | undefined,
+  value: unknown,
+  originalDetails: unknown,
   originalSize: BoundedJsonUtf8Bytes,
   redactionConfig?: ToolResultDetailRedactionConfig,
-): Record<string, unknown> {
+): unknown {
   const sanitizedBytes = jsonUtf8BytesOrInfinity(value);
   if (sanitizedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return value;
   }
-  const fallback = buildPersistedDetailsFallback(
-    src,
-    originalSize,
-    sanitizedBytes,
-    redactionConfig,
-  );
+  const fallback = isRecord(originalDetails)
+    ? buildPersistedDetailsFallback(originalDetails, originalSize, sanitizedBytes, redactionConfig)
+    : {
+        persistedDetailsTruncated: true,
+        finalDetailsTruncated: true,
+        ...originalDetailsSizeFields(originalSize),
+        sanitizedDetailsBytes: sanitizedBytes,
+      };
   if (jsonUtf8BytesOrInfinity(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return fallback;
   }
@@ -413,32 +429,6 @@ function enforcePersistedDetailsByteCap(
     finalDetailsTruncated: true,
     ...originalDetailsSizeFields(originalSize),
     sanitizedDetailsBytes: sanitizedBytes,
-  };
-}
-
-function enforceRedactedPersistedDetailsByteCap(
-  redacted: unknown,
-  originalDetails: unknown,
-  originalSize: BoundedJsonUtf8Bytes,
-  redactionConfig?: ToolResultDetailRedactionConfig,
-): unknown {
-  const redactedBytes = jsonUtf8BytesOrInfinity(redacted);
-  if (redactedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
-    return redacted;
-  }
-  if (originalDetails && typeof originalDetails === "object" && !Array.isArray(originalDetails)) {
-    return buildPersistedDetailsFallback(
-      originalDetails as Record<string, unknown>,
-      originalSize,
-      redactedBytes,
-      redactionConfig,
-    );
-  }
-  return {
-    persistedDetailsTruncated: true,
-    finalDetailsTruncated: true,
-    ...originalDetailsSizeFields(originalSize),
-    sanitizedDetailsBytes: redactedBytes,
   };
 }
 
@@ -453,7 +443,7 @@ function sanitizeToolResultDetailsForPersistence(
   // need to be fully stringified just to learn they exceed the persistence cap.
   const originalSize = boundedJsonUtf8Bytes(details, MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES);
   if (originalSize.complete && originalSize.bytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
-    return enforceRedactedPersistedDetailsByteCap(
+    return enforcePersistedDetailsByteCap(
       redactPersistedDetailValue(details, 0, undefined, redactionConfig),
       details,
       originalSize,
@@ -478,37 +468,33 @@ function sanitizeToolResultDetailsForPersistence(
     ...originalDetailsSizeFields(originalSize),
     originalDetailKeys: redactedOriginalDetailKeys(src, redactionConfig),
   };
-  for (const key of [
-    "status",
-    "sessionId",
-    "pid",
-    "startedAt",
-    "endedAt",
-    "cwd",
-    "name",
-    "exitCode",
-    "exitSignal",
-    "retryInMs",
-    "total",
-    "totalLines",
-    "totalChars",
-    "truncated",
-    "spill",
-    "fullOutputPath",
-    "spilledChars",
-    "spillTruncated",
-    "truncation",
-  ]) {
-    const field = src[key];
-    if (field !== undefined) {
-      out[key] = redactPersistedSummaryField(
-        key,
-        field,
-        MAX_PERSISTED_DETAIL_STRING_CHARS,
-        redactionConfig,
-      );
-    }
-  }
+  copyPersistedSummaryFields({
+    target: out,
+    source: src,
+    keys: [
+      "status",
+      "sessionId",
+      "pid",
+      "startedAt",
+      "endedAt",
+      "cwd",
+      "name",
+      "exitCode",
+      "exitSignal",
+      "retryInMs",
+      "total",
+      "totalLines",
+      "totalChars",
+      "truncated",
+      "spill",
+      "fullOutputPath",
+      "spilledChars",
+      "spillTruncated",
+      "truncation",
+    ],
+    maxChars: MAX_PERSISTED_DETAIL_STRING_CHARS,
+    redactionConfig,
+  });
   copyPersistedResultStateFields(out, src, MAX_PERSISTED_DETAIL_STRING_CHARS, redactionConfig);
   if (typeof src.tail === "string") {
     out.tail = redactPersistedDetailString(
@@ -528,29 +514,18 @@ function sanitizeToolResultDetailsForPersistence(
   return enforcePersistedDetailsByteCap(out, src, originalSize, redactionConfig);
 }
 
-function capToolResultDetails(
-  msg: AgentMessage,
-  redactionConfig?: ToolResultDetailRedactionConfig,
-): AgentMessage {
-  if ((msg as { role?: string }).role !== "toolResult") {
-    return msg;
-  }
-  const details = (msg as { details?: unknown }).details;
-  const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details, redactionConfig);
-  if (sanitizedDetails === details) {
-    return msg;
-  }
-  const next = { ...msg } as AgentMessage & { details?: unknown };
-  next.details = sanitizedDetails;
-  return next;
-}
-
 function capToolResultForPersistence(
   msg: AgentMessage,
   maxChars: number,
   redactionConfig?: ToolResultDetailRedactionConfig,
 ): AgentMessage {
-  return capToolResultDetails(capToolResultSize(msg, maxChars), redactionConfig);
+  const capped = capToolResultSize(msg, maxChars);
+  if (capped.role !== "toolResult") {
+    return capped;
+  }
+  const details = (capped as { details?: unknown }).details;
+  const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details, redactionConfig);
+  return sanitizedDetails === details ? capped : { ...capped, details: sanitizedDetails };
 }
 
 function normalizePersistedToolResultName(

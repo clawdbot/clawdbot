@@ -5,7 +5,11 @@ import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
+  countPendingDescendantRunsExcludingRunFromRuns,
+  countPendingDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
+  hasDescendantRunAwaitingSettleFromRuns,
+  listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
@@ -30,6 +34,21 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
 
 function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
   return new Map(runs.map((run) => [run.runId, run]));
+}
+
+class CountingRunMap extends Map<string, SubagentRunRecord> {
+  entriesCalls = 0;
+  valuesCalls = 0;
+
+  override entries(): MapIterator<[string, SubagentRunRecord]> {
+    this.entriesCalls += 1;
+    return super.entries();
+  }
+
+  override values(): MapIterator<SubagentRunRecord> {
+    this.valuesCalls += 1;
+    return super.values();
+  }
 }
 
 function listRunsForController(
@@ -115,6 +134,24 @@ describe("subagent registry read index", () => {
       countActiveDescendantRunsFromRuns(runs, root),
     );
     expect(index.countActiveDescendantRuns(root)).toBe(1);
+    expect(index.countPendingDescendantRuns(root)).toBe(
+      countPendingDescendantRunsFromRuns(runs, root),
+    );
+    expect(index.countPendingDescendantRuns(root)).toBe(2);
+    expect(index.countPendingDescendantRunsExcludingRun(root, "run-parent")).toBe(
+      countPendingDescendantRunsExcludingRunFromRuns(runs, root, "run-parent"),
+    );
+    expect(index.countPendingDescendantRunsExcludingRun(root, "run-parent")).toBe(1);
+    expect(index.hasDescendantRunAwaitingSettle(root)).toBe(
+      hasDescendantRunAwaitingSettleFromRuns(runs, root),
+    );
+    expect(index.listDescendantRunsForRequester(root)).toEqual(
+      listDescendantRunsForRequesterFromRuns(runs, root),
+    );
+    expect(index.listDescendantRunsForRequester(root).map((run) => run.runId)).toEqual([
+      "run-parent",
+      "run-live-child",
+    ]);
   });
 
   it("handles empty registry snapshots", () => {
@@ -215,6 +252,48 @@ describe("subagent registry read index", () => {
         (run) => run.runId,
       ),
     ).toEqual(["run-original", "run-added-after-context"]);
+  });
+
+  it("reuses one source-map scan across repeated descendant queries", () => {
+    const root = "agent:main:main";
+    const entries: Array<[string, SubagentRunRecord]> = [];
+    let requesterSessionKey = root;
+    for (let index = 0; index < 100; index += 1) {
+      const runId = `run-${index}`;
+      const childSessionKey = `agent:main:subagent:${index}`;
+      entries.push([
+        runId,
+        makeRun({
+          runId,
+          childSessionKey,
+          requesterSessionKey,
+          createdAt: 1_000 + index,
+          startedAt: 1_000 + index,
+        }),
+      ]);
+      requesterSessionKey = childSessionKey;
+    }
+    const runs = new CountingRunMap(entries);
+    const index = buildSubagentRunReadIndexFromRuns({ runs, now: 2_000 });
+
+    expect(runs.entriesCalls).toBe(1);
+    expect(runs.valuesCalls).toBe(0);
+    expect(index.latestRunsByChildSessionKey.size).toBe(100);
+    expect(index.countActiveDescendantRuns(root)).toBe(100);
+    expect(index.countPendingDescendantRuns(root)).toBe(100);
+    expect(index.countPendingDescendantRunsExcludingRun(root, "run-50")).toBe(99);
+    expect(index.hasDescendantRunAwaitingSettle(root)).toBe(true);
+    expect(index.listDescendantRunsForRequester(root)).toHaveLength(100);
+
+    for (const entry of entries) {
+      index.countActiveDescendantRuns(entry[1].childSessionKey);
+      index.countPendingDescendantRuns(entry[1].childSessionKey);
+      index.hasDescendantRunAwaitingSettle(entry[1].childSessionKey);
+      index.listDescendantRunsForRequester(entry[1].childSessionKey);
+    }
+
+    expect(runs.entriesCalls).toBe(1);
+    expect(runs.valuesCalls).toBe(0);
   });
 
   it("normalizes display lookup keys for whitespace-padded child session keys", () => {

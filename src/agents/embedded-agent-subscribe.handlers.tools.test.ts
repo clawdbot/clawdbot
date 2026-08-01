@@ -2211,8 +2211,8 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
-  it("does not suppress assistant output when deterministic prompt delivery rejects", async () => {
-    const { ctx } = createTestContext();
+  it("records an actionable failure when deterministic approval delivery rejects", async () => {
+    const { ctx, warn } = createTestContext();
     ctx.params.onToolResult = vi.fn(async () => {
       throw new Error("delivery failed");
     });
@@ -2235,6 +2235,54 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     });
 
     expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to deliver exec approval prompt: delivery failed"),
+    );
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "Approval prompt delivery failed: delivery failed",
+      mutatingAction: false,
+    });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+    expect(payloads[0]?.text).toContain("approval prompt delivery");
+  });
+
+  it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
+    const { ctx, warn } = createTestContext();
+    ctx.params.onToolResult = vi.fn(async () => {
+      throw new Error("notice delivery failed");
+    });
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-unavailable-reject",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-unavailable",
+          reason: "no-approval-route",
+          channelLabel: "Discord",
+        },
+      },
+    });
+
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to deliver exec approval prompt: notice delivery failed"),
+    );
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "Approval prompt delivery failed: notice delivery failed",
+      mutatingAction: false,
+    });
   });
 
   it("emits approval + blocked command item events when exec needs approval", async () => {

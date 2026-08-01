@@ -491,6 +491,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private syncing: Promise<void> | null = null;
   private queuedArchiveFiles = new Set<string>();
   private queuedSessions = new Map<string, MemorySessionSyncTarget>();
+  private queuedForce = false;
+  private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -1895,15 +1897,38 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closing || this.closed) {
       return;
     }
+    if (
+      hasTargetedSessionSyncParams(params) &&
+      (this.queuedSessionSync !== null ||
+        this.queuedArchiveFiles.size > 0 ||
+        this.queuedSessions.size > 0)
+    ) {
+      // A failed queued batch stays manager-owned. Route the next targeted
+      // call through the queue even while idle so it adopts that retained work.
+      return await this.enqueueTargetedSessionSync(params);
+    }
     return await this.syncAdmitted(params);
   }
 
   private async syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+    },
   ): Promise<void> {
     if (this.syncing) {
       if (hasTargetedSessionSyncParams(params)) {
+        if (options?.queuedSessionOwner) {
+          // Another caller claimed the sync slot after this queue owner was
+          // created. Wait for it, then retry admission instead of enqueueing
+          // into the promise that is already awaiting this call.
+          await this.syncing.catch(() => undefined);
+          if (this.closing || this.closed) {
+            return;
+          }
+          return await this.syncAdmitted(params, options);
+        }
         return this.enqueueTargetedSessionSync(params);
       }
       try {
@@ -1995,19 +2020,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private enqueueTargetedSessionSync(
-    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
   ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
-        isClosed: () => this.closed,
+        isClosed: () => this.closing || this.closed,
         getSyncing: () => this.syncing,
         getQueuedArchiveFiles: () => this.queuedArchiveFiles,
         getQueuedSessions: () => this.queuedSessions,
+        getQueuedForce: () => this.queuedForce,
+        setQueuedForce: (value) => {
+          this.queuedForce = value;
+        },
+        getQueuedProgressCallbacks: () => this.queuedProgressCallbacks,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.syncAdmitted(params),
+        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
       },
       targets,
     );
@@ -2314,6 +2344,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
+    this.queuedArchiveFiles.clear();
+    this.queuedSessions.clear();
+    this.queuedForce = false;
+    this.queuedProgressCallbacks.clear();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

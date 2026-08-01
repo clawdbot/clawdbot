@@ -144,7 +144,7 @@ describe("cron controller", () => {
               "openai/gpt-5.2": { alias: "main" },
             },
           },
-          list: {
+          entries: {
             writer: {
               model: { primary: "xai/grok-4", fallbacks: ["openai/gpt-5.2-mini"] },
             },

@@ -520,12 +520,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               }
             },
             delivery: {
+              observeMessageSent: true,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },
             dispatcherOptions: {
               ...turnDispatcherOptions,
-              onSettled: () => draftController.progressDraftGate.cancel(),
+              onSettled: () => draftController.cancelProgressDraft(),
             },
             replyOptions: {
               skillFilter: roomConfig?.skills,

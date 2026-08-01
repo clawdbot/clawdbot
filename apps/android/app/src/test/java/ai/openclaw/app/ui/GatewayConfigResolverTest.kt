@@ -417,17 +417,6 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveScannedSetupCodeResultFlagsInsecureRemoteGateway() {
-    val setupCode =
-      encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
-
-    val resolved = resolveScannedSetupCodeResult(setupCode)
-
-    assertNull(resolved.setupCode)
-    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, resolved.error)
-  }
-
-  @Test
   fun resolveScannedSetupCodeResultPreservesIpv6ZoneError() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://[fe80::1%25wlan0]:443","bootstrapToken":"bootstrap-1"}""")

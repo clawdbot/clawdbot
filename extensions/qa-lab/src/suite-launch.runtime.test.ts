@@ -203,6 +203,26 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("forces the declared runtime for a single runtime-specific flow scenario", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-single-codex-runtime-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/single-codex-runtime",
+      providerMode: "live-frontier",
+      scenarioIds: ["long-context-progress-watchdog"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forcedRuntime: "codex",
+        scenarioIds: ["long-context-progress-watchdog"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
   it("retries a flow-only suite once for retryable infrastructure failures", async () => {
     const attempts = mockFlowPartitionFailures(
       new Map([

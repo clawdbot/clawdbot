@@ -15,6 +15,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  explicitSetPaths?: readonly (readonly string[])[];
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;

@@ -395,15 +395,7 @@ function renderSessionListBody(params: {
           : nothing}`;
       }
       if (section.id === "work") {
-        // Keep the Coding header visible beside catalog sections just as it
-        // was when those sections were nested inside it.
-        if (
-          section.totalRowCount === 0 &&
-          !(
-            catalogsVisible &&
-            (params.catalogs.catalogs.length > 0 || params.catalogs.refreshStatus.error !== null)
-          )
-        ) {
+        if (section.totalRowCount === 0) {
           return nothing;
         }
         return renderSessionSection({ host, section });

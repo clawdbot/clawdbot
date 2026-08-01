@@ -62,7 +62,9 @@ const hoisted = vi.hoisted(() => {
     inCatalog: true,
   }));
   const prepareModelRuntimeSnapshot = vi.fn(async () => ({}));
-  const refreshPreparedModelRuntimeSnapshots = vi.fn(async (_cfg?: unknown) => {});
+  const refreshPreparedModelRuntimeSnapshots = vi.fn(
+    async (_cfg?: unknown, _options?: unknown) => {},
+  );
   const ensureRuntimePluginsLoaded = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
@@ -424,6 +426,7 @@ describe("startGatewayPostAttachRuntime", () => {
       cfg: { hooks: { internal: { enabled: false } } },
       delayMs: 0,
       shouldContinue: expect.any(Function),
+      waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
     expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
@@ -457,6 +460,39 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(
       expect.arrayContaining([recoverySidecar]),
     );
+  });
+
+  it("gates main-session recovery behind post-ready work", async () => {
+    let releasePostReadyWork!: () => void;
+    const postReadyWork = new Promise<void>((resolve) => {
+      releasePostReadyWork = resolve;
+    });
+    let waitForStart: (() => Promise<void>) | undefined;
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { waitForStart?: () => Promise<void> }) => {
+        waitForStart = params.waitForStart;
+        return { stop: vi.fn(async () => {}) };
+      },
+    );
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      waitForPostReadyWork: () => postReadyWork,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(waitForStart).toEqual(expect.any(Function));
+    });
+    let released = false;
+    const waiting = waitForStart?.().then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    releasePostReadyWork();
+    await waiting;
+    expect(released).toBe(true);
   });
 
   it("stops restart recovery with gateway-lifetime sidecars", async () => {
@@ -1190,11 +1226,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("uses current config when agent runtime plugin prewarm runs", async () => {
     const startupConfig = { marker: "startup" } as never;
     const currentConfig = { marker: "current" } as never;
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams({
         gatewayPluginConfigAtStart: startupConfig,
       }),
+      waitForPostReadyWork: () => gatewayReady,
       providerAuthPrewarm: { enabled: false },
       agentRuntimePluginPrewarm: {
         enabled: true,
@@ -1203,6 +1244,12 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+
+    releaseGatewayReady();
     await waitForGatewayTestState(() => {
       expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: currentConfig,
@@ -1753,9 +1800,110 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(trace.measures).toContain("sidecars.channels");
     expect(trace.measures).toContain("sidecars.channel-skip");
+    expect(prewarmPrimaryModel).toHaveBeenCalledWith(
+      expect.objectContaining({ startupTrace: trace.startupTrace }),
+    );
     expect(logChannels.info).toHaveBeenCalledWith(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
+  });
+
+  it("records prepared runtime build grouping in the startup trace", async () => {
+    const trace = createStartupTraceRecorder();
+
+    await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      startupTrace: trace.startupTrace,
+    });
+
+    const options = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]?.[1] as
+      | {
+          onBuildStats?: (stats: {
+            agentCount: number;
+            workspaceGroupCount: number;
+            configuredFactsGroupCount: number;
+            catalogSourceCount: number;
+            credentialGroupCount: number;
+            catalogGroupCount: number;
+            runtimeRegistryCount: number;
+            configuredRuntimeModelCount: number;
+            generatedCatalogPluginCount: number;
+            generatedCatalogReadCount: number;
+            workspaceFactsMs: number;
+            runtimePluginMs: number;
+            pluginMetadataMs: number;
+            staticProviderCatalogMs: number;
+            ambientCredentialsMs: number;
+            agentFactsMs: number;
+            configuredProjectionMs: number;
+            catalogSourceMs: number;
+            registryMs: number;
+            sourceConcurrencyLimit: number;
+            fullCatalogConcurrencyLimit: number;
+          }) => void;
+        }
+      | undefined;
+    options?.onBuildStats?.({
+      agentCount: 12,
+      workspaceGroupCount: 2,
+      configuredFactsGroupCount: 2,
+      catalogSourceCount: 0,
+      credentialGroupCount: 1,
+      catalogGroupCount: 0,
+      runtimeRegistryCount: 12,
+      configuredRuntimeModelCount: 2,
+      generatedCatalogPluginCount: 0,
+      generatedCatalogReadCount: 0,
+      workspaceFactsMs: 120,
+      runtimePluginMs: 0,
+      pluginMetadataMs: 40,
+      staticProviderCatalogMs: 50,
+      ambientCredentialsMs: 10,
+      agentFactsMs: 5,
+      configuredProjectionMs: 15,
+      catalogSourceMs: 0,
+      registryMs: 30,
+      sourceConcurrencyLimit: 2,
+      fullCatalogConcurrencyLimit: 1,
+    });
+
+    expect(trace.details).toContainEqual({
+      name: "sidecars.model-runtime-build",
+      metrics: [
+        ["agentCount", 12],
+        ["workspaceGroupCount", 2],
+        ["configuredFactsGroupCount", 2],
+        ["catalogSourceCount", 0],
+        ["credentialGroupCount", 1],
+        ["catalogGroupCount", 0],
+        ["runtimeRegistryCount", 12],
+        ["configuredRuntimeModelCount", 2],
+        ["generatedCatalogPluginCount", 0],
+        ["generatedCatalogReadCount", 0],
+        ["workspaceFactsMs", 120],
+        ["runtimePluginMs", 0],
+        ["pluginMetadataMs", 40],
+        ["staticProviderCatalogMs", 50],
+        ["ambientCredentialsMs", 10],
+        ["agentFactsMs", 5],
+        ["configuredProjectionMs", 15],
+        ["catalogSourceMs", 0],
+        ["registryMs", 30],
+        ["sourceConcurrencyLimitCount", 2],
+        ["fullCatalogConcurrencyLimitCount", 1],
+      ],
+    });
   });
 
   it("marks startup main-session orphans before channel startup", async () => {

@@ -291,6 +291,41 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
   return texts;
 }
 
+export function extractSlackMpimRetainedBotNonce(
+  prompt: string,
+  botReplyPrefix: string,
+): string | undefined {
+  const historyHeader = "[Thread history - for context]\n";
+  const historyStart = prompt.indexOf(historyHeader);
+  if (historyStart < 0) {
+    return undefined;
+  }
+  const historyBodyStart = historyStart + historyHeader.length;
+  const currentTurnStart = prompt.lastIndexOf("Slack MPIM assistant-history recall check.");
+  if (currentTurnStart < historyBodyStart) {
+    return undefined;
+  }
+  for (const line of prompt.slice(historyBodyStart, currentTurnStart).split(/\r?\n/u)) {
+    const headerEnd = line.indexOf("] ");
+    if (headerEnd < 0) {
+      continue;
+    }
+    const header = line.slice(0, headerEnd);
+    if (!header.startsWith("[Slack ") || !header.includes(" (this assistant) (assistant) ")) {
+      continue;
+    }
+    const reply = line.slice(headerEnd + 2);
+    if (!reply.startsWith(botReplyPrefix)) {
+      continue;
+    }
+    const nonce = reply.slice(botReplyPrefix.length);
+    if (/^[A-Z0-9]{8,32}$/u.test(nonce)) {
+      return nonce;
+    }
+  }
+  return undefined;
+}
+
 export function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {

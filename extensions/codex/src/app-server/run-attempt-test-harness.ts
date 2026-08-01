@@ -416,7 +416,30 @@ export function createAppServerHarness(
   const closeHandlers = new Set<() => void>();
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
-    return requestImpl(method, params, requestOptions as { signal?: AbortSignal } | undefined);
+    const result = await requestImpl(
+      method,
+      params,
+      requestOptions as { signal?: AbortSignal } | undefined,
+    );
+    if (method === "turn/interrupt") {
+      const { threadId, turnId } = params as { threadId?: string; turnId?: string };
+      if (threadId && turnId) {
+        // Codex publishes this terminal after acknowledging interruption;
+        // test clients must preserve the same lifecycle instead of orphaning turns.
+        queueMicrotask(() => {
+          for (const handler of notificationHandlers) {
+            void handler({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: { id: turnId, status: "interrupted" },
+              },
+            });
+          }
+        });
+      }
+    }
+    return result;
   });
 
   const client = {

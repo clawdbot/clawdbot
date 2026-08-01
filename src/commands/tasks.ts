@@ -625,7 +625,7 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running cron jobs`,
+      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
   runtime.log(

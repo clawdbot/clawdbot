@@ -27,6 +27,8 @@ import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realti
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
+  private static readonly MAX_PENDING_AUDIO_CHUNKS = 320;
+  private static readonly MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
   readonly supportsToolResultContinuation = false;
 
   private ws: WebSocket | null = null;
@@ -36,6 +38,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   private terminalError: Error | null = null;
   private reconnectAttempts = 0;
   private pendingAudio: Buffer[] = [];
+  private pendingAudioBytes = 0;
   private pendingToolResults: Array<{
     callId: string;
     result: unknown;
@@ -60,10 +63,11 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.intentionallyClosed) {
+      return;
+    }
     if (!this.connected || !this.sessionConfigured || this.ws?.readyState !== WebSocket.OPEN) {
-      if (this.pendingAudio.length < 320) {
-        this.pendingAudio.push(audio);
-      }
+      this.enqueuePendingAudio(audio);
       return;
     }
     this.sendEvent({
@@ -77,6 +81,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   sendUserMessage(text: string): void {
+    if (this.intentionallyClosed) {
+      return;
+    }
     if (!this.canSubmitInput()) {
       if (this.pendingUserMessages.length < XAI_REALTIME_MAX_PENDING_USER_MESSAGES) {
         this.pendingUserMessages.push(text);
@@ -101,6 +108,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
+    if (this.intentionallyClosed) {
+      return;
+    }
     if (!this.canSubmitToolResult()) {
       if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
         this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
@@ -121,7 +131,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     this.reconnectAbortController.abort();
     this.connected = false;
     this.sessionConfigured = false;
-    this.pendingToolResultAcks.clear();
+    this.resetTerminalState();
     if (this.ws) {
       this.ws.close(1000, "Bridge closed");
       this.ws = null;
@@ -213,7 +223,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         this.reconnectAbortController.abort();
         this.connected = false;
         this.sessionConfigured = false;
-        this.pendingToolResultAcks.clear();
+        this.resetTerminalState();
         try {
           this.config.onError?.(error);
         } finally {
@@ -352,6 +362,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         type: "session.reconnect.blocked",
         detail: `reason=${reason} ${blocked}`,
       });
+      this.enterTerminalState();
       this.config.onClose?.("error");
       return;
     }
@@ -361,6 +372,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         type: "session.reconnect.exhausted",
         detail: `reason=${reason} attempts=${this.reconnectAttempts}`,
       });
+      this.enterTerminalState();
       this.config.onClose?.("error");
       return;
     }
@@ -418,7 +430,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   protected onSessionUpdated(): void {
     this.sessionConfigured = true;
     this.reconnectAttempts = 0;
-    for (const chunk of this.pendingAudio.splice(0)) {
+    const pendingAudio = this.pendingAudio.splice(0);
+    this.pendingAudioBytes = 0;
+    for (const chunk of pendingAudio) {
       this.sendAudio(chunk);
     }
     for (const pending of this.pendingToolResults.splice(0)) {
@@ -461,5 +475,34 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
 
   private canSubmitInput(): boolean {
     return this.connected && this.sessionConfigured && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  private enqueuePendingAudio(audio: Buffer): void {
+    if (
+      this.pendingAudio.length >= XaiRealtimeVoiceBridge.MAX_PENDING_AUDIO_CHUNKS ||
+      this.pendingAudioBytes + audio.byteLength > XaiRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
+    ) {
+      return;
+    }
+    const queuedAudio = Buffer.from(audio);
+    this.pendingAudio.push(queuedAudio);
+    this.pendingAudioBytes += queuedAudio.byteLength;
+  }
+
+  private enterTerminalState(): void {
+    this.intentionallyClosed = true;
+    this.reconnectAbortController.abort();
+    this.connected = false;
+    this.sessionConfigured = false;
+    this.resetTerminalState();
+  }
+
+  private resetTerminalState(): void {
+    this.pendingAudio = [];
+    this.pendingAudioBytes = 0;
+    this.pendingToolResults = [];
+    this.pendingUserMessages = [];
+    this.conversationId = null;
+    this.resetRealtimeSessionState();
   }
 }

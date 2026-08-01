@@ -9,7 +9,10 @@ import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import {
+  connectOpenAIQuicksilverSideband,
+  type OpenAIQuicksilverSocketFactory,
+} from "./realtime-quicksilver-sideband.js";
 import {
   createCallResponse,
   emitSideband,
@@ -68,6 +71,7 @@ type TestableGatewayBridge = {
     }) => Promise<{ text: string }>;
     signal: AbortSignal;
   }): Promise<void>;
+  startDelegation(delegationId: string, input: string): void;
 };
 
 function createDelegationBridge(
@@ -540,6 +544,36 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(socket.closed).toBe(true);
   });
 
+  it("bounds sideband frames and aggregate pre-open buffering", async () => {
+    const controller = new AbortController();
+    const socket = new FakeSocket("manual");
+    let socketOptions: Parameters<OpenAIQuicksilverSocketFactory>[1] | undefined;
+    socket.once("close", () => controller.abort(new Error("sideband overflow observed")));
+    const connection = connectOpenAIQuicksilverSideband({
+      auth: { type: "api-key", token: "platform-key" },
+      createSocket: (_url, options) => {
+        socketOptions = options;
+        return socket;
+      },
+      requestIds: {
+        realtimeSessionId: "realtime-session",
+        sessionId: "session",
+        threadId: "thread",
+      },
+      signal: controller.signal,
+      url: "wss://api.openai.com/v1/live/rtc_test",
+    });
+
+    expect(socketOptions?.maxPayload).toBe(16 * 1024 * 1024);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.from([0]), false);
+
+    await expect(connection).rejects.toThrow("sideband overflow observed");
+    expect(socket.closeCode).toBe(1009);
+    expect(socket.closeReason).toBe("sideband startup buffer exceeded");
+  });
+
   it("does not append failure text when the host cancels a delegation", async () => {
     const abortError = new Error("The operation was aborted");
     abortError.name = "AbortError";
@@ -590,6 +624,84 @@ describe("GPT-Live gateway relay bridge", () => {
     } finally {
       bridge.close();
     }
+  });
+
+  it("bounds gateway delegation output before sideband sends", async () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
+    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      await testBridge.runDelegation({
+        delegationId: "delegation-large",
+        prompt: "summarize everything",
+        runAgentConsult,
+        signal: new AbortController().signal,
+      });
+
+      const appends = parseSent(socket).filter(
+        (event) => event.type === "delegation.context.append",
+      );
+      expect(appends.length).toBeGreaterThan(0);
+      expect(appends.length).toBeLessThanOrEqual(11);
+      expect(
+        appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+      ).toMatch(/^x+ \[truncated\]$/);
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
+    const resolvers: Array<(value: { text: string }) => void> = [];
+    const signals: AbortSignal[] = [];
+    const runAgentConsult = vi.fn(
+      async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
+        await new Promise<{ text: string }>((resolve, reject) => {
+          signals.push(signal as AbortSignal);
+          resolvers.push(resolve);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      testBridge.startDelegation("delegation-1", "first task");
+      testBridge.startDelegation("delegation-2", "second task");
+      testBridge.startDelegation("delegation-3", "latest task");
+
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      expect(signals[0]?.aborted).toBe(true);
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
+
+      resolvers[1]?.({ text: "latest result" });
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual({
+          type: "delegation.context.append",
+          delegation_item_id: "delegation-3",
+          channel: "speakable",
+          content: [{ type: "input_text", text: "latest result" }],
+        }),
+      );
+      expect(socket.closed).toBe(false);
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("ignores delegation work after the bridge closes", () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "unused" }));
+    const { bridge, testBridge } = createDelegationBridge(runAgentConsult);
+
+    bridge.close();
+    testBridge.startDelegation("delegation-late", "late task");
+
+    expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {

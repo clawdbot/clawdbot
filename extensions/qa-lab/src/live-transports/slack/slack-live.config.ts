@@ -286,21 +286,23 @@ export function buildSlackQaConfig(
               ? { dm: { enabled: true, groupEnabled: true } }
               : {}),
             replyToMode: params.overrides?.replyToMode ?? "off",
-            ...(progressOverrides
-              ? {
-                  streaming: {
-                    mode: "progress" as const,
-                    progress: {
-                      label: false,
-                      maxLines: 4,
-                      toolProgress: progressOverrides.toolProgress,
-                      ...(progressOverrides.commentary === undefined
-                        ? {}
-                        : { commentary: progressOverrides.commentary }),
+            ...(params.overrides?.streamingMode
+              ? { streaming: { mode: params.overrides.streamingMode } }
+              : progressOverrides
+                ? {
+                    streaming: {
+                      mode: "progress" as const,
+                      progress: {
+                        label: false,
+                        maxLines: 4,
+                        toolProgress: progressOverrides.toolProgress,
+                        ...(progressOverrides.commentary === undefined
+                          ? {}
+                          : { commentary: progressOverrides.commentary }),
+                      },
                     },
-                  },
-                }
-              : {}),
+                  }
+                : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {

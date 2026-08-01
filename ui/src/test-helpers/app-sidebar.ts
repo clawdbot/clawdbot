@@ -21,7 +21,11 @@ import type {
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  createSessionCapability,
+  type SessionCapability,
+  type SessionListOptions,
+} from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -33,6 +37,10 @@ vi.mock("../components/sidebar-attention.ts", () => ({}));
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
+const sidebarSessionGatewayBindings = new WeakMap<
+  SessionCapability,
+  (gateway: ApplicationGateway) => void
+>();
 
 export type SidebarLifecycleState = HTMLElement & {
   activeRouteId?: string;
@@ -229,7 +237,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
     }),
   );
-  const refresh = vi.fn(() => Promise.resolve());
+  const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
+    Promise.resolve(),
+  );
   const refreshReplacement = vi.fn(() => Promise.resolve());
   const setCreatorFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
@@ -239,7 +249,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
   );
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
-    Promise.resolve<SessionsListResult | null>(null),
+    Promise.resolve<SessionsListResult | null>(state.result),
   );
   const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
     const result = reconcileSessionHistory(state.result, row, defaults, options);
@@ -252,6 +262,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     }
     return true;
   });
+  let scopedSessions: SessionCapability | null = null;
   const sessions = {
     get state() {
       return state;
@@ -285,6 +296,29 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
+      if (!scope.archivedFilter || scope.archivedFilter === "active") {
+        return {
+          result: state.result,
+          agentId: state.agentId,
+          loading: state.loading,
+          error: state.error,
+        };
+      }
+      return scopedSessions!.listSnapshot(scope);
+    },
+    subscribeList(
+      scope: Parameters<SessionCapability["subscribeList"]>[0],
+      listener: Parameters<SessionCapability["subscribeList"]>[1],
+    ) {
+      return scopedSessions!.subscribeList(scope, listener);
+    },
+    refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
+      if (!options?.archivedFilter || options.archivedFilter === "active") {
+        return refresh(options);
+      }
+      return scopedSessions!.refreshList(options);
+    },
     reconcile,
     setCreatorFilter,
     refresh,
@@ -292,6 +326,57 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeMessages,
     unsubscribeMessages,
   } as unknown as SessionCapability;
+  let boundGateway: ApplicationGateway | null = null;
+  const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
+  sidebarSessionGatewayBindings.set(sessions, (gateway) => {
+    if (boundGateway === gateway) {
+      return;
+    }
+    scopedSessions?.dispose();
+    boundGateway = gateway;
+    const scopedClient = (client: GatewayBrowserClient | null): GatewayBrowserClient | null => {
+      if (!client) {
+        return null;
+      }
+      const existing = scopedClients.get(client);
+      if (existing) {
+        return existing;
+      }
+      const proxy = {
+        request: async <T>(method: string, params?: unknown): Promise<T> => {
+          if (method === "sessions.subscribe") {
+            return { subscribed: true } as T;
+          }
+          if (method !== "sessions.list") {
+            return client.request<T>(method, params);
+          }
+          const { archived, ...options } = (params ?? {}) as SessionListOptions & {
+            archived?: true | "all";
+          };
+          if (!archived) {
+            return state.result as T;
+          }
+          return (await list({
+            ...options,
+            archivedFilter: archived === true ? "archived" : "all",
+          })) as T;
+        },
+      } as GatewayBrowserClient;
+      scopedClients.set(client, proxy);
+      return proxy;
+    };
+    scopedSessions = createSessionCapability({
+      get snapshot() {
+        const snapshot = gateway.snapshot;
+        return { ...snapshot, client: scopedClient(snapshot.client) };
+      },
+      subscribe: (listener) =>
+        gateway.subscribe((snapshot) =>
+          listener({ ...snapshot, client: scopedClient(snapshot.client) }),
+        ),
+      subscribeEvents: (listener) => gateway.subscribeEvents(listener),
+    });
+  });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
     for (const listener of listeners) {
@@ -343,6 +428,7 @@ export function createContext(
     subscribe: () => () => undefined,
   },
 ): ApplicationContext<RouteId> {
+  sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
     gateway,

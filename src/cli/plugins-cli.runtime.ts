@@ -396,7 +396,10 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
   if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
-    defaultRuntime.log("No plugin issues detected.");
+    defaultRuntime.log(
+      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
+    );
     return;
   }
 

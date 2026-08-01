@@ -20,7 +20,10 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  normalizeMainSessionRecoveryRunFences,
+  transitionMainSessionRecovery,
+} from "./main-session-recovery-state.js";
 import {
   hasCurrentProcessOwner,
   log,
@@ -189,34 +192,16 @@ export async function markRestartAbortedMainSessions(params: {
             continue;
           }
           const wasRunning = entry.status === "running";
-          const recoveryRuns = new Map<string, RestartRecoveryRun>();
-          for (const run of entry.restartRecoveryRuns ?? []) {
-            if (run.lifecycleGeneration === currentLifecycleGeneration) {
-              recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-            }
-          }
-          const replaceActiveRunMarker = (run: RestartRecoveryRun) => {
-            for (const [key, existingRun] of recoveryRuns) {
-              if (existingRun.runId === run.runId) {
-                recoveryRuns.delete(key);
-              }
-            }
-            recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-          };
-          for (const run of registeredActiveRuns) {
-            replaceActiveRunMarker(run);
-          }
-          for (const run of matchingActiveRuns) {
-            replaceActiveRunMarker({
-              runId: run.runId,
-              lifecycleGeneration: run.lifecycleGeneration,
-            });
-          }
-          entry.restartRecoveryRuns = [...recoveryRuns.values()].toSorted((a, b) =>
-            a.runId === b.runId
-              ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-              : a.runId.localeCompare(b.runId),
-          );
+          entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []).filter(
+              (run) => run.lifecycleGeneration === currentLifecycleGeneration,
+            ),
+            ...registeredActiveRuns,
+            ...matchingActiveRuns.map(({ runId, lifecycleGeneration }) => ({
+              runId,
+              lifecycleGeneration,
+            })),
+          ]);
           transitionMainSessionRecovery(entry, {
             kind: "mark_interrupted",
             cycleId: randomUUID(),

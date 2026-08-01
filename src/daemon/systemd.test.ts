@@ -862,6 +862,23 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(requireFirstWrite(write)).toContain("Restarted systemd service");
   });
 
+  it("startSystemdService clears the start-limit latch before starting the system unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(0);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["reset-failed", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["start", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      });
+    const { stdout, write } = createWritableStreamMock();
+    await startSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } });
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
+  });
+
   it("stopSystemdService surfaces sudo guidance for system-scope units without root", async () => {
     mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
     mockEffectiveUid(1000);
@@ -2431,6 +2448,63 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
+  it.each([
+    "Access denied",
+    "Unit openclaw-node.service is not loaded properly: Invalid argument.",
+    "Failed to disable unit: Access denied.\nUnit openclaw-node.service is not active.",
+    "Unit is not loaded.",
+    "Unit inactive.",
+    "Unit unrelated.service is not active.",
+  ])("refuses to remove the unit when systemctl disable fails: %s", async (detail) => {
+    await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
+      await fs.writeFile(nodeEnvFilePath, "OPENCLAW_GATEWAY_TOKEN=preserved-token\n", "utf8");
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(createExecFileError(detail), "", detail);
+        });
+
+      const { stdout } = createWritableStreamMock();
+
+      await expect(uninstallSystemdService({ env, stdout })).rejects.toThrow(
+        `systemctl disable failed: ${detail}`,
+      );
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toContain("OpenClaw Node");
+      await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toContain("preserved-token");
+    });
+  });
+
+  it.each([
+    "Unit file openclaw-node.service does not exist.",
+    "Failed to disable unit: Unit file openclaw-node.service does not exist.",
+    "Unit openclaw-node.service could not be found.",
+    "Failed to stop openclaw-node.service: Unit openclaw-node.service not loaded.",
+    "Failed to stop openclaw-node.service: Unit openclaw-node.service is not active.",
+  ])("keeps missing or inactive systemd unit removal idempotent: %s", async (detail) => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(createExecFileError(detail), "", detail);
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+
+      await expect(uninstallSystemdService({ env, stdout })).resolves.toBeUndefined();
+      expect(requireFirstWrite(write)).toContain("Systemd service not found");
+    });
+  });
+
   it("disables the OPENCLAW_SYSTEMD_UNIT override during uninstall", async () => {
     await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });
@@ -2735,10 +2809,17 @@ describe("systemd service control", () => {
   });
 
   it("starts the resolved user unit and ignores audit observer failures", async () => {
+    const sequence: string[] = [];
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        sequence.push(args[1] ?? "");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        sequence.push(args[1] ?? "");
         cb(null, "", "");
       });
     const write = vi.fn();
@@ -2754,6 +2835,7 @@ describe("systemd service control", () => {
       }),
     ).resolves.toBeUndefined();
 
+    expect(sequence).toEqual(["reset-failed", "start"]);
     expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-start" });
     expect(
       expectDefined(onMutation.mock.invocationCallOrder[0], "start audit call order"),
@@ -2761,11 +2843,41 @@ describe("systemd service control", () => {
     expect(requireFirstWrite(write)).toContain("Started systemd service");
   });
 
+  it("still starts when reset-failed cannot resolve an unloaded user unit", async () => {
+    const sequence: string[] = [];
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        sequence.push(args[1] ?? "");
+        cb(
+          createExecFileError("unit not loaded", {
+            stderr: `Unit ${GATEWAY_SERVICE} not loaded.`,
+          }),
+          "",
+          `Unit ${GATEWAY_SERVICE} not loaded.`,
+        );
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        sequence.push(args[1] ?? "");
+        cb(null, "", "");
+      });
+    const { stdout, write } = createWritableStreamMock();
+
+    await startSystemdService({ stdout, env: {} });
+
+    expect(sequence).toEqual(["reset-failed", "start"]);
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
+  });
+
   it("stops the resolved user unit", async () => {
+    const sequence: string[] = [];
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "stop", GATEWAY_SERVICE);
+        sequence.push(args[1] ?? "");
         cb(null, "", "");
       });
     const write = vi.fn();
@@ -2774,6 +2886,7 @@ describe("systemd service control", () => {
 
     await stopSystemdService({ stdout, env: {}, onMutation });
 
+    expect(sequence).toEqual(["stop"]);
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
     expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });

@@ -558,6 +558,7 @@ export async function recoverStore(params: {
       sessionKey,
       forceRestartSafeTools:
         entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
+      forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       gatewayRuntime: params.gatewayRuntime,
     });

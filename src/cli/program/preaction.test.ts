@@ -152,6 +152,7 @@ describe("registerPreActionHooks", () => {
     const programLocal = new Command().name("openclaw");
     const agent = programLocal
       .command("agent")
+      .argument("[note]")
       .requiredOption("-m, --message <text>")
       .option("--local")
       .option("--json")
@@ -663,6 +664,18 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bootstraps when Commander consumed --help as a required option value", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "agent", "--message", "--help", "--message", "hello"];
+
+    await parseProgram.parseAsync(process.argv);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent"],
+    });
+  });
+
   it.each([
     {
       name: "version-pinned skill install",
@@ -745,6 +758,19 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("does not select JSON output when Commander consumed --json as an option value", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "agent", "", "--message", "--json", "--message", "hello"];
+
+    await parseProgram.parseAsync(process.argv);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent"],
+    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {

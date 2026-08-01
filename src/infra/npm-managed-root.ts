@@ -184,15 +184,31 @@ function isUnsupportedManagedNpmOverride(value: unknown): boolean {
   return typeof value === "string" && value.trim().startsWith("npm:");
 }
 
-function filterUnsupportedManagedNpmRootOverrides(value: unknown): Record<string, unknown> {
+function isPnpmParentChildOverrideSelector(key: string): boolean {
+  // Match pnpm's parse-overrides delimiter without confusing npm ranges such as pkg@>1.
+  return /[^ |@]>/u.test(key);
+}
+
+export type ManagedNpmOverrideOmissions = {
+  npmAliases?: boolean;
+  pnpmParentChildSelectors?: boolean;
+};
+
+function filterUnsupportedManagedNpmRootOverrides(
+  value: unknown,
+  omissions: ManagedNpmOverrideOmissions,
+): Record<string, unknown> {
   const overrides = readOverrideRecord(value);
   const filtered: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(overrides)) {
-    if (isUnsupportedManagedNpmOverride(raw)) {
+    if (
+      (omissions.pnpmParentChildSelectors && isPnpmParentChildOverrideSelector(key)) ||
+      (omissions.npmAliases && isUnsupportedManagedNpmOverride(raw))
+    ) {
       continue;
     }
     if (isRecord(raw)) {
-      const nested = filterUnsupportedManagedNpmRootOverrides(raw);
+      const nested = filterUnsupportedManagedNpmRootOverrides(raw, omissions);
       if (Object.keys(nested).length > 0) {
         filtered[key] = nested;
       }
@@ -337,14 +353,14 @@ export async function upsertManagedNpmRootDependency(params: {
   packageName: string;
   dependencySpec: string;
   managedOverrides?: Record<string, unknown>;
-  omitUnsupportedManagedOverrides?: boolean;
+  overrideOmissions?: ManagedNpmOverrideOmissions;
 }): Promise<void> {
   await fs.mkdir(params.npmRoot, { recursive: true });
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const managedOverrides = params.omitUnsupportedManagedOverrides
-    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
+  const managedOverrides = params.overrideOmissions
+    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides, params.overrideOmissions)
     : readOverrideRecord(params.managedOverrides);
   const nextDependencies = {
     ...dependencies,
@@ -881,7 +897,7 @@ export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
 export async function syncManagedNpmRootPeerDependencies(params: {
   npmRoot: string;
   managedOverrides?: Record<string, unknown>;
-  omitUnsupportedManagedOverrides?: boolean;
+  overrideOmissions?: ManagedNpmOverrideOmissions;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
 }): Promise<boolean> {
@@ -917,8 +933,8 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     }
   }
 
-  const managedOverrides = params.omitUnsupportedManagedOverrides
-    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
+  const managedOverrides = params.overrideOmissions
+    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides, params.overrideOmissions)
     : readOverrideRecord(params.managedOverrides);
   // Also catches the plan-failure fallback (stale pins reused) and alias overrides whose
   // lock-resolved version can never string-match the override spec.

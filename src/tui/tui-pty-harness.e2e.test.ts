@@ -427,6 +427,12 @@ describe.sequential("TUI PTY harness", () => {
         await gapFixture.run.write("history gap proof\r");
         await gapFixture.waitForLogEntry((entry) => entry.method === "gapHistoryRecovered");
         await gapFixture.run.waitForOutput("PTY_GAP_RECOVERED");
+        const gapNotice = "gateway event gap: expected 4, got 5";
+        await gapFixture.run.waitForOutput(gapNotice);
+        const recoveredOutput = gapFixture.run.visibleOutput();
+        expect(recoveredOutput.lastIndexOf(gapNotice)).toBeGreaterThan(
+          recoveredOutput.lastIndexOf("PTY_GAP_RECOVERED"),
+        );
 
         await gapFixture.run.write("after gap recovery proof\r");
         await gapFixture.waitForLogEntry(

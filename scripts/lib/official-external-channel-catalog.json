@@ -310,6 +310,50 @@
       }
     },
     {
+      "name": "@openclaw/imessage",
+      "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "imessage",
+          "label": "iMessage",
+          "selectionLabel": "iMessage (imsg)",
+          "detailLabel": "iMessage",
+          "docsPath": "/channels/imessage",
+          "docsLabel": "imessage",
+          "blurb": "Local iMessage/SMS through the imsg bridge, including private API message actions when enabled.",
+          "aliases": ["imsg"],
+          "systemImage": "message.fill",
+          "cliAddOptions": [
+            {
+              "flags": "--cli-path <path>",
+              "description": "iMessage CLI path"
+            },
+            {
+              "flags": "--db-path <path>",
+              "description": "iMessage database path"
+            },
+            {
+              "flags": "--service <service>",
+              "description": "iMessage service"
+            },
+            {
+              "flags": "--region <region>",
+              "description": "SMS region"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/imessage",
+          "npmSpec": "@openclaw/imessage",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/irc",
       "description": "OpenClaw IRC channel plugin",
       "source": "official",

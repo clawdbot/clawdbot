@@ -224,11 +224,12 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
-export type LlmCompleteParams = {
-  messages: LlmCompleteMessage[];
+type LlmCompleteCommonParams = {
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
+  /** Advisory output limit; runtime owners without an equivalent control may ignore it. */
   maxTokens?: number;
+  /** Advisory sampling hint; runtime owners without an equivalent control may ignore it. */
   temperature?: number;
   /** Requested reasoning effort; the host normalizes it for the selected model. */
   reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
@@ -240,12 +241,52 @@ export type LlmCompleteParams = {
   agentId?: string;
 };
 
+type LlmDirectCompleteParams = LlmCompleteCommonParams & {
+  messages: LlmCompleteMessage[];
+  execution?: undefined;
+};
+
+export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
+  /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
+  messages: [{ role: "user"; content: string }];
+  execution: {
+    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    mode: "isolated-agent-runtime";
+    /** Exact credential owner. Requires host-granted plugin policy. */
+    authProfileId?: string;
+    timeoutMs?: number;
+  };
+};
+
+export type LlmCompleteParams = LlmDirectCompleteParams | LlmIsolatedAgentRuntimeCompleteParams;
+
+export type LlmCompleteErrorCode =
+  | "LLM_COMPLETION_NOT_AUTHORIZED"
+  | "LLM_ISOLATED_INPUT_REJECTED"
+  | "LLM_ISOLATED_UNSUPPORTED"
+  | "LLM_RUNTIME_UNAVAILABLE"
+  | "LLM_COMPLETION_ABORTED"
+  | "LLM_COMPLETION_TIMEOUT"
+  | "LLM_COMPLETION_OUTPUT_REJECTED"
+  | "LLM_COMPLETION_FAILED";
+
+type LlmCompleteExecution =
+  | {
+      mode: "direct-provider";
+      owner: { kind: "provider"; id: string };
+    }
+  | {
+      mode: "isolated-agent-runtime";
+      owner: { kind: "cli" | "harness"; id: string };
+    };
+
 export type LlmCompleteResult = {
   text: string;
   provider: string;
   model: string;
   agentId: string;
   usage: LlmCompleteUsage;
+  execution: LlmCompleteExecution;
   audit: {
     caller: LlmCompleteCaller;
     purpose?: string;

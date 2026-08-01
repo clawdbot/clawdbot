@@ -6,6 +6,7 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
+import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,7 +23,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -46,6 +47,7 @@ export function renderAgentOverview(params: {
   configSaving: boolean;
   configDirty: boolean;
   modelCatalog: ModelCatalogEntry[];
+  modelCatalogError: string | null;
   onConfigReload: () => void;
   onConfigSave: () => void;
   onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
@@ -53,6 +55,7 @@ export function renderAgentOverview(params: {
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  onModelCatalogRetry: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const {
@@ -110,7 +113,7 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (identityName || agent.id).slice(0, 1).toUpperCase();
+    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
@@ -275,6 +278,14 @@ export function renderAgentOverview(params: {
         `,
       },
       html`
+        ${renderPanelRefreshStatus({
+          status: {
+            error: params.modelCatalogError,
+            hasLoaded: params.modelCatalog.length > 0,
+            stale: Boolean(params.modelCatalogError && params.modelCatalog.length > 0),
+          },
+          onRetry: params.onModelCatalogRetry,
+        })}
         ${renderSettingsRow({
           title: isDefault
             ? t("agents.overview.primaryModelDefault")

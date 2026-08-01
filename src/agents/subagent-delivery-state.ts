@@ -84,7 +84,7 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
 }
 
 /** Returns true when delivery is suspended with a durable timestamp. */
-export function isDeliverySuspended(entry: SubagentRunRecord): boolean {
+export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
