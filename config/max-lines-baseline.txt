@@ -975,7 +975,6 @@ ui/src/lib/skills/index.test.ts
 ui/src/lib/workboard/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
-ui/src/pages/agents/memory/dreaming.ts
 ui/src/pages/agents/memory/view.ts
 ui/src/pages/agents/panels-tools-skills.ts
 ui/src/pages/chat/chat-command-executor.test.ts
