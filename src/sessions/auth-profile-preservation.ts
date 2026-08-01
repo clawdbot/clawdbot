@@ -7,6 +7,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
+/** Checks whether a pinned session auth profile can authenticate the selected provider. */
 export function shouldPreserveSessionAuthProfileOverride(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;

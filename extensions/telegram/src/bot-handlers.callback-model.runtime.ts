@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideToSessionEntry,
   ModelSelectionLockedError,
+  shouldPreserveSessionAuthProfileOverride,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -277,6 +278,10 @@ export async function handleTelegramModelCallback(params: {
         fallbackEntry: { sessionId: randomUUID(), updatedAt: Date.now() },
         replaceEntry: true,
         update: (entry) => {
+          const currentProvider =
+            entry.providerOverride?.trim() ||
+            entry.modelProvider?.trim() ||
+            resolvedDefault.provider;
           applyModelOverrideToSessionEntry({
             entry,
             selection: {
@@ -284,6 +289,12 @@ export async function handleTelegramModelCallback(params: {
               model: selection.model,
               isDefault: isDefaultSelection,
             },
+            preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+              cfg: runtimeCfg,
+              entry,
+              currentProvider,
+              provider: selection.provider,
+            }),
             markLiveSwitchPending: true,
           });
           return entry;
