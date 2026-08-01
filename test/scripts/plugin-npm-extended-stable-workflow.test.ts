@@ -425,7 +425,7 @@ describe("plugin npm extended-stable workflow", () => {
       step(parsed.jobs?.publish_plugins_npm, "Overlay trusted OIDC packaging helper").run,
     ).toContain(".publication-target/scripts/lib/plugin-npm-package-manifest.mjs");
     expect(step(parsed.jobs?.publish_plugins_npm, "Setup OIDC publication target").uses).toBe(
-      "./.publication-target/.github/actions/setup-node-env",
+      "./.github/actions/setup-node-env",
     );
     expect(
       step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher")["working-directory"],

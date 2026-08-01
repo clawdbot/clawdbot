@@ -1235,7 +1235,7 @@ jobs:
 
       - name: Setup OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: ./.publication-target/.github/actions/setup-node-env
+        uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
