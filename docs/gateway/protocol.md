@@ -181,9 +181,10 @@ Validating before send:
    promise the frame fits: attachments travel as base64, so a 20 MB file is about
    26.7 MB on the wire and exceeds the default 25 MiB frame limit on its own.
 3. Treat the server as authoritative for everything else. Accepted MIME types and
-   per-message counts are deliberately not advertised because they depend on the
-   entrypoint, the resolved model, and payload sniffing; the gateway still returns
-   a typed rejection.
+   per-message handling are deliberately not advertised because they depend on
+   the entrypoint, the resolved model, and payload sniffing. The gateway can
+   return a typed rejection, while text-only model runs can omit additional
+   images after their offload cap and still complete the request.
 4. Re-read the values on every reconnect. They are a connection-time snapshot, so
    a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
 

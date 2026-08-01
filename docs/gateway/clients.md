@@ -127,10 +127,12 @@ if (attachments) {
 Both values are decoded per-attachment ceilings. Still check the serialized
 request against `policy.maxPayload`: attachments travel as base64, so a file near
 `maxBytes` can exceed the frame limit on its own. Older gateways omit
-`policy.attachments`; when it is absent, send and handle the server's typed
-rejection. Accepted MIME types and per-message counts are not advertised because
-they depend on the entrypoint and the resolved model, and the values are a
-connection-time snapshot, so re-read them on every reconnect.
+`policy.attachments`; when it is absent, send and handle the server outcome.
+Accepted MIME types and per-message handling are not advertised because they
+depend on the entrypoint and the resolved model. The gateway can return a typed
+rejection, while text-only model runs can omit additional images after their
+offload cap and still complete the request. The values are a connection-time
+snapshot, so re-read them on every reconnect.
 
 ## Recover state after reconnect
 
