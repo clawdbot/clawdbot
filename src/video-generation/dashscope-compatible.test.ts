@@ -1,6 +1,25 @@
-// DashScope-compatible download regressions: body idle after headers.
+// DashScope-compatible lifecycle, task status, and generated-video regressions.
 import { describe, expect, it, vi } from "vitest";
-import { downloadDashscopeGeneratedVideos } from "./dashscope-compatible.js";
+import {
+  downloadDashscopeGeneratedVideos,
+  pollDashscopeVideoTaskUntilComplete,
+  runDashscopeVideoGenerationTask,
+} from "./dashscope-compatible.js";
+
+const providerLabels = ["Qwen", "Alibaba Wan"] as const;
+
+const invalidGeneratedVideos = [
+  { name: "JSON error", contentType: "application/json", body: '{"error":"not a video"}' },
+  {
+    name: "problem JSON error",
+    contentType: "application/problem+json",
+    body: '{"title":"not a video"}',
+  },
+  { name: "HTML error", contentType: "text/html; charset=utf-8", body: "<html>error</html>" },
+  { name: "image", contentType: "image/png", body: "image-bytes" },
+  { name: "audio", contentType: "audio/mp4", body: "audio-bytes" },
+  { name: "empty video", contentType: "video/mp4", body: "" },
+] as const;
 
 function neverChunkingVideoResponse(): Response {
   return new Response(
@@ -17,6 +36,111 @@ function neverChunkingVideoResponse(): Response {
 }
 
 describe("downloadDashscopeGeneratedVideos", () => {
+  it.each(
+    providerLabels.flatMap((providerLabel) =>
+      invalidGeneratedVideos.map(({ name, contentType, body }) => ({
+        providerLabel,
+        name,
+        contentType,
+        body,
+      })),
+    ),
+  )("rejects $providerLabel $name responses instead of returning a video", async (invalid) => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(invalid.body, {
+          status: 200,
+          headers: { "content-type": invalid.contentType },
+        }),
+    );
+
+    await expect(
+      downloadDashscopeGeneratedVideos({
+        providerLabel: invalid.providerLabel,
+        urls: ["https://example.com/not-video.mp4"],
+        timeoutMs: 5_000,
+        fetchFn: fetchFn as typeof fetch,
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow(
+      `${invalid.providerLabel} generated video download: malformed video response`,
+    );
+
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it.each(providerLabels)(
+    "cancels unread invalid %s video bodies before releasing them",
+    async (providerLabel) => {
+      const cancellationOrder: string[] = [];
+      const cancelBody = vi.fn(async () => {
+        cancellationOrder.push("cancel-started");
+        await Promise.resolve();
+        cancellationOrder.push("cancel-completed");
+      });
+      const fetchFn = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+              },
+              cancel: cancelBody,
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      );
+
+      await expect(
+        downloadDashscopeGeneratedVideos({
+          providerLabel,
+          urls: ["https://example.com/still-streaming.mp4"],
+          timeoutMs: 80,
+          fetchFn: fetchFn as typeof fetch,
+          maxBytes: 10 * 1024 * 1024,
+        }),
+      ).rejects.toThrow(`${providerLabel} generated video download: malformed video response`);
+
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(cancellationOrder).toEqual(["cancel-started", "cancel-completed"]);
+    },
+  );
+
+  it.each([
+    { contentType: "video/mp4", expectedMimeType: "video/mp4" },
+    { contentType: "VIDEO/MP4; codecs=avc1", expectedMimeType: "VIDEO/MP4; codecs=avc1" },
+    { contentType: "application/octet-stream", expectedMimeType: "application/octet-stream" },
+    { contentType: undefined, expectedMimeType: "video/mp4" },
+  ])(
+    "preserves valid generated video content type $contentType",
+    async ({ contentType, expectedMimeType }) => {
+      const fetchFn = vi.fn(
+        async () =>
+          new Response(new TextEncoder().encode("mp4-bytes"), {
+            status: 200,
+            ...(contentType ? { headers: { "content-type": contentType } } : {}),
+          }),
+      );
+
+      const videos = await downloadDashscopeGeneratedVideos({
+        providerLabel: "Alibaba Wan",
+        urls: ["https://example.com/video.mp4"],
+        timeoutMs: 5_000,
+        fetchFn: fetchFn as typeof fetch,
+        maxBytes: 10 * 1024 * 1024,
+      });
+
+      expect(videos[0]).toMatchObject({
+        buffer: Buffer.from("mp4-bytes"),
+        fileName: "video-1.mp4",
+        mimeType: expectedMimeType,
+      });
+    },
+  );
+
   it("aborts a stalled generated video body via chunk idle timeout", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const timeoutMs = 80;
@@ -136,6 +260,119 @@ describe("downloadDashscopeGeneratedVideos", () => {
       expect(requestSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(100);
       expect(requestSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("pollDashscopeVideoTaskUntilComplete", () => {
+  it.each(providerLabels)(
+    "immediately rejects documented UNKNOWN %s tasks",
+    async (providerLabel) => {
+      const fetchFn = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ output: { task_status: " UNKNOWN " } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+
+      await expect(
+        pollDashscopeVideoTaskUntilComplete({
+          providerLabel,
+          taskId: "expired-task",
+          headers: new Headers(),
+          timeoutMs: 80,
+          fetchFn: fetchFn as typeof fetch,
+          baseUrl: "https://example.com",
+        }),
+      ).rejects.toThrow(
+        `${providerLabel} video generation task expired-task is unknown or expired`,
+      );
+
+      expect(fetchFn).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(providerLabels)(
+    "includes the provider reason when an UNKNOWN %s task expires",
+    async (providerLabel) => {
+      const fetchFn = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ output: { task_status: "UNKNOWN", message: "task was deleted" } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      );
+
+      await expect(
+        pollDashscopeVideoTaskUntilComplete({
+          providerLabel,
+          taskId: "deleted-task",
+          headers: new Headers(),
+          timeoutMs: 80,
+          fetchFn: fetchFn as typeof fetch,
+          baseUrl: "https://example.com",
+        }),
+      ).rejects.toThrow(
+        `${providerLabel} video generation task deleted-task is unknown or expired: task was deleted`,
+      );
+
+      expect(fetchFn).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+describe("runDashscopeVideoGenerationTask", () => {
+  it("releases the submission request timeout before polling the task", async () => {
+    vi.useFakeTimers();
+    try {
+      let submissionTimerCount: number | undefined;
+      let pollTimerCount: number | undefined;
+      const fetchFn = vi.fn(async (url: string | URL | Request) => {
+        const requestUrl = url instanceof Request ? url.url : String(url);
+        if (requestUrl.includes("/video-synthesis")) {
+          submissionTimerCount = vi.getTimerCount();
+          return new Response(JSON.stringify({ output: { task_id: "task-123" } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (requestUrl.includes("/tasks/task-123")) {
+          pollTimerCount = vi.getTimerCount();
+          return new Response(
+            JSON.stringify({
+              output: { task_status: "SUCCEEDED", video_url: "https://example.com/result.mp4" },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(new TextEncoder().encode("mp4-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        });
+      });
+
+      await runDashscopeVideoGenerationTask({
+        providerLabel: "Qwen",
+        model: "wan2.6-t2v",
+        req: { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {} },
+        url: "https://example.com/video-synthesis",
+        headers: new Headers(),
+        baseUrl: "https://example.com",
+        timeoutMs: 5_000,
+        fetchFn: fetchFn as typeof fetch,
+      });
+
+      expect(submissionTimerCount).toBeGreaterThan(0);
+      expect(pollTimerCount).toBe(submissionTimerCount);
     } finally {
       vi.useRealTimers();
     }
