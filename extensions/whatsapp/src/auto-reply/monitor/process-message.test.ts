@@ -92,7 +92,10 @@ vi.mock("../../identity.js", async (importOriginal) => {
   return {
     ...actual,
     getPrimaryIdentityId: () => null,
-    getSelfIdentity: () => ({ e164: "+15550001111" }),
+    getSelfIdentity: (msg: Parameters<typeof actual.getSelfIdentity>[0]) => {
+      const identity = actual.getSelfIdentity(msg);
+      return identity.e164 || identity.jid || identity.lid ? identity : { e164: "+15550001111" };
+    },
     getSenderIdentity: () => ({ name: "Alice", e164: "+15550002222" }),
   };
 });
@@ -338,6 +341,48 @@ describe("processMessage group system prompt wiring", () => {
         }
       ).groupSystemPrompt,
     ).toBe("from config");
+  });
+
+  it.each([
+    {
+      name: "renders a native self-LID mention as the configured agent identity",
+      identityName: "Kit",
+      suffix: "?",
+      expectedBody: "@Kit ?",
+    },
+    {
+      name: "renders dollar signs in the agent identity literally",
+      identityName: "Kit $&",
+      suffix: "/status",
+      expectedBody: "@Kit $& /status",
+    },
+  ])("$name without changing the raw body", async ({ identityName, suffix, expectedBody }) => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const rawBody = `@900000000000001 ${suffix}`;
+    const msg = makeBaseMsg({ body: rawBody });
+    msg.platform.self = {
+      e164: "+15550003333",
+      jid: "15550003333@s.whatsapp.net",
+      lid: "900000000000001@lid",
+    };
+    msg.group = {
+      ...msg.group,
+      mentions: { jids: ["900000000000001@lid"] },
+    };
+
+    await callProcessMessage({
+      cfg: {
+        agents: {
+          list: [{ id: "main", identity: { name: identityName } }],
+        },
+      },
+      msg,
+    });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: expectedBody,
+      rawBody,
+    });
   });
 
   it.each([
