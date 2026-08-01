@@ -306,6 +306,115 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
     });
 
+    it.each([
+      { name: "empty audio", body: new Uint8Array(), contentType: "audio/mpeg" },
+      {
+        name: "a successful JSON error",
+        body: JSON.stringify({ error: "speech generation failed" }),
+        contentType: "application/json",
+      },
+      {
+        name: "a successful problem JSON error",
+        body: JSON.stringify({ detail: "speech generation failed" }),
+        contentType: "application/problem+json",
+      },
+      {
+        name: "a successful HTML error",
+        body: "<html>speech generation failed</html>",
+        contentType: "text/html; charset=utf-8",
+      },
+      { name: "an image response", body: "image-bytes", contentType: "image/png" },
+      { name: "a video response", body: "video-bytes", contentType: "video/mp4" },
+      {
+        name: "a second content type hidden in audio parameters",
+        body: "audio-bytes",
+        contentType: "audio/mpeg; charset=utf-8, text/html",
+      },
+      {
+        name: "a missing audio type before a conflicting type",
+        body: "audio-bytes",
+        contentType: "; audio/mpeg, text/html",
+      },
+      { name: "a present empty audio content type", body: "audio-bytes", contentType: "" },
+    ])("rejects $name instead of returning malformed audio", async ({ body, contentType }) => {
+      globalThis.fetch = vi.fn(
+        async () => new Response(body, { status: 200, headers: { "content-type": contentType } }),
+      ) as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error: malformed audio response");
+    });
+
+    it.each([
+      "audio/mpeg",
+      "AUDIO/OGG; codecs=opus",
+      "audio/aac",
+      "audio/flac",
+      "audio/wav",
+      "audio/pcm",
+      "application/octet-stream",
+      undefined,
+    ])("accepts nonempty audio with response content type %s", async (contentType) => {
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            Buffer.from("audio-bytes"),
+            contentType ? { headers: { "content-type": contentType } } : undefined,
+          ),
+      ) as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toEqual(Buffer.from("audio-bytes"));
+    });
+
+    it("cancels an unread invalid audio body before releasing its request", async () => {
+      const cancel = vi.fn(async () => {});
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("still streaming"));
+              },
+              cancel,
+            }),
+            { headers: { "content-type": "image/png" } },
+          ),
+      ) as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error: malformed audio response");
+
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
       const streamed = createStreamingErrorResponse({
         status: 200,
@@ -355,6 +464,63 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503)");
 
       expect(streamed.getReadCount()).toBeLessThan(200);
+    });
+
+    it("does not block on an endless malformed audio stream cloned for debug capture", async () => {
+      proxyReset.captureProxyEnv();
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-malformed-capture";
+      let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                streamController = controller;
+                controller.enqueue(new TextEncoder().encode("endless malformed response"));
+              },
+            }),
+            { headers: { "content-type": "image/png" } },
+          ),
+      ) as unknown as typeof fetch;
+      initializeDebugProxyCapture("test");
+
+      try {
+        await expect(
+          Promise.race([
+            openaiTTS({
+              text: "hello",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              model: "gpt-4o-mini-tts",
+              voice: "alloy",
+              responseFormat: "mp3",
+              timeoutMs: 5_000,
+            }),
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(() => reject(new Error("capture cancellation stalled")), 250);
+            }),
+          ]),
+        ).rejects.toThrow("OpenAI TTS API error: malformed audio response");
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        streamController?.close();
+        try {
+          await vi.waitFor(() => {
+            const events = getDebugProxyCaptureStore().getSessionEvents(
+              "tts-malformed-capture",
+              10,
+            );
+            expect(events.map((event) => event.kind).toSorted()).toEqual(["request", "response"]);
+          });
+        } finally {
+          finalizeDebugProxyCapture();
+        }
+      }
     });
 
     it("records TTS exchanges in debug proxy capture mode", async () => {

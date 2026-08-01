@@ -1,13 +1,13 @@
 // Openai plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
+  readProviderBinaryResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -182,11 +182,18 @@ export async function openaiTTS(params: {
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-    });
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "OpenAI TTS API error", "audio", {
+        maxBytes,
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+      }),
+    );
   } finally {
+    // Capture tees the response; awaiting one branch's cancel can never settle.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }

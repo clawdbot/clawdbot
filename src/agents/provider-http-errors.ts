@@ -4,6 +4,7 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -24,6 +25,10 @@ const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
+};
+
+type ProviderBinaryResponseReadOptions = ProviderResponseReadOptions & {
+  onOverflow?: NonNullable<Parameters<typeof readResponseWithLimit>[2]>["onOverflow"];
 };
 
 /** Options for bounded provider error-body normalization. */
@@ -397,26 +402,63 @@ export async function readProviderJsonArrayFieldResponse(
   return value;
 }
 
-function normalizeContentType(response: Response): string | undefined {
-  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-  return contentType || undefined;
+function normalizeContentType(contentType: string | null): string | undefined {
+  return contentType?.split(";")[0]?.trim().toLowerCase() || undefined;
 }
 
-/** Rejects text or JSON responses on provider endpoints that should return binary bytes. */
+// Fetch joins repeated Content-Type headers with commas; quoted codec lists can
+// also contain commas, so only delimiters outside complete quoted values are unsafe.
+function hasInvalidContentTypeDelimiter(contentType: string): boolean {
+  let quoted = false;
+  let escaped = false;
+  for (const character of contentType) {
+    if (quoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      return true;
+    }
+  }
+  return quoted || escaped;
+}
+
+/** Rejects non-binary responses and mismatched provider-owned audio/video families. */
 export function assertProviderBinaryResponseContent(
   response: Response,
   label: string,
   kind = "binary",
 ): void {
-  const contentType = normalizeContentType(response);
-  if (!contentType) {
+  const rawContentType = response.headers.get("content-type");
+  if (rawContentType === null) {
+    return;
+  }
+  const contentType = normalizeContentType(rawContentType);
+  const requiresMediaFamily = kind === "audio" || kind === "video";
+  if (!contentType && !requiresMediaFamily) {
     return;
   }
   if (
+    !contentType ||
     contentType === "application/json" ||
     contentType.endsWith("+json") ||
-    contentType.startsWith("text/")
+    contentType.startsWith("text/") ||
+    (requiresMediaFamily &&
+      (hasInvalidContentTypeDelimiter(rawContentType) ||
+        (contentType !== "application/octet-stream" &&
+          (!/^(audio|video)\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(contentType) ||
+            mediaKindFromMime(contentType) !== kind))))
   ) {
+    // Capture clones tee this stream; awaiting one branch's cancellation would never settle.
+    void response.body?.cancel().catch(() => undefined);
     throw new Error(`${label}: malformed ${kind} response`);
   }
 }
@@ -426,14 +468,16 @@ export async function readProviderBinaryResponse(
   response: Response,
   label: string,
   kind = "binary",
-  opts?: ProviderResponseReadOptions,
+  opts?: ProviderBinaryResponseReadOptions,
 ): Promise<Uint8Array> {
   assertProviderBinaryResponseContent(response, label, kind);
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
     ...opts,
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
+    onOverflow:
+      opts?.onOverflow ??
+      (({ maxBytes: maxBytesLocal }) =>
+        new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`)),
   });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
