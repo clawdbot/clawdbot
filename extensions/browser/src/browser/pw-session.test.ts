@@ -729,6 +729,25 @@ describe("pw-session ensurePageState", () => {
     expect(saveAs).not.toHaveBeenCalled();
   });
 
+  it("does not emit an unhandled rejection when a download capture is abandoned", async () => {
+    const { page } = fakePage();
+    const state = ensurePageState(page);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      createDownloadCaptureForPage(page, state, 1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+      expect(state.downloadWaiterDepth).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("lets explicit download owners arm while passive capture yields", () => {
     const { page } = fakePage();
     const state = ensurePageState(page);

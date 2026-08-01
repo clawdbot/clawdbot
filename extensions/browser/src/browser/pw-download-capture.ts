@@ -124,6 +124,10 @@ export function createDownloadCaptureForPage(
     );
     timer.unref?.();
   });
+  // Capture ownership can end before this internal timeout fires (for example,
+  // when an outer tool request is abandoned). Keep the original rejection for
+  // active consumers while preventing a late rejection from reaching process.
+  void promise.catch(() => {});
 
   return {
     armed: true,
