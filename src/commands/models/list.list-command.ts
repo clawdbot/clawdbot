@@ -71,6 +71,8 @@ export async function modelsListCommand(
   if (parsedProviderFilter === null) {
     return;
   }
+  const humanReadable = !opts.json && !opts.plain;
+  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
     { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
@@ -100,6 +102,9 @@ export async function modelsListCommand(
       })
     : undefined;
   const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const promotionsRefreshPromise = promotionsModulePromise?.then((promotionsModule) =>
+    promotionsModule.startPromotionsFeedRefresh(),
+  );
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -233,7 +238,7 @@ export async function modelsListCommand(
   // Promotion decorations are best-effort: claim tags come from local
   // provenance, and the discovery section reads a cadence-gated feed cache.
   // Neither may break the core listing; stale refreshes have a short timeout.
-  const promotionsModule = await promotionsModuleLoader.load();
+  const promotionsModule = await (promotionsModulePromise ?? promotionsModuleLoader.load());
   try {
     promotionsModule.applyPromotionClaimTags(rows);
   } catch {
@@ -244,7 +249,7 @@ export async function modelsListCommand(
   } else {
     printModelTable(rows, runtime, opts);
   }
-  if (!opts.json && !opts.plain) {
+  if (promotionsRefreshPromise) {
     // Runs on the empty listing too: a fresh install with zero configured
     // models is exactly the user passive discovery is for. Compares against
     // the configured entries, not the rendered rows — filtered and --all
@@ -252,6 +257,7 @@ export async function modelsListCommand(
     try {
       await promotionsModule.printAvailablePromotionsSection({
         configuredKeys: new Set(entries.map((entry) => entry.key)),
+        refresh: await promotionsRefreshPromise,
         runtime,
       });
     } catch {
