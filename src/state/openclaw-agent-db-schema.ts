@@ -48,7 +48,7 @@ import {
 } from "./openclaw-agent-db-session-provenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
