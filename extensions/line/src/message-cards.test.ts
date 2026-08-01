@@ -123,22 +123,24 @@ async function withLineProvider(
   run: (client: messagingApi.MessagingApiClient, requests: LineProviderRequest[]) => Promise<void>,
 ): Promise<void> {
   const requests: LineProviderRequest[] = [];
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-      messages: Array<{ type: string; altText: string }>;
-    };
-    requests.push({
-      path: request.url ?? "",
-      authenticated: request.headers.authorization === "Bearer isolated-test-token",
-      type: payload.messages[0]?.type ?? "",
-      altText: payload.messages[0]?.altText ?? "",
+    request.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
     });
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
+    request.once("end", () => {
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        messages: Array<{ type: string; altText: string }>;
+      };
+      requests.push({
+        path: request.url ?? "",
+        authenticated: request.headers.authorization === "Bearer isolated-test-token",
+        type: payload.messages[0]?.type ?? "",
+        altText: payload.messages[0]?.altText ?? "",
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
