@@ -13,19 +13,12 @@ export function createSubagentRegistryCompletionRuntime(config: {
   resumed: Set<string>;
   retryTimers: Set<ReturnType<typeof setTimeout>>;
   completeSubagentRun: (params: SubagentCompletionRequest) => Promise<void>;
-  scheduleOrphanRecovery: (params?: { delayMs?: number; maxRetries?: number }) => void;
+  scheduleSweep: (params?: { delayMs?: number }) => void;
   resumeRun: (runId: string) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const {
-    runs,
-    resumed,
-    retryTimers,
-    completeSubagentRun,
-    scheduleOrphanRecovery,
-    resumeRun,
-    warn,
-  } = config;
+  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun, warn } =
+    config;
 
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
@@ -65,7 +58,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
       // completion through the normal persisted-session recovery path.
-      scheduleOrphanRecovery({ delayMs: 1_000 });
+      scheduleSweep({ delayMs: 1_000 });
       return;
     }
     if (

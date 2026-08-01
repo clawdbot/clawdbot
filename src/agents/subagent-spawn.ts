@@ -7,7 +7,6 @@ import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
@@ -33,6 +32,7 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
+  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import {
@@ -573,18 +573,10 @@ export async function spawnSubagentDirect(
               waitForSessionDeletion: !launchTerminationConfirmed,
             }),
           ]);
-          for (;;) {
-            try {
-              settleFailedQueuedSubagentLaunch(childRunId, launchError);
-              break;
-            } catch {
-              // The child is stopped; retry only the durable terminal write.
-              await new Promise<void>((resolve) => {
-                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-                timer.unref?.();
-              });
-            }
-          }
+          await retrySubagentCleanup(async () => {
+            settleFailedQueuedSubagentLaunch(childRunId, launchError);
+            return true;
+          });
           const cleanupComplete =
             contextRollback.status === "fulfilled" &&
             contextRollback.value &&

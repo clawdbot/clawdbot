@@ -75,7 +75,7 @@ vi.mock("../../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../../agents/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 

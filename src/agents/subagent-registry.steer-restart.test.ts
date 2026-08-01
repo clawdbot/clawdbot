@@ -579,8 +579,7 @@ describe("subagent registry steer restarts", () => {
 
   it("updates task to the dispatched steer message when provided", () => {
     // Regression test: orphan-session recovery
-    // (`recoverOrphanedSubagentSessions` -> `resumeOrphanedSession` /
-    // `buildResumeMessage` in `subagent-orphan-recovery.ts`) rewraps
+    // Registry restart recovery rewraps
     // `entry.task` into the [Subagent Task] block. If steer replacement did
     // not update `task` to the new message, a gateway restart classified as
     // resumable-fresh would re-run the stale pre-steer instruction and lose

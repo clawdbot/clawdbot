@@ -32,7 +32,7 @@ const hoisted = vi.hoisted(() => {
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
-  const scheduleSubagentOrphanRecovery = vi.fn();
+  const scheduleSubagentRegistrySweep = vi.fn();
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
     marked: 0,
     skipped: 0,
@@ -91,7 +91,7 @@ const hoisted = vi.hoisted(() => {
     scheduleGatewayUpdateCheck,
     startGatewayTailscaleExposure,
     logGatewayStartup,
-    scheduleSubagentOrphanRecovery,
+    scheduleSubagentRegistrySweep,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
     scheduleRestartSentinelWake,
@@ -121,7 +121,7 @@ vi.mock("../agents/session-dirs.js", () => ({
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
-  scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
+  scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 
 vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
@@ -336,7 +336,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
-    hoisted.scheduleSubagentOrphanRecovery.mockClear();
+    hoisted.scheduleSubagentRegistrySweep.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
       marked: 0,
@@ -425,7 +425,7 @@ describe("startGatewayPostAttachRuntime", () => {
       waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
-    expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
+    expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });

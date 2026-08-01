@@ -1,5 +1,4 @@
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import {
   runWithGatewayIndependentRootWorkAdmission,
   GatewayDrainingError,
@@ -17,6 +16,8 @@ import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+import { retrySubagentCleanup } from "./subagent-spawn-cleanup.js";
+import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
 import { enqueueSwarmRun } from "./swarm-scheduler.js";
 
@@ -41,7 +42,7 @@ export function createSubagentRegistryRestorer(config: {
   cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
   settleFailedQueuedSubagentLaunch: (runId: string, error: string) => void;
   completeCollectorLaunchCleanup: (runId: string) => void;
-  scheduleOrphanRecovery: (params?: { delayMs?: number; maxRetries?: number }) => void;
+  scheduleSweep: (params?: { delayMs?: number }) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const {
@@ -59,17 +60,10 @@ export function createSubagentRegistryRestorer(config: {
     cleanupCollectorLaunchResources,
     settleFailedQueuedSubagentLaunch,
     completeCollectorLaunchCleanup,
-    scheduleOrphanRecovery,
+    scheduleSweep,
     warn,
   } = config;
   let restoreAttempted = false;
-  const readGatewayRunId = (response: unknown): string | undefined => {
-    if (!response || typeof response !== "object") {
-      return undefined;
-    }
-    const runId = (response as { runId?: unknown }).runId;
-    return typeof runId === "string" && runId.trim() ? runId.trim() : undefined;
-  };
 
   function restoreSubagentRunsOnce() {
     if (restoreAttempted) {
@@ -218,7 +212,7 @@ export function createSubagentRegistryRestorer(config: {
 
       // Cold-start restore can precede instance-runtime registration. The post-attach
       // startup pass retries this seam once the lifecycle-bound principal exists.
-      scheduleOrphanRecovery();
+      scheduleSweep();
     } catch (err) {
       warn(
         `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
@@ -233,8 +227,8 @@ export function createSubagentRegistryRestorer(config: {
     launchTerminationConfirmed: boolean,
   ): Promise<boolean> {
     const cleanupComplete = await runWithGatewayIndependentRootWorkAdmission(async () => {
-      for (;;) {
-        try {
+      const sessionDeleted = await retrySubagentCleanup(
+        async () => {
           await deps().callGateway({
             method: "sessions.delete",
             params: {
@@ -244,23 +238,19 @@ export function createSubagentRegistryRestorer(config: {
             },
             timeoutMs: 10_000,
           });
-          break;
-        } catch (cleanupError) {
-          warn("failed to delete restored collector session after launch failure", {
-            runId,
-            childSessionKey: entry.childSessionKey,
-            error: cleanupError,
-          });
-          if (launchTerminationConfirmed) {
-            return false;
-          }
-        }
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-          timer.unref?.();
-        });
-      }
-      if (!(await cleanupCollectorLaunchResources(entry))) {
+          return true;
+        },
+        {
+          shouldRetry: () => !launchTerminationConfirmed,
+          onError: (cleanupError) =>
+            warn("failed to delete restored collector session after launch failure", {
+              runId,
+              childSessionKey: entry.childSessionKey,
+              error: cleanupError,
+            }),
+        },
+      );
+      if (!sessionDeleted || !(await cleanupCollectorLaunchResources(entry))) {
         return false;
       }
       return true;
@@ -272,22 +262,20 @@ export function createSubagentRegistryRestorer(config: {
       });
       return false;
     });
-    for (;;) {
-      try {
+    await retrySubagentCleanup(
+      async () => {
         settleFailedQueuedSubagentLaunch(runId, error);
-        break;
-      } catch (persistError) {
-        warn("failed to persist restored collector launch failure", {
-          runId,
-          childSessionKey: entry.childSessionKey,
-          error: persistError,
-        });
-      }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-        timer.unref?.();
-      });
-    }
+        return true;
+      },
+      {
+        onError: (persistError) =>
+          warn("failed to persist restored collector launch failure", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            error: persistError,
+          }),
+      },
+    );
     if (cleanupComplete) {
       emitSessionLifecycleEvent({
         sessionKey: entry.childSessionKey,

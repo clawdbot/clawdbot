@@ -199,7 +199,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
+vi.mock("./subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
 import { defaultRuntime } from "../runtime.js";
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";

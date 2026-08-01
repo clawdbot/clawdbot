@@ -27,7 +27,7 @@ import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-reg
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-announce.registry.runtime.js"),
+  () => import("./subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {

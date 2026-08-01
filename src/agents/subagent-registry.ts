@@ -42,7 +42,6 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
-import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import { resolveSubagentTaskForRun } from "./subagent-registry-sweep-kill.js";
 import {
   createSubagentRegistrySweeper,
@@ -54,6 +53,7 @@ import {
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
+import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -74,8 +74,6 @@ function getSubagentRegistryBootstrapState(): SubagentRegistryBootstrapState {
 }
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
-const ORPHAN_RECOVERY_DEBOUNCE_MS = 1_000;
-let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
@@ -99,45 +97,18 @@ function findSubagentTaskForRun(entry: SubagentRunRecord) {
   return resolveSubagentTaskForRun(getSubagentRunsForChildSession(entry.childSessionKey), entry);
 }
 
-export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxRetries?: number }) {
-  const gatewayRuntime = subagentRegistryDeps.getGatewayRecoveryRuntime();
-  if (!gatewayRuntime) {
-    log.warn("subagent orphan recovery deferred until the Gateway instance runtime is available");
-    return;
-  }
-  const now = Date.now();
-  if (now - lastOrphanRecoveryScheduleAt < ORPHAN_RECOVERY_DEBOUNCE_MS) {
-    return;
-  }
-  lastOrphanRecoveryScheduleAt = now;
-  void import("./subagent-orphan-recovery.js").then(
-    ({ scheduleOrphanRecovery }) => {
-      // This import only installs timers. Each delayed or retrying recovery
-      // attempt owns independent root admission inside the recovery module.
-      scheduleOrphanRecovery({
-        // Retries follow the process's current lifecycle-bound Gateway
-        // principal instead of retaining the instance that scheduled them.
-        getGatewayRuntime: subagentRegistryDeps.getGatewayRecoveryRuntime,
-        getActiveRuns: () => subagentRuns,
-        delayMs: params?.delayMs,
-        maxRetries: params?.maxRetries,
-      });
-    },
-    () => {
-      // Ignore import failures — orphan recovery is best-effort.
-    },
-  );
+export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
+  subagentSweeper.schedule(params);
 }
 
 const resumedRuns = new Set<string>();
-const endedHookInFlightRunIds = new Set<string>();
 
 const completionRuntime = createSubagentRegistryCompletionRuntime({
   runs: subagentRuns,
   resumed: resumedRuns,
   retryTimers: resumeRetryTimers,
   completeSubagentRun: (params) => completeSubagentRun(params),
-  scheduleOrphanRecovery: scheduleSubagentOrphanRecovery,
+  scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId),
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -350,6 +321,34 @@ function resumeSubagentRun(runId: string) {
   resumedRuns.add(runId);
 }
 
+function reserveSwarmCollectorLaunch(runId: string, idempotencyKey: string): boolean {
+  const entry =
+    subagentRuns.get(runId) ??
+    [...subagentRuns.values()].find((candidate) => candidate.swarmRunId === runId);
+  if (
+    !entry ||
+    entry.collect !== true ||
+    entry.collectorCompletion ||
+    typeof entry.execution.endedAt === "number"
+  ) {
+    return false;
+  }
+  const previous = {
+    idempotencyKey: entry.swarmLaunchIdempotencyKey,
+    pending: entry.swarmLaunchPending,
+  };
+  entry.swarmLaunchIdempotencyKey = idempotencyKey;
+  entry.swarmLaunchPending = true;
+  try {
+    persistSubagentRunsOrThrow(entry.runId);
+  } catch (error) {
+    entry.swarmLaunchIdempotencyKey = previous.idempotencyKey;
+    entry.swarmLaunchPending = previous.pending;
+    throw error;
+  }
+  return true;
+}
+
 const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   resumedRuns,
@@ -363,12 +362,18 @@ const subagentRestorer = createSubagentRegistryRestorer({
     listSwarmRunsForGroup(groupId, requesterSessionKey),
   startQueuedSubagentRun: (runId, gatewayRunId) =>
     subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId),
-  terminateAcceptedRestoredCollectorRun: contextCleanup.terminateAcceptedRestoredCollectorRun,
+  terminateAcceptedRestoredCollectorRun: ({ entry, gatewayRunId, timeoutMs }) =>
+    terminateAcceptedCollectorRun({
+      childSessionKey: entry.childSessionKey,
+      gatewayRunId,
+      timeoutMs,
+      callGateway: subagentRegistryDeps.callGateway,
+    }),
   cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
   completeCollectorLaunchCleanup: (runId) => publicApi.completeCollectorLaunchCleanup(runId),
-  scheduleOrphanRecovery: scheduleSubagentOrphanRecovery,
+  scheduleSweep: scheduleSubagentRegistrySweep,
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -396,7 +401,10 @@ const subagentSweeper = createSubagentRegistrySweeper({
   clearPendingLifecycleTimeout,
   sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
-  scheduleSubagentOrphanRecovery,
+  getGatewayRecoveryRuntime: () => subagentRegistryDeps.getGatewayRecoveryRuntime(),
+  replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
+  reserveSwarmCollectorLaunch,
+  finalizeInterruptedSubagentRun: completionRuntime.finalizeInterruptedSubagentRun,
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
@@ -450,7 +458,7 @@ const subagentRunManager = createSubagentRunManager({
   clearPendingLifecycleError,
   clearPendingLifecycleTimeout,
   resolveSubagentWaitTimeoutMs,
-  scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
+  scheduleSweep: scheduleSubagentRegistrySweep,
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
   notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
@@ -459,37 +467,6 @@ const subagentRunManager = createSubagentRunManager({
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
   },
   resolveSubagentTask: findSubagentTaskForRun,
-});
-
-configureSubagentRegistrySteerRuntime({
-  replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
-  finalizeInterruptedSubagentRun: async (params) =>
-    await completionRuntime.finalizeInterruptedSubagentRun(params),
-  reserveSwarmCollectorLaunch: (runId, idempotencyKey) => {
-    const entry =
-      subagentRuns.get(runId) ??
-      [...subagentRuns.values()].find((candidate) => candidate.swarmRunId === runId);
-    if (
-      !entry ||
-      entry.collect !== true ||
-      entry.collectorCompletion ||
-      typeof entry.execution.endedAt === "number"
-    ) {
-      return false;
-    }
-    const previousIdempotencyKey = entry.swarmLaunchIdempotencyKey;
-    const previousPending = entry.swarmLaunchPending;
-    entry.swarmLaunchIdempotencyKey = idempotencyKey;
-    entry.swarmLaunchPending = true;
-    try {
-      persistSubagentRunsOrThrow(entry.runId);
-    } catch (error) {
-      entry.swarmLaunchIdempotencyKey = previousIdempotencyKey;
-      entry.swarmLaunchPending = previousPending;
-      throw error;
-    }
-    return true;
-  },
 });
 
 export const markSubagentRunForSteerRestart = subagentRunManager.markSubagentRunForSteerRestart;
@@ -508,14 +485,12 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumeRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
-  endedHookInFlightRunIds.clear();
   pendingLifecycle.clearAll();
   resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
   subagentSweeper.reset();
   subagentRestorer.reset();
-  lastOrphanRecoveryScheduleAt = 0;
   subagentListener.reset();
   if (opts?.persist !== false) {
     persistSubagentRuns();

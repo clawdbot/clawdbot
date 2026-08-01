@@ -1,25 +1,53 @@
 import { promises as fs } from "node:fs";
+import type { callGateway } from "../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
+type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
+
+export async function retrySubagentCleanup(
+  attempt: () => boolean | Promise<boolean>,
+  options?: { shouldRetry?: () => boolean; onError?: (error: unknown) => void },
+): Promise<boolean> {
+  for (;;) {
+    try {
+      if (await attempt()) {
+        return true;
+      }
+    } catch (error) {
+      options?.onError?.(error);
+    }
+    if (options?.shouldRetry?.() === false) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
+      timer.unref?.();
+    });
+  }
+}
+
+type SessionCleanupOptions = {
+  emitLifecycleHooks?: boolean;
+  deleteTranscript?: boolean;
+  callGateway?: GatewayCall;
+  timeoutMs?: number;
+};
 
 export async function cleanupProvisionalSession(
   childSessionKey: string,
-  options?: {
-    emitLifecycleHooks?: boolean;
-    deleteTranscript?: boolean;
-  },
+  options?: SessionCleanupOptions,
 ): Promise<boolean> {
   try {
-    await callSubagentGateway({
+    await (options?.callGateway ?? callSubagentGateway)({
       method: "sessions.delete",
       params: {
         key: childSessionKey,
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+      timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
     return true;
   } catch {
@@ -30,20 +58,9 @@ export async function cleanupProvisionalSession(
 
 async function waitForProvisionalSessionDeletion(
   childSessionKey: string,
-  options?: {
-    emitLifecycleHooks?: boolean;
-    deleteTranscript?: boolean;
-  },
+  options?: SessionCleanupOptions,
 ): Promise<void> {
-  for (;;) {
-    if (await cleanupProvisionalSession(childSessionKey, options)) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
-    });
-  }
+  await retrySubagentCleanup(() => cleanupProvisionalSession(childSessionKey, options));
 }
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
@@ -78,27 +95,25 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
+  callGateway?: GatewayCall;
+  timeoutMs?: number;
 }): Promise<void> {
-  for (;;) {
+  const call = params.callGateway ?? callSubagentGateway;
+  const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
+  await retrySubagentCleanup(async () => {
     try {
-      await callSubagentGateway({
+      await call({
         method: "chat.abort",
         params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+        timeoutMs,
       });
-      return;
+      return true;
     } catch {
-      if (
-        await cleanupProvisionalSession(params.childSessionKey, {
-          deleteTranscript: true,
-        })
-      ) {
-        return;
-      }
+      return await cleanupProvisionalSession(params.childSessionKey, {
+        deleteTranscript: true,
+        callGateway: call,
+        timeoutMs,
+      });
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
-    });
-  }
+  });
 }

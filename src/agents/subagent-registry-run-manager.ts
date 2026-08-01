@@ -260,7 +260,7 @@ export function createSubagentRunManager(params: {
   clearPendingLifecycleError(runId: string): void;
   clearPendingLifecycleTimeout(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
-  scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
+  scheduleSweep(args?: { delayMs?: number }): void;
   resolveSubagentSessionCompletion(args: {
     childSessionKey: string;
     fallbackEndedAt: number;
@@ -342,7 +342,7 @@ export function createSubagentRunManager(params: {
   ): Promise<void> => {
     let completionForRetry: Parameters<typeof params.completeSubagentRun>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
-      params.scheduleOrphanRecovery({ delayMs: 1_000 });
+      params.scheduleSweep({ delayMs: 1_000 });
       const scheduledEntry = entry;
       setTimeout(() => {
         const current = params.runs.get(runId);
@@ -566,7 +566,7 @@ export function createSubagentRunManager(params: {
         params.resumedRuns.delete(runId);
         params.resumeSubagentRun(runId);
       } else if (completionForRetry && typeof current.execution.endedAt !== "number") {
-        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+        params.scheduleSweep({ delayMs: 1_000 });
       }
     }
   };
@@ -654,6 +654,7 @@ export function createSubagentRunManager(params: {
     previousRunId: string;
     nextRunId: string;
     fallback?: SubagentRunRecord;
+    expected?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
@@ -666,6 +667,9 @@ export function createSubagentRunManager(params: {
     }
 
     const previous = params.runs.get(previousRunId);
+    if (replaceParams.expected && previous !== replaceParams.expected) {
+      return false;
+    }
     const source = previous ?? replaceParams.fallback;
     if (!source) {
       return false;
@@ -700,9 +704,7 @@ export function createSubagentRunManager(params: {
     // child session during steer/wake/orphan-resume) over the previous run's
     // stale `task`. Falling back to the prior task preserves behavior for any
     // caller that does not pass a replacement message. The orphan-session
-    // recovery flow (`recoverOrphanedSubagentSessions` ->
-    // `resumeOrphanedSession` / `buildResumeMessage` in
-    // `subagent-orphan-recovery.ts`) rewraps the persisted `task` into the
+    // registry restart recovery flow rewraps the persisted `task` into the
     // `[Subagent Task]` block after a gateway restart; using stale text would
     // silently re-run the original instruction and lose the user's steer
     // update.

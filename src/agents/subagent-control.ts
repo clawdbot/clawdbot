@@ -1,8 +1,4 @@
-/**
- * Implements subagent control operations: list, kill, steer, and send-message.
- * The module enforces controller ownership before mutating child sessions or
- * routing internal follow-up messages.
- */
+/** Controller-authorized subagent list, kill, steer, and message operations. */
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
@@ -802,10 +798,7 @@ export async function steerControlledSubagentRun(params: {
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
-    // Preserve the steered instruction so that restart redispatch rewraps the
-    // new message rather than the stale pre-steer task. Persisting the older
-    // task would cause `recoverOrphanedSubagentSessions` to re-issue the
-    // original instruction after a crash, silently dropping the user's steer.
+    // Persist the steer so restart recovery cannot reissue the stale task.
     task: params.message,
   });
   if (!replaced) {

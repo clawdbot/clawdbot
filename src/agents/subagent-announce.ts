@@ -74,7 +74,7 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-announce.registry.runtime.js"),
+  () => import("./subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {

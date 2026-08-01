@@ -1,11 +1,4 @@
-// Faithful restart-path integration proof for stale-aborted subagent orphan
-// recovery. Unlike subagent-orphan-recovery.test.ts (which stubs the session
-// store and finalize), this drives the REAL recovery pass against the REAL
-// subagent registry, the REAL liveness policy, and a REAL on-disk session
-// store. Only the outbound gateway transport and the transcript file reader are
-// mocked, because they are the genuine process boundaries a single-process test
-// cannot stand up. It exists to prove that finalize actually ends the real
-// registry run (not a stubbed counter) and that the fresh run still resumes.
+// Restart-path proof against the real registry sweeper and SQLite session store.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +13,6 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime } from "./subagent-orphan-recovery.js";
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
@@ -29,7 +21,6 @@ import {
 } from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
-  finalizeInterruptedSubagentRun,
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -49,12 +40,6 @@ const gatewayRuntime: GatewayRecoveryRuntime = {
   waitForAgent: vi.fn(),
   sendRecoveryNotice: vi.fn(),
 };
-
-function recoverOrphanedSubagentSessions(
-  params: Omit<Parameters<typeof recoverOrphanedSubagentSessionsWithRuntime>[0], "gatewayRuntime">,
-) {
-  return recoverOrphanedSubagentSessionsWithRuntime({ ...params, gatewayRuntime });
-}
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -92,6 +77,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     // external side effects) are recorded so completeSubagentRun runs in-process.
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
+      getGatewayRecoveryRuntime: () => gatewayRuntime,
       runSubagentAnnounceFlow: vi.fn(async () => true),
       onAgentEvent: vi.fn(() => () => undefined),
     });
@@ -147,15 +133,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
     ).not.toBeNull();
     addSubagentRunForTests(record);
 
-    const result = await recoverOrphanedSubagentSessions({
-      getActiveRuns: () => new Map([[runId, record]]),
-    });
+    await testing.sweepOnceForTests();
 
     const after = getSubagentRunByChildSessionKey(childSessionKey);
     expect(dispatchAgent).not.toHaveBeenCalled();
     expect(after?.execution.endedAt).toBeTypeOf("number");
     expect(after?.execution.outcome?.status).toBe("error");
-    expect(result.recovered).toBe(0);
     expect(findTaskByRunId(runId)).toMatchObject({
       status: "failed",
       endedAt: expect.any(Number),
@@ -194,15 +177,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
     addSubagentRunForTests(record);
 
-    const result = await recoverOrphanedSubagentSessions({
-      getActiveRuns: () => new Map([[runId, record]]),
-    });
+    await testing.sweepOnceForTests();
 
-    console.log(
-      `[proof] fresh recovery: result=${JSON.stringify(result)} runtimeDispatches=${
-        dispatchAgent.mock.calls.length
-      }`,
-    );
+    console.log(`[proof] fresh recovery: runtimeDispatches=${dispatchAgent.mock.calls.length}`);
 
     // Fresh aborted run passed the stale gate and reached the instance-owned dispatcher.
     expect(dispatchAgent).toHaveBeenCalledOnce();
@@ -211,7 +188,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       lane: "subagent",
       deliver: false,
     });
-    expect(result.recovered).toBe(1);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("resumed-run-id");
   });
 
   it("finalizes only a stale predecessor when a fresh generation shares its child session", async () => {
@@ -252,19 +229,23 @@ describe("subagent orphan recovery — faithful restart path", () => {
     addSubagentRunForTests(staleRecord);
     addSubagentRunForTests(freshRecord);
 
-    const updated = await finalizeInterruptedSubagentRun({
-      runId: staleRecord.runId,
-      error: "stale predecessor interrupted by restart",
-      endedAt: now,
+    await writeSubagentSessionEntry({
+      stateDir: tempStateDir!,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-shared-generation",
+      updatedAt: now,
+      abortedLastRun: true,
+      defaultSessionId: "sess-shared-generation",
     });
+    await testing.sweepOnceForTests();
 
     const runs = listSubagentRunsForRequester("agent:main:main");
-    expect(updated).toBe(1);
-    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(dispatchAgent).toHaveBeenCalledOnce();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
-    expect(runs).toContainEqual(expect.objectContaining({ runId: freshRecord.runId }));
+    expect(runs).toContainEqual(expect.objectContaining({ runId: "resumed-run-id" }));
     expect(
-      runs.find((entry) => entry.runId === freshRecord.runId)?.execution.endedAt,
+      runs.find((entry) => entry.runId === "resumed-run-id")?.execution.endedAt,
     ).toBeUndefined();
     expect(findTaskByRunId(staleRecord.runId)).toMatchObject({ status: "failed" });
     expect(findTaskByRunId(freshRecord.runId)).toMatchObject({ status: "running" });
