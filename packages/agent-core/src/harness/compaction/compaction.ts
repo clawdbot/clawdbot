@@ -12,6 +12,7 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { attachInternalAgentCoreUsage } from "../../internal-compaction-usage.js";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -138,8 +139,6 @@ export interface CompactionResult<T = unknown> {
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
-  /** Provider-reported usage for the summarization calls performed by this compaction. */
-  usage?: Usage;
 }
 
 /** Successful output from one summarization model call. */
@@ -1043,13 +1042,17 @@ export async function compact(
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   summary += formatFileOperations(readFiles, modifiedFiles);
 
-  return ok({
-    summary,
-    firstKeptEntryId,
-    tokensBefore,
-    details: { readFiles, modifiedFiles } as CompactionDetails,
-    usage,
-  });
+  return ok(
+    attachInternalAgentCoreUsage(
+      {
+        summary,
+        firstKeptEntryId,
+        tokensBefore,
+        details: { readFiles, modifiedFiles } as CompactionDetails,
+      },
+      usage,
+    ),
+  );
 }
 async function generateTurnPrefixSummary(
   messages: AgentMessage[],

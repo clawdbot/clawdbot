@@ -3,7 +3,7 @@
  *
  * Keeps session-manager branch traversal local while delegating summary generation to agent-core.
  */
-import type { Model, Usage } from "../../../llm/types.js";
+import type { Model } from "../../../llm/types.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary as generateBranchSummaryCore,
@@ -27,7 +27,6 @@ export interface BranchSummaryResult {
   summary?: string;
   readFiles?: string[];
   modifiedFiles?: string[];
-  usage?: Usage;
   aborted?: boolean;
   error?: string;
 }

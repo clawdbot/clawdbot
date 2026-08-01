@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getInternalAgentCoreUsage } from "../../internal-compaction-usage.js";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
@@ -577,7 +578,7 @@ describe("split-turn compaction", () => {
     if (!result.ok) {
       throw result.error;
     }
-    expect(result.value.usage).toEqual({
+    expect(getInternalAgentCoreUsage(result.value)).toEqual({
       input: 300,
       output: 30,
       cacheRead: 15,

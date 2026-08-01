@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getInternalAgentCoreUsage } from "../../internal-compaction-usage.js";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
@@ -138,7 +139,7 @@ describe("branch summarization", () => {
     if (!result.ok) {
       throw result.error;
     }
-    expect(result.value.usage).toEqual(createResponse(model).usage);
+    expect(getInternalAgentCoreUsage(result.value)).toEqual(createResponse(model).usage);
     expect(capture.readCapture().prompt).toContain("ERROR: deployment timed out");
     expect(capture.readCapture().prompt).not.toContain("never send internal metadata");
     expect(capture.readCapture().maxOutputTokens).toBe(2048);

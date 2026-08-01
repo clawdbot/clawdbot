@@ -1,5 +1,6 @@
 // Agent Core module implements branch summarization behavior.
 import type { Model, StreamFn } from "@openclaw/llm-core";
+import { attachInternalAgentCoreUsage } from "../../internal-compaction-usage.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
@@ -300,10 +301,14 @@ export async function generateBranchSummary(
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   summary += formatFileOperations(readFiles, modifiedFiles);
 
-  return ok({
-    summary: summary || "No summary generated",
-    readFiles,
-    modifiedFiles,
-    usage: response.usage,
-  });
+  return ok(
+    attachInternalAgentCoreUsage(
+      {
+        summary: summary || "No summary generated",
+        readFiles,
+        modifiedFiles,
+      },
+      response.usage,
+    ),
+  );
 }

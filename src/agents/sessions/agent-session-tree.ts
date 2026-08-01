@@ -1,3 +1,4 @@
+import { getInternalAgentCoreUsage } from "../../../packages/agent-core/src/internal-compaction-usage.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
@@ -143,8 +144,9 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         if (result.error) {
           throw new Error(result.error);
         }
-        if (result.usage) {
-          this.emit({ type: "context_usage", source: "branch_summary", usage: result.usage });
+        const summaryUsage = getInternalAgentCoreUsage(result);
+        if (summaryUsage) {
+          this.emit({ type: "context_usage", source: "branch_summary", usage: summaryUsage });
         }
         summaryText = result.summary;
         summaryDetails = {
