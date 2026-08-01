@@ -523,6 +523,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     const panel = await openTabPanel({
       browserCdp: reloadedBrowserCdp,
+      expect,
       extensionId: reloadedExtensionId,
       page: reloadedLauncher,
     });
@@ -655,7 +656,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       path.join(os.tmpdir(), "openclaw-browser-copilot-artifacts");
     await fs.mkdir(artifactDir, { recursive: true });
 
-    const alphaPanel = await openTabPanel({ browserCdp, extensionId, page: alphaTab });
+    const alphaPanel = await openTabPanel({ browserCdp, expect, extensionId, page: alphaTab });
     const alphaContextProof = await alphaTab.evaluate(async () => {
       const tab = await chrome.tabs.getCurrent();
       const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
@@ -731,7 +732,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       .toContain("Isolated reply: alpha marker");
 
     const betaTab = await context.newPage();
-    const betaPanel = await openTabPanel({ browserCdp, extensionId, page: betaTab });
+    const betaPanel = await openTabPanel({ browserCdp, expect, extensionId, page: betaTab });
     const betaTabId = await betaTab.evaluate(async () => (await chrome.tabs.getCurrent()).id);
     if (typeof betaTabId !== "number") {
       throw new Error("Chrome did not expose the beta tab id");
@@ -834,6 +835,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     let reopenedBetaPanel = await openTabPanel({
       browserCdp,
+      expect,
       extensionId,
       page: betaTab,
     });
@@ -952,6 +954,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     reopenedBetaPanel = await openTabPanel({
       browserCdp,
+      expect,
       extensionId,
       page: betaTab,
     });

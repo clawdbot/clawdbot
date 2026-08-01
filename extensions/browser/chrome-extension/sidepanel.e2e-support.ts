@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright-core";
-import { expect as vitestExpect } from "vitest";
+import type { expect as VitestExpect } from "vitest";
 import type { RawData } from "ws";
 
 type CopilotTurnIsolationGateway = {
@@ -250,6 +250,7 @@ function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
 
 export async function openTabPanel(params: {
   browserCdp: CDPSession;
+  expect: typeof VitestExpect;
   extensionId: string;
   page: Page;
 }): Promise<PanelTarget> {
@@ -258,11 +259,11 @@ export async function openTabPanel(params: {
   };
   const priorTargetIds = new Set(prior.targetInfos.map((target) => target.targetId));
   await params.page.goto(`chrome-extension://${params.extensionId}/e2e-launcher.html`);
-  await vitestExpect
+  await params.expect
     .poll(async () => await params.page.locator("body").getAttribute("data-ready"))
     .toBe("true");
   await params.page.locator("#open").click();
-  await vitestExpect
+  await params.expect
     .poll(
       async () =>
         await params.page.locator("body").evaluate((body) => ({
@@ -272,7 +273,7 @@ export async function openTabPanel(params: {
       { timeout: 5_000 },
     )
     .toEqual({ error: undefined, opened: "true" });
-  await vitestExpect
+  await params.expect
     .poll(
       async () => {
         const targets = (await params.browserCdp.send("Target.getTargets")) as {
