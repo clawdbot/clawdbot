@@ -34,6 +34,53 @@ describe("Claude CLI logged-out failures", () => {
   });
 });
 
+describe("credentials file ENOENT failures", () => {
+  it("classifies missing credentials files as auth failures", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/home/operator/.config/openclaw/.credentials.json'",
+      ),
+    ).toBe("auth");
+  });
+
+  it("classifies missing hidden token files as auth failures", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/home/operator/.config/openclaw/.tokens.json'",
+      ),
+    ).toBe("auth");
+  });
+
+  it("leaves unrelated missing local files unclassified", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/home/operator/project/data.json'",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not classify unrelated open paths from wrapper credential text", () => {
+    expect(
+      classifyFailoverReason(
+        "Credentials refresh failed: ENOENT: no such file or directory, open '/home/operator/project/data.json'",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not classify same-name non-credential workspace files", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/home/operator/workspace/tokens.json'",
+      ),
+    ).toBeNull();
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/home/operator/workspace/credentials/cache.json'",
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("formatAssistantErrorText streaming JSON parse classification", () => {
   beforeEach(() => {
     toolPolicyAuditInfo.mockClear();

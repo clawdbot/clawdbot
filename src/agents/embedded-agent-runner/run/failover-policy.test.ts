@@ -2,6 +2,7 @@
 // profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
@@ -265,6 +266,50 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "fallback_model",
       reason: "rate_limit",
+    });
+  });
+
+  it("falls back for missing credentials files after assistant rotation is exhausted", () => {
+    const assistantError = makeAssistantMessageFixture({
+      errorMessage:
+        "ENOENT: no such file or directory, open '/home/operator/.config/openclaw/.credentials.json'",
+    });
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBe("auth");
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "auth",
+    });
+  });
+
+  it("does not fall back for unrelated unclassified missing files", () => {
+    const assistantError = makeAssistantMessageFixture({
+      errorMessage: "ENOENT: no such file or directory, open '/home/operator/project/data.json'",
+    });
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBeNull();
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
     });
   });
 
