@@ -226,6 +226,17 @@ The backport flow covers mainline inventory, private-security reconciliation,
 approval, the staging PR, and proof handoff. After it lands, use the sequence
 below. Never route `.33+` through regular beta/stable release steps.
 
+Extended-stable has a default **SDK/config firebreak**: do not backport a
+change that alters the public plugin SDK or any config/default/schema/migration
+surface. First adapt the fix to the maintenance branch so the affected plugin
+or runtime uses the SDK and configuration already shipped on that line. If
+that cannot preserve the reliability fix, do not backport it unless the defect
+itself is a material security or reliability defect in the SDK/config owner and
+an explicit maintainer approves the narrow exception. Read and satisfy the
+mechanical comparison and exception evidence in
+`references/extended-stable-backports.md`; a clean cherry-pick, green release
+checks, or a regenerated baseline is not approval to change either contract.
+
 ## Publish Gateway extended-stable releases
 
 Use this path only for the trailing completed month's `.33+` Gateway
