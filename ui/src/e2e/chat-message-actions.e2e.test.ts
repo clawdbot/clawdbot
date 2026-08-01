@@ -152,9 +152,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
         {
           role: "assistant",
           content: [
+            { type: "thinking", thinking: privateThinking },
             {
               type: "text",
-              text: `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
+              text: visibleThinkingAnswer,
             },
           ],
           timestamp: Date.now() + 2,
@@ -219,6 +220,22 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const thinkingGroup = page
         .locator(".chat-group.assistant")
         .filter({ hasText: visibleThinkingAnswer });
+      const reasoningDisclosure = thinkingGroup.locator(".chat-thinking-disclosure");
+      const reasoningSummary = reasoningDisclosure.getByText("Reasoning", { exact: true });
+      await reasoningSummary.waitFor({ state: "visible" });
+      expect(await reasoningDisclosure.getAttribute("open")).toBeNull();
+      await expect.poll(() => thinkingGroup.getByText(privateThinking).isVisible()).toBe(false);
+      await screenshot(page, "01-reasoning-collapsed.png");
+
+      await reasoningSummary.press("Enter");
+      await expect.poll(() => reasoningDisclosure.getAttribute("open")).not.toBeNull();
+      await thinkingGroup.getByText(privateThinking).waitFor({ state: "visible" });
+      await screenshot(page, "02-reasoning-expanded.png");
+
+      await reasoningSummary.press("Space");
+      await expect.poll(() => reasoningDisclosure.getAttribute("open")).toBeNull();
+      await expect.poll(() => thinkingGroup.getByText(privateThinking).isVisible()).toBe(false);
+
       await thinkingGroup.hover();
       await thinkingGroup.getByRole("button", { name: "Reply to message" }).click();
       const thinkingReplyPreview = page.locator(".chat-reply-preview");

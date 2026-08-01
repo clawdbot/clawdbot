@@ -2,8 +2,60 @@
    CHAT TEXT STYLING
    ============================================= */
 
-.chat-thinking {
+.chat-thinking-disclosure {
   margin-bottom: 10px;
+}
+
+.chat-thinking-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-thinking-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-summary::marker {
+  content: "";
+}
+
+.chat-thinking-summary:hover {
+  background: color-mix(in srgb, var(--secondary) 72%, transparent);
+  color: var(--text);
+}
+
+.chat-thinking-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-thinking-summary__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  transition: transform 140ms ease;
+}
+
+.chat-thinking-summary__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-thinking-disclosure[open] .chat-thinking-summary__icon {
+  transform: rotate(90deg);
+}
+
+.chat-thinking {
+  margin-top: 6px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
@@ -16,6 +68,12 @@
 :root[data-theme-mode="light"] .chat-thinking {
   border-color: rgba(16, 24, 40, 0.25);
   background: rgba(16, 24, 40, 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-summary__icon {
+    transition: none;
+  }
 }
 
 .chat-text {
