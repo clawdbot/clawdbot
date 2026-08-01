@@ -3,6 +3,14 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getPluginCompatRecord } from "../plugins/compat/registry.js";
+import type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+  ContextEngineRegistration,
+  ContextEngineRegistrationLifecycle,
+} from "../plugins/registry-contribution-types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -19,36 +27,14 @@ import type {
   IngestResult,
 } from "./types.js";
 
+export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
+
 /**
  * Runtime context passed to context engine factories during resolution.
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-type ContextEngineFactoryContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-};
-
-/**
- * A factory that creates a ContextEngine instance.
- * Supports async creation for engines that need DB connections etc.
- *
- * The factory receives a {@link ContextEngineFactoryContext} with runtime
- * environment context (config, paths). Existing no-arg factories remain
- * backward compatible because TypeScript permits assigning functions with
- * fewer parameters to wider signatures.
- */
-export type ContextEngineFactory = (
-  ctx: ContextEngineFactoryContext,
-) => ContextEngine | Promise<ContextEngine>;
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
-type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
-type ContextEngineRegistration = {
-  factory: ContextEngineFactory;
-  owner: string;
-  lifecycle: ContextEngineRegistrationLifecycle;
-};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -153,7 +139,6 @@ type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -162,10 +147,11 @@ type ContextEngineRegistryState = {
 const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryState>(
   CONTEXT_ENGINE_REGISTRY_STATE,
   () => ({
-    engines: new Map(),
     quarantinedEngines: new Map(),
   }),
 );
+
+const getContextEngines = () => requireActivePluginRegistry().contextEngines;
 
 function requireContextEngineOwner(owner: string): string {
   const normalizedOwner = owner.trim();
@@ -254,9 +240,29 @@ export function registerContextEngineForOwner(
   owner: string,
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
+  const targetRegistry = requireActivePluginRegistry();
+  const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
+  if (
+    result.ok &&
+    (opts?.lifecycle ?? "runtime") === "runtime" &&
+    getActivePluginRegistry() === targetRegistry
+  ) {
+    clearContextEngineRuntimeQuarantine(id);
+  }
+  return result;
+}
+
+/** Registers an engine in a registry value while that value is being assembled. */
+export function registerContextEngineInRegistry(
+  pluginRegistry: PluginRegistry,
+  id: string,
+  factory: ContextEngineFactory,
+  owner: string,
+  opts?: RegisterContextEngineForOwnerOptions,
+): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
   const lifecycle = opts?.lifecycle ?? "runtime";
-  const registry = contextEngineRegistryState.engines;
+  const registry = pluginRegistry.contextEngines;
   const existing = registry.get(id);
   if (
     id === defaultSlotIdForKey("contextEngine") &&
@@ -277,27 +283,33 @@ export function registerContextEngineForOwner(
     return { ok: false, existingOwner: existing.owner };
   }
   registry.set(id, { factory, owner: normalizedOwner, lifecycle });
-  if (lifecycle === "runtime") {
-    clearContextEngineRuntimeQuarantine(id);
-  }
   return { ok: true };
+}
+
+/** Clear runtime quarantine only after a complete builder-local registry becomes active. */
+export function activateContextEngineRegistrations(pluginRegistry: PluginRegistry): void {
+  for (const [id, registration] of pluginRegistry.contextEngines) {
+    if (registration.lifecycle === "runtime") {
+      clearContextEngineRuntimeQuarantine(id);
+    }
+  }
 }
 
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
 export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
-  return contextEngineRegistryState.engines.get(id);
+  return getContextEngines().get(id);
 }
 
 /**
  * List all registered engine ids.
  */
 function listContextEngineIds(): string[] {
-  return [...contextEngineRegistryState.engines.keys()];
+  return [...getContextEngines().keys()].toSorted();
 }
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = contextEngineRegistryState.engines;
+  const registry = getContextEngines();
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
@@ -575,7 +587,7 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  const entry = contextEngineRegistryState.engines.get(engineId);
+  const entry = getContextEngines().get(engineId);
   if (!entry) {
     if (isDefaultEngine) {
       throw new Error(
@@ -640,7 +652,7 @@ async function resolveDefaultContextEngine(
   defaultEngineId: string,
   factoryCtx: ContextEngineFactoryContext,
 ): Promise<ContextEngine> {
-  const defaultEntry = contextEngineRegistryState.engines.get(defaultEngineId);
+  const defaultEntry = getContextEngines().get(defaultEngineId);
   if (!defaultEntry) {
     throw new Error(
       `[context-engine] fallback failed: default engine "${defaultEngineId}" is not registered. ` +

@@ -5,6 +5,7 @@ import type {
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_DEFAULT_PREFIX_PADDING_MS,
   XAI_REALTIME_DEFAULT_SILENCE_DURATION_MS,
@@ -219,13 +220,48 @@ export abstract class XaiRealtimeVoiceProtocol {
     if (this.deliveredToolCallKeys.has(dedupeKey)) {
       return;
     }
-    this.deliveredToolCallKeys.add(dedupeKey);
-    this.pendingToolCallIds.add(callId);
-    let args: unknown = {};
+    let args: unknown;
     try {
       args = JSON.parse(fields.rawArgs || "{}");
-    } catch {}
+    } catch {
+      this.rejectToolCallArguments({
+        itemId,
+        callId,
+        dedupeKey,
+        reason: "malformed-json",
+      });
+      return;
+    }
+    if (!isRecord(args)) {
+      this.rejectToolCallArguments({
+        itemId,
+        callId,
+        dedupeKey,
+        reason: "non-object-json",
+      });
+      return;
+    }
+    this.deliveredToolCallKeys.add(dedupeKey);
+    this.pendingToolCallIds.add(callId);
     this.config.onToolCall({ itemId, callId, name, args });
+  }
+
+  private rejectToolCallArguments(params: {
+    itemId: string;
+    callId: string;
+    dedupeKey: string;
+    reason: string;
+  }): void {
+    // xAI pauses until every function call receives an output. Treat rejection as
+    // terminal and dedupe it before sending so replay cannot complete the call twice.
+    this.deliveredToolCallKeys.add(params.dedupeKey);
+    this.config.onEvent?.({
+      direction: "server",
+      type: "tool_call.arguments.rejected",
+      detail: `reason=${params.reason}`,
+      itemId: params.itemId,
+    });
+    this.submitToolResultNow(params.callId, { error: "Invalid tool arguments." });
   }
 
   private flushPendingResponseCreateAfterToolResults(): void {

@@ -12,6 +12,12 @@ import {
   registerMemoryPromptPreparation,
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  requireActivePluginRegistry,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
@@ -25,9 +31,11 @@ import {
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
-  registerContextEngineForOwner,
+  activateContextEngineRegistrations,
   getContextEngineRegistration,
   listContextEngineQuarantines,
+  registerContextEngineForOwner,
+  registerContextEngineInRegistry,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
@@ -148,13 +156,7 @@ function requireFactoryContext(
 }
 
 function requireRegistryState() {
-  const registryState = (globalThis as Record<symbol, unknown>)[
-    Symbol.for("openclaw.contextEngineRegistryState")
-  ] as { engines: Map<string, unknown> } | undefined;
-  if (!registryState) {
-    throw new Error("expected context engine registry state");
-  }
-  return registryState;
+  return { engines: requireActivePluginRegistry().contextEngines };
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -631,6 +633,20 @@ describe("Registry tests", () => {
       existingOwner: "owner-a",
     });
     expect(getContextEngineRegistration("reg-owner-guard")?.factory).toBe(factory1);
+  });
+
+  it("reserves the default engine id even in an empty builder registry", () => {
+    const building = createEmptyPluginRegistry();
+
+    expect(
+      registerContextEngineInRegistry(
+        building,
+        "legacy",
+        () => new MockContextEngine(),
+        "plugin:shadow",
+      ),
+    ).toEqual({ ok: false, existingOwner: "core" });
+    expect(building.contextEngines.size).toBe(0);
   });
 
   it("exposes the trusted plugin owner for a resolved registered engine", async () => {
@@ -1132,6 +1148,31 @@ describe("Invalid engine fallback", () => {
 
     expect(listContextEngineQuarantines()).toEqual([]);
     expect(registeredEngine.info.id).toBe(engineId);
+  });
+
+  it("defers quarantine clearing for builder-context direct registrations", async () => {
+    const engineId = uniqueEngineId("builder-register");
+    await resolveContextEngine(configWithSlot(engineId));
+    const builder = createEmptyPluginRegistry();
+
+    withPluginRegistrationContext(builder, "context-builder", () => {
+      registerContextEngineForOwner(
+        engineId,
+        () => new MockContextEngine(),
+        "plugin:context-builder",
+        { allowSameOwnerRefresh: true },
+      );
+    });
+
+    expect(builder.contextEngines.has(engineId)).toBe(true);
+    expect(getContextEngineRegistration(engineId)).toBeUndefined();
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({ engineId, reason: "not registered" }),
+    ]);
+
+    setActivePluginRegistry(builder);
+    activateContextEngineRegistrations(builder);
+    expect(listContextEngineQuarantines()).toEqual([]);
   });
 
   it("does not quarantine abort rejections from lifecycle methods", async () => {

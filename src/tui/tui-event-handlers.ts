@@ -672,14 +672,15 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
-      let forceRender = false;
+      let forceRender = phase === "end";
       if (phase === "end") {
         postFinalizingRuns.delete(evt.runId);
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("idle");
-        forceRender = true;
+        if (!localMode || !isLocalRunId?.(evt.runId) || finalizedRuns.has(evt.runId)) {
+          setActivityStatus("idle"); // Local chat.final proves post-turn maintenance finished.
+        }
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
@@ -695,10 +696,8 @@ export function createEventHandlers(context: EventHandlerContext) {
                 ? evt.data.errorMessage
                 : "unknown";
           scheduleTerminalLifecycleError(evt.runId, errorMessage);
-          setActivityStatus("error");
-        } else {
-          setActivityStatus("error");
         }
+        setActivityStatus("error");
         forceRender = true;
       }
       tui.requestRender(forceRender);

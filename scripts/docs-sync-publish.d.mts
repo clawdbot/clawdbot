@@ -20,6 +20,8 @@ export function applyLocaleNavLabelOverlay(
 ): Record<string, unknown>;
 /** Composes the publish docs configuration with generated locale navigation. */
 export function composeDocsConfig(): Record<string, unknown>;
+/** Writes the public heading map into the publish tree without committing an expanded mirror. */
+export function writePublishedDocsMap(targetDocsDir: string): string;
 /**
  * Mirrors ClawHub docs into the target docs tree.
  */

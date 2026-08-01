@@ -93,6 +93,9 @@ type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
   type: string;
   audio?: string;
+  item?: {
+    type?: string;
+  };
   session?: {
     voice?: string;
     model?: string;
@@ -1185,6 +1188,159 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       });
     },
   );
+
+  it.each(["completed arguments", "resumed item replay"] as const)(
+    "rejects malformed and non-object tool arguments from %s without retaining pending state",
+    async (ingress) => {
+      const onEvent = vi.fn();
+      const onToolCall = vi.fn();
+      const bridge = buildXaiRealtimeVoiceProvider().createBridge({
+        providerConfig: {
+          apiKey: "xai-test", // pragma: allowlist secret
+          sessionResumption: ingress === "resumed item replay",
+        },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onEvent,
+        onToolCall,
+      });
+      const { connecting, socket } = await openRealtimeBridge(bridge);
+      await connecting;
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
+      const invalidEvents = ["{", "null", "[]", JSON.stringify("text"), "1", "true"].map(
+        (rawArgs, index) => {
+          const itemId = `item_invalid_${index}`;
+          const callId = `call_invalid_${index}`;
+          return ingress === "completed arguments"
+            ? {
+                type: "response.function_call_arguments.done",
+                item_id: itemId,
+                call_id: callId,
+                name: "lookup_weather",
+                arguments: rawArgs,
+              }
+            : {
+                type: "conversation.item.created",
+                item: {
+                  id: itemId,
+                  type: "function_call",
+                  call_id: callId,
+                  name: "lookup_weather",
+                  arguments: rawArgs,
+                },
+              };
+        },
+      );
+      for (const event of invalidEvents) {
+        socket.emit("message", Buffer.from(JSON.stringify(event)));
+      }
+      socket.emit("message", Buffer.from(JSON.stringify(invalidEvents[0])));
+
+      expect(onToolCall).not.toHaveBeenCalled();
+      expect(
+        onEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.type === "tool_call.arguments.rejected"),
+      ).toEqual([
+        {
+          direction: "server",
+          type: "tool_call.arguments.rejected",
+          detail: "reason=malformed-json",
+          itemId: "item_invalid_0",
+        },
+        ...Array.from({ length: 5 }, (_, index) => ({
+          direction: "server",
+          type: "tool_call.arguments.rejected",
+          detail: "reason=non-object-json",
+          itemId: `item_invalid_${index + 1}`,
+        })),
+      ]);
+      expect(
+        parseSent(socket).filter(
+          (event) =>
+            event.type === "conversation.item.create" &&
+            event.item?.type === "function_call_output",
+        ),
+      ).toEqual(
+        Array.from({ length: 6 }, (_, index) => ({
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: `call_invalid_${index}`,
+            output: JSON.stringify({ error: "Invalid tool arguments." }),
+          },
+        })),
+      );
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+        { type: "response.create" },
+      ]);
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+      bridge.sendUserMessage?.("Continue after rejected tool arguments.");
+      expect(parseSent(socket).slice(-2)).toEqual([
+        {
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Continue after rejected tool arguments." }],
+          },
+        },
+        { type: "response.create" },
+      ]);
+      bridge.close();
+    },
+  );
+
+  it("treats rejected tool call arguments as terminal for the same identity", async () => {
+    const onToolCall = vi.fn();
+    const bridge = buildXaiRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    for (const rawArgs of ['{"city":', JSON.stringify({ city: "Paris" })]) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.done",
+            item_id: "item_rejected",
+            call_id: "call_rejected",
+            name: "lookup_weather",
+            arguments: rawArgs,
+          }),
+        ),
+      );
+    }
+
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(
+      parseSent(socket).filter(
+        (event) =>
+          event.type === "conversation.item.create" && event.item?.type === "function_call_output",
+      ),
+    ).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_rejected",
+          output: JSON.stringify({ error: "Invalid tool arguments." }),
+        },
+      },
+    ]);
+    bridge.close();
+  });
 
   it("waits for all parallel tool results before sending response.create", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
