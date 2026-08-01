@@ -7,6 +7,11 @@ import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env"
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
+import {
+  advanceBuzzRecoveryWatermark,
+  openBuzzRecoveryWatermarkStore,
+  resolveBuzzColdStartSince,
+} from "./recovery-watermark.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
@@ -77,6 +82,17 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
+  const watermarkStore = openBuzzRecoveryWatermarkStore({
+    onError: (error) => {
+      ctx.log?.warn?.(
+        `[${account.accountId}] Buzz recovery watermark unavailable: ${error.message}`,
+      );
+    },
+  });
+  const reportWatermarkError = (error: Error) => {
+    ctx.log?.warn?.(`[${account.accountId}] Buzz recovery watermark failed: ${error.message}`);
+  };
+
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;
   while (!ctx.abortSignal.aborted) {
@@ -88,8 +104,16 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       reportBusFailure = resolve;
     });
     try {
-      const sessionSince =
-        Math.floor(Date.now() / 1000) - (hasAttemptedSession ? RECONNECT_LOOKBACK_SECONDS : 0);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const sessionSince = hasAttemptedSession
+        ? nowSeconds - RECONNECT_LOOKBACK_SECONDS
+        : await resolveBuzzColdStartSince({
+            store: watermarkStore,
+            accountId: account.accountId,
+            nowSeconds,
+            lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
+            onError: reportWatermarkError,
+          });
       hasAttemptedSession = true;
       bus = await startBuzzBus({
         accountId: account.accountId,
@@ -112,6 +136,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             message,
             signal,
             buildContext,
+          });
+          await advanceBuzzRecoveryWatermark({
+            store: watermarkStore,
+            accountId: account.accountId,
+            seconds: message.createdAt,
+            onError: reportWatermarkError,
           });
         },
         onMessageError: (error) => {
