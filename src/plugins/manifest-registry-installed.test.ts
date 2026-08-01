@@ -7,7 +7,7 @@ import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
@@ -199,95 +199,21 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).not.toBe(first);
   });
 
-  it("reuses package realpaths across mutable installed-index fingerprint builds", () => {
+  it("fingerprints immutable inventory without inspecting plugin files", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
     const index = createIndexWithUnhashedPackageJson(rootDir);
-    const packageJsonPath = path.join(fs.realpathSync(rootDir), "package.json");
     const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let rootPathCalls: unknown[][];
-    let packageJsonPathCalls: unknown[][];
+    const statSpy = vi.spyOn(fs, "statSync");
     try {
       resolveInstalledManifestRegistryIndexFingerprint(index);
       resolveInstalledManifestRegistryIndexFingerprint(index);
-      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === rootDir);
-      packageJsonPathCalls = realpathSpy.mock.calls.filter(
-        ([filePath]) => filePath === packageJsonPath,
-      );
+      expect(realpathSpy).not.toHaveBeenCalled();
+      expect(statSpy).not.toHaveBeenCalled();
     } finally {
       realpathSpy.mockRestore();
+      statSpy.mockRestore();
     }
-
-    expect(rootPathCalls).toHaveLength(1);
-    expect(packageJsonPathCalls).toHaveLength(1);
-  });
-
-  it("clears package realpath memoization with plugin metadata lifecycle caches", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndexWithUnhashedPackageJson(rootDir);
-    const packageJsonPath = path.join(fs.realpathSync(rootDir), "package.json");
-    const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let rootPathCalls: unknown[][];
-    let packageJsonPathCalls: unknown[][];
-    try {
-      resolveInstalledManifestRegistryIndexFingerprint(index);
-      clearPluginMetadataLifecycleCaches();
-      resolveInstalledManifestRegistryIndexFingerprint(index);
-      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === rootDir);
-      packageJsonPathCalls = realpathSpy.mock.calls.filter(
-        ([filePath]) => filePath === packageJsonPath,
-      );
-    } finally {
-      realpathSpy.mockRestore();
-    }
-
-    expect(rootPathCalls).toHaveLength(2);
-    expect(packageJsonPathCalls).toHaveLength(2);
-  });
-
-  it("bounds package realpath memoization across many fingerprint roots", () => {
-    const firstRootDir = makeTempDir();
-    writePlugin(firstRootDir, "installed", "installed-");
-    const firstIndex = createIndexWithUnhashedPackageJson(firstRootDir);
-    resolveInstalledManifestRegistryIndexFingerprint(firstIndex);
-
-    const records: InstalledPluginIndexRecord[] = [];
-    for (let index = 0; index < 300; index += 1) {
-      const rootDir = makeTempDir();
-      const pluginId = `installed-${index}`;
-      writePlugin(rootDir, pluginId, `${pluginId}-`);
-      const record = createIndexWithUnhashedPackageJson(rootDir).plugins[0];
-      if (!record) {
-        throw new Error("expected index record");
-      }
-      records.push({
-        ...record,
-        pluginId,
-        manifestHash: `manifest-hash-${index}`,
-      });
-    }
-    resolveInstalledManifestRegistryIndexFingerprint({
-      ...firstIndex,
-      plugins: records,
-    });
-
-    const packageJsonPath = path.join(fs.realpathSync(firstRootDir), "package.json");
-    const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let rootPathCalls: unknown[][];
-    let packageJsonPathCalls: unknown[][];
-    try {
-      resolveInstalledManifestRegistryIndexFingerprint(firstIndex);
-      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === firstRootDir);
-      packageJsonPathCalls = realpathSpy.mock.calls.filter(
-        ([filePath]) => filePath === packageJsonPath,
-      );
-    } finally {
-      realpathSpy.mockRestore();
-    }
-
-    expect(rootPathCalls).toHaveLength(1);
-    expect(packageJsonPathCalls).toHaveLength(1);
   });
 
   it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
@@ -312,7 +238,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).not.toBe(first);
   });
 
-  it("does not cache frozen installed-index fingerprints that depend on live file state", () => {
+  it("keeps frozen installed-index fingerprints process-stable without file signatures", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
     const index = deepFreeze(createIndex(rootDir));
@@ -323,7 +249,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     fs.utimesSync(manifestPath, nextMtime, nextMtime);
     const second = resolveInstalledManifestRegistryIndexFingerprint(index);
 
-    expect(second).not.toBe(first);
+    expect(second).toBe(first);
   });
 
   it("reconstructs installed-index manifest registries when manifest files change", () => {
