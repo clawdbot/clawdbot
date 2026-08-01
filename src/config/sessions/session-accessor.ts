@@ -119,6 +119,7 @@ export type {
   UpdateSessionLastRouteParams,
 } from "./session-accessor.entry-mutation.js";
 export {
+  countSessionEntryRowsReadOnly,
   copySessionOwnedStateForCanonicalRepair,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,

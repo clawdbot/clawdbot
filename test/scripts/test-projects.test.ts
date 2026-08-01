@@ -3864,16 +3864,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes changed ui build helpers to their importing tests", () => {
+  it.each([
+    ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
+    ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],
+  ])("routes changed ui build helper %s to its owner test", (changedPath, testPath) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/config/control-ui-chunking.ts",
+      changedPath,
     ]);
 
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/app/control-ui-chunking.test.ts"],
+        includePatterns: [testPath],
         watchMode: false,
       },
     ]);

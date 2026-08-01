@@ -1344,6 +1344,85 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("allows each role's UTF-8 transcript limit and releases it on finished", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const onmessage = lastConnectParams().callbacks.onmessage;
+    const halfLimit = "é".repeat(64 * 1024);
+    onmessage({
+      serverContent: {
+        inputTranscription: { text: halfLimit },
+        outputTranscription: { text: halfLimit },
+      },
+    });
+    onmessage({
+      serverContent: {
+        inputTranscription: { text: halfLimit },
+        outputTranscription: { text: halfLimit },
+      },
+    });
+    onmessage({ serverContent: { outputTranscription: { finished: true } } });
+    onmessage({ serverContent: { inputTranscription: { finished: true } } });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["assistant", `${halfLimit}${halfLimit}`, true],
+      ["user", `${halfLimit}${halfLimit}`, true],
+    ]);
+    expect(session.close).not.toHaveBeenCalled();
+  });
+
+  it("terminates and clears a runaway transcript stream at the UTF-8 byte limit", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+      onClose,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const callbacks = lastConnectParams().callbacks;
+    const transcriptChunk = "€".repeat(16);
+    const acceptedChunks = Math.floor((256 * 1024) / Buffer.byteLength(transcriptChunk, "utf8"));
+    for (let index = 0; index < 10_000; index += 1) {
+      callbacks.onmessage({
+        serverContent: {
+          inputTranscription: { text: transcriptChunk },
+        },
+      });
+    }
+    callbacks.onclose({ code: 1000, reason: "late clean close", wasClean: true });
+
+    expect(onTranscript).toHaveBeenCalledTimes(acceptedChunks);
+    expect(onTranscript.mock.calls.at(-1)).toEqual(["user", transcriptChunk, false]);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+      }),
+    );
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(session.close).toHaveBeenCalledTimes(1);
+    await expect(bridge.connect()).rejects.toThrow(
+      "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+    );
+  });
+
   it("retains unordered transcript chunks until a protocol terminal or close", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();

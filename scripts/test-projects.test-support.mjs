@@ -1940,6 +1940,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
+  ["ui/config/control-ui-locales.ts", ["ui/src/app/vite-config.node.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [

@@ -426,6 +426,7 @@ describe("startGatewayPostAttachRuntime", () => {
       cfg: { hooks: { internal: { enabled: false } } },
       delayMs: 0,
       shouldContinue: expect.any(Function),
+      waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
     expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
@@ -459,6 +460,39 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(
       expect.arrayContaining([recoverySidecar]),
     );
+  });
+
+  it("gates main-session recovery behind post-ready work", async () => {
+    let releasePostReadyWork!: () => void;
+    const postReadyWork = new Promise<void>((resolve) => {
+      releasePostReadyWork = resolve;
+    });
+    let waitForStart: (() => Promise<void>) | undefined;
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { waitForStart?: () => Promise<void> }) => {
+        waitForStart = params.waitForStart;
+        return { stop: vi.fn(async () => {}) };
+      },
+    );
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      waitForPostReadyWork: () => postReadyWork,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(waitForStart).toEqual(expect.any(Function));
+    });
+    let released = false;
+    const waiting = waitForStart?.().then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    releasePostReadyWork();
+    await waiting;
+    expect(released).toBe(true);
   });
 
   it("stops restart recovery with gateway-lifetime sidecars", async () => {
@@ -1192,11 +1226,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("uses current config when agent runtime plugin prewarm runs", async () => {
     const startupConfig = { marker: "startup" } as never;
     const currentConfig = { marker: "current" } as never;
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams({
         gatewayPluginConfigAtStart: startupConfig,
       }),
+      waitForPostReadyWork: () => gatewayReady,
       providerAuthPrewarm: { enabled: false },
       agentRuntimePluginPrewarm: {
         enabled: true,
@@ -1205,6 +1244,12 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+
+    releaseGatewayReady();
     await waitForGatewayTestState(() => {
       expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: currentConfig,
