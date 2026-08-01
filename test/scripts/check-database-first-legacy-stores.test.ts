@@ -4249,6 +4249,418 @@ describe("check-database-first-legacy-stores", () => {
         }
         persist({ filePath: "sessions.json" });
       `("bracket-wrapper-property.ts", filesystemWriteViolations(6)),
+      "flags wrapper option paths read through computed const property access": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        const key = "filePath";
+        function persist(params: { filePath: string }) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ [key]: "sessions.json" });
+      `("computed-const-wrapper-property.ts", filesystemWriteViolations(7)),
+      "tracks computed property keys through const aliases": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        const key = "filePath";
+        const alias = key;
+        function persist(params: { filePath: string }) {
+          return writeFile(params[alias], "{}\\n");
+        }
+        persist({ [key]: "sessions.json" });
+      `("computed-aliased-wrapper-property.ts", filesystemWriteViolations(8)),
+      "updates computed property keys after reassignment": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        let key = "currentPath";
+        key = "filePath";
+        function persist(params: { filePath: string }) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ [key]: "sessions.json" });
+      `("computed-reassigned-wrapper-property.ts", filesystemWriteViolations(8)),
+      "tracks computed property keys through nested wrapper closures": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        const key = "filePath";
+        function persist(params: { filePath: string }) {
+          function nested() {
+            return writeFile(params[key], "{}\\n");
+          }
+          return nested();
+        }
+        persist({ [key]: "sessions.json" });
+      `("computed-nested-wrapper-property.ts", filesystemWriteViolations(10)),
+      "conservatively scans options for unknown computed property keys": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { filePath: string }) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ filePath: "sessions.json" });
+      `("unknown-computed-wrapper-property.ts", filesystemWriteViolations(7)),
+      "does not flag safe options for unknown computed property keys": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { currentPath: string }) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ currentPath: "state/openclaw.sqlite" });
+      `("unknown-computed-safe-wrapper-property.ts", []),
+      "tracks unknown computed property definitions": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: Record<string, string>) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ [key]: "sessions.json" });
+      `("unknown-computed-property-definition.ts", filesystemWriteViolations(7)),
+      "tracks distinct unknown computed definition and read keys": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const readKey: string;
+        declare const writeKey: string;
+        function persist(params: Record<string, string>) {
+          return writeFile(params[readKey], "{}\\n");
+        }
+        persist({ [writeKey]: "sessions.json" });
+      `("distinct-unknown-computed-property-keys.ts", filesystemWriteViolations(8)),
+      "copies unknown computed property facts through object spreads": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        const base = { [key]: "sessions.json" };
+        function persist(params: Record<string, string>) {
+          return writeFile(params[key], "{}\\n");
+        }
+        persist({ ...base });
+      `("spread-unknown-computed-property.ts", filesystemWriteViolations(8)),
+      "tracks nested unknown computed property definitions": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { paths: Record<string, string> }) {
+          return writeFile(params.paths[key], "{}\\n");
+        }
+        persist({ paths: { [key]: "sessions.json" } });
+      `("nested-unknown-computed-property.ts", filesystemWriteViolations(7)),
+      "keeps exact safe siblings safe beside unknown computed properties": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: Record<string, string>) {
+          return writeFile(params.currentPath, "{}\\n");
+        }
+        persist({ [key]: "sessions.json", currentPath: "state/openclaw.sqlite" });
+      `("unknown-computed-property-safe-sibling.ts", []),
+      "retains a conservative fallback when computed key candidates exceed the cap": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          `let key; ${Array.from(
+            { length: 32 },
+            (_, index) =>
+              `${index === 0 ? "" : "else "}if (condition${index}) key = "key${index}";`,
+          ).join(" ")} else key = "filePath";`,
+          'function persist(params) { return writeFile(params[key], "{}\\n"); }',
+          'persist({ filePath: "sessions.json" });',
+        ].join("\n"),
+        filename: "src/runtime/computed-key-candidate-cap.ts",
+        expected: filesystemWriteViolations(4),
+      },
+      "retains a conservative fallback for computed key cross products": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          `let outerKey; ${Array.from(
+            { length: 5 },
+            (_, index) =>
+              `${index === 0 ? "" : "else "}if (outer${index}) outerKey = "outer${index}";`,
+          ).join(" ")} else outerKey = "paths";`,
+          `let innerKey; ${Array.from(
+            { length: 5 },
+            (_, index) =>
+              `${index === 0 ? "" : "else "}if (inner${index}) innerKey = "inner${index}";`,
+          ).join(" ")} else innerKey = "filePath";`,
+          'function persist(params) { return writeFile(params[outerKey][innerKey], "{}\\n"); }',
+          'persist({ paths: { filePath: "sessions.json" } });',
+        ].join("\n"),
+        filename: "src/runtime/computed-key-cross-product-cap.ts",
+        expected: filesystemWriteViolations(5),
+      },
+      "keeps outer computed-key facts visible through conditional property overlays": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { filePath: string }, key: string) {
+          if (ready) {
+            params.currentPath = "state/openclaw.sqlite";
+            return writeFile(params[key], "{}\\n");
+          }
+        }
+        persist({ filePath: "sessions.json" }, key);
+      `("conditional-computed-key-overlay.ts", filesystemWriteViolations(10)),
+      "keeps outer computed-key facts visible through loop property overlays": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { filePath: string }, key: string) {
+          while (ready) {
+            params.currentPath = "state/openclaw.sqlite";
+            return writeFile(params[key], "{}\\n");
+          }
+        }
+        persist({ filePath: "sessions.json" }, key);
+      `("loop-computed-key-overlay.ts", filesystemWriteViolations(10)),
+      "keeps outer computed-key facts visible through try property overlays": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { filePath: string }, key: string) {
+          try {
+            params.currentPath = "state/openclaw.sqlite";
+            return writeFile(params[key], "{}\\n");
+          } catch {}
+        }
+        persist({ filePath: "sessions.json" }, key);
+      `("try-computed-key-overlay.ts", filesystemWriteViolations(10)),
+      "keeps nested computed-key facts visible through property overlays": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        declare const key: string;
+        function persist(params: { paths: { filePath: string } }, key: string) {
+          if (ready) {
+            params.paths.currentPath = "state/openclaw.sqlite";
+            return writeFile(params.paths[key], "{}\\n");
+          }
+        }
+        persist({ paths: { filePath: "sessions.json" } }, key);
+      `("nested-computed-key-overlay.ts", filesystemWriteViolations(10)),
+      "flags inline wrapper paths before chained method calls": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath.toString(), "{}\\n");
+        }
+        persist({ filePath: "sessions.json" });
+      `("inline-chained-wrapper-property.ts", filesystemWriteViolations(6)),
+      "flags nested inline wrapper paths before chained method calls": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { paths: { filePath: string } }) {
+          return writeFile(params.paths.filePath.toString(), "{}\\n");
+        }
+        persist({ paths: { filePath: "sessions.json" } });
+      `("nested-inline-chained-wrapper-property.ts", filesystemWriteViolations(6)),
+      "flags inline wrapper paths passed through chained normalize methods": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { path: string }) {
+          return writeFile(params.path.normalize(), "{}\\n");
+        }
+        persist({ path: "sessions.json" });
+      `("inline-normalized-wrapper-property.ts", filesystemWriteViolations(6)),
+      "expands wrapper spread arguments from inline arrays": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        persist(...[params]);
+      `("inline-array-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "expands wrapper spread arguments from tuple bindings": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const args = [{ filePath: "sessions.json" }] as const;
+        persist(...args);
+      `("tuple-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "preserves wrapper positions through prefixed nested spreads": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(label: string, params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        persist("state", ...[...[params]]);
+      `("prefixed-nested-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "merges object facts across conditional wrapper arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        persist(ready ? { filePath: "sessions.json" } : { filePath: currentPath });
+      `("conditional-wrapper-argument.ts", filesystemWriteViolations(6)),
+      "forwards comma-expression wrapper arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        persist((0, { filePath: "sessions.json" }));
+      `("comma-wrapper-argument.ts", filesystemWriteViolations(6)),
+      "forwards satisfies wrapper arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        persist(params satisfies { filePath: string });
+      `("satisfies-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "forwards awaited resolved wrapper arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        await persist(await Promise.resolve(params));
+      `("awaited-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "forwards proxied wrapper arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        persist(new Proxy(params, {}));
+      `("proxied-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "keeps safe proxied wrapper arguments safe": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: currentPath };
+        persist(new Proxy(params, {}));
+      `("safe-proxied-wrapper-argument.ts", []),
+      "forwards scalar paths through satisfies expressions": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(filePath: string) {
+          return writeFile(filePath, "{}\\n");
+        }
+        const filePath = "sessions.json";
+        persist(filePath satisfies string);
+      `("satisfies-scalar-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "forwards scalar paths through spread arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(filePath: string) {
+          return writeFile(filePath, "{}\\n");
+        }
+        const filePath = "sessions.json";
+        persist(...[filePath]);
+      `("spread-scalar-wrapper-argument.ts", filesystemWriteViolations(7)),
+      "keeps safe conditional wrapper arguments safe": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params: { filePath: string }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        persist(ready ? { filePath: currentPath } : { filePath: sqlitePath });
+      `("safe-conditional-wrapper-argument.ts", []),
+      "widens truncated conditional argument facts conservatively": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          'function persist(params) { return writeFile(params.filePath, "{}\\n"); }',
+          `persist(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? { filePath: currentPath } : `,
+          ).join("")}{ filePath: "sessions.json" });`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-conditional-wrapper-argument.ts",
+        expected: filesystemWriteViolations(3),
+      },
+      "preserves filesystem writer aliases beyond the fact alternative cap": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          'function invoke(callback, filePath) { return callback(filePath, "{}\\n"); }',
+          `invoke(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? safe${index} : `,
+          ).join("")}writeFile, "sessions.json");`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-filesystem-writer-fact.ts",
+        expected: filesystemWriteViolations(3),
+      },
+      "preserves wrapper records beyond the fact alternative cap": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          'function dangerous(params) { return writeFile(params.filePath, "{}\\n"); }',
+          "function invoke(callback, params) { return callback(params); }",
+          `invoke(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? safe${index} : `,
+          ).join("")}dangerous, { filePath: "sessions.json" });`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-wrapper-record-fact.ts",
+        expected: filesystemWriteViolations(4),
+      },
+      "keeps safe callbacks beyond the fact alternative cap safe": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          'function invoke(callback, filePath) { return callback(filePath, "{}\\n"); }',
+          `invoke(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? safe${index} : `,
+          ).join("")}safe32, "sessions.json");`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-safe-callback-fact.ts",
+        expected: [],
+      },
+      "preserves nested callback maps beyond the fact alternative cap": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          'function dangerous(filePath) { return writeFile(filePath, "{}\\n"); }',
+          'const dangerousObject = { callback: dangerous, filePath: "sessions.json" };',
+          "function invoke(entry) { return entry.callback(entry.filePath); }",
+          `invoke(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? safe${index} : `,
+          ).join("")}dangerousObject);`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-nested-callback-map.ts",
+        expected: filesystemWriteViolations(5),
+      },
+      "keeps safe nested callback maps beyond the fact alternative cap safe": {
+        source: [
+          'import { writeFile } from "node:fs/promises";',
+          "function invoke(entry) { return entry.callback(entry.filePath); }",
+          `invoke(${Array.from(
+            { length: 32 },
+            (_, index) => `condition${index} ? safe${index} : `,
+          ).join("")}safe32);`,
+        ].join("\n"),
+        filename: "src/runtime/truncated-safe-nested-callback-map.ts",
+        expected: [],
+      },
+      "does not merge branch-local computed property effects after their scope exits": sourceCase`
+        function update(groupId: string) {
+          if (named) {
+            const groups = {};
+            groups[groupId] = {};
+          } else {
+            const groups = {};
+            groups[groupId] = {};
+          }
+        }
+        update(event.groupId ?? "");
+      `("branch-local-computed-property-effects.ts", []),
+      "retains defined branches when applying object parameter defaults": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params = { filePath: currentPath }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: "sessions.json" };
+        persist(ready ? undefined : params);
+      `("conditional-object-parameter-default.ts", filesystemWriteViolations(7)),
+      "retains defined branches when applying scalar parameter defaults": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(filePath = currentPath) {
+          return writeFile(filePath, "{}\\n");
+        }
+        const filePath = "sessions.json";
+        persist(ready ? void 0 : filePath);
+      `("conditional-scalar-parameter-default.ts", filesystemWriteViolations(7)),
+      "applies legacy object defaults to possibly undefined arguments": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params = { filePath: "sessions.json" }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: currentPath };
+        persist(ready ? undefined : params);
+      `("legacy-object-parameter-default.ts", filesystemWriteViolations(7)),
+      "applies legacy destructured defaults to possibly missing properties": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist({ filePath = "sessions.json" }) {
+          return writeFile(filePath, "{}\\n");
+        }
+        persist(ready ? {} : { filePath: currentPath });
+      `("legacy-destructured-parameter-default.ts", filesystemWriteViolations(6)),
+      "keeps safe defaults and defined branches safe": sourceCase`
+        import { writeFile } from "node:fs/promises";
+        function persist(params = { filePath: currentPath }) {
+          return writeFile(params.filePath, "{}\\n");
+        }
+        const params = { filePath: sqlitePath };
+        persist(ready ? undefined : params);
+      `("safe-conditional-parameter-default.ts", []),
       "does not treat custom writeFile methods as wrapper filesystem writes": sourceCase`
         function persist(writer: { writeFile: (path: string, content: string) => void }, params: { filePath: string }) {
           return writer.writeFile(params.filePath, "{}\\n");
