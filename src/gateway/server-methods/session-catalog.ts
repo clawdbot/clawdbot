@@ -30,7 +30,6 @@ import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
-import { sessionCatalogListKey } from "./session-catalog-list-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -225,6 +224,26 @@ export function resolveSessionCatalogCreateTarget(
   return resolved.ok
     ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
     : resolved;
+}
+
+function sessionCatalogListKey(params: {
+  agentId: string;
+  request: SessionsCatalogListParams;
+  search?: string;
+}): string {
+  const cursors = params.request.cursors
+    ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      )
+    : null;
+  return JSON.stringify([
+    params.agentId,
+    params.request.catalogId ?? null,
+    params.search ?? null,
+    params.request.limitPerHost ?? null,
+    params.request.hostIds ?? null,
+    cursors,
+  ]);
 }
 
 function catalogListCache(
