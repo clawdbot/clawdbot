@@ -705,7 +705,7 @@ function collectDangerousChildProcessAliasCalls(
       candidate.file,
       candidate.source,
       ts.ScriptTarget.Latest,
-      false,
+      true,
       scriptKindForFile(ts, candidate.file),
     ),
   }));

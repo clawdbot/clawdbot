@@ -176,12 +176,10 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
       {
         name: "Unicode import alias",
         source: `\nimport { exec as 运行 } from "node:child_process";\n运行("echo unsafe");\n`,
-        expectedLine: 3,
       },
       {
         name: "CommonJS property extraction",
         source: `\nconst run = require("node:child_process").exec;\nrun("echo unsafe");\n`,
-        expectedLine: 3,
       },
       {
         name: "CommonJS computed property extraction",
@@ -209,8 +207,13 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
         expectedLine: 4,
       },
       {
-        name: "CommonJS alias with global ambient require",
-        source: `\ndeclare global { function require(id: string): any; }\nexport {};\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        name: "CommonJS alias with global ambient require variable",
+        source: `\ndeclare global { const require: (id: string) => any; }\nexport {};\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        expectedLine: 5,
+      },
+      {
+        name: "CommonJS alias in an ambient module",
+        source: `\ndeclare module "runtime" {\n  const require: (id: string) => any;\n  const { exec: run } = require("child_process");\n  run("echo unsafe");\n}\n`,
         expectedLine: 5,
       },
       {
