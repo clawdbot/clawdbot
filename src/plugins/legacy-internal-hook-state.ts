@@ -1,4 +1,4 @@
-import type { InternalHookHandler } from "../hooks/internal-hooks.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import {
   collectLivePluginRegistries,
   getPluginRegistrationContext,

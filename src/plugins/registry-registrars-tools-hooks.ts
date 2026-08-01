@@ -4,7 +4,7 @@ import {
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { InternalHookHandler } from "../hooks/internal-hooks.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";

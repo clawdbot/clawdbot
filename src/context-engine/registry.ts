@@ -3,6 +3,12 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getPluginCompatRecord } from "../plugins/compat/registry.js";
+import type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+  ContextEngineRegistration,
+  ContextEngineRegistrationLifecycle,
+} from "../plugins/registry-contribution-types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -21,36 +27,17 @@ import type {
   IngestResult,
 } from "./types.js";
 
+export type {
+  ContextEngineFactory,
+  ContextEngineRegistration,
+} from "../plugins/registry-contribution-types.js";
+
 /**
  * Runtime context passed to context engine factories during resolution.
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-type ContextEngineFactoryContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-};
-
-/**
- * A factory that creates a ContextEngine instance.
- * Supports async creation for engines that need DB connections etc.
- *
- * The factory receives a {@link ContextEngineFactoryContext} with runtime
- * environment context (config, paths). Existing no-arg factories remain
- * backward compatible because TypeScript permits assigning functions with
- * fewer parameters to wider signatures.
- */
-export type ContextEngineFactory = (
-  ctx: ContextEngineFactoryContext,
-) => ContextEngine | Promise<ContextEngine>;
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
-type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
-export type ContextEngineRegistration = {
-  factory: ContextEngineFactory;
-  owner: string;
-  lifecycle: ContextEngineRegistrationLifecycle;
-};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;

@@ -1,213 +1,46 @@
 /** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type {
+  MemoryCorpusSupplement,
+  MemoryCorpusSupplementRegistration,
+  MemoryFlushPlan,
+  MemoryPluginCapability,
+  MemoryPluginCapabilityRegistration,
+  MemoryPluginPublicArtifact,
+  MemoryPluginRuntime,
+  MemoryPluginState,
+  MemoryPromptPreparationRegistration,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+  MemoryPromptSectionPreparer,
+  MemoryPromptSupplementRegistration,
+  PreparedMemoryPromptSection,
+} from "./registry-contribution-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
-export type MemoryPromptSectionParams = {
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-};
-
-export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
-
-/**
- * Loads and renders prompt state before synchronous prompt assembly.
- * Implementations may perform async state reads here, but must validate their
- * owner instance before returning lines for the current run.
- */
-type MemoryPromptSectionPreparer = (
-  params: MemoryPromptSectionParams,
-) => Promise<readonly string[]>;
-
-export type PreparedMemoryPromptSection = Readonly<{
-  context: Readonly<{
-    availableTools: readonly string[];
-    citationsMode?: MemoryCitationsMode;
-    agentId?: string;
-    agentSessionKey?: string;
-    sandboxed: boolean;
-  }>;
-  lines: readonly string[];
-}>;
-
-export type MemoryCorpusSearchResult = {
-  corpus: string;
-  path: string;
-  title?: string;
-  kind?: string;
-  score: number;
-  snippet: string;
-  id?: string;
-  startLine?: number;
-  endLine?: number;
-  citation?: string;
-  source?: string;
-  provenanceLabel?: string;
-  sourceType?: string;
-  sourcePath?: string;
-  updatedAt?: string;
-};
-
-type MemoryCorpusGetResult = {
-  corpus: string;
-  path: string;
-  title?: string;
-  kind?: string;
-  content: string;
-  fromLine: number;
-  lineCount: number;
-  id?: string;
-  provenanceLabel?: string;
-  sourceType?: string;
-  sourcePath?: string;
-  updatedAt?: string;
-};
-
-export type MemoryCorpusSupplement = {
-  search(params: {
-    query: string;
-    maxResults?: number;
-    agentId?: string;
-    agentSessionKey?: string;
-    sandboxed?: boolean;
-  }): Promise<MemoryCorpusSearchResult[]>;
-  get(params: {
-    lookup: string;
-    fromLine?: number;
-    lineCount?: number;
-    agentId?: string;
-    agentSessionKey?: string;
-    sandboxed?: boolean;
-  }): Promise<MemoryCorpusGetResult | null>;
-};
-
-export type MemoryCorpusSupplementRegistration = {
-  pluginId: string;
-  supplement: MemoryCorpusSupplement;
-};
-
-export type MemoryPromptSupplementRegistration = {
-  pluginId: string;
-  builder: MemoryPromptSectionBuilder;
-};
-
-export type MemoryPromptPreparationRegistration = {
-  pluginId: string;
-  prepare: MemoryPromptSectionPreparer;
-};
-
-export type MemoryFlushPlan = {
-  softThresholdTokens: number;
-  forceFlushTranscriptBytes: number;
-  reserveTokensFloor: number;
-  model?: string;
-  prompt: string;
-  systemPrompt: string;
-  relativePath: string;
-  recordWriteProvenance?: (params: {
-    workspaceDir: string;
-    relativePath: string;
-    contentBefore: string;
-    contentAfter: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }) => Promise<(() => Promise<void>) | void>;
-  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
-};
-
-export type MemoryFlushPlanResolver = (params: {
-  cfg?: OpenClawConfig;
-  nowMs?: number;
-}) => MemoryFlushPlan | null;
-
-export type RegisteredMemorySearchManager = MemorySearchManager;
-
-type MemoryRuntimeQmdConfig = {
-  command?: string;
-};
-
-type MemoryRuntimeBackendConfig =
-  | {
-      backend: "builtin";
-    }
-  | {
-      backend: "qmd";
-      qmd?: MemoryRuntimeQmdConfig;
-    };
-
-export type MemoryPluginRuntime = {
-  getMemorySearchManager(params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    purpose?: "default" | "status" | "cli";
-  }): Promise<{
-    manager: RegisteredMemorySearchManager | null;
-    debug?: {
-      backend?: "builtin" | "qmd";
-      purpose?: "default" | "status" | "cli";
-      managerMs?: number;
-      managerCacheState?:
-        | "cached-full-hit"
-        | "cached-full-miss"
-        | "transient-cli"
-        | "transient-status"
-        | "pending-create-wait"
-        | "fallback-builtin"
-        | "recent-failure-cooldown";
-      qmdIdentityHash?: string;
-      failureCode?: "qmd-unavailable";
-    };
-    error?: string;
-  }>;
-  resolveMemoryBackendConfig(params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-  }): MemoryRuntimeBackendConfig;
-  closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
-  closeAllMemorySearchManagers?(): Promise<void>;
-};
-
-type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
-
-export type MemoryPluginPublicArtifact = {
-  kind: string;
-  workspaceDir: string;
-  relativePath: string;
-  absolutePath: string;
-  agentIds: string[];
-  contentType: MemoryPluginPublicArtifactContentType;
-};
-
-export type MemoryPluginPublicArtifactsProvider = {
-  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
-};
-
-export type MemoryPluginCapability = {
-  promptBuilder?: MemoryPromptSectionBuilder;
-  flushPlanResolver?: MemoryFlushPlanResolver;
-  runtime?: MemoryPluginRuntime;
-  publicArtifacts?: MemoryPluginPublicArtifactsProvider;
-};
-
-export type MemoryPluginCapabilityRegistration = {
-  pluginId: string;
-  capability: MemoryPluginCapability;
-};
-
-export type MemoryPluginState = {
-  capability?: MemoryPluginCapabilityRegistration;
-  corpusSupplements: MemoryCorpusSupplementRegistration[];
-  promptPreparations: MemoryPromptPreparationRegistration[];
-  promptSupplements: MemoryPromptSupplementRegistration[];
-};
+export type {
+  MemoryCorpusSearchResult,
+  MemoryCorpusSupplement,
+  MemoryCorpusSupplementRegistration,
+  MemoryFlushPlan,
+  MemoryFlushPlanResolver,
+  MemoryPluginCapability,
+  MemoryPluginCapabilityRegistration,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+  MemoryPluginRuntime,
+  MemoryPluginState,
+  MemoryPromptPreparationRegistration,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+  MemoryPromptSupplementRegistration,
+  PreparedMemoryPromptSection,
+  RegisteredMemorySearchManager,
+} from "./registry-contribution-types.js";
 
 export function resolveMemoryCapabilityRegistration(
   registrations: readonly MemoryPluginCapabilityRegistration[],

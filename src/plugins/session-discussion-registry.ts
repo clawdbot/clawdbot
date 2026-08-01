@@ -1,21 +1,16 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionDiscussionProvider } from "./registry-contribution-types.js";
 import {
   getActivePluginChannelRegistry,
   getPluginRegistrationContext,
   requireActivePluginChannelRegistry,
 } from "./runtime.js";
 
-export type SessionDiscussionState = "none" | "available" | "open";
-export type SessionDiscussionInfo = {
-  state: SessionDiscussionState;
-  embedUrl?: string;
-  openUrl?: string;
-};
-export type SessionDiscussionProvider = {
-  id: string;
-  info(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
-  open(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
-};
+export type {
+  SessionDiscussionInfo,
+  SessionDiscussionProvider,
+  SessionDiscussionState,
+} from "./registry-contribution-types.js";
 
 const log = createSubsystemLogger("plugins/session-discussion");
 export function registerSessionDiscussionProvider(provider: SessionDiscussionProvider): void {
@@ -41,12 +36,10 @@ export function getSessionDiscussionProvider(): SessionDiscussionProvider | unde
     ?.provider;
 }
 
-/** Clears the process-wide provider before a new active plugin registry is assembled. */
 export function clearSessionDiscussionProvider(): void {
   requireActivePluginChannelRegistry().sessionDiscussionProviders.clear();
 }
 
-/** Restores the provider when a plugin registration transaction does not become active. */
 export function restoreSessionDiscussionProvider(
   provider: SessionDiscussionProvider | undefined,
 ): void {
