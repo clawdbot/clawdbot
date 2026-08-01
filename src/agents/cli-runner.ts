@@ -1599,8 +1599,9 @@ export async function runPreparedCliAgent(
             );
           } catch (retryError) {
             if (params.abortSignal?.aborted) {
-              preserveCliSessionBindingOnRecoveryAbort(retryError);
-              throw retryError;
+              const abortError = params.abortSignal.reason;
+              preserveCliSessionBindingOnRecoveryAbort(abortError);
+              throw abortError;
             }
             const sessionChanged =
               isFailoverError(retryError) &&
