@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-  OPENCLAW_LOCALES,
-  OPENCLAW_LOCALE_REGISTRY,
-  OPENCLAW_LOCALE_REGISTRY_REVISION,
+  SUPPORTED_LOCALES,
+  LOCALE_REGISTRY,
+  LOCALE_REGISTRY_REVISION,
   getLocaleDirection,
   matchExactOpenClawLocale,
   matchInferredOpenClawLocale,
@@ -12,15 +12,13 @@ import {
 
 describe("localization locale registry", () => {
   it("registers the existing 22-locale product union", () => {
-    expect(OPENCLAW_LOCALES).toHaveLength(22);
-    expect(OPENCLAW_LOCALES).toContain("sv");
+    expect(SUPPORTED_LOCALES).toHaveLength(22);
+    expect(SUPPORTED_LOCALES).toContain("sv");
   });
 
   it("binds the registry revision to its canonical content", () => {
-    expect(OPENCLAW_LOCALE_REGISTRY_REVISION).toBe(
-      `sha256:${createHash("sha256")
-        .update(JSON.stringify(OPENCLAW_LOCALE_REGISTRY))
-        .digest("hex")}`,
+    expect(LOCALE_REGISTRY_REVISION).toBe(
+      `sha256:${createHash("sha256").update(JSON.stringify(LOCALE_REGISTRY)).digest("hex")}`,
     );
   });
 

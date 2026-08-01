@@ -2,8 +2,8 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { FormatError, IntlMessageFormat } from "intl-messageformat";
 import type { LocalizationContext } from "./context.js";
 import {
-  OPENCLAW_LOCALES,
-  OPENCLAW_LOCALE_REGISTRY_REVISION,
+  SUPPORTED_LOCALES,
+  LOCALE_REGISTRY_REVISION,
   type OpenClawLocale,
 } from "./locale-registry.js";
 
@@ -143,7 +143,7 @@ export function createCatalogSnapshot(
     Object.freeze({
       namespaces: Object.freeze(normalizeNamespaces(params.namespace)),
       sourceLocale,
-      registryRevision: params.registryRevision ?? OPENCLAW_LOCALE_REGISTRY_REVISION,
+      registryRevision: params.registryRevision ?? LOCALE_REGISTRY_REVISION,
       catalogRevision: params.catalogRevision,
       catalogs: Object.freeze(catalogs),
     }),
@@ -320,7 +320,7 @@ function validateSnapshotCatalogs(
 
   const issues: CatalogValidationIssue[] = [];
   for (const locale of Object.keys(catalogs)) {
-    if (!OPENCLAW_LOCALES.includes(locale as OpenClawLocale)) {
+    if (!SUPPORTED_LOCALES.includes(locale as OpenClawLocale)) {
       issues.push({
         code: "invalid-locale",
         key: `${namespaces.join("|")}.*`,

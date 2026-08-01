@@ -9,7 +9,7 @@ export type LocaleRegistration = {
   inferredLanguageDefault?: boolean;
 };
 
-export const OPENCLAW_LOCALES = [
+export const SUPPORTED_LOCALES = [
   "en",
   "zh-CN",
   "zh-TW",
@@ -34,12 +34,12 @@ export const OPENCLAW_LOCALES = [
   "sv",
 ] as const;
 
-export type OpenClawLocale = (typeof OPENCLAW_LOCALES)[number];
+export type OpenClawLocale = (typeof SUPPORTED_LOCALES)[number];
 
-export const OPENCLAW_LOCALE_REGISTRY_REVISION =
+export const LOCALE_REGISTRY_REVISION =
   "sha256:f1fc485ce67ea02b74c69e63e648da3fddc51e276d507a2eeb21d49a18898207";
 
-export const OPENCLAW_LOCALE_REGISTRY: readonly LocaleRegistration[] = [
+export const LOCALE_REGISTRY: readonly LocaleRegistration[] = [
   locale("en", "English", { aliases: ["en-US"], inferredLanguageDefault: true }),
   locale("zh-CN", "Chinese (Simplified)", {
     aliases: ["zh", "zh-Hans", "zh-SG"],
@@ -92,12 +92,12 @@ function locale(
 }
 
 const REGISTRATION_BY_ID = new Map(
-  OPENCLAW_LOCALE_REGISTRY.map((registration) => [registration.id, registration]),
+  LOCALE_REGISTRY.map((registration) => [registration.id, registration]),
 );
 const EXACT_LOCALE_LOOKUP = new Map<string, OpenClawLocale>();
 const INFERRED_LANGUAGE_DEFAULTS = new Map<string, OpenClawLocale>();
 
-for (const registration of OPENCLAW_LOCALE_REGISTRY) {
+for (const registration of LOCALE_REGISTRY) {
   for (const token of [registration.id, ...registration.aliases]) {
     const normalized = normalizeLocaleToken(token);
     if (!normalized) {
@@ -141,7 +141,7 @@ export function normalizeLocaleToken(raw: string | null | undefined): string | n
 
 export function matchExactOpenClawLocale(
   raw: string | null | undefined,
-  supportedLocales: readonly OpenClawLocale[] = OPENCLAW_LOCALES,
+  supportedLocales: readonly OpenClawLocale[] = SUPPORTED_LOCALES,
 ): OpenClawLocale | null {
   const normalized = normalizeLocaleToken(raw);
   if (!normalized) {
@@ -153,7 +153,7 @@ export function matchExactOpenClawLocale(
 
 export function matchInferredOpenClawLocale(
   raw: string | null | undefined,
-  supportedLocales: readonly OpenClawLocale[] = OPENCLAW_LOCALES,
+  supportedLocales: readonly OpenClawLocale[] = SUPPORTED_LOCALES,
 ): OpenClawLocale | null {
   const normalized = normalizeLocaleToken(raw);
   if (!normalized) {

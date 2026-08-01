@@ -1,5 +1,5 @@
 import {
-  OPENCLAW_LOCALES,
+  SUPPORTED_LOCALES,
   getLocaleRegistration,
   matchExactOpenClawLocale,
   matchInferredOpenClawLocale,
@@ -41,7 +41,7 @@ export function createLocalizationContext(params: {
   audience: LocalizationAudience;
   supportedLocales?: readonly OpenClawLocale[];
 }): LocalizationContext {
-  const supportedLocales = params.supportedLocales ?? OPENCLAW_LOCALES;
+  const supportedLocales = params.supportedLocales ?? SUPPORTED_LOCALES;
   const fallbacks = getLocaleRegistration(params.locale).fallback.filter((locale) =>
     supportedLocales.includes(locale),
   );
@@ -63,7 +63,7 @@ export function resolveLocalizationContext(params: {
   platform?: readonly (string | null | undefined)[];
   supportedLocales?: readonly OpenClawLocale[];
 }): LocaleResolutionResult {
-  const supportedLocales = params.supportedLocales ?? OPENCLAW_LOCALES;
+  const supportedLocales = params.supportedLocales ?? SUPPORTED_LOCALES;
   const findings: LocaleResolutionFinding[] = [];
   const strictCandidates: ReadonlyArray<[LocalizationSource, string | null | undefined]> = [
     ["explicit-user", params.explicitUser],
@@ -106,7 +106,7 @@ export function resolveProcessLocalizationContext(
     platform?: readonly (string | null | undefined)[];
   },
 ): LocaleResolutionResult {
-  const supportedLocales = options.supportedLocales ?? OPENCLAW_LOCALES;
+  const supportedLocales = options.supportedLocales ?? SUPPORTED_LOCALES;
   const explicit = env.OPENCLAW_LOCALE;
   if (explicit?.trim()) {
     const locale = matchExactOpenClawLocale(explicit, supportedLocales);
