@@ -283,6 +283,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     delegationCapability: resolveDelegationCapability({
       fallbackActive: runtime.fallbackActive,
       inputProvenance: params.inputProvenance,
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
     }),
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarnessId,

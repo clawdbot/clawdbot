@@ -439,7 +439,6 @@ export async function startCodexAttemptThread(params: {
               }
               startupReservation = turnRouter.reserveThread({
                 threadId,
-                releaseOn: params.signal,
               });
               return { release: releaseStartupReservation };
             };

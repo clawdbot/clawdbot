@@ -69,7 +69,6 @@ export async function prepareCodexAttemptRoute(
       releaseCurrentRoute();
       resourceState.turnRoute = resourceState.turnRouter.reserveThread({
         threadId: resourceState.thread.threadId,
-        releaseOn: runAbortController.signal,
       });
     }
     if (!resourceState.turnRoute) {

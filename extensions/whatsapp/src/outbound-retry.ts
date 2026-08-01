@@ -1,4 +1,5 @@
 // WhatsApp plugin module implements outbound retry behavior.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { formatError } from "./session-errors.js";
 import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
@@ -17,7 +18,7 @@ class WhatsAppOutboundRetryError extends Error {
 function isRetryableWhatsAppOutboundError(error: unknown): boolean {
   // Outbound sends surface direct failures; inspecting wrappers or causes can
   // replay a non-idempotent send. A direct local timeout may have delivered it.
-  if (isWhatsAppSocketOperationTimeoutError(error)) {
+  if (isChannelPartialDeliveryError(error) || isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
   return WHATSAPP_RETRYABLE_OUTBOUND_ERROR_PATTERN.test(formatError(error));

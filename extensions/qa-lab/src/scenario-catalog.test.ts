@@ -643,20 +643,6 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
-    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      harnessRuntime: "codex",
-    });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {

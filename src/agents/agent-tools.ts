@@ -558,6 +558,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     const normalized = normalizeToolName(toolName);
     return normalized === "*" || normalized === "message";
   });
+  // Frozen child output may use only the parent's existing source-delivery grant.
+  // Trusted ingress plus its exact one-tool cap prevent ordinary private turns from narrowing.
+  const sourceReplyOnly =
+    options?.trustedInternalHandoff === true &&
+    options.inputProvenance?.kind === "inter_session" &&
+    options.inputProvenance.sourceTool === "subagent_announce" &&
+    options.sourceReplyDeliveryMode === "message_tool_only" &&
+    options.runtimeToolAllowlist?.length === 1 &&
+    normalizeToolName(options.runtimeToolAllowlist[0] ?? "") === "message";
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
@@ -1035,6 +1044,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             computerContextEpoch: options?.computerContextEpoch,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            sourceReplyOnly,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,

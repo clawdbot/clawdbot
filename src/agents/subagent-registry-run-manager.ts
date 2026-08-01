@@ -4,6 +4,7 @@
  * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
  */
 import { getRuntimeConfig } from "../config/config.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
@@ -332,12 +333,12 @@ export function createSubagentRunManager(params: {
     }
   };
 
-  const waitForSubagentCompletion = async (
+  const runSubagentCompletionWait = async (
     runId: string,
     waitTimeoutMs: number,
     expectedEntry?: SubagentRunRecord,
     capWaitToStoredDeadline = false,
-  ) => {
+  ): Promise<void> => {
     let completionForRetry: Parameters<typeof params.completeSubagentRun>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       params.scheduleOrphanRecovery({ delayMs: 1_000 });
@@ -564,6 +565,11 @@ export function createSubagentRunManager(params: {
       }
     }
   };
+
+  // Child completion outlives the spawning attempt, so all launch and retry
+  // paths must start without inheriting its soon-to-be-disposed writer.
+  const waitForSubagentCompletion: typeof runSubagentCompletionWait = (...args) =>
+    runWithoutOwnedSessionTranscriptWrites(() => runSubagentCompletionWait(...args));
 
   const markSubagentRunForSteerRestart = (runId: string) => {
     const key = runId.trim();

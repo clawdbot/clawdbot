@@ -26,6 +26,10 @@ describe("qa scenario catalog", () => {
       "switches to medium thinking",
       "verifies medium thinking reaches the provider",
     ]);
+    const flow = JSON.stringify(scenario.execution.flow);
+    expect(flow).toContain("/debug/request-cursor");
+    expect(flow).toContain("/debug/requests?after=${offRequestCursor}");
+    expect(flow).toContain("/debug/requests?after=${maxRequestCursor}");
   });
 
   it("includes the OpenAI native web search live scenario", () => {

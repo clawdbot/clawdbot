@@ -10,6 +10,10 @@ import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/compl
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import {
+  createSourceDeliveryPlan,
+  resolveSourceDeliveryOutcome,
+} from "../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -36,8 +40,10 @@ import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
   hasCommittedOutboundDeliveryEvidence,
+  hasCommittedSourceReplyDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
   hasPayloadOutcomeSendEvidence,
+  hasUnaccountedMessagingToolAggregateEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasIntentionalSilentAgentPayload,
@@ -669,6 +675,7 @@ async function deliverCompletionDirect(params: {
     threadId?: string;
   };
   internalEvents?: readonly AgentInternalEvent[];
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
@@ -685,6 +692,7 @@ async function deliverCompletionDirect(params: {
     resolveDefaultAgentId(params.cfg),
   );
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
+  let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
@@ -697,23 +705,87 @@ async function deliverCompletionDirect(params: {
       conversationType: "direct",
       content,
       idempotencyKey,
+      onDeliveryResult: () => {
+        if (committedDelivery) {
+          return;
+        }
+        // Platform identity is committed before transcript mirroring, which
+        // may wait behind the requester's still-active SQLite writer.
+        committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
+        params.onDeliveryResult?.(committedDelivery);
+      },
       mirror: {
         sessionKey: params.requesterSessionKey,
         agentId,
         idempotencyKey,
       },
     });
-    return {
-      delivered: true,
-      path: "direct",
-    };
+    return committedDelivery ?? { delivered: true, path: "direct" };
   } catch (err) {
+    if (committedDelivery) {
+      // Post-send bookkeeping must never turn an identified delivery into a
+      // retryable failure and send the same completion twice.
+      return committedDelivery;
+    }
     return {
       delivered: false,
       path: "direct",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
   }
+}
+
+function hasMessagingToolDeliveryToSource(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>> & {
+    didDeliverSourceReplyViaMessageTool?: unknown;
+    messagingToolSourceReplyPayloads?: unknown;
+  },
+  deliveryTarget: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  },
+): boolean {
+  if (
+    hasCommittedSourceReplyDeliveryEvidence(result) ||
+    hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
+  ) {
+    return true;
+  }
+
+  const targets = Array.isArray(result.messagingToolSentTargets)
+    ? result.messagingToolSentTargets
+    : [];
+  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
+    return hasMessagingToolDeliveryEvidence(result);
+  }
+
+  type SourceDeliveryMessageToolTarget = NonNullable<
+    Parameters<typeof resolveSourceDeliveryOutcome>[1]["messageToolSentTargets"]
+  >[number];
+  const sourceTargets: SourceDeliveryMessageToolTarget[] = [];
+  for (const target of targets) {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    const record = target as SourceDeliveryMessageToolTarget;
+    const to = typeof record.to === "string" ? record.to.trim() : "";
+    // Older current-source receipts omit `to`; explicit off-target sends must never satisfy it.
+    sourceTargets.push(to ? record : { ...record, to: deliveryTarget.to });
+  }
+  return resolveSourceDeliveryOutcome(
+    createSourceDeliveryPlan({
+      owner: "message_tool",
+      reason: "subagent_completion",
+      target: deliveryTarget,
+      requireExplicitMessageTargetEvidence: true,
+    }),
+    {
+      didSendViaMessageTool: hasMessagingToolDeliveryEvidence(result),
+      messageToolSentTargets: sourceTargets,
+    },
+  ).verifiedMessageToolDelivery;
 }
 
 async function sendSubagentAnnounceDirectly(params: {
@@ -731,6 +803,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -820,6 +893,7 @@ async function sendSubagentAnnounceDirectly(params: {
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
         internalEvents: params.internalEvents,
+        onDeliveryResult: params.onDeliveryResult,
       });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
@@ -982,7 +1056,8 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
     const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult && hasMessagingToolDeliveryEvidence(directAnnounceResult),
+      directAnnounceResult &&
+      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
@@ -1112,6 +1187,7 @@ export async function deliverSubagentAnnouncement(params: {
   requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const durableGeneratedMediaHandoff =
@@ -1256,6 +1332,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),

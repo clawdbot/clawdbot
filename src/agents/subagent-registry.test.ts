@@ -11,6 +11,10 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -1640,6 +1644,63 @@ describe("subagent registry seam flow", () => {
     const run = findRequesterRun("run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
+  });
+
+  it("detaches subagent completion from a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:main:main";
+    let disposed = false;
+    let resolveWait: (value: Record<string, unknown>) => void = () => {};
+    const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
+      resolveWait = resolve;
+    });
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const freshCompletionWrite = vi.fn(async () => {});
+
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "agent.wait") {
+        return {};
+      }
+      const result = await pendingWait;
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      return result;
+    });
+    mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return true;
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        mod.registerSubagentRun({
+          runId: "run-detached-requester-owner",
+          requesterSessionKey: sessionKey,
+          task: "finish after the requester attempt exits",
+          expectsCompletionMessage: true,
+        });
+        await waitForFast(() =>
+          expect(mocks.callGateway).toHaveBeenCalledWith(
+            expect.objectContaining({ method: "agent.wait" }),
+          ),
+        );
+      },
+    );
+
+    disposed = true;
+    resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+
+    await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(freshCompletionWrite).toHaveBeenCalledOnce();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(staleWriteLock).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {

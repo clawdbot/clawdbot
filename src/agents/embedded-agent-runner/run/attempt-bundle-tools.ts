@@ -64,10 +64,25 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionId: params.attempt.sessionId,
       }),
   });
-  const clientTools =
-    toolsEnabled && !params.isRawModelRun && !params.attempt.forceRestartSafeTools
+  const providedClientTools =
+    toolsEnabled &&
+    !params.attempt.disableTools &&
+    !params.isRawModelRun &&
+    !params.attempt.forceRestartSafeTools
       ? params.attempt.clientTools
       : undefined;
+  // Client functions share the attempt's authority; filter before their names
+  // can reserve bundled tools or enter deferred catalogs and provider requests.
+  const clientTools =
+    providedClientTools && effectiveToolsAllow
+      ? applyEmbeddedAttemptToolsAllow(
+          providedClientTools.map((definition) => ({
+            name: definition.function.name,
+            definition,
+          })),
+          effectiveToolsAllow,
+        ).map(({ definition }) => definition)
+      : providedClientTools;
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
     shouldCreateBundleMcpRuntimeForAttempt({

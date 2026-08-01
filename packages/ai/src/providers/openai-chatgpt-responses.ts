@@ -36,7 +36,10 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
-import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import {
+  processResponsesStream,
+  ResponsesStreamFailure,
+} from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -342,6 +345,9 @@ export const streamOpenAICodexResponses: StreamFunction<
             if (activeSignal?.aborted) {
               throw transportAbortError(activeSignal);
             }
+            if (output.stopReason === "aborted" || output.stopReason === "error") {
+              throw new CodexApiError(output.errorMessage ?? "An unknown error occurred");
+            }
             stream.push({
               type: "done",
               reason: output.stopReason as "stop" | "length" | "toolUse",
@@ -482,6 +488,10 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       if (activeSignal?.aborted) {
         throw transportAbortError(activeSignal);
+      }
+
+      if (output.stopReason === "aborted" || output.stopReason === "error") {
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
       stream.push({
@@ -711,7 +721,11 @@ class CodexProtocolError extends Error {
 }
 
 function isCodexNonTransportError(error: unknown): boolean {
-  return error instanceof CodexApiError || error instanceof CodexProtocolError;
+  return (
+    error instanceof CodexApiError ||
+    error instanceof CodexProtocolError ||
+    error instanceof ResponsesStreamFailure
+  );
 }
 
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
@@ -759,14 +773,6 @@ async function* mapCodexEvents(
       });
     }
 
-    if (type === "response.failed") {
-      const response = (event as { response?: { error?: { code?: string; message?: string } } })
-        .response;
-      const code = response?.error?.code;
-      const message = response?.error?.message;
-      throw new CodexApiError(message || "Codex response failed", { code, payload: event });
-    }
-
     if (
       type === "response.done" ||
       type === "response.completed" ||
@@ -778,7 +784,7 @@ async function* mapCodexEvents(
         : response;
       yield {
         ...event,
-        type: "response.completed",
+        type: type === "response.done" ? "response.completed" : type,
         response: normalizedResponse,
       } as ResponseStreamEvent;
       return;
@@ -824,18 +830,28 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   try {
     while (true) {
       const { done, value } = await guard.read();
-      if (done) {
-        break;
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
+      if (done) {
+        buffer += decoder.decode();
+      }
 
-      let idx = buffer.indexOf("\n\n");
-      while (idx !== -1) {
-        const chunk = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
+      while (true) {
+        // Defer a possible CRLF only when CR does not already complete a blank line.
+        const deferTrailingCr =
+          !done && buffer.endsWith("\r") && !buffer.endsWith("\r\r") && !buffer.endsWith("\n\r");
+        const searchable = deferTrailingCr ? buffer.slice(0, -1) : buffer;
+        // A CRLF is one line ending: never backtrack its CR into a false blank line.
+        const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/.exec(searchable);
+        if (!boundary) {
+          break;
+        }
+        const chunk = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
 
         const dataLines = chunk
-          .split("\n")
+          .split(/\r\n|\r|\n/)
           .filter((l) => l.startsWith("data:"))
           .map((l) => l.slice(5).trim());
         if (dataLines.length > 0) {
@@ -857,7 +873,10 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
             yield event;
           }
         }
-        idx = buffer.indexOf("\n\n");
+      }
+
+      if (done) {
+        break;
       }
     }
   } finally {

@@ -2231,6 +2231,58 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("persists identified completion delivery before stalled announce bookkeeping settles", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        lastError: "earlier delivery failed",
+        lastDropReason: "sink_unavailable",
+      },
+    });
+    let releaseAnnounce!: () => void;
+    const announcePending = new Promise<void>((resolve) => {
+      releaseAnnounce = resolve;
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+        });
+        await announcePending;
+        return true;
+      },
+    );
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() =>
+      expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "delivered",
+        error: undefined,
+      }),
+    );
+
+    expect(entry.delivery).toMatchObject({
+      status: "delivered",
+      announcedAt: 12_300,
+      deliveredAt: 12_300,
+    });
+    expect(entry.delivery?.lastError).toBeUndefined();
+    expect(entry.delivery?.lastDropReason).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(persist).toHaveBeenCalledWith(entry.runId);
+
+    releaseAnnounce();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+  });
+
   it("keeps a late superseded-delivery retirement root-admitted", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true, generation: 1 });
     const runs = new Map([[entry.runId, entry]]);

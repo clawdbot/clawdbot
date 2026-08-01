@@ -197,6 +197,11 @@ function buildWhatsAppPendingHistoryContextFixture(
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
+const CODEX_SUBAGENT_TOOL_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw",
+  tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+} as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
 const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
@@ -2564,6 +2569,73 @@ describe("qa mock openai server", () => {
     expect(body.output?.[0]?.content?.[0]?.text).toBe("");
   });
 
+  it.each([
+    { name: "no current tools", tools: [] },
+    { name: "message-only current tools", tools: [MESSAGE_TOOL] },
+  ])("does not replay historical direct-fallback spawn or yield with $name", async ({ tools }) => {
+    const server = await startMockServer();
+    const kickoff =
+      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+    const completion = [
+      "[Internal task completion event]",
+      "Task: qa-direct-fallback-worker",
+      "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+    ].join("\n");
+
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      tools,
+      instructions:
+        "Historical sessions_spawn and sessions_yield guidance does not grant completion-turn tools.",
+      input: [
+        makeUserInput(kickoff),
+        makeDeveloperInput("Current completion handoff may use only the declared tool surface."),
+        makeUserInput(completion),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(payload)).toBe("");
+    const debugRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "completion debug request",
+    );
+    expect(debugRequest).not.toHaveProperty("plannedToolName");
+  });
+
+  it("prefers the current direct-fallback worker turn over an earlier parent kickoff", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent direct fallback QA check: spawn one worker and yield."),
+        makeUserInput(
+          "Subagent direct fallback worker: finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK.",
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(payload)).toBe("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+  });
+
+  it("does not treat prompt or instruction mentions as callable subagent tools", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      tools: [MESSAGE_TOOL],
+      instructions: "The prior run used sessions_spawn and sessions_yield.",
+      input: [
+        makeUserInput(
+          'Use sessions_spawn for this QA check. task="Return historical answer" label=qa-stale.',
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+  });
+
   it("surfaces sessions_spawn tool errors instead of echoing child-task tokens", async () => {
     const server = await startMockServer();
 
@@ -3309,6 +3381,225 @@ describe("qa mock openai server", () => {
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
+  it.each([
+    "body instructions",
+    "developer-role input",
+    "Codex base instructions plus developer-role input",
+  ])(
+    "delivers synthesized fanout results through the message tool when %s makes the final private",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const tools = [SESSIONS_SPAWN_TOOL, MESSAGE_TOOL];
+
+      const firstSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools,
+        input: [makeUserInput(prompt)],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
+
+      const secondSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools,
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output:
+              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          },
+        ],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+
+      const completionInput = [
+        makeUserInput(prompt),
+        makeUserInput("[Internal task completion event]\nresult: ALPHA-OK\nresult: BETA-OK"),
+      ];
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+      const withDeliveryInstructions = (input: unknown[]) =>
+        instructionSource === "body instructions"
+          ? { instructions, input }
+          : {
+              ...(usesCodexDelivery
+                ? { instructions: "Follow the unrelated Codex base instructions." }
+                : {}),
+              input: [
+                { role: "developer", content: [{ type: "input_text", text: instructions }] },
+                ...input,
+              ],
+            };
+      const delivery = await expectResponsesJson(server, {
+        stream: false,
+        tools,
+        ...withDeliveryInstructions(completionInput),
+      });
+      const messageCall = outputToolCall(delivery, "message");
+      expect(outputToolArgsFromItem(messageCall)).toEqual({
+        action: "send",
+        message: "subagent-1: ok\nsubagent-2: ok",
+        ...(usesCodexDelivery ? { final: true } : {}),
+      });
+
+      const settled = await expectResponsesJson(server, {
+        stream: false,
+        tools,
+        ...withDeliveryInstructions([
+          ...completionInput,
+          messageCall,
+          {
+            type: "function_call_output",
+            call_id: outputToolCallId(messageCall, "call_mock_message_fanout"),
+            output: '{"ok":true,"messageId":"qa-fanout-final"}',
+          },
+        ]),
+      });
+      expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(settled)).toBe("");
+    },
+  );
+
+  it.each(["OpenAI developer instructions", "Codex developer instructions"])(
+    "waits for separate private fanout completion turns before message-only delivery with %s",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+
+      const firstSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(prompt)],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
+
+      const secondSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha"}',
+          },
+        ],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+
+      const privateCompletion = (workerMarker: "ALPHA-OK" | "BETA-OK") => ({
+        stream: false,
+        tools: [MESSAGE_TOOL],
+        ...(usesCodexDelivery
+          ? { instructions: "Follow the unrelated Codex base instructions." }
+          : {}),
+        input: [
+          { role: "developer", content: [{ type: "input_text", text: instructions }] },
+          makeUserInput(prompt),
+          makeUserInput(`[Internal task completion event]\nresult: ${workerMarker}`),
+        ],
+      });
+
+      const alphaCompletion = await expectResponsesJson(server, privateCompletion("ALPHA-OK"));
+      expect(outputItems(alphaCompletion).some((item) => item.type === "function_call")).toBe(
+        false,
+      );
+      expect(outputText(alphaCompletion)).toBe("");
+
+      const betaCompletion = await expectResponsesJson(server, privateCompletion("BETA-OK"));
+      expect(outputToolArgsFromItem(outputToolCall(betaCompletion, "message"))).toEqual({
+        action: "send",
+        message: "subagent-1: ok\nsubagent-2: ok",
+        ...(usesCodexDelivery ? { final: true } : {}),
+      });
+    },
+  );
+
+  it.each(["OpenAI developer instructions", "Codex developer instructions"])(
+    "defers private zero-tool fanout completions to the parent-owned settle wake with %s",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+
+      const firstSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(prompt)],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
+
+      const secondSpawn = await expectResponsesJson(server, {
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          {
+            type: "function_call_output",
+            output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha"}',
+          },
+        ],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+
+      for (const workerMarker of ["ALPHA-OK", "BETA-OK"] as const) {
+        const completion = await expectResponsesJson(server, {
+          stream: false,
+          tools: [],
+          ...(usesCodexDelivery
+            ? { instructions: "Follow the unrelated Codex base instructions." }
+            : {}),
+          input: [
+            makeDeveloperInput(instructions),
+            makeUserInput(prompt),
+            makeUserInput(`[Internal task completion event]\nresult: ${workerMarker}`),
+          ],
+        });
+        expect(outputItems(completion).some((item) => item.type === "function_call")).toBe(false);
+        expect(outputText(completion)).toBe("");
+      }
+
+      const requesterSettleWake = await expectResponsesJson(server, {
+        stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          makeUserInput(
+            "[Subagent Context] Every subagent spawned from this session has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
+          ),
+        ],
+      });
+      expect(outputItems(requesterSettleWake).some((item) => item.type === "function_call")).toBe(
+        false,
+      );
+      expect(outputText(requesterSettleWake)).toBe("subagent-1: ok\nsubagent-2: ok");
+    },
+  );
+
   it("replays completed subagent fanout on requester-settle continuation turns", async () => {
     const server = await startMockServer();
 
@@ -3337,23 +3628,18 @@ describe("qa mock openai server", () => {
     expect(secondSpawn.status).toBe(200);
     expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
-    const phaseOnlyFinal = await postResponses(server, {
+    const settledFinal = await postResponses(server, {
       stream: false,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Continue.",
-            },
-          ],
-        },
+        makeUserInput(prompt),
+        makeUserInput(
+          "[Subagent Context] Every subagent spawned from this session has now settled.\nALPHA-OK\nBETA-OK",
+        ),
       ],
     });
-    expect(phaseOnlyFinal.status).toBe(200);
-    expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+    expect(settledFinal.status).toBe(200);
+    expect(outputText(await settledFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
 
     const settledContinuation = await postResponses(server, {
       stream: false,
@@ -3455,6 +3741,7 @@ describe("qa mock openai server", () => {
 
     const appServerHandoff = await postResponses(handoffServer, {
       stream: true,
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
       input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
     });
     expect(appServerHandoff.status).toBe(200);
@@ -3462,6 +3749,7 @@ describe("qa mock openai server", () => {
 
     const repeatedHandoff = await postResponses(handoffServer, {
       stream: true,
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
       input: [makeUserInput(handoffPrompt), makeUserInput("Continue again.")],
     });
     expect(repeatedHandoff.status).toBe(200);
@@ -3483,6 +3771,7 @@ describe("qa mock openai server", () => {
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
     const appServerFanout = await postResponses(server, {
       stream: true,
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
       input: [makeUserInput(fanoutPrompt), makeUserInput("Continue.")],
     });
     expect(appServerFanout.status).toBe(200);
@@ -4787,12 +5076,17 @@ describe("qa mock openai server", () => {
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
-  it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
+  it("plans Codex Responses Lite handoff from declared developer additional tools", async () => {
     const server = await startMockServer();
 
     const response = await postResponses(server, {
       stream: false,
       input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+        },
         makeUserInput(
           "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
         ),
@@ -5888,6 +6182,101 @@ describe("qa mock openai server", () => {
     );
   });
 
+  it.each([
+    {
+      name: "system string",
+      system:
+        "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.",
+    },
+    {
+      name: "system text blocks",
+      system: [
+        {
+          type: "text" as const,
+          text: "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.",
+        },
+      ],
+    },
+  ])(
+    "delivers Anthropic private fanout results through the message tool ($name)",
+    async ({ system }) => {
+      const server = await startMockServer();
+      const messages: Array<Record<string, unknown>> = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.",
+            },
+          ],
+        },
+      ];
+      const request = async () => {
+        const response = await postJson(server, "/v1/messages", {
+          model: "claude-opus-4-8",
+          max_tokens: 256,
+          system,
+          tools: [
+            { name: "sessions_spawn", input_schema: { type: "object", properties: {} } },
+            { name: "message", input_schema: { type: "object", properties: {} } },
+          ],
+          messages,
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()) as {
+          stop_reason: string;
+          content: Array<Record<string, unknown>>;
+        };
+      };
+      const appendResult = (toolUse: Record<string, unknown>, result: Record<string, unknown>) => {
+        messages.push(
+          { role: "assistant", content: [toolUse] },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolUse.id,
+                content: JSON.stringify(result),
+              },
+            ],
+          },
+        );
+      };
+
+      for (const [label, marker] of [
+        ["qa-fanout-alpha", "ALPHA-OK"],
+        ["qa-fanout-beta", "BETA-OK"],
+      ] as const) {
+        const spawned = await request();
+        expect(spawned.stop_reason).toBe("tool_use");
+        const toolUse = spawned.content.find((block) => block.type === "tool_use");
+        expect(toolUse).toMatchObject({ name: "sessions_spawn", input: { label } });
+        if (!toolUse || typeof toolUse.id !== "string") {
+          throw new Error(`Expected Anthropic ${label} sessions_spawn tool_use block`);
+        }
+        appendResult(toolUse, { status: "accepted", childSessionKey: label, note: marker });
+      }
+
+      const delivered = await request();
+      expect(delivered.stop_reason).toBe("tool_use");
+      const messageToolUse = delivered.content.find((block) => block.type === "tool_use");
+      expect(messageToolUse).toMatchObject({
+        name: "message",
+        input: { action: "send", message: "subagent-1: ok\nsubagent-2: ok" },
+      });
+      if (!messageToolUse || typeof messageToolUse.id !== "string") {
+        throw new Error("Expected Anthropic fanout message tool_use block");
+      }
+      appendResult(messageToolUse, { ok: true, messageId: "qa-fanout-final" });
+
+      const settled = await request();
+      expect(settled.stop_reason).toBe("end_turn");
+      expect(settled.content).toEqual([{ type: "text", text: "" }]);
+    },
+  );
+
   it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {
     const server = await startMockServer();
 
@@ -6819,6 +7208,7 @@ describe("qa mock openai server provider variant tagging", () => {
     const openaiHandoff = await expectResponsesJson(openaiHandoffServer, {
       model: "gpt-5.6-luna",
       stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
       input: [makeUserInput(handoffPrompt)],
     });
     expect(outputToolArgs(openaiHandoff)).toMatchObject({
@@ -6830,6 +7220,7 @@ describe("qa mock openai server provider variant tagging", () => {
     const anthropicHandoff = await expectResponsesJson(anthropicHandoffServer, {
       model: "claude-opus-4-8",
       stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
       input: [makeUserInput(handoffPrompt)],
     });
     expect(outputToolArgs(anthropicHandoff)).toMatchObject({
