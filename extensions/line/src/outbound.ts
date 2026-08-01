@@ -26,7 +26,6 @@ import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
-const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -221,11 +220,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     } else if (shouldSendQuickRepliesInline) {
       const quickReplyMessages: Array<Record<string, unknown>> = [];
       if (lineData.flexMessage) {
-        quickReplyMessages.push({
-          type: "flex",
-          altText: truncateUtf16Safe(lineData.flexMessage.altText, LINE_FLEX_ALT_TEXT_LIMIT),
-          contents: lineData.flexMessage.contents,
-        });
+        quickReplyMessages.push(
+          outboundRuntime.createFlexMessage(
+            lineData.flexMessage.altText,
+            lineData.flexMessage.contents as Parameters<
+              typeof outboundRuntime.createFlexMessage
+            >[1],
+          ),
+        );
       }
       if (lineData.templateMessage) {
         const template = buildTemplate(lineData.templateMessage);
@@ -243,11 +245,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         });
       }
       for (const flexMsg of processed.flexMessages) {
-        quickReplyMessages.push({
-          type: "flex",
-          altText: truncateUtf16Safe(flexMsg.altText, LINE_FLEX_ALT_TEXT_LIMIT),
-          contents: flexMsg.contents,
-        });
+        quickReplyMessages.push(
+          outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
+        );
       }
       for (const url of mediaUrls) {
         const trimmed = url?.trim();

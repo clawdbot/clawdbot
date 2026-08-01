@@ -22,7 +22,6 @@ type ImageMessage = messagingApi.ImageMessage;
 type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
 type AudioMessage = messagingApi.AudioMessage;
 type LocationMessage = messagingApi.LocationMessage;
-type FlexMessage = messagingApi.FlexMessage;
 type FlexContainer = messagingApi.FlexContainer;
 type TemplateMessage = messagingApi.TemplateMessage;
 type QuickReply = messagingApi.QuickReply;
@@ -34,6 +33,7 @@ const userProfileCache = new Map<
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
+const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 
 function cacheUserProfile(
   userId: string,
@@ -481,7 +481,7 @@ export function createFlexMessage(
 ): messagingApi.FlexMessage {
   return {
     type: "flex",
-    altText,
+    altText: truncateUtf16Safe(altText, LINE_FLEX_ALT_TEXT_LIMIT),
     contents,
   };
 }
@@ -522,13 +522,7 @@ export async function pushFlexMessage(
   contents: FlexContainer,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const flexMessage: FlexMessage = {
-    type: "flex",
-    altText: truncateUtf16Safe(altText, 400),
-    contents,
-  };
-
-  return pushLineMessages(to, [flexMessage], opts, {
+  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
     errorContext: "push flex message",
     verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
   });

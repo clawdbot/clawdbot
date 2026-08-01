@@ -12,7 +12,6 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
@@ -228,7 +227,7 @@ export async function deliverLineAutoReply(params: {
   if (lineData.flexMessage) {
     richMessages.push(
       deps.createFlexMessage(
-        truncateUtf16Safe(lineData.flexMessage.altText, 400),
+        lineData.flexMessage.altText,
         lineData.flexMessage.contents as FlexContainer,
       ),
     );
@@ -253,9 +252,7 @@ export async function deliverLineAutoReply(params: {
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {
-    richMessages.push(
-      deps.createFlexMessage(truncateUtf16Safe(flexMsg.altText, 400), flexMsg.contents),
-    );
+    richMessages.push(deps.createFlexMessage(flexMsg.altText, flexMsg.contents));
   }
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
