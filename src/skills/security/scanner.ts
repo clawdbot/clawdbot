@@ -231,20 +231,20 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
     message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /ignore (all|any|previous|above|prior) instructions/i,
+    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
   },
   {
     ruleId: "prompt-injection-system",
     severity: "critical",
     message: "Skill text references hidden prompt layers",
-    pattern: /\b(system prompt|developer message|hidden instructions)\b/i,
+    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
   },
   {
     ruleId: "prompt-injection-tool",
     severity: "critical",
     message: "Skill text encourages bypassing tool approval",
     pattern:
-      /\b(run|execute|invoke|call)\b.{0,50}\btool\b.{0,50}\bwithout\b.{0,30}\b(permission|approval)/i,
+      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
   },
   {
     ruleId: "shell-pipe-to-shell",
