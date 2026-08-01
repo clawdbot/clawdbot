@@ -101,8 +101,24 @@ export type FollowupRun = {
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
+  /**
+   * Runtime-only mapping from imageOrder slots to a declared media index space.
+   * Direct execution uses `inbound-media`; queued execution normalizes to `run-media`, whose
+   * indexes address the sessionCtx.media delivered with that run. This exists before the
+   * transcript recorder materializes and survives collect batching; persisted mediaImageLayout
+   * remains the durable first-hydration transcript snapshot, not the execution-time projection
+   * carrier (later native hydration can therefore refine runtime ownership without rewriting it).
+   */
+  imageSourceMapping?: {
+    indexes: Array<number | undefined>;
+    space: "inbound-media" | "run-media";
+  };
+  /** Mapping existed but failed validation; partial indexes remain safe ownership evidence. */
+  imageSourceMappingInvalid?: true;
   /** Ordered facts represented by attachment text in this prompt. */
   media?: MediaFact[];
+  /** Combined inbound index (`ctx.media` then supplied media) for each prompt fact. */
+  mediaSourceIndexes?: Array<number | undefined>;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

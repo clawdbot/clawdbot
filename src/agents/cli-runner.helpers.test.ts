@@ -108,6 +108,88 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     }
   });
 
+  it("hydrates managed structured media outside the active agent workspace", async () => {
+    const managedMediaDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-managed-media-"),
+    );
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-agent-workspace-"),
+    );
+    const imagePath = path.join(managedMediaDir, "photo.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
+
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        media: [
+          {
+            path: imagePath,
+            contentType: "image/png",
+            workspaceDir: managedMediaDir,
+          },
+        ],
+        imageOrder: ["offloaded"],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
+    } finally {
+      await fs.rm(managedMediaDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates structured media inside a non-default agent workspace root", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(process.cwd(), ".openclaw-cli-nondefault-workspace-"),
+    );
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }));
+
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        media: [{ path: imagePath, contentType: "image/png" }],
+        imageOrder: ["offloaded"],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
+      await result.cleanupImages?.();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects structured media outside default and active agent workspace roots", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(process.cwd(), ".openclaw-cli-bounded-workspace-"),
+    );
+    const outsideDir = await fs.mkdtemp(
+      path.join(process.cwd(), ".openclaw-cli-outside-workspace-"),
+    );
+    const imagePath = path.join(outsideDir, "photo.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 56, g: 34, b: 12 }));
+
+    try {
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "codex" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          media: [{ path: imagePath, contentType: "image/png" }],
+          imageOrder: ["offloaded"],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+      await expect(fs.stat(path.join(workspaceDir, ".openclaw-cli-images"))).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("dedupes repeated refs and skips failed loads before sanitizing", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-dedupe-"),

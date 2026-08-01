@@ -13,6 +13,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -275,8 +276,14 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 
 export async function getExecuteAgentTurnForTest() {
   const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
-  return async (...args: Parameters<typeof execute>) => {
-    const execution = await execute(...args);
+  return async (
+    params: Omit<AgentTurnParams, "sessionMediaSourceSpace"> &
+      Partial<Pick<AgentTurnParams, "sessionMediaSourceSpace">>,
+  ) => {
+    const execution = await execute({
+      ...params,
+      sessionMediaSourceSpace: params.sessionMediaSourceSpace ?? "inbound-media",
+    });
     const outcome = execution.outcome;
     if (outcome.kind === "settled") {
       return {
@@ -564,6 +571,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
   opts?: GetReplyOptions & ReplyOptionsWithHeartbeatRunScope;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
+  sessionMediaSourceSpace?: "inbound-media" | "run-media";
   typingSignals?: TypingSignaler;
 }) {
   return {
@@ -575,6 +583,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext),
+    sessionMediaSourceSpace: overrides?.sessionMediaSourceSpace ?? "inbound-media",
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),

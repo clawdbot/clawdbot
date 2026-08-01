@@ -110,7 +110,10 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
-  /** Ordered media facts whose model-facing text projection is already present in the prompt. */
+  /**
+   * Ordered media facts whose model-facing text projection is already present in the prompt.
+   * `workspaceDir` is ignored here: public reply options cannot add local filesystem roots.
+   */
   media?: MediaFact[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;

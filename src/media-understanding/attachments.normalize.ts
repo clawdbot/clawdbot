@@ -32,14 +32,20 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
 /** Converts ordered media facts into indexed attachment records. */
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   return normalizeMediaFacts(ctx.media)
-    .map((fact, index) => ({
-      path: normalizeOptionalString(fact.path),
-      url: normalizeOptionalString(fact.url),
-      mime: normalizeOptionalString(fact.contentType) ?? fact.kind,
-      workspaceDir: normalizeOptionalString(fact.workspaceDir),
-      index,
-      alreadyTranscribed: fact.transcribed === true,
-    }))
+    .map((fact, index) => {
+      const attachment: MediaAttachment = {
+        path: normalizeOptionalString(fact.path),
+        url: normalizeOptionalString(fact.url),
+        mime: normalizeOptionalString(fact.contentType) ?? fact.kind,
+        workspaceDir: normalizeOptionalString(fact.workspaceDir),
+        index,
+        alreadyTranscribed: fact.transcribed === true,
+      };
+      if (fact.hydrationSuppressed === true) {
+        attachment.hydrationSuppressed = true;
+      }
+      return attachment;
+    })
     .filter((entry) => Boolean(entry.path ?? entry.url));
 }
 

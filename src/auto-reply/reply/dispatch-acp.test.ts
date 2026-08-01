@@ -1364,6 +1364,46 @@ describe("tryDispatchAcpReply", () => {
     expect(normalizeAttachments).not.toHaveBeenCalled();
   });
 
+  it("does not hydrate attachments explicitly suppressed by an earlier image slot", async () => {
+    const getBuffer = vi.fn(async () => {
+      throw new Error("suppressed attachment must not be read");
+    });
+    const result = await resolveAgentTurnAttachments({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        media: [
+          {
+            path: "/tmp/already-represented.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+      runtime: {
+        MediaAttachmentCache: class {
+          getBuffer = getBuffer;
+        } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+        isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+          false,
+        normalizeAttachments: () => [
+          {
+            path: "/tmp/already-represented.png",
+            mime: "image/png",
+            index: 0,
+            hydrationSuppressed: true,
+          },
+        ],
+        resolveMediaAttachmentLocalRoots: () => ["/tmp"],
+      },
+      includeRecentHistoryImages: false,
+    });
+
+    expect(result).toEqual({ attachments: [], recentHistoryImages: [] });
+    expect(getBuffer).not.toHaveBeenCalled();
+  });
+
   it("does not inject recent history images when the current turn already has an image", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-"));
     const currentPath = path.join(tempDir, "current.png");
@@ -1701,6 +1741,95 @@ describe("tryDispatchAcpReply", () => {
         mediaType: "image/png",
         data: pdfPage.data,
       },
+    ]);
+  });
+
+  it("orders ACP extracted attachments by their media source indexes", async () => {
+    setReadyAcpResolution();
+    const currentPath = "/tmp/openclaw-current-ordered-image.png";
+    const current = Buffer.from("current");
+    acpAttachmentBuffers.set(currentPath, current);
+    const extractedSecond = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("second").toString("base64"),
+      attachmentIndex: 2,
+    };
+    const extractedFirst = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("first").toString("base64"),
+      attachmentIndex: 1,
+    };
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
+      outputs: [],
+      decisions: [],
+      extractedFileImages: [extractedSecond, extractedFirst],
+      appliedImage: false,
+      appliedAudio: false,
+      appliedVideo: false,
+      appliedFile: true,
+    });
+
+    await runDispatch({
+      bodyForAgent: "compare pages",
+      ctxOverrides: { media: [{ path: currentPath, contentType: "image/png" }] },
+    });
+
+    const attachments = runTurnCall().attachments as
+      | Array<{ data: string; mimeType: string }>
+      | undefined;
+    expect(attachments?.map((attachment) => attachment.data)).toEqual([
+      current.toString("base64"),
+      extractedFirst.data,
+      extractedSecond.data,
+    ]);
+  });
+
+  it("keeps unsourced inline ACP attachments stable while sorting extracted sources", async () => {
+    setReadyAcpResolution();
+    const inline = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("inline").toString("base64"),
+    };
+    const extractedSecond = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("second").toString("base64"),
+      attachmentIndex: 2,
+    };
+    const extractedFirst = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("first").toString("base64"),
+      attachmentIndex: 1,
+    };
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
+      outputs: [],
+      decisions: [],
+      extractedFileImages: [extractedSecond, extractedFirst],
+      appliedImage: false,
+      appliedAudio: false,
+      appliedVideo: false,
+      appliedFile: true,
+    });
+
+    await runDispatch({
+      bodyForAgent: "compare",
+      images: [inline],
+      ctxOverrides: {
+        media: [{ path: "/tmp/report.pdf", contentType: "application/pdf" }],
+      },
+    });
+
+    const attachments = runTurnCall().attachments as
+      | Array<{ data: string; mimeType: string }>
+      | undefined;
+    expect(attachments?.map((attachment) => attachment.data)).toEqual([
+      inline.data,
+      extractedFirst.data,
+      extractedSecond.data,
     ]);
   });
 

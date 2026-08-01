@@ -175,22 +175,34 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("strips audio attachments when transcription succeeded via MediaUnderstanding", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
-      MediaTypes: ["audio/ogg", "image/png"],
+    const ctx = {
+      media: [
+        {
+          path: "/tmp/voice.ogg",
+          url: "https://example.com/voice.ogg",
+          contentType: "audio/ogg",
+        },
+        {
+          path: "/tmp/image.png",
+          url: "https://example.com/image.png",
+          contentType: "image/png",
+        },
+      ],
       MediaUnderstanding: [
         {
-          kind: "audio.transcription",
+          kind: "audio.transcription" as const,
           attachmentIndex: 0,
           text: "Hello world",
           provider: "whisper",
         },
       ],
-    });
+    };
+    const note = buildInboundMediaNote(ctx);
     expect(note).toBe(
       "[media attached: /tmp/image.png (image/png) | https://example.com/image.png]",
     );
+    const projection = buildInboundMediaNoteProjection(ctx);
+    expect(projection.mediaSourceIndexes).toEqual([1]);
   });
 
   it("strips audio attachments when transcription succeeded via decisions", () => {
@@ -400,7 +412,7 @@ describe("buildInboundMediaNote", () => {
       ],
     });
 
-    expect(projection).toEqual({ media: [] });
+    expect(projection).toEqual({ media: [], mediaSourceIndexes: [] });
   });
 
   it("keeps audio attachments when no transcription is available", () => {
@@ -469,6 +481,7 @@ describe("buildInboundMediaNote", () => {
           messageId: undefined,
         },
       ],
+      mediaSourceIndexes: [0],
     });
 
     const multi = buildInboundMediaNoteProjection({
@@ -494,5 +507,6 @@ describe("buildInboundMediaNote", () => {
       { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
       { path: "/tmp/b.pdf", contentType: "application/pdf", kind: "document" },
     ]);
+    expect(multi.mediaSourceIndexes).toEqual([0, 1]);
   });
 });

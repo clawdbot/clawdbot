@@ -23,6 +23,7 @@ import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
+import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -418,6 +419,7 @@ export async function prepareCliPromptImagePayload(params: {
   workspaceDir: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageFactIndexes?: readonly (number | null)[];
   media?: MediaFact[];
 }): Promise<{
   prompt: string;
@@ -437,8 +439,12 @@ export async function prepareCliPromptImagePayload(params: {
         workspaceDir: params.workspaceDir,
         model: { input: ["text", "image"] },
         existingImages: params.images,
+        existingImageFactIndexes: params.imageFactIndexes,
         imageOrder: params.imageOrder,
         maxBytes: MAX_IMAGE_BYTES,
+        // Structured CLI media may live in managed inbound, sandbox, remote-cache, or agent
+        // workspace roots. Never use caller-supplied fact roots as the allowlist.
+        localRoots: [...getDefaultMediaLocalRoots(), params.workspaceDir],
       })
     : undefined;
   if (imageResult?.failedMediaCount) {

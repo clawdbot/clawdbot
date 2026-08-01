@@ -64,8 +64,11 @@ export async function resolveAgentTurnAttachments(params: {
     return { attachments: [], recentHistoryImages: [] };
   }
   const runtime = params.runtime ?? (await loadAgentTurnMediaRuntime());
-  const currentAttachments = runtime
-    .normalizeAttachments(params.ctx)
+  const normalizedCurrentAttachments = runtime.normalizeAttachments(params.ctx);
+  const currentAttachments = normalizedCurrentAttachments
+    // Persisted or queued facts can retain this proof even when callers bypass current-turn image
+    // collection; keep the lower-level attachment loader safe as a replay boundary.
+    .filter((attachment) => attachment.hydrationSuppressed !== true)
     .map((attachment) =>
       normalizeOptionalString(attachment.path)
         ? Object.assign({}, attachment, { url: undefined })
@@ -75,7 +78,7 @@ export async function resolveAgentTurnAttachments(params: {
     ? resolveRecentInboundHistoryImages({ ctx: params.ctx })
     : [];
   const firstHistoryAttachmentIndex =
-    currentAttachments.reduce(
+    normalizedCurrentAttachments.reduce(
       (maxIndex, attachment) =>
         Number.isFinite(attachment.index) ? Math.max(maxIndex, attachment.index) : maxIndex,
       -1,

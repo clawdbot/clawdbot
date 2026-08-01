@@ -7,6 +7,8 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { logError } from "../../logger.js";
+import { buildSuppliedImageSourceIndexes } from "../../media/image-source-indexes.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
@@ -46,6 +48,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    promptMediaSourceIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
@@ -133,13 +136,33 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
   const originatingThreadId = resolveRoutedDeliveryThreadId({ ctx, sessionKey });
+  const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
+  const suppliedMediaForPersistence = normalizeMediaFacts(opts?.media);
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...suppliedMediaForPersistence];
+  const suppliedSourceResult = buildSuppliedImageSourceIndexes({
+    imageOrder: opts?.imageOrder,
+    suppliedMedia: suppliedMediaForPersistence,
+    sourceOffset: ctxMediaForPersistence.length,
+  });
+  if (suppliedSourceResult.kind === "invalid") {
+    logError(
+      `supplied image source mapping is invalid; continuing without positional ownership: ${suppliedSourceResult.reason}`,
+    );
+  }
+  const suppliedImageSourceIndexes =
+    suppliedSourceResult.kind === "none" ? undefined : suppliedSourceResult.indexes;
   const currentTurnImages = await traceRunPhase("reply.resolve_current_turn_images", () =>
     resolveCurrentTurnImages({
       ctx,
       cfg,
       images: opts?.images,
       imageOrder: opts?.imageOrder,
+      imageSourceIndexes: suppliedImageSourceIndexes,
+      sourceMediaCount: userTurnMediaForPersistence.length,
+      sourceMappingInvalid: suppliedSourceResult.kind === "invalid",
+      invalidSourceMappingPolicy: "hydrate",
       extractedFileImages: opts?.extractedFileImages,
+      imageFactIndexSpace: "inbound-media",
     }),
   );
   // Abort-signal attachment for queued followups:
@@ -188,9 +211,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         })
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
+  const agentSessionCtx =
+    userTurnMediaForPersistence.length > 0
+      ? {
+          ...sessionCtx,
+          // Preserve the exact slot order so `inbound-media` indexes address
+          // `[ctx.media, supplied images]`. stage-sandbox-media keeps ctx.media and
+          // sessionCtx.media aligned; public supplied roots were stripped at runPreparedReply.
+          // Snapshot only after all current-turn symbol metadata has been written to sessionCtx.
+          media: userTurnMediaForPersistence,
+        }
+      : sessionCtx;
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
@@ -302,6 +334,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
+    // GetReplyOptions supplied media is image-only; keep audio semantics on the inbound context.
     currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
@@ -313,6 +346,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
+    ...(currentTurnImages.imageSourceIndexes
+      ? {
+          imageSourceMapping: {
+            indexes: currentTurnImages.imageSourceIndexes,
+            space: "inbound-media" as const,
+          },
+        }
+      : {}),
+    ...(currentTurnImages.imageSourceMappingInvalid
+      ? { imageSourceMappingInvalid: true as const }
+      : {}),
+    mediaSourceIndexes: promptMediaSourceIndexes,
     media: promptMedia,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
@@ -436,7 +481,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
       ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
       : undefined;
-
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
@@ -471,7 +515,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
-    sessionCtx,
+    sessionCtx: agentSessionCtx,
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered: effectiveResetTriggered,

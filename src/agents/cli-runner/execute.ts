@@ -190,6 +190,7 @@ export async function executePreparedCliRun(
         workspaceDir: context.workspaceDir,
         images: params.images,
         imageOrder: params.imageOrder,
+        imageFactIndexes: params.imageFactIndexes,
         media: params.media,
       });
   prompt = imagePayload.prompt;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const state = vi.hoisted(() => ({
@@ -114,6 +115,7 @@ describe("executeFollowupTurn", () => {
     });
 
     const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.followupRun).toBe(turn.queued);
     expect(call).toMatchObject({
       commandBody: "queued prompt",
       transcriptCommandBody: "queued transcript",
@@ -136,6 +138,107 @@ describe("executeFollowupTurn", () => {
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
     expect(onExecutionStarted).toHaveBeenCalledOnce();
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
+  });
+
+  it("preserves probe-rechecked run writeback on the admitted queued turn", async () => {
+    const turn = createTurn();
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      params.followupRun.run = {
+        ...params.followupRun.run,
+        provider: "openai",
+        model: "rechecked-model",
+      };
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    expect(turn.queued.run.provider).toBe("openai");
+    expect(turn.queued.run.model).toBe("rechecked-model");
+  });
+
+  it("remaps original image indexes to the queued media projection", async () => {
+    const base = createTurn();
+    const image = { type: "image" as const, data: "image", mimeType: "image/png" };
+    const turn = createTurn({
+      queued: {
+        ...base.queued,
+        images: [image],
+        imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [1], space: "inbound-media" },
+        media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" }],
+        mediaSourceIndexes: [1],
+      },
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.sessionCtx.media).toEqual(turn.queued.media);
+    expect(call.followupRun.imageSourceMapping).toEqual({ indexes: [0], space: "run-media" });
+  });
+
+  it("drops invalid queued source ownership without suppressing visible hydration", async () => {
+    const base = createTurn();
+    const turn = createTurn({
+      queued: {
+        ...base.queued,
+        images: [{ type: "image", data: "image", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [0], space: "inbound-media" },
+        media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" }],
+      },
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.followupRun.imageSourceMapping).toEqual({
+      indexes: [undefined],
+      space: "run-media",
+    });
+    expect(call.followupRun.imageSourceMappingInvalid).toBe(true);
+    expect(call.sessionCtx.media?.map((fact) => fact.path)).toEqual(["/tmp/photo.png"]);
+    expect(call.sessionCtx.media?.[0]?.hydrationSuppressed).toBeUndefined();
+
+    const secondHydration = await resolveCurrentTurnImages({
+      ctx: call.sessionCtx,
+      cfg: {} as never,
+      images: call.followupRun.images,
+      imageOrder: call.followupRun.imageOrder,
+      imageSourceIndexes: call.followupRun.imageSourceMapping?.indexes,
+      sourceMappingInvalid: call.followupRun.imageSourceMappingInvalid,
+      invalidSourceMappingPolicy: "infer-inline",
+    });
+    expect(secondHydration.images).toHaveLength(1);
+    expect(secondHydration.imageOrder).toEqual(["inline"]);
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {

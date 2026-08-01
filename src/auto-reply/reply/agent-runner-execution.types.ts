@@ -77,6 +77,8 @@ export type AgentTurnParams = {
   transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  /** Declares which media index space sessionCtx.media represents when image sources are mapped. */
+  sessionMediaSourceSpace: "inbound-media" | "run-media";
   replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;

@@ -27,6 +27,7 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import { orderSourceIndexedEntries } from "../../media/image-source-indexes.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -77,17 +78,7 @@ function appendOrderedAcpAttachments(params: {
 }
 
 function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAttachment[] {
-  return entries
-    .toSorted((left, right) => {
-      if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
-        return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
-      }
-      if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-        return left.sequence - right.sequence;
-      }
-      return left.sequence - right.sequence;
-    })
-    .map((entry) => entry.attachment);
+  return orderSourceIndexedEntries(entries).map((entry) => entry.attachment);
 }
 const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-session.runtime.js"),

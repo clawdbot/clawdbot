@@ -364,6 +364,7 @@ export async function executePreparedReplyAgentRun(
           transcriptCommandBody,
           followupRun,
           sessionCtx,
+          sessionMediaSourceSpace: "inbound-media",
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
           opts,

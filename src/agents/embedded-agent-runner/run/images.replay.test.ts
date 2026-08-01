@@ -36,6 +36,67 @@ describe("structured prompt media replay", () => {
     expect(readRuntimePromptImageFactIndexes(images)).toEqual([0, 1]);
   });
 
+  it("rebinds a collected image after transcribed audio to persisted fact ownership", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-collect-replay-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    const imageData = Buffer.from(TINY_PNG_BASE64, "base64");
+    await fs.writeFile(imagePath, imageData);
+    const runtimeImages = finalizeRuntimePromptImages(
+      [
+        {
+          image: { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" },
+          factIndex: 0,
+        },
+      ],
+      "run-media",
+    ).images;
+    const persistedMedia = [
+      { path: path.join(workspaceDir, "voice.m4a"), contentType: "audio/mp4", transcribed: true },
+      { path: imagePath, contentType: "image/png" },
+    ];
+
+    try {
+      const embeddedHydration = await detectAndLoadPromptImages({
+        prompt: "inspect",
+        media: persistedMedia,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: runtimeImages,
+        imageOrder: ["inline"],
+        workspaceOnly: true,
+      });
+      expect(embeddedHydration.images).toHaveLength(1);
+      expect(embeddedHydration.imageFactIndexes).toEqual([1]);
+      expect(embeddedHydration.loadedCount).toBe(0);
+
+      const persistedMessage = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "inspect" }, ...embeddedHydration.images],
+        timestamp: Date.now(),
+        __openclaw: {
+          media: persistedMedia,
+          mediaImageBlockFactIndexes: embeddedHydration.imageFactIndexes,
+        },
+      } as unknown as AgentMessage;
+      const replay = await hydratePromptMediaMessages([persistedMessage], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      const replayContent = (replay[0] as { content?: unknown } | undefined)?.content;
+      expect(
+        Array.isArray(replayContent) ? replayContent.filter((block) => block.type === "image") : [],
+      ).toHaveLength(1);
+      expect(
+        (replay[0] as unknown as { __openclaw?: { mediaImageBlockFactIndexes?: unknown } })[
+          "__openclaw"
+        ]?.mediaImageBlockFactIndexes,
+      ).toEqual([1]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("retains the runtime fact carrier when queued hydration fails", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-failure-"));
     const media = [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }];

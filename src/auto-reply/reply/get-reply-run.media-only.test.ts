@@ -1,19 +1,27 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
+import { readPersistedMediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { resolveInlineImageFactIndexes } from "../../media/image-source-indexes.js";
+import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
+import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
 import { applySessionHints } from "./body.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
@@ -30,7 +38,7 @@ import { createReplyOperation, getActiveReplyRunCount } from "./reply-run-regist
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { routeReply } from "./route-reply.runtime.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -1192,6 +1200,15 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
           media: [{ path: imagePath, workspaceDir: tmpDir }],
         },
+        opts: {
+          images: [
+            {
+              type: "image",
+              data: Buffer.from("supplied-image").toString("base64"),
+              mimeType: "image/png",
+            },
+          ] as never,
+        },
       }),
     );
 
@@ -1199,6 +1216,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: Buffer.from("supplied-image").toString("base64"),
+        mimeType: "image/png",
+      },
       {
         type: "image",
         data: expect.any(String),
@@ -1212,8 +1234,330 @@ describe("runPreparedReply media-only handling", () => {
         media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
       },
     });
-    expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
-    expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(call.followupRun.images?.[1]?.data).toHaveLength(92);
+    expect(call.followupRun.imageOrder).toEqual(["inline", "inline"]);
+    expect(call.followupRun.imageSourceMapping).toEqual({
+      indexes: [undefined, 0],
+      space: "inbound-media",
+    });
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        mediaImageLayout: {
+          slots: [{ kind: "inline" }, { kind: "inline", factIndex: 0 }],
+        },
+      },
+    });
+  });
+
+  it("preserves a newly minted source-turn id on media-augmented session context", async () => {
+    const expectedSourceTurnId = buildChannelSourceTurnId({
+      provider: "telegram",
+      conversationId: "chat-42",
+      messageId: "message-7",
+    });
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          ...createInboundBody("inspect image"),
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          ...createSessionBody("inspect image"),
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-42",
+          ChatType: "direct",
+          MessageSid: "message-7",
+        },
+        opts: {
+          media: [{ path: "/tmp/source-turn-image.png", contentType: "image/png" }],
+          imageOrder: ["offloaded"],
+        },
+      }),
+    );
+
+    expect(readChannelSourceTurnId(requireRunReplyAgentCall().sessionCtx)).toBe(
+      expectedSourceTurnId,
+    );
+  });
+
+  it("strips supplied workspace roots across direct, transcript, and queued media", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-queued-offloaded-"));
+    const imagePath = path.join(tmpDir, "chat-send-offloaded.png");
+    const imageData = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await writeFile(imagePath, imageData);
+    const offloaded = {
+      path: imagePath,
+      contentType: "image/png",
+      workspaceDir: tmpDir,
+    };
+    const params = baseParams({
+      ctx: {
+        ...createInboundBody("inspect offloaded image"),
+        OriginatingChannel: "webchat",
+        OriginatingTo: "webchat:local",
+        ChatType: "direct",
+      },
+      sessionCtx: {
+        ...createSessionBody("inspect offloaded image"),
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "webchat:local",
+        ChatType: "direct",
+      },
+      opts: { media: [offloaded], imageOrder: ["offloaded"] },
+    });
+
+    try {
+      await runPreparedReply(params);
+
+      const call = requireRunReplyAgentCall();
+      expect(offloaded.workspaceDir).toBe(tmpDir);
+      expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
+        "Ignoring 1 supplied media workspace root(s) at the public reply ingress",
+      );
+      expect(call.followupRun.imageSourceMapping).toEqual({
+        indexes: [0],
+        space: "inbound-media",
+      });
+      expect(call.followupRun.mediaSourceIndexes).toEqual([0]);
+      expect(call.followupRun.media).toEqual([
+        expect.objectContaining({ path: imagePath, contentType: "image/png" }),
+      ]);
+      expect(call.followupRun.media?.[0]).not.toHaveProperty("workspaceDir");
+      expect(call.sessionCtx.media).toEqual([
+        expect.objectContaining({ path: imagePath, contentType: "image/png" }),
+      ]);
+      expect(call.sessionCtx.media?.[0]).not.toHaveProperty("workspaceDir");
+      expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+        __openclaw: {
+          media: [expect.not.objectContaining({ workspaceDir: tmpDir })],
+        },
+      });
+
+      const queuedHydration = await resolveCurrentTurnImages({
+        ctx: call.sessionCtx,
+        cfg: params.cfg,
+        images: call.followupRun.images,
+        imageOrder: call.followupRun.imageOrder,
+        imageSourceIndexes: call.followupRun.imageSourceMapping?.indexes,
+      });
+      expect(queuedHydration).toEqual({
+        imageOrder: ["offloaded"],
+        imageSourceIndexes: [0],
+      });
+
+      const candidateImages = await detectAndLoadPromptImages({
+        prompt: call.commandBody,
+        media: call.followupRun.media,
+        workspaceDir: tmpDir,
+        model: { input: ["text", "image"] },
+        existingImages: queuedHydration.images,
+        existingImageFactIndexes: resolveInlineImageFactIndexes({
+          imageOrder: queuedHydration.imageOrder,
+          imageSourceIndexes: queuedHydration.imageSourceIndexes,
+        }),
+        imageOrder: queuedHydration.imageOrder,
+        localRoots: [...getDefaultMediaLocalRoots(), tmpDir],
+      });
+      expect(candidateImages.images).toEqual([
+        { type: "image", data: imageData.toString("base64"), mimeType: "image/png" },
+      ]);
+      expect(candidateImages.failedMediaCount).toBe(0);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates an unlayouted supplied image once at the trusted CLI boundary", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-supplied-native-image-"));
+    const imagePath = path.join(tmpDir, "supplied.png");
+    const imageData = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await writeFile(imagePath, imageData);
+    const params = baseParams({
+      workspaceDir: tmpDir,
+      ctx: createInboundBody("inspect supplied image"),
+      sessionCtx: createSessionBody("inspect supplied image"),
+      opts: { media: [{ path: imagePath, contentType: "image/png", workspaceDir: tmpDir }] },
+    });
+
+    try {
+      await runPreparedReply(params);
+
+      const call = requireRunReplyAgentCall();
+      expect(call.followupRun.images).toBeUndefined();
+      expect(call.followupRun.imageOrder).toBeUndefined();
+      expect(call.followupRun.imageSourceMapping).toBeUndefined();
+      expect(call.followupRun.media?.[0]).not.toHaveProperty("workspaceDir");
+
+      const runnerHydration = await resolveCurrentTurnImages({
+        ctx: call.sessionCtx,
+        cfg: params.cfg,
+        images: call.followupRun.images,
+        imageOrder: call.followupRun.imageOrder,
+        imageSourceIndexes: call.followupRun.imageSourceMapping?.indexes,
+        invalidSourceMappingPolicy: "infer-inline",
+      });
+      expect(runnerHydration).toEqual({});
+
+      const candidateImages = await detectAndLoadPromptImages({
+        prompt: call.commandBody,
+        media: call.followupRun.media,
+        workspaceDir: tmpDir,
+        model: { input: ["text", "image"] },
+        existingImages: runnerHydration.images,
+        existingImageFactIndexes: resolveInlineImageFactIndexes({
+          imageOrder: runnerHydration.imageOrder,
+          imageSourceIndexes: runnerHydration.imageSourceIndexes,
+        }),
+        imageOrder: runnerHydration.imageOrder,
+        localRoots: [...getDefaultMediaLocalRoots(), tmpDir],
+      });
+      expect(candidateImages.images).toHaveLength(1);
+      expect(candidateImages.images[0]?.data).toBe(imageData.toString("base64"));
+      expect(candidateImages.failedMediaCount).toBe(0);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates an unlayouted managed supplied image exactly once for embedded and CLI", async () => {
+    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-managed-supplied-"));
+    const imagePath = path.join(
+      resolveStateDir(),
+      "media",
+      "inbound",
+      `supplied-${process.pid}-${Date.now()}.png`,
+    );
+    const imageData = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await mkdir(path.dirname(imagePath), { recursive: true });
+    await writeFile(imagePath, imageData);
+    const params = baseParams({
+      workspaceDir,
+      ctx: createInboundBody("inspect managed supplied image"),
+      sessionCtx: createSessionBody("inspect managed supplied image"),
+      opts: { media: [{ path: imagePath, contentType: "image/png" }] },
+    });
+
+    try {
+      await runPreparedReply(params);
+
+      const call = requireRunReplyAgentCall();
+      const runnerHydration = await resolveCurrentTurnImages({
+        ctx: call.sessionCtx,
+        cfg: params.cfg,
+        images: call.followupRun.images,
+        imageOrder: call.followupRun.imageOrder,
+        imageSourceIndexes: call.followupRun.imageSourceMapping?.indexes,
+        invalidSourceMappingPolicy: "infer-inline",
+      });
+      expect(runnerHydration.images).toHaveLength(1);
+      expect(runnerHydration.imageOrder).toEqual(["inline"]);
+      expect(runnerHydration.imageSourceIndexes).toEqual([0]);
+      expect(readRuntimePromptImageFactIndexes(runnerHydration.images)).toEqual([0]);
+
+      const persistedMessage = call.followupRun.userTurnTranscriptRecorder?.message;
+      expect(persistedMessage).toBeDefined();
+      const mediaImageLayout = readPersistedMediaImageLayout(persistedMessage!);
+      expect(mediaImageLayout).toEqual({
+        slots: [{ kind: "offloaded", factIndex: 0 }],
+        suppressedFactIndexes: [],
+      });
+
+      const embeddedImages = await detectAndLoadPromptImages({
+        prompt: call.commandBody,
+        media: call.followupRun.media,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: runnerHydration.images,
+        existingImageFactIndexes: readRuntimePromptImageFactIndexes(runnerHydration.images),
+        imageOrder: runnerHydration.imageOrder,
+        mediaImageLayout,
+      });
+      expect(embeddedImages.images).toHaveLength(1);
+      expect(embeddedImages.images[0]?.data).toBe(imageData.toString("base64"));
+      expect(embeddedImages.loadedCount).toBe(0);
+
+      const cliImages = await detectAndLoadPromptImages({
+        prompt: call.commandBody,
+        media: call.followupRun.media,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: runnerHydration.images,
+        existingImageFactIndexes: resolveInlineImageFactIndexes({
+          imageOrder: runnerHydration.imageOrder,
+          imageSourceIndexes: runnerHydration.imageSourceIndexes,
+        }),
+        imageOrder: runnerHydration.imageOrder,
+        localRoots: [...getDefaultMediaLocalRoots(), workspaceDir],
+      });
+      expect(cliImages.images).toHaveLength(1);
+      expect(cliImages.images[0]?.data).toBe(imageData.toString("base64"));
+      expect(cliImages.loadedCount).toBe(0);
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+      await rm(imagePath, { force: true });
+    }
+  });
+
+  it("propagates malformed direct-run ownership without a second native hydration", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-invalid-direct-source-"));
+    const imagePath = path.join(tmpDir, "one.png");
+    await writeFile(imagePath, "source-image");
+    const inline = {
+      type: "image" as const,
+      data: Buffer.from("inline-image").toString("base64"),
+      mimeType: "image/png",
+    };
+    const params = baseParams({
+      ctx: createInboundBody("inspect malformed offload"),
+      sessionCtx: createSessionBody("inspect malformed offload"),
+      opts: {
+        images: [inline],
+        media: [{ path: imagePath, contentType: "image/png" }],
+        imageOrder: ["inline", "offloaded", "offloaded"],
+      },
+    });
+
+    try {
+      const result = await runPreparedReply(params);
+
+      expect(result).toEqual({ text: "ok" });
+      const call = requireRunReplyAgentCall();
+      expect(call.followupRun.imageSourceMapping).toEqual({
+        indexes: [undefined, 0, undefined],
+        space: "inbound-media",
+      });
+      expect(call.followupRun.imageSourceMappingInvalid).toBe(true);
+
+      const secondHydration = await resolveCurrentTurnImages({
+        ctx: call.sessionCtx,
+        cfg: params.cfg,
+        images: call.followupRun.images,
+        imageOrder: call.followupRun.imageOrder,
+        imageSourceIndexes: call.followupRun.imageSourceMapping?.indexes,
+        sourceMappingInvalid: call.followupRun.imageSourceMappingInvalid,
+        invalidSourceMappingPolicy: "infer-inline",
+      });
+      expect(secondHydration.images).toEqual([inline]);
+      expect(secondHydration.imageOrder).toEqual(["inline", "offloaded", "offloaded"]);
+      expect(secondHydration.imageSourceMappingInvalid).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("does not copy prior session media onto text-only followups", async () => {
@@ -1469,6 +1813,10 @@ describe("runPreparedReply media-only handling", () => {
       },
     });
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(call.followupRun.imageSourceMapping).toEqual({
+      indexes: [1],
+      space: "inbound-media",
+    });
     expect(call.followupRun.prompt).toContain("a tiny dot image");
   });
 

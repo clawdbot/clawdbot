@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 
 const hoisted = vi.hoisted(() => ({
   canAdvanceSessionEntryCache: vi.fn(() => true),
@@ -300,6 +301,87 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
           suppressedFactIndexes: [],
         },
       }),
+    );
+  });
+
+  it("passes runner-hydrated fact ownership into embedded prompt hydration", async () => {
+    const base = createInput();
+    const image = { type: "image" as const, data: "managed", mimeType: "image/png" };
+    const images = finalizeRuntimePromptImages([{ image, factIndex: 0 }], "inbound-media").images;
+    const persistedMessage = {
+      role: "user" as const,
+      content: "inspect",
+      __openclaw: {
+        media: [{ path: "/managed/inbound.png", contentType: "image/png" }],
+        mediaImageLayout: { slots: [{ kind: "offloaded" as const, factIndex: 0 }] },
+      },
+    };
+    const input = createInput({
+      attempt: {
+        ...base.attempt,
+        images,
+        imageOrder: ["inline"],
+        userTurnTranscriptRecorder: {
+          message: persistedMessage,
+          resolveMessage: vi.fn(async () => persistedMessage),
+        } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>,
+      },
+    });
+
+    await prepareEmbeddedAttemptPromptExecution(input);
+
+    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingImages: images,
+        existingImageFactIndexes: [0],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }],
+          suppressedFactIndexes: [],
+        },
+      }),
+    );
+  });
+
+  it("does not apply collected run-media ownership to persisted inbound media", async () => {
+    const base = createInput();
+    const image = { type: "image" as const, data: "managed", mimeType: "image/png" };
+    const images = finalizeRuntimePromptImages([{ image, factIndex: 0 }], "run-media").images;
+    const persistedMessage = {
+      role: "user" as const,
+      content: "inspect",
+      __openclaw: {
+        media: [
+          { path: "/managed/voice.m4a", contentType: "audio/mp4", transcribed: true },
+          { path: "/managed/inbound.png", contentType: "image/png" },
+        ],
+      },
+    };
+    const input = createInput({
+      attempt: {
+        ...base.attempt,
+        images,
+        imageOrder: ["inline"],
+        userTurnTranscriptRecorder: {
+          message: persistedMessage,
+          resolveMessage: vi.fn(async () => persistedMessage),
+        } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>,
+      },
+    });
+
+    await prepareEmbeddedAttemptPromptExecution(input);
+
+    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingImages: images,
+        imageOrder: ["inline"],
+        media: [
+          expect.objectContaining({ path: "/managed/voice.m4a", transcribed: true }),
+          expect.objectContaining({ path: "/managed/inbound.png" }),
+        ],
+      }),
+    );
+    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+      expect.not.objectContaining({ existingImageFactIndexes: expect.anything() }),
     );
   });
 });

@@ -513,6 +513,64 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
+  it("projects direct inbound image identities into CLI prompt media space", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
+    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+      images: [inlineImage],
+      imageOrder: ["inline", "offloaded"],
+      imageSourceIndexes: [1, 2],
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    followupRun.images = [inlineImage];
+    followupRun.imageOrder = ["inline", "offloaded"];
+    followupRun.imageSourceMapping = { indexes: [1, 2], space: "inbound-media" };
+    followupRun.media = [
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { path: "/tmp/b.png", contentType: "image/png" },
+    ];
+    followupRun.mediaSourceIndexes = [1, 2];
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionMediaSourceSpace: "inbound-media",
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+          media: [
+            { path: "/tmp/transcribed.ogg", contentType: "audio/ogg", transcribed: true },
+            ...followupRun.media,
+          ],
+        },
+      }),
+    );
+
+    expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      images: [inlineImage],
+      imageOrder: ["inline", "offloaded"],
+      imageFactIndexes: [0],
+      media: followupRun.media,
+    });
+  });
+
   it("consumes pending MCP App context when a CLI process receives the turn", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

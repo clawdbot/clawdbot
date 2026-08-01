@@ -239,6 +239,8 @@ export async function runEmbeddedFallbackCandidate(params: {
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
+        // Embedded execution reads persisted media ownership. Runtime images retain their source
+        // space so collect projections cannot be mistaken for persisted inbound-media indexes.
         images: params.currentTurnImages.images,
         imageOrder: params.currentTurnImages.imageOrder,
         abortSignal: params.runAbortSignal,

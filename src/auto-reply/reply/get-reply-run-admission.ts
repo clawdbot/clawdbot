@@ -198,6 +198,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptBody,
     transcriptCommandBody,
     media: promptMedia,
+    mediaSourceIndexes: promptMediaSourceIndexes,
     currentInboundContext,
   } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
@@ -548,6 +549,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           transcriptBody,
           transcriptCommandBody,
           media: promptMedia,
+          mediaSourceIndexes: promptMediaSourceIndexes,
           currentInboundContext,
         } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
@@ -571,6 +573,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    promptMediaSourceIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,

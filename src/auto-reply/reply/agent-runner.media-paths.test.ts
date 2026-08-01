@@ -659,6 +659,7 @@ describe("runReplyAgent media path normalization", () => {
         },
       }),
       sessionCtx,
+      sessionMediaSourceSpace: "inbound-media",
       typingSignals: {
         mode: "instant",
         shouldStartImmediately: true,
@@ -725,6 +726,7 @@ describe("runReplyAgent media path normalization", () => {
         AccountId: "default",
         MessageSid: "msg-1",
       } as unknown as TemplateContext,
+      sessionMediaSourceSpace: "inbound-media",
       typingSignals: {
         mode: "instant",
         shouldStartImmediately: true,

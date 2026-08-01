@@ -1911,6 +1911,9 @@ describe("followup queue collect routing", () => {
         }),
         images: [firstImage],
         imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [0], space: "inbound-media" },
+        media: [{ path: "/tmp/first.png", contentType: "image/png", kind: "image" }],
+        mediaSourceIndexes: [0],
       },
       settings,
     );
@@ -1924,6 +1927,9 @@ describe("followup queue collect routing", () => {
         }),
         images: [secondImage],
         imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [0], space: "inbound-media" },
+        media: [{ path: "/tmp/second.png", contentType: "image/png", kind: "image" }],
+        mediaSourceIndexes: [0],
       },
       settings,
     );
@@ -1933,6 +1939,147 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.images).toEqual([firstImage, secondImage]);
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
+    expect(calls[0]?.imageSourceMapping).toEqual({
+      indexes: [0, 1],
+      space: "run-media",
+    });
+    expect(calls[0]?.mediaSourceIndexes).toBeUndefined();
+    expect(calls[0]?.media?.map((fact) => fact.path)).toEqual([
+      "/tmp/first.png",
+      "/tmp/second.png",
+    ]);
+  });
+
+  it("offsets collected image sources across preceding media-only runs", async () => {
+    const key = `test-collect-media-offset-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+    const image = { type: "image" as const, data: "image", mimeType: "image/png" };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "document first",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        media: [{ path: "/tmp/context.pdf", contentType: "application/pdf", kind: "document" }],
+        mediaSourceIndexes: [0],
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "image second",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        images: [image],
+        imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [1], space: "inbound-media" },
+        media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" }],
+        mediaSourceIndexes: [1],
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.imageSourceMapping).toEqual({ indexes: [1], space: "run-media" });
+    expect(calls[0]?.media?.map((fact) => fact.path)).toEqual([
+      "/tmp/context.pdf",
+      "/tmp/photo.png",
+    ]);
+  });
+
+  it("drops a misaligned collected source mapping instead of retrying the batch", async () => {
+    const key = `test-collect-invalid-image-source-mapping-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "invalid image mapping",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        images: [{ type: "image", data: "image", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        imageSourceMapping: { indexes: [0, 1], space: "run-media" },
+        media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" }],
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.imageSourceMapping).toEqual({ indexes: [0], space: "run-media" });
+    expect(calls[0]?.imageSourceMappingInvalid).toBe(true);
+    expect(calls[0]?.media?.map((fact) => fact.path)).toEqual(["/tmp/photo.png"]);
+    expect(calls[0]?.media?.[0]?.hydrationSuppressed).toBeUndefined();
+  });
+
+  it("preserves media hydration when collected source mapping has no image layout", async () => {
+    const key = `test-collect-missing-image-layout-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "missing image layout",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        imageSourceMapping: { indexes: [0], space: "run-media" },
+        media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" }],
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.imageSourceMapping).toBeUndefined();
+    expect(calls[0]?.imageSourceMappingInvalid).toBe(true);
+    expect(calls[0]?.media?.map((fact) => fact.path)).toEqual(["/tmp/photo.png"]);
+    expect(calls[0]?.media?.[0]?.hydrationSuppressed).toBeUndefined();
+  });
+
+  it("synthesizes inline slots for collected images without an image order", async () => {
+    const key = `test-collect-images-without-order-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "legacy image",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        images: [{ type: "image", data: "image", mimeType: "image/png" }],
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.images).toHaveLength(1);
+    expect(calls[0]?.imageOrder).toEqual(["inline"]);
   });
 
   it("splits collect batches when sender authorization changes", async () => {

@@ -5,12 +5,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ImageContent } from "../../llm/types.js";
+import { logError } from "../../logger.js";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import { orderSourceIndexedEntries } from "../../media/image-source-indexes.js";
+import { normalizeMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
+import type { RuntimePromptImageFactSpace } from "../../media/runtime-prompt-image-provenance.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
@@ -28,6 +33,11 @@ type OrderedTurnImage = {
   sequence: number;
 };
 
+type OrderedImageSlot = {
+  kind: PromptImageOrderEntry;
+  sourceIndex?: number;
+};
+
 function isGenericMediaType(mediaType: string | undefined): boolean {
   if (!mediaType) {
     return true;
@@ -36,8 +46,7 @@ function isGenericMediaType(mediaType: string | undefined): boolean {
   return normalized === "application/octet-stream" || normalized === "binary/octet-stream";
 }
 
-/** Resolves image media types from current-turn attachment metadata or filenames. */
-function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): string | undefined {
+function resolveNativeImageMediaType(pathValue: unknown, mediaType?: unknown): string | undefined {
   const mediaPath = normalizeOptionalString(pathValue);
   if (!mediaPath) {
     return undefined;
@@ -53,10 +62,15 @@ function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): 
   return inferredType?.startsWith("image/") ? inferredType : undefined;
 }
 
-function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
-  return normalizeAttachments(ctx).flatMap((attachment) => {
+function collectCurrentImageAttachments(
+  attachments: ReturnType<typeof normalizeAttachments>,
+): CurrentImageAttachment[] {
+  return attachments.flatMap((attachment) => {
+    if (attachment.hydrationSuppressed === true) {
+      return [];
+    }
     const mediaPath = normalizeOptionalString(attachment.path);
-    const mediaType = resolveCurrentImageMediaType(attachment.path, attachment.mime);
+    const mediaType = resolveNativeImageMediaType(attachment.path, attachment.mime);
     if (mediaPath && mediaType) {
       return [
         {
@@ -94,70 +108,104 @@ function createUndescribedImageContext(
   };
 }
 
+function normalizeOrderedImageSlots(params: {
+  images: ImageContent[] | undefined;
+  imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: readonly (number | undefined)[];
+}): { slots: OrderedImageSlot[]; sourceMappingInvalid: boolean } {
+  const images = params.images ?? [];
+  const imageOrder = params.imageOrder ?? images.map(() => "inline" as const);
+  let slots = imageOrder.map((kind, index) => ({
+    kind,
+    sourceIndex: params.imageSourceIndexes?.[index],
+  }));
+  let sourceMappingInvalid = false;
+  if (params.imageSourceIndexes && params.imageSourceIndexes.length !== imageOrder.length) {
+    logError(
+      `Image source slot count ${params.imageSourceIndexes.length} does not match image order count ${imageOrder.length}`,
+    );
+    sourceMappingInvalid = true;
+  }
+  const inlineSlotCount = imageOrder.filter((entry) => entry === "inline").length;
+  if (inlineSlotCount !== images.length) {
+    const mismatchMessage = `Inline image count ${images.length} does not match image order slot count ${inlineSlotCount}`;
+    if (images.length === 0) {
+      logVerbose(`${mismatchMessage}; leaving fact-owned slots to runner hydration`);
+    } else if (params.imageSourceIndexes) {
+      logError(mismatchMessage);
+    } else {
+      logVerbose(mismatchMessage);
+    }
+    sourceMappingInvalid ||= params.imageSourceIndexes !== undefined;
+    let remainingInlineSlots = images.length;
+    slots = slots.filter((slot) => {
+      if (slot.kind === "offloaded") {
+        return true;
+      }
+      if (remainingInlineSlots === 0) {
+        return false;
+      }
+      remainingInlineSlots -= 1;
+      return true;
+    });
+    slots.push(
+      ...Array.from({ length: remainingInlineSlots }, () => ({
+        kind: "inline" as const,
+        sourceIndex: undefined,
+      })),
+    );
+  }
+  return { slots, sourceMappingInvalid };
+}
+
 function appendOrderedImages(params: {
   entries: OrderedTurnImage[];
   images: ImageContent[] | undefined;
-  imageOrder?: PromptImageOrderEntry[];
+  slots?: readonly OrderedImageSlot[];
   sourceIndex?: number;
-}) {
+}): void {
   const images = params.images ?? [];
-  if (!params.imageOrder || params.imageOrder.length === 0) {
-    for (const image of images) {
-      params.entries.push({
-        image,
-        imageOrder: "inline",
-        sourceIndex: params.sourceIndex,
-        sequence: params.entries.length,
-      });
-    }
-    return;
-  }
-
+  const slots: readonly OrderedImageSlot[] =
+    params.slots ?? images.map(() => ({ kind: "inline" as const }));
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder) {
+  for (const slot of slots) {
+    const mappedSourceIndex = slot.sourceIndex;
     params.entries.push({
-      image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
-      imageOrder,
-      sourceIndex: params.sourceIndex,
-      sequence: params.entries.length,
-    });
-  }
-  while (inlineIndex < images.length) {
-    params.entries.push({
-      image: images[inlineIndex++],
-      imageOrder: "inline",
-      sourceIndex: params.sourceIndex,
+      image: slot.kind === "inline" ? images[inlineIndex++] : undefined,
+      imageOrder: slot.kind,
+      sourceIndex: mappedSourceIndex ?? params.sourceIndex,
       sequence: params.entries.length,
     });
   }
 }
 
-function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
+function resolveMergedTurnImages(
+  entries: OrderedTurnImage[],
+  sourceMappingInvalid: boolean,
+  imageFactIndexSpace?: RuntimePromptImageFactSpace,
+): {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   imageSourceIndexes?: Array<number | undefined>;
+  imageSourceMappingInvalid?: true;
 } {
   if (entries.length === 0) {
-    return {};
+    return sourceMappingInvalid ? { imageSourceMappingInvalid: true } : {};
   }
-  const merged = entries.toSorted((left, right) => {
-    if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
-      return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
-    }
-    if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-      return left.sequence - right.sequence;
-    }
-    return left.sequence - right.sequence;
-  });
-  const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
-  const result = {
+  const merged = orderSourceIndexedEntries(entries);
+  const images = finalizeRuntimePromptImages(
+    merged.flatMap((entry) =>
+      entry.image ? [{ image: entry.image, factIndex: entry.sourceIndex ?? null }] : [],
+    ),
+    imageFactIndexSpace,
+  ).images;
+  const imageSourceIndexes = merged.map((entry) => entry.sourceIndex);
+  return {
     ...(images.length > 0 ? { images } : {}),
     imageOrder: merged.map((entry) => entry.imageOrder),
+    ...(imageSourceIndexes.some((index) => index !== undefined) ? { imageSourceIndexes } : {}),
+    ...(sourceMappingInvalid ? { imageSourceMappingInvalid: true as const } : {}),
   };
-  Object.defineProperty(result, "imageSourceIndexes", {
-    value: merged.map((entry) => entry.sourceIndex),
-  });
-  return result;
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
@@ -166,18 +214,27 @@ export async function resolveCurrentTurnImages(params: {
   cfg: OpenClawConfig;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: readonly (number | undefined)[];
+  sourceMediaCount?: number;
+  sourceMappingInvalid?: boolean;
+  invalidSourceMappingPolicy?: "hydrate" | "infer-inline";
   extractedFileImages?: ExtractedFileImage[];
+  imageFactIndexSpace?: RuntimePromptImageFactSpace;
 }): Promise<{
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   imageSourceIndexes?: Array<number | undefined>;
+  imageSourceMappingInvalid?: true;
 }> {
   const entries: OrderedTurnImage[] = [];
-  appendOrderedImages({
-    entries,
+  const initialSlots = normalizeOrderedImageSlots({
     images: params.images,
     imageOrder: params.imageOrder,
+    imageSourceIndexes: params.imageSourceIndexes,
   });
+  appendOrderedImages({ entries, images: params.images, slots: initialSlots.slots });
+  let sourceMappingInvalid =
+    initialSlots.sourceMappingInvalid || params.sourceMappingInvalid === true;
   for (const image of params.extractedFileImages ?? []) {
     appendOrderedImages({
       entries,
@@ -186,16 +243,56 @@ export async function resolveCurrentTurnImages(params: {
     });
   }
 
-  const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
+  const normalizedAttachments = normalizeAttachments(params.ctx);
+  const sourceMediaCount = params.sourceMediaCount ?? normalizeMediaFacts(params.ctx.media).length;
+  for (const entry of entries) {
+    const sourceIndex = entry.sourceIndex;
+    if (sourceIndex !== undefined && (sourceIndex < 0 || sourceIndex >= sourceMediaCount)) {
+      logError(
+        `Image source index ${sourceIndex} does not exist in the current session media space`,
+      );
+      sourceMappingInvalid = true;
+      entry.sourceIndex = undefined;
+    }
+  }
+  const currentImageAttachments = collectCurrentImageAttachments(normalizedAttachments);
   if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnImages(entries, sourceMappingInvalid, params.imageFactIndexSpace);
   }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
+  // The hydrate policy leaves unsourced facts eligible for the native hydration path below.
+  const inferInlineOwnership =
+    sourceMappingInvalid && params.invalidSourceMappingPolicy === "infer-inline";
+  if (inferInlineOwnership) {
+    const claimedIndexes = new Set(
+      entries.flatMap((entry) => (entry.sourceIndex === undefined ? [] : [entry.sourceIndex])),
+    );
+    const unclaimedAttachments = currentImageAttachments.filter(
+      (attachment) =>
+        !claimedIndexes.has(attachment.index) && !describedImageIndexes.has(attachment.index),
+    );
+    let unclaimedIndex = 0;
+    for (const entry of entries) {
+      if (!entry.image || entry.sourceIndex !== undefined) {
+        continue;
+      }
+      const attachment = unclaimedAttachments[unclaimedIndex++];
+      if (!attachment) {
+        break;
+      }
+      entry.sourceIndex = attachment.index;
+    }
+  }
+  const representedImageIndexes = new Set(
+    entries.flatMap((entry) => (entry.sourceIndex === undefined ? [] : [entry.sourceIndex])),
+  );
   const undescribedImageAttachments = currentImageAttachments.filter(
-    (attachment) => !describedImageIndexes.has(attachment.index),
+    (attachment) =>
+      !describedImageIndexes.has(attachment.index) &&
+      !representedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnImages(entries, sourceMappingInvalid, params.imageFactIndexSpace);
   }
 
   try {
@@ -216,7 +313,7 @@ export async function resolveCurrentTurnImages(params: {
       logVerbose(
         `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
-      return resolveMergedTurnImages(entries);
+      return resolveMergedTurnImages(entries, sourceMappingInvalid, params.imageFactIndexSpace);
     }
     for (const [index, image] of images.entries()) {
       appendOrderedImages({
@@ -225,11 +322,11 @@ export async function resolveCurrentTurnImages(params: {
         sourceIndex: undescribedImageAttachments[index]?.index,
       });
     }
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnImages(entries, sourceMappingInvalid, params.imageFactIndexSpace);
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnImages(entries, sourceMappingInvalid, params.imageFactIndexSpace);
   }
 }

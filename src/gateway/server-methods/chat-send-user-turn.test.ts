@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -8,7 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
-import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
+import {
+  detectAndLoadPromptImages,
+  hydratePromptMediaMessages,
+} from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -271,6 +275,71 @@ describe("prepareChatSendUserTurn", () => {
     await expect(readInput()).resolves.toMatchObject({
       mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
     });
+  });
+
+  it("keeps chat.send offloaded images hydratable for CLI backends", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-send-offloaded-cli-"));
+    const id = `chat-send-offloaded-${process.pid}-${Date.now()}.png`;
+    const imagePath = path.join(resolveStateDir(), "media", "inbound", id);
+    const imageBuffer = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 });
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, imageBuffer);
+    try {
+      const { controller } = createUserTurnInputController();
+      const mediaRef = `media://inbound/${id}`;
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          clientInfo: createClientInfo(),
+          normalizedAttachments: [{}],
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-cli-image",
+          sessionKey: "agent:main:main",
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({
+          imageOrder: ["offloaded"],
+          offloadedRefs: [
+            {
+              mediaRef,
+              id: "large.png",
+              path: imagePath,
+              kind: "image",
+              mimeType: "image/png",
+              label: "large.png",
+              sizeBytes: imageBuffer.length,
+            },
+          ],
+          parsedMessage: `inspect\n[media attached: ${mediaRef}]`,
+        }),
+        client: null,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      const hydrated = await detectAndLoadPromptImages({
+        prompt: prepared.ctx.Body ?? "",
+        media: prepared.replyOptionMedia,
+        workspaceDir: root,
+        model: { input: ["text", "image"] },
+        imageOrder: ["offloaded"],
+        localRoots: [resolveStateDir()],
+      });
+
+      expect(hydrated.images).toEqual([
+        { type: "image", data: imageBuffer.toString("base64"), mimeType: "image/png" },
+      ]);
+      expect(hydrated.failedMediaCount).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(imagePath, { force: true });
+    }
   });
 
   it.each([

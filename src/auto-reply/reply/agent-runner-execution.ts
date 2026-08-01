@@ -30,6 +30,7 @@ import {
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logError } from "../../logger.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
@@ -198,12 +199,35 @@ async function executeAgentTurnInternalWithRetryState(
           requesterSenderE164: params.followupRun.run.senderE164,
         }),
       );
+    const imageSourceMapping = params.followupRun.imageSourceMapping;
+    const hasFollowupImageLayout =
+      params.followupRun.images !== undefined ||
+      params.followupRun.imageOrder !== undefined ||
+      imageSourceMapping !== undefined;
+    let imageSourceIndexes = hasFollowupImageLayout ? imageSourceMapping?.indexes : undefined;
+    let sourceMappingInvalid = params.followupRun.imageSourceMappingInvalid === true;
+    // Direct runs declare inbound-media; queued runs normalize to run-media. Never trust a
+    // wrong-space index, but degrade to ownership inference so an internal contract bug does not
+    // turn an otherwise recoverable user message into a terminal failure.
+    if (imageSourceMapping && imageSourceMapping.space !== params.sessionMediaSourceSpace) {
+      logError(
+        `Image source space ${imageSourceMapping.space} does not match session media space ${params.sessionMediaSourceSpace}`,
+      );
+      imageSourceIndexes = undefined;
+      sourceMappingInvalid = true;
+    }
     currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
       resolveCurrentTurnImages({
         ctx: params.sessionCtx,
         cfg: runtimeConfig,
-        images: params.followupRun.images ?? params.opts?.images,
-        imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
+        images: hasFollowupImageLayout ? params.followupRun.images : params.opts?.images,
+        imageOrder: hasFollowupImageLayout
+          ? params.followupRun.imageOrder
+          : params.opts?.imageOrder,
+        imageSourceIndexes,
+        sourceMappingInvalid,
+        invalidSourceMappingPolicy: "infer-inline",
+        imageFactIndexSpace: params.sessionMediaSourceSpace,
       }),
     );
   } catch (error) {

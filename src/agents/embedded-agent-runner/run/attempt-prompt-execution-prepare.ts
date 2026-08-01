@@ -2,6 +2,7 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OwnedSessionTranscriptCacheSnapshot } from "../../../config/sessions/transcript-write-context.js";
 import { readPersistedMediaFacts } from "../../../media/media-facts.js";
+import { readRuntimePromptImageProvenance } from "../../../media/runtime-prompt-image-provenance.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -72,12 +73,21 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     attempt.userTurnTranscriptRecorder?.message ??
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
+  const imageProvenance = readRuntimePromptImageProvenance(attempt.images);
+  // A collected run indexes its compact runtime media projection, while the recorder persists the
+  // original inbound facts (for example, transcribed audio before an image). Never apply run-media
+  // indexes to that persisted array; omission lets canonical layout/attachment inference recover.
+  const existingImageFactIndexes =
+    persistedMedia.length > 0 && imageProvenance?.space === "run-media"
+      ? undefined
+      : imageProvenance?.factIndexes;
 
   return await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
     existingImages: attempt.images,
+    ...(existingImageFactIndexes ? { existingImageFactIndexes } : {}),
     imageOrder: attempt.imageOrder,
     media: persistedMedia.length > 0 ? persistedMedia : attempt.media,
     mediaImageLayout: persistedMessage

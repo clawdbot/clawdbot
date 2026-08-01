@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
+  createFollowupRun,
   createMinimalRunAgentTurnParams,
   createMockReplyOperation,
   setupAgentRunnerExecutionTestState,
@@ -10,6 +11,70 @@ const state = setupAgentRunnerExecutionTestState();
 const { executeAgentTurn } = await import("./agent-runner-execution.js");
 
 describe("executeAgentTurn contract", () => {
+  it("drops mismatched-space ownership and continues with inference", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { durationMs: 1 },
+    });
+    const followupRun = {
+      ...createFollowupRun(),
+      images: [{ type: "image" as const, data: "image", mimeType: "image/png" }],
+      imageOrder: ["inline" as const],
+      imageSourceMapping: { indexes: [0], space: "inbound-media" as const },
+    };
+
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+          media: [{ path: "/tmp/photo.png", contentType: "image/png" }],
+        },
+        sessionMediaSourceSpace: "run-media",
+      }),
+    );
+
+    expect(state.resolveCurrentTurnImagesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageSourceIndexes: undefined,
+        sourceMappingInvalid: true,
+        invalidSourceMappingPolicy: "infer-inline",
+      }),
+    );
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("passes run-media image indexes through the execution boundary", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { durationMs: 1 },
+    });
+    const followupRun = {
+      ...createFollowupRun(),
+      images: [{ type: "image" as const, data: "image", mimeType: "image/png" }],
+      imageOrder: ["inline" as const],
+      imageSourceMapping: { indexes: [0], space: "run-media" as const },
+      media: [{ path: "/tmp/photo.png", contentType: "image/png", kind: "image" as const }],
+    };
+
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+          media: followupRun.media,
+        },
+        sessionMediaSourceSpace: "run-media",
+      }),
+    );
+
+    expect(state.resolveCurrentTurnImagesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ imageSourceIndexes: [0] }),
+    );
+  });
+
   it("returns one closed settled result with winner and fallback facts", async () => {
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "done" }],

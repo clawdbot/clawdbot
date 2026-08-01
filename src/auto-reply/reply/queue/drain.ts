@@ -6,6 +6,7 @@ import { stableStringify } from "../../../agents/stable-stringify.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { resolveProjectedImageSourceIndexes } from "../../../media/image-source-indexes.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -290,24 +291,62 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 
 function collectQueuedPromptMedia(
   items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
+): Pick<
+  FollowupRun,
+  "images" | "imageOrder" | "imageSourceMapping" | "imageSourceMappingInvalid" | "media"
+> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+  const imageSourceIndexes: NonNullable<FollowupRun["imageSourceMapping"]>["indexes"] = [];
   const media: NonNullable<FollowupRun["media"]> = [];
+  let imageSourceMappingInvalid = false;
+  let mediaOffset = 0;
   for (const item of items) {
+    const itemImageOrder = item.imageOrder ?? item.images?.map(() => "inline" as const);
     if (item.images) {
       images.push(...item.images);
     }
-    if (item.imageOrder) {
-      imageOrder.push(...item.imageOrder);
+    if (item.imageSourceMapping && !itemImageOrder) {
+      defaultRuntime.error?.(
+        "collect queue image source mapping has no image layout; continuing without positional ownership",
+      );
+      imageSourceMappingInvalid = true;
+    }
+    imageSourceMappingInvalid ||= item.imageSourceMappingInvalid === true;
+    if (itemImageOrder) {
+      imageOrder.push(...itemImageOrder);
+      const sourceResult = resolveProjectedImageSourceIndexes({
+        imageSourceMapping: item.imageSourceMapping,
+        imageOrderLength: itemImageOrder.length,
+        projectedMediaSourceIndexes: item.mediaSourceIndexes,
+        projectedMediaLength: item.media?.length ?? 0,
+      });
+      if (sourceResult.kind === "invalid") {
+        defaultRuntime.error?.(
+          `collect queue image source mapping is invalid; continuing without positional ownership: ${sourceResult.reason}`,
+        );
+        imageSourceMappingInvalid = true;
+      }
+      const projectedIndexes = sourceResult.kind === "none" ? undefined : sourceResult.indexes;
+      imageSourceIndexes.push(
+        ...itemImageOrder.map((_, index) => {
+          const sourceIndex = projectedIndexes?.[index];
+          return sourceIndex === undefined ? undefined : sourceIndex + mediaOffset;
+        }),
+      );
     }
     if (item.media) {
       media.push(...item.media);
     }
+    mediaOffset += item.media?.length ?? 0;
   }
   return {
     ...(images.length > 0 ? { images } : {}),
     ...(imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(imageSourceIndexes.some((index) => index !== undefined)
+      ? { imageSourceMapping: { indexes: imageSourceIndexes, space: "run-media" as const } }
+      : {}),
+    ...(imageSourceMappingInvalid ? { imageSourceMappingInvalid: true as const } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
 }

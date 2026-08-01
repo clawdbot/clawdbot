@@ -13,6 +13,11 @@ import {
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logError } from "../../logger.js";
+import {
+  resolveInlineImageFactIndexes,
+  resolveProjectedImageSourceIndexes,
+} from "../../media/image-source-indexes.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -84,6 +89,27 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  // Unlike embedded execution, CLI must use the pre-persistence runtime projection: collect merges
+  // several recorders without merging their mediaImageLayout slots, and the mapping also drives
+  // the second hydration before a recorder layout is guaranteed to be materialized.
+  const cliSourceResult = resolveProjectedImageSourceIndexes({
+    imageSourceMapping: params.currentTurnImages.imageSourceIndexes
+      ? {
+          indexes: params.currentTurnImages.imageSourceIndexes,
+          space: turn.sessionMediaSourceSpace,
+        }
+      : undefined,
+    imageOrderLength: params.currentTurnImages.imageOrder?.length ?? 0,
+    projectedMediaSourceIndexes: turn.followupRun.mediaSourceIndexes,
+    projectedMediaLength: turn.followupRun.media?.length ?? 0,
+  });
+  if (cliSourceResult.kind === "invalid") {
+    logError(
+      `CLI image source projection is invalid; falling back to positional inference: ${cliSourceResult.reason}`,
+    );
+  }
+  const cliImageSourceIndexes =
+    cliSourceResult.kind === "mapped" ? cliSourceResult.indexes : undefined;
   const cliSessionBinding = getCliSessionBinding(
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
@@ -378,6 +404,10 @@ export async function runCliFallbackCandidate(params: {
               ],
             images: params.currentTurnImages.images,
             imageOrder: params.currentTurnImages.imageOrder,
+            imageFactIndexes: resolveInlineImageFactIndexes({
+              imageOrder: params.currentTurnImages.imageOrder,
+              imageSourceIndexes: cliImageSourceIndexes,
+            }),
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,

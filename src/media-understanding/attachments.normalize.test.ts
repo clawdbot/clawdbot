@@ -86,4 +86,24 @@ describe("normalizeAttachments", () => {
       }),
     ]);
   });
+
+  it("preserves explicit hydration suppression on normalized attachments", () => {
+    expect(
+      normalizeAttachments({
+        media: [
+          {
+            path: "/tmp/described.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        path: "/tmp/described.png",
+        index: 0,
+        hydrationSuppressed: true,
+      }),
+    ]);
+  });
 });

@@ -174,6 +174,8 @@ export type RunCliAgentParams = {
   bootstrapContextRunKind?: BootstrapContextRunKind;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Media fact identity for each inline image, aligned with `images`. */
+  imageFactIndexes?: readonly (number | null)[];
   /** Ordered facts represented by attachment text in the current prompt. */
   media?: MediaFact[];
   skillsSnapshot?: SkillSnapshot;

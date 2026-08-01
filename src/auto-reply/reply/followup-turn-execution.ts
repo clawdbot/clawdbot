@@ -1,5 +1,7 @@
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logError } from "../../logger.js";
+import { resolveProjectedImageSourceIndexes } from "../../media/image-source-indexes.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -277,11 +279,40 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      const sourceMapping = turn.queued.imageSourceMapping;
+      const imageOrderLength = turn.queued.imageOrder?.length ?? turn.queued.images?.length ?? 0;
+      const sourceResult = resolveProjectedImageSourceIndexes({
+        imageSourceMapping: sourceMapping,
+        imageOrderLength,
+        projectedMediaSourceIndexes: turn.queued.mediaSourceIndexes,
+        projectedMediaLength: turn.queued.media?.length ?? 0,
+      });
+      const sourceMappingInvalid =
+        turn.queued.imageSourceMappingInvalid === true || sourceResult.kind === "invalid";
+      if (sourceResult.kind === "invalid") {
+        logError(
+          `followup image source mapping is invalid; continuing without positional ownership: ${sourceResult.reason}`,
+        );
+      }
+      const queuedImageSourceIndexes =
+        sourceResult.kind === "none" ? undefined : sourceResult.indexes;
+      if (sourceMappingInvalid) {
+        turn.queued.imageSourceMappingInvalid = true;
+      }
+      if (queuedImageSourceIndexes) {
+        turn.queued.imageSourceMapping = {
+          indexes: queuedImageSourceIndexes,
+          space: "run-media",
+        };
+      }
       execution = await executeAgentTurn({
         commandBody: turn.queued.prompt,
         transcriptCommandBody: turn.queued.transcriptPrompt,
+        // Preserve queued object identity: executeAgentTurn deliberately writes a probe-rechecked
+        // runnable run back through followupRun.run for later accounting and delivery.
         followupRun: turn.queued,
         sessionCtx,
+        sessionMediaSourceSpace: "run-media",
         replyOperation: turn.operation,
         opts: progressOpts,
         typingSignals,

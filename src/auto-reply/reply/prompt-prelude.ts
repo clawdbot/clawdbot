@@ -36,6 +36,8 @@ function buildReplyPromptBodies(params: {
   mediaNote?: string;
   mediaReplyHint?: string;
   media?: MediaFact[];
+  /** Index in the combined inbound list `[ctx.media, supplied media]` for each prompt fact. */
+  mediaSourceIndexes?: Array<number | undefined>;
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
@@ -55,7 +57,13 @@ function buildReplyPromptBodies(params: {
   const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
   const mediaNote = generatedMedia.text;
-  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
+  const suppliedMedia = normalizeMediaFacts(params.media);
+  const media = [...generatedMedia.media, ...suppliedMedia];
+  const suppliedSourceOffset = normalizeMediaFacts(params.ctx.media).length;
+  const mediaSourceIndexes = [
+    ...generatedMedia.mediaSourceIndexes,
+    ...suppliedMedia.map((_, index) => suppliedSourceOffset + index),
+  ];
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
@@ -75,7 +83,7 @@ function buildReplyPromptBodies(params: {
   return {
     mediaNote,
     mediaReplyHint,
-    ...(media.length > 0 ? { media } : {}),
+    ...(media.length > 0 ? { media, mediaSourceIndexes } : {}),
     prefixedCommandBody: annotateInterSessionPromptText(
       prefixedCommandBodyRaw,
       params.sessionCtx.InputProvenance,

@@ -30,6 +30,7 @@ export type MediaAttachment = {
   workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
+  hydrationSuppressed?: boolean;
 };
 
 export type MediaUnderstandingOutput = {
