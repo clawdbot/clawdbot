@@ -931,6 +931,172 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
+  it("rebuilds policy refreshes when recoverable install records are missing from plugins", async () => {
+    const stateDir = makeTempDir();
+    const pathPluginDir = path.join(stateDir, "plugins", "path-demo");
+    const npmPluginDir = path.join(stateDir, "plugins", "npm-demo");
+    fs.mkdirSync(pathPluginDir, { recursive: true });
+    fs.mkdirSync(npmPluginDir, { recursive: true });
+    const pathCandidate = createCandidate(pathPluginDir, { id: "path-demo" });
+    const npmCandidate = createCandidate(npmPluginDir, { id: "npm-demo" });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const installRecords = {
+      "path-demo": {
+        source: "path" as const,
+        sourcePath: pathPluginDir,
+        installPath: pathPluginDir,
+        spec: pathPluginDir,
+      },
+      "npm-demo": {
+        source: "npm" as const,
+        spec: "@vendor/npm-demo@1.2.3",
+        installPath: npmPluginDir,
+        resolvedName: "@vendor/npm-demo",
+        resolvedVersion: "1.2.3",
+      },
+    };
+    const initial = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [pathCandidate, npmCandidate],
+      env,
+      installRecords,
+    });
+    await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [pathCandidate, npmCandidate],
+      env,
+      config: {
+        plugins: {
+          entries: {
+            "path-demo": {
+              enabled: false,
+            },
+            "npm-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      policyPluginIds: [],
+    });
+
+    expectPluginIds(refreshed, ["path-demo", "npm-demo"]);
+    expectPluginFields(refreshed, "path-demo", { enabled: false });
+    expectPluginFields(refreshed, "npm-demo", { enabled: false });
+    expectInstallRecord(refreshed, "path-demo", { source: "path", installPath: pathPluginDir });
+    expectInstallRecord(refreshed, "npm-demo", { source: "npm", installPath: npmPluginDir });
+  });
+
+  it("keeps policy refreshes on the fast path for unavailable install records", async () => {
+    const stateDir = makeTempDir();
+    const missingPluginDir = path.join(stateDir, "plugins", "missing");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const installRecords = {
+      missing: {
+        source: "npm" as const,
+        spec: "missing-plugin@1.0.0",
+        installPath: missingPluginDir,
+      },
+    };
+    await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "policy fast-path sentinel",
+        },
+      ],
+      env,
+      installRecords,
+    });
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [],
+      env,
+      policyPluginIds: [],
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "missing", {
+      source: "npm",
+      spec: "missing-plugin@1.0.0",
+      installPath: missingPluginDir,
+    });
+    expect(refreshed.diagnostics).toEqual([
+      {
+        level: "warn",
+        message: "policy fast-path sentinel",
+      },
+    ]);
+  });
+
+  it("keeps policy refreshes on the fast path for existing retained paths discovery cannot materialize", async () => {
+    const stateDir = makeTempDir();
+    const invalidPluginDir = path.join(stateDir, "plugins", "invalid");
+    fs.mkdirSync(invalidPluginDir, { recursive: true });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const installRecords = {
+      invalid: {
+        source: "npm" as const,
+        spec: "invalid-plugin@1.0.0",
+        installPath: invalidPluginDir,
+      },
+    };
+    await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "existing-path fast-path sentinel",
+        },
+      ],
+      env,
+      installRecords,
+    });
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      policyPluginIds: [],
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "invalid", {
+      source: "npm",
+      spec: "invalid-plugin@1.0.0",
+      installPath: invalidPluginDir,
+    });
+    expect(refreshed.diagnostics).toEqual([
+      {
+        level: "warn",
+        message: "existing-path fast-path sentinel",
+      },
+    ]);
+  });
+
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(

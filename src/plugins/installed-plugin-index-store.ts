@@ -469,6 +469,26 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
+function hasCompletePersistedInstallRecordView(
+  persisted: InstalledPluginIndex,
+  params: RefreshInstalledPluginIndexParams,
+): boolean {
+  const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
+  const missingInstallRecordPluginIds = Object.keys(persisted.installRecords ?? {}).filter(
+    (pluginId) => !pluginIds.has(pluginId),
+  );
+  if (missingInstallRecordPluginIds.length === 0) {
+    return true;
+  }
+  const current = loadInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
+  const materializedPluginIds = new Set(current.plugins.map((plugin) => plugin.pluginId));
+  return missingInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId));
+}
+
 function canRefreshPersistedPolicyState(
   persisted: InstalledPluginIndex | null,
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
@@ -490,6 +510,9 @@ function canRefreshPersistedPolicyState(
     params.installRecords &&
     hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
   ) {
+    return false;
+  }
+  if (!hasCompletePersistedInstallRecordView(persisted, params)) {
     return false;
   }
   return hasPolicyRefreshTargets(persisted, params.policyPluginIds);
