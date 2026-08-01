@@ -573,6 +573,7 @@ async function startLocalModeTui(
         OPENCLAW_HOME: homeDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
         OPENCLAW_AGENT_DIR: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
         XDG_CONFIG_HOME: xdgConfigHome,

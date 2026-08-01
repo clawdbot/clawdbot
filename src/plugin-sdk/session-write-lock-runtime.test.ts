@@ -1,18 +1,33 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SessionWriteLockStaleError,
   SessionWriteLockTimeoutError,
 } from "../agents/session-write-lock-error.js";
 import { drainSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
+import { readSessionLockProcessStartTime } from "../infra/session-lock-file-inspection.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   acquireSessionWriteLock,
   drainSessionFileWriteLockStateForTest,
 } from "./session-write-lock-runtime.js";
+
+const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
+
+function addedSignalListener(
+  signal: (typeof CLEANUP_SIGNALS)[number],
+  before: Set<(...args: unknown[]) => void>,
+): (() => void) | undefined {
+  return process
+    .listeners(signal)
+    .find((listener) => !before.has(listener as (...args: unknown[]) => void)) as
+    | (() => void)
+    | undefined;
+}
 
 describe("Plugin SDK session write-lock adapter", () => {
   let root = "";
@@ -40,16 +55,131 @@ describe("Plugin SDK session write-lock adapter", () => {
     await expect(fs.access(`${sessionFile}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("synchronously releases file sidecars on termination signals", async () => {
-    const sessionFile = path.join(root, "session.jsonl");
+  for (const signal of CLEANUP_SIGNALS) {
+    it(`synchronously releases sidecars for ${signal} without removing peer listeners`, async () => {
+      const sessionFile = path.join(root, `${signal}.jsonl`);
+      const peer = () => {};
+      process.on(signal, peer);
+      const before = new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      try {
+        await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        const cleanup = addedSignalListener(signal, before);
+        expect(cleanup).toBeDefined();
+
+        cleanup?.();
+
+        await expect(fs.access(`${sessionFile}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+        await drainSessionFileWriteLockStateForTest();
+        expect(new Set(process.listeners(signal))).toEqual(before);
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        kill.mockRestore();
+        process.off(signal, peer);
+      }
+    });
+  }
+
+  it("does not accumulate cleanup listeners across drain cycles", async () => {
+    const prime = await acquireSessionWriteLock({
+      sessionFile: path.join(root, "listener-prime.jsonl"),
+      timeoutMs: 500,
+    });
+    await prime.release();
+    await drainSessionFileWriteLockStateForTest();
+    const signalCounts = CLEANUP_SIGNALS.map((signal) => process.listenerCount(signal));
+    const exitCount = process.listenerCount("exit");
+
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      const lock = await acquireSessionWriteLock({
+        sessionFile: path.join(root, `listener-${cycle}.jsonl`),
+        timeoutMs: 500,
+      });
+      await lock.release();
+      await drainSessionFileWriteLockStateForTest();
+    }
+
+    expect(CLEANUP_SIGNALS.map((signal) => process.listenerCount(signal))).toEqual(signalCounts);
+    expect(process.listenerCount("exit")).toBe(exitCount);
+  });
+
+  it("reraises a sole termination signal after synchronous cleanup", async () => {
+    const signal = "SIGTERM";
+    const before = new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>);
+    const sessionFile = path.join(root, "sole-signal.jsonl");
     await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-    const keepAlive = () => {};
-    process.on("SIGTERM", keepAlive);
+    const cleanup = addedSignalListener(signal, before);
+    const listenerCount = vi.spyOn(process, "listenerCount").mockReturnValue(1);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     try {
-      process.emit("SIGTERM");
+      cleanup?.();
+
       await expect(fs.access(`${sessionFile}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(kill).toHaveBeenCalledWith(process.pid, signal);
     } finally {
-      process.off("SIGTERM", keepAlive);
+      listenerCount.mockRestore();
+      kill.mockRestore();
+    }
+  });
+
+  it("removes sidecars during real process exit", async () => {
+    const sessionFile = path.join(root, "process-exit.jsonl");
+    const runtimeUrl = pathToFileURL(
+      path.resolve("src/plugin-sdk/session-write-lock-runtime.ts"),
+    ).href;
+    const script = `
+      import fs from "node:fs/promises";
+      import { acquireSessionWriteLock } from ${JSON.stringify(runtimeUrl)};
+      const sessionFile = ${JSON.stringify(sessionFile)};
+      await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await fs.access(sessionFile + ".lock");
+      process.exit(0);
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    await expect(fs.access(`${sessionFile}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("watchdog expiry releases only the lock it owns", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("VITEST", "false");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sessionFile = path.join(root, "watchdog.jsonl");
+    try {
+      const expired = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, maxHoldMs: 1 });
+      await vi.advanceTimersByTimeAsync(60_001);
+      vi.useRealTimers();
+      await expect
+        .poll(
+          async () => {
+            try {
+              await fs.access(`${sessionFile}.lock`);
+              return false;
+            } catch {
+              return true;
+            }
+          },
+          { timeout: 1_000 },
+        )
+        .toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("[session-write-lock] releasing lock held for"),
+      );
+
+      const successor = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await expired.release();
+      await expect(fs.access(`${sessionFile}.lock`)).resolves.toBeUndefined();
+      await successor.release();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      warn.mockRestore();
     }
   });
 
@@ -108,18 +238,40 @@ describe("Plugin SDK session write-lock adapter", () => {
   it("cancels contended infinite admission without affecting the owner", async () => {
     const sessionFile = path.join(root, "session.jsonl");
     const held = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+    const lockPath = `${sessionFile}.lock`;
+    const originalReadFile = fs.readFile.bind(fs);
+    let observedContention: (() => void) | undefined;
+    const contention = new Promise<void>((resolve) => {
+      observedContention = resolve;
+    });
+    const readFile = vi.spyOn(fs, "readFile").mockImplementation((async (file, options) => {
+      if (file === lockPath) {
+        observedContention?.();
+      }
+      return await originalReadFile(file, options as never);
+    }) as typeof fs.readFile);
     const abort = new AbortController();
     const reason = new Error("stop requested");
-    const pending = acquireSessionWriteLock({
-      sessionFile,
-      timeoutMs: Number.POSITIVE_INFINITY,
-      signal: abort.signal,
-    });
-    abort.abort(reason);
+    try {
+      const pending = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: Number.POSITIVE_INFINITY,
+        signal: abort.signal,
+      });
+      const rejected = expect(pending).rejects.toBe(reason);
+      await contention;
+      abort.abort(reason);
 
-    await expect(pending).rejects.toBe(reason);
-    await expect(fs.access(`${sessionFile}.lock`)).resolves.toBeUndefined();
-    await held.release();
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await held.release();
+      await rejected;
+      const successor = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await successor.release();
+      await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      readFile.mockRestore();
+      await held.release();
+    }
   });
 
   it("reclaims a definitely dead file owner", async () => {
@@ -163,6 +315,31 @@ describe("Plugin SDK session write-lock adapter", () => {
     const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
     await lock.release();
   });
+
+  it.runIf(process.platform === "linux")(
+    "emits process starttime and reclaims a recycled-pid sidecar",
+    async () => {
+      const starttime = readSessionLockProcessStartTime(process.pid);
+      expect(starttime).not.toBeNull();
+      const sessionFile = path.join(root, "recycled-pid.jsonl");
+      await fs.writeFile(
+        `${sessionFile}.lock`,
+        JSON.stringify({
+          pid: process.pid,
+          starttime: (starttime ?? 0) + 1,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const payload = JSON.parse(await fs.readFile(`${sessionFile}.lock`, "utf8")) as {
+        pid: number;
+        starttime: number;
+      };
+      expect(payload).toMatchObject({ pid: process.pid, starttime });
+      await lock.release();
+    },
+  );
 
   it("reports an old live OpenClaw owner without removing it", async () => {
     const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
