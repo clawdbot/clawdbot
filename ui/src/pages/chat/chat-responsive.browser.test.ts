@@ -554,6 +554,102 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedBrowser = null;
   });
 
+  it(
+    "does not replay a retained session rail open generation after an A-B-A round trip",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(900, 700);
+      try {
+        await page.goto(realChatServer.baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              const script = document.createElement("script");
+              script.type = "module";
+              script.src = "/src/pages/chat/components/chat-session-rail.ts";
+              script.addEventListener("load", () => resolve(), { once: true });
+              script.addEventListener(
+                "error",
+                () => reject(new Error("Session rail module failed")),
+                {
+                  once: true,
+                },
+              );
+              document.head.append(script);
+            }),
+        );
+        const result = await page.evaluate(async () => {
+          localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+          const rail = document.createElement("openclaw-chat-session-rail") as HTMLElement & {
+            companion: {
+              exchanges: [];
+              pendingQuestion: null;
+              failedQuestion: null;
+              hint: null;
+              draft: string;
+            };
+            connected: boolean;
+            openRequest: number;
+            sessionKey: string;
+            updateComplete: Promise<boolean>;
+          };
+          let visibleReports = 0;
+          rail.companion = {
+            exchanges: [],
+            pendingQuestion: null,
+            failedQuestion: null,
+            hint: null,
+            draft: "What changed?",
+          };
+          rail.connected = true;
+          rail.sessionKey = "agent:main:a";
+          (
+            rail as typeof rail & { onVisibilityChange: (visible: boolean) => void }
+          ).onVisibilityChange = (visible) => {
+            if (visible) {
+              visibleReports += 1;
+            }
+          };
+          document.body.replaceChildren(rail);
+          await rail.updateComplete;
+          const mode = () =>
+            rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
+          const update = async (sessionKey: string, openRequest: number) => {
+            rail.sessionKey = sessionKey;
+            rail.openRequest = openRequest;
+            await rail.updateComplete;
+            return mode();
+          };
+
+          return {
+            modes: [
+              await update("agent:main:a", 1),
+              await update("agent:main:b", 0),
+              await update("agent:main:a", 1),
+              await update("agent:main:a", 2),
+            ],
+            storedPreference: localStorage.getItem("openclaw.chat.observerHud.display"),
+            visibleReports,
+          };
+        });
+
+        expect(result).toEqual({
+          modes: ["expanded", "pill", "pill", "expanded"],
+          storedPreference: "pill",
+          visibleReports: 2,
+        });
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it.each([
     [320, 568],
     [1366, 900],

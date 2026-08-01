@@ -49,6 +49,9 @@ function unreadFinalDigest(digest: SessionObserverDigest, lastReadAt?: number): 
 export class ChatSessionRailState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
+  // The pane projects a retained generation as 0 while another session is selected.
+  // Keep consumption across resets so A/N -> B/0 -> A/N cannot replay N.
+  private lastHandledOpenRequest = 0;
   private transientExpanded = false;
   // Explicit open from the restore icon while idle: the companion must stay
   // reachable at any point, even with no digest and an empty thread.
@@ -64,7 +67,11 @@ export class ChatSessionRailState {
     this.manualOpen = false;
   }
 
-  tryAutoOpen(): boolean {
+  tryAutoOpen(openRequest: number): boolean {
+    if (openRequest <= this.lastHandledOpenRequest) {
+      return false;
+    }
+    this.lastHandledOpenRequest = openRequest;
     if (this.displayPreference === "off") {
       return false;
     }
@@ -223,7 +230,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       }
     }
     if (changedProperties.has("openRequest") && this.openRequest > 0) {
-      if (this.railState.tryAutoOpen()) {
+      if (this.railState.tryAutoOpen(this.openRequest)) {
         this.onVisibilityChange?.(true);
       }
     }
