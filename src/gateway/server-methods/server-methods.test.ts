@@ -1271,6 +1271,81 @@ describe("projectRecentChatDisplayMessages", () => {
     },
   );
 
+  it("drops a repaired stream-error placeholder before same-turn assistant content", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("keeps a stream-error placeholder when the next user turn starts first", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh answer" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh answer" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
       {

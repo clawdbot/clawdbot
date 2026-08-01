@@ -3,6 +3,7 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
@@ -453,6 +454,45 @@ describe("SessionHistorySseState", () => {
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
     expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(5);
+  });
+
+  test("requests refresh when later assistant content repairs an inline stream error", () => {
+    const state = newState([userTextMessage("hello", 1)]);
+
+    const sentinel = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+      },
+      messageSeq: 2,
+    });
+
+    expect(sentinel?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+      __openclaw: { seq: 2 },
+    });
+    expect(appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
+  });
+
+  test("requests refresh when initial SSE history ends with a repaired stream error", () => {
+    const state = newState([
+      userTextMessage("hello", 1),
+      {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
   });
 
   test("marks bounded tail snapshots as having older history", () => {
