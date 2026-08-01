@@ -1,7 +1,10 @@
 // Codex tests cover attempt turn watches plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { updateActiveCompletionBlockerItemIds } from "./attempt-notifications.js";
+import {
+  isCodexTurnAbortMarkerNotification,
+  updateActiveCompletionBlockerItemIds,
+} from "./attempt-notifications.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 
 describe("Codex app-server attempt turn watches", () => {
@@ -393,4 +396,75 @@ describe("Codex completion blocker item tracking", () => {
       expect(activeItemIds).toEqual(new Set());
     },
   );
+});
+
+describe("isCodexTurnAbortMarkerNotification", () => {
+  function abortMarkerNotification(text: string, role: "user" | "developer" = "user") {
+    return {
+      method: "rawResponseItem/completed" as const,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "abort-marker-1",
+          type: "message",
+          role,
+          content: [{ type: "input_text", text }],
+        },
+      },
+    };
+  }
+
+  const CANONICAL_GUIDANCE =
+    "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+
+  it("recognizes the canonical interrupted-turn guidance body", () => {
+    const text = `<turn_aborted>\n${CANONICAL_GUIDANCE}\n</turn_aborted>`;
+    expect(isCodexTurnAbortMarkerNotification(abortMarkerNotification(text))).toBe(true);
+  });
+
+  it("recognizes a reworded guidance body as long as the <turn_aborted> markers are present", () => {
+    // Regression for openclaw/openclaw#99268: the guidance sentence is a
+    // crate-internal `pub(crate)` constant upstream can reword at any release.
+    // Abort detection must key on the structural markers, not the prose body.
+    const reworded =
+      "<turn_aborted>\nThe prior turn was cancelled by the operator; background processes may persist.\n</turn_aborted>";
+    expect(isCodexTurnAbortMarkerNotification(abortMarkerNotification(reworded))).toBe(true);
+  });
+
+  it("recognizes the developer-role interrupted marker", () => {
+    const text = `<turn_aborted>\nThe previous turn was interrupted on purpose.\n</turn_aborted>`;
+    expect(isCodexTurnAbortMarkerNotification(abortMarkerNotification(text, "developer"))).toBe(
+      true,
+    );
+  });
+
+  it("ignores text without the <turn_aborted> markers", () => {
+    expect(isCodexTurnAbortMarkerNotification(abortMarkerNotification(CANONICAL_GUIDANCE))).toBe(
+      false,
+    );
+  });
+
+  it("ignores an empty marker body", () => {
+    expect(
+      isCodexTurnAbortMarkerNotification(abortMarkerNotification("<turn_aborted></turn_aborted>")),
+    ).toBe(false);
+  });
+
+  it("ignores a whitespace-only marker body", () => {
+    expect(
+      isCodexTurnAbortMarkerNotification(
+        abortMarkerNotification("<turn_aborted>\n \n</turn_aborted>"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat the current user prompt echo as an abort marker", () => {
+    const text = `<turn_aborted>\n${CANONICAL_GUIDANCE}\n</turn_aborted>`;
+    expect(
+      isCodexTurnAbortMarkerNotification(abortMarkerNotification(text), {
+        currentPromptText: text,
+      }),
+    ).toBe(false);
+  });
 });

@@ -10,6 +10,15 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+// Structural markers Codex wraps around an interrupted-turn guidance message.
+// These `<turn_aborted>` tags are the stable signal we key on. We deliberately
+// do NOT match the guidance sentence body: upstream declares that prose as
+// `pub(crate) const INTERRUPTED_GUIDANCE` / `INTERRUPTED_DEVELOPER_GUIDANCE` in
+// codex-rs/core/src/context/turn_aborted.rs (verified against @openai/codex
+// 0.142.4, see version.ts). `pub(crate)` means crate-internal, not protocol
+// surface, so any upstream reword would silently break a strict-equality check.
+// The `<turn_aborted>` tags in the same file are the coarser, more durable
+// signal; the current prompt echo guard below prevents false positives.
 const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
 const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
 
@@ -355,7 +364,13 @@ export function isCodexTurnAbortMarkerNotification(
   if (role === "user" && currentPromptTexts.includes(text)) {
     return false;
   }
-  return readCodexTurnAbortMarkerBody(text) !== undefined;
+  // Key solely on the structural `<turn_aborted>` markers. The wrapped guidance
+  // body is crate-internal prose upstream can reword at any release, so matching
+  // it exactly would silently break abort recognition (see marker comment above).
+  // Require a non-whitespace body so a marker pair wrapping only whitespace is
+  // not mistaken for a real abort notification.
+  const body = readCodexTurnAbortMarkerBody(text);
+  return body !== undefined && body.length > 0;
 }
 
 function readCodexTurnAbortMarkerBody(text: string): string | undefined {
