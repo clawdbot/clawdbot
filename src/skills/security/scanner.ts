@@ -442,11 +442,79 @@ function collectAliasScanSources(source: string, filePath: string): AliasScanSou
   return scanSources;
 }
 
-function collectAliasBindingIdentifiers(
+type ChildProcessBindingIdentifier = {
+  binding: import("typescript").Identifier;
+  requireIdentifier?: import("typescript").Identifier;
+};
+
+type ChildProcessBindingIdentifiers = {
+  aliases: ChildProcessBindingIdentifier[];
+  namespaces: ChildProcessBindingIdentifier[];
+};
+
+function unwrapAliasReferenceExpression(
+  ts: typeof import("typescript"),
+  expression: import("typescript").Expression,
+): import("typescript").Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function getChildProcessRequireIdentifier(
+  ts: typeof import("typescript"),
+  expression: import("typescript").Expression,
+): import("typescript").Identifier | undefined {
+  const candidate = unwrapAliasReferenceExpression(ts, expression);
+  if (!ts.isCallExpression(candidate)) {
+    return undefined;
+  }
+  const requireExpression = unwrapAliasReferenceExpression(ts, candidate.expression);
+  if (
+    !ts.isIdentifier(requireExpression) ||
+    requireExpression.text !== "require" ||
+    candidate.arguments.length !== 1
+  ) {
+    return undefined;
+  }
+  const [specifier] = candidate.arguments;
+  return specifier && ts.isStringLiteralLike(specifier) && isChildProcessSpecifier(specifier.text)
+    ? requireExpression
+    : undefined;
+}
+
+function getStaticMemberAccess(
+  ts: typeof import("typescript"),
+  expression: import("typescript").Expression,
+): { expression: import("typescript").Expression; name: string } | undefined {
+  const candidate = unwrapAliasReferenceExpression(ts, expression);
+  if (ts.isPropertyAccessExpression(candidate)) {
+    return { expression: candidate.expression, name: candidate.name.text };
+  }
+  if (
+    ts.isElementAccessExpression(candidate) &&
+    candidate.argumentExpression &&
+    ts.isStringLiteralLike(candidate.argumentExpression)
+  ) {
+    return { expression: candidate.expression, name: candidate.argumentExpression.text };
+  }
+  return undefined;
+}
+
+function collectChildProcessBindingIdentifiers(
   ts: typeof import("typescript"),
   sourceFile: import("typescript").SourceFile,
-): import("typescript").Identifier[] {
-  const bindings: import("typescript").Identifier[] = [];
+): ChildProcessBindingIdentifiers {
+  const aliases: ChildProcessBindingIdentifier[] = [];
+  const namespaces: ChildProcessBindingIdentifier[] = [];
   const visit = (node: import("typescript").Node): void => {
     if (
       ts.isImportDeclaration(node) &&
@@ -455,6 +523,9 @@ function collectAliasBindingIdentifiers(
     ) {
       const importClause = node.importClause;
       const namedBindings = importClause?.namedBindings;
+      if (importClause && !importClause.isTypeOnly && importClause.name) {
+        namespaces.push({ binding: importClause.name });
+      }
       if (
         importClause &&
         !importClause.isTypeOnly &&
@@ -462,30 +533,25 @@ function collectAliasBindingIdentifiers(
         ts.isNamedImports(namedBindings)
       ) {
         for (const element of namedBindings.elements) {
-          if (
-            !element.isTypeOnly &&
-            element.propertyName &&
-            DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
-          ) {
-            bindings.push(element.name);
+          if (!element.isTypeOnly && element.propertyName) {
+            if (DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)) {
+              aliases.push({ binding: element.name });
+            } else if (element.propertyName.text === "default") {
+              namespaces.push({ binding: element.name });
+            }
           }
         }
-      }
-    } else if (
-      ts.isVariableDeclaration(node) &&
-      ts.isObjectBindingPattern(node.name) &&
-      node.initializer &&
-      ts.isCallExpression(node.initializer) &&
-      ts.isIdentifier(node.initializer.expression) &&
-      node.initializer.expression.text === "require" &&
-      node.initializer.arguments.length === 1
-    ) {
-      const [specifier] = node.initializer.arguments;
-      if (
-        specifier &&
-        ts.isStringLiteralLike(specifier) &&
-        isChildProcessSpecifier(specifier.text)
+      } else if (
+        importClause &&
+        !importClause.isTypeOnly &&
+        namedBindings &&
+        ts.isNamespaceImport(namedBindings)
       ) {
+        namespaces.push({ binding: namedBindings.name });
+      }
+    } else if (ts.isVariableDeclaration(node) && node.initializer) {
+      const requireIdentifier = getChildProcessRequireIdentifier(ts, node.initializer);
+      if (requireIdentifier && ts.isObjectBindingPattern(node.name)) {
         for (const element of node.name.elements) {
           if (
             element.propertyName &&
@@ -494,8 +560,22 @@ function collectAliasBindingIdentifiers(
             ts.isIdentifier(element.name) &&
             DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
           ) {
-            bindings.push(element.name);
+            aliases.push({ binding: element.name, requireIdentifier });
           }
+        }
+      } else if (requireIdentifier && ts.isIdentifier(node.name)) {
+        namespaces.push({ binding: node.name, requireIdentifier });
+      } else if (ts.isIdentifier(node.name)) {
+        const member = getStaticMemberAccess(ts, node.initializer);
+        const memberRequireIdentifier = member
+          ? getChildProcessRequireIdentifier(ts, member.expression)
+          : undefined;
+        if (
+          member &&
+          memberRequireIdentifier &&
+          DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(member.name)
+        ) {
+          aliases.push({ binding: node.name, requireIdentifier: memberRequireIdentifier });
         }
       }
     }
@@ -503,7 +583,7 @@ function collectAliasBindingIdentifiers(
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return bindings;
+  return { aliases, namespaces };
 }
 
 function createAliasTypeChecker(
@@ -532,6 +612,67 @@ function createAliasTypeChecker(
   return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker();
 }
 
+function returnsStaticRequireStub(
+  ts: typeof import("typescript"),
+  body: import("typescript").ConciseBody,
+): boolean {
+  const [onlyStatement] = ts.isBlock(body) ? body.statements : [];
+  const returned = ts.isBlock(body)
+    ? body.statements.length === 1 && onlyStatement && ts.isReturnStatement(onlyStatement)
+      ? onlyStatement.expression
+      : undefined
+    : body;
+  if (!returned) {
+    return false;
+  }
+  const expression = unwrapAliasReferenceExpression(ts, returned);
+  return ts.isObjectLiteralExpression(expression) || ts.isClassExpression(expression);
+}
+
+function isNodeRequireIdentifier(
+  ts: typeof import("typescript"),
+  checker: import("typescript").TypeChecker,
+  identifier: import("typescript").Identifier,
+): boolean {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (!symbol) {
+    return true;
+  }
+  const runtimeDeclarations = symbol.declarations?.filter((declaration) => {
+    if (
+      ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Ambient ||
+      ts.isTypeOnlyImportDeclaration(declaration) ||
+      ts.isInterfaceDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration)
+    ) {
+      return false;
+    }
+    return !ts.isFunctionDeclaration(declaration) || Boolean(declaration.body);
+  });
+  if (!runtimeDeclarations?.length) {
+    // Ambient/type-only declarations emit no binding, so Node still supplies
+    // the runtime require. Treating them as shadows creates a scanner bypass.
+    return true;
+  }
+  const isClearlyStaticStub = runtimeDeclarations.every((declaration) => {
+    if (ts.isFunctionDeclaration(declaration) && declaration.body) {
+      return returnsStaticRequireStub(ts, declaration.body);
+    }
+    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) {
+      return false;
+    }
+    const initializer = unwrapAliasReferenceExpression(ts, declaration.initializer);
+    if (ts.isObjectLiteralExpression(initializer) || ts.isClassExpression(initializer)) {
+      return true;
+    }
+    return (
+      (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) &&
+      returnsStaticRequireStub(ts, initializer.body)
+    );
+  });
+  return !isClearlyStaticStub;
+}
+
 function collectDangerousChildProcessAliasCalls(
   source: string,
   filePath: string,
@@ -554,33 +695,100 @@ function collectDangerousChildProcessAliasCalls(
   for (const candidate of parsedSources) {
     // Markdown fragments are independent parse scopes. Keeping aliases local
     // prevents one example from tainting same-named calls in another fragment.
-    const aliasBindings = collectAliasBindingIdentifiers(ts, candidate.sourceFile);
-    if (aliasBindings.length === 0) {
+    const bindings = collectChildProcessBindingIdentifiers(ts, candidate.sourceFile);
+    if (bindings.aliases.length === 0 && bindings.namespaces.length === 0) {
       continue;
     }
     const checker = createAliasTypeChecker(ts, candidate.sourceFile);
     const aliasSymbols = new Set<import("typescript").Symbol>();
-    for (const binding of aliasBindings) {
-      const symbol = checker.getSymbolAtLocation(binding);
+    for (const candidateBinding of bindings.aliases) {
+      if (
+        candidateBinding.requireIdentifier &&
+        !isNodeRequireIdentifier(ts, checker, candidateBinding.requireIdentifier)
+      ) {
+        continue;
+      }
+      const symbol = checker.getSymbolAtLocation(candidateBinding.binding);
       if (symbol) {
         aliasSymbols.add(symbol);
       }
     }
+    const namespaceSymbols = new Set<import("typescript").Symbol>();
+    for (const candidateBinding of bindings.namespaces) {
+      if (
+        candidateBinding.requireIdentifier &&
+        !isNodeRequireIdentifier(ts, checker, candidateBinding.requireIdentifier)
+      ) {
+        continue;
+      }
+      const symbol = checker.getSymbolAtLocation(candidateBinding.binding);
+      if (symbol) {
+        namespaceSymbols.add(symbol);
+      }
+    }
+
+    const collectNamespacePropertyAlias = (node: import("typescript").Node): void => {
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        const namespaceExpression = unwrapAliasReferenceExpression(ts, node.initializer);
+        if (ts.isObjectBindingPattern(node.name) && ts.isIdentifier(namespaceExpression)) {
+          const namespaceSymbol = checker.getSymbolAtLocation(namespaceExpression);
+          if (namespaceSymbol && namespaceSymbols.has(namespaceSymbol)) {
+            for (const element of node.name.elements) {
+              if (
+                element.propertyName &&
+                (ts.isIdentifier(element.propertyName) ||
+                  ts.isStringLiteralLike(element.propertyName)) &&
+                ts.isIdentifier(element.name) &&
+                DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
+              ) {
+                const aliasSymbol = checker.getSymbolAtLocation(element.name);
+                if (aliasSymbol) {
+                  aliasSymbols.add(aliasSymbol);
+                }
+              }
+            }
+          }
+          ts.forEachChild(node, collectNamespacePropertyAlias);
+          return;
+        }
+        if (!ts.isIdentifier(node.name)) {
+          ts.forEachChild(node, collectNamespacePropertyAlias);
+          return;
+        }
+        const member = getStaticMemberAccess(ts, node.initializer);
+        if (member && DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(member.name)) {
+          const namespaceOwner = unwrapAliasReferenceExpression(ts, member.expression);
+          if (ts.isIdentifier(namespaceOwner)) {
+            const namespaceSymbol = checker.getSymbolAtLocation(namespaceOwner);
+            if (namespaceSymbol && namespaceSymbols.has(namespaceSymbol)) {
+              const aliasSymbol = checker.getSymbolAtLocation(node.name);
+              if (aliasSymbol) {
+                aliasSymbols.add(aliasSymbol);
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, collectNamespacePropertyAlias);
+    };
+    collectNamespacePropertyAlias(candidate.sourceFile);
 
     const visit = (node: import("typescript").Node): void => {
-      if (
-        (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
-        ts.isIdentifier(node.expression)
-      ) {
-        const symbol = checker.getSymbolAtLocation(node.expression);
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const expression = unwrapAliasReferenceExpression(ts, node.expression);
+        if (!ts.isIdentifier(expression)) {
+          ts.forEachChild(node, visit);
+          return;
+        }
+        const symbol = checker.getSymbolAtLocation(expression);
         if (
           symbol &&
           aliasSymbols.has(symbol) &&
-          !DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(node.expression.text)
+          !DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(expression.text)
         ) {
           const candidateLine =
             candidate.sourceFile.getLineAndCharacterOfPosition(
-              node.expression.getStart(candidate.sourceFile),
+              expression.getStart(candidate.sourceFile),
             ).line + 1;
           const sourceLine = candidate.lineOffset + candidateLine;
           callCountsByLine.set(sourceLine, (callCountsByLine.get(sourceLine) ?? 0) + 1);

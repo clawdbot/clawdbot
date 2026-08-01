@@ -167,24 +167,61 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
     const cases = [
       {
         name: "ES module import alias",
-        source: `
-import { exec as run } from "node:child_process";
-run("echo unsafe");
-`,
+        source: `\nimport { exec as run } from "node:child_process";\nrun("echo unsafe");\n`,
       },
       {
         name: "CommonJS destructuring alias",
-        source: `
-const { spawn: launch } = require("child_process");
-launch("node", ["unsafe.js"]);
-`,
+        source: `\nconst { spawn: launch } = require("child_process");\nlaunch("node", ["unsafe.js"]);\n`,
       },
       {
         name: "Unicode import alias",
-        source: `
-import { exec as 运行 } from "node:child_process";
-运行("echo unsafe");
-`,
+        source: `\nimport { exec as 运行 } from "node:child_process";\n运行("echo unsafe");\n`,
+        expectedLine: 3,
+      },
+      {
+        name: "CommonJS property extraction",
+        source: `\nconst run = require("node:child_process").exec;\nrun("echo unsafe");\n`,
+        expectedLine: 3,
+      },
+      {
+        name: "CommonJS computed property extraction",
+        source: `\nconst run = require("child_process")["exec"];\nrun("echo unsafe");\n`,
+        expectedLine: 3,
+      },
+      {
+        name: "ES module namespace property extraction",
+        source: `\nimport * as childProcess from "node:child_process";\nconst run = childProcess.exec;\nrun("echo unsafe");\n`,
+        expectedLine: 4,
+      },
+      {
+        name: "ES module default property extraction",
+        source: `\nimport childProcess from "node:child_process";\nconst run = childProcess.exec;\nrun("echo unsafe");\n`,
+        expectedLine: 4,
+      },
+      {
+        name: "ES module namespace destructuring",
+        source: `\nimport * as childProcess from "node:child_process";\nconst { exec: run } = childProcess;\nrun("echo unsafe");\n`,
+        expectedLine: 4,
+      },
+      {
+        name: "CommonJS alias with ambient require declaration",
+        source: `\ndeclare function require(id: string): any;\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        expectedLine: 4,
+      },
+      {
+        name: "CommonJS property extraction through createRequire",
+        source: `\nimport { createRequire as makeRequire } from "node:module";\nconst require = makeRequire(import.meta.url);\nconst run = require("child_process").exec;\nrun("echo unsafe");\n`,
+        expectedLine: 5,
+      },
+      {
+        name: "ES module named default property extraction",
+        source: `\nimport { default as childProcess } from "node:child_process";\nconst run = childProcess.exec;\nrun("echo unsafe");\n`,
+        expectedLine: 4,
+      },
+      {
+        name: "CommonJS alias through a local loader reference",
+        source: `\nconst require = process.mainModule.require;\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        expectedLine: 4,
       },
     ];
 
@@ -194,9 +231,25 @@ import { exec as 运行 } from "node:child_process";
           (candidate) => candidate.ruleId === "dangerous-exec",
         );
 
-        expect(findings.map((finding) => finding.line)).toEqual([3]);
+        expect(findings.map((finding) => finding.line)).toEqual([testCase.expectedLine ?? 3]);
       });
     }
+  });
+
+  it("detects aliased calls through transparent expression wrappers", () => {
+    const source = `
+import { exec as run } from "node:child_process";
+(run)("echo unsafe");
+new (run)("echo unsafe");
+(run as typeof run)("echo unsafe");
+run!("echo unsafe");
+`;
+
+    const findings = scanSource(source, "plugin.ts").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([3, 4, 5, 6]);
   });
 
   it("detects aliased child_process calls in proposal code fences", () => {
@@ -288,6 +341,27 @@ import { exec as run } from "node:child_process";
   run();
 }
 `;
+
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not derive property aliases from a shadowed namespace import", () => {
+    const source = `
+import * as childProcess from "node:child_process";
+{
+  const childProcess = { exec: () => "safe" };
+  const run = childProcess.exec;
+  run();
+}
+`;
+
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not derive child_process aliases from a shadowed require", () => {
+    const source = `const require = () => ({ exec: () => "safe" });\nconst run = require("node:child_process").exec;\nrun();`;
 
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
