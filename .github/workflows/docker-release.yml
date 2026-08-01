@@ -18,7 +18,9 @@ on:
         required: true
 
 concurrency:
-  group: docker-release-publish-${{ inputs.tag }}
+  # Alias promotion checks are read-then-write; serialize every Docker publish
+  # so an older stable run cannot overwrite a newer latest/main promotion.
+  group: docker-release-publish
   cancel-in-progress: false
   queue: max
 

@@ -375,7 +375,7 @@ describe("Docker channel promotion", () => {
     const promote = requireJob(workflow, "promote");
 
     expect(releaseWorkflow.concurrency).toEqual({
-      group: "docker-release-publish-${{ inputs.tag }}",
+      group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
     });
