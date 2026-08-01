@@ -54,7 +54,6 @@ const dependencyManifestFields = [
   "cpu",
   "libc",
 ];
-
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
@@ -80,6 +79,10 @@ export function dependencyFieldChanges(baseManifest, headManifest) {
     }
   }
   return changes;
+}
+
+export function isRemovalOnlyDependencyGraphChange(changes) {
+  return changes.length > 0 && changes.every((change) => change.change_type === "removed");
 }
 
 export function shouldAutoscrubDependencyLockfiles({
@@ -305,6 +308,26 @@ export function renderTrustedDependencyComment({ actor, headSha }) {
     `- Trusted role: ${markdownCode(actor.reason)}`,
     "",
     "Security review is still recommended before merge when the dependency graph change is intentional.",
+  ].join("\n");
+}
+
+export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, headSha }) {
+  const removalLines = dependencyGraphChanges.map(
+    (change) =>
+      `- Removed ${markdownCode(change.name ?? "<unknown dependency>")} from ${markdownCode(change.manifest ?? "<unknown manifest>")}.`,
+  );
+  return [
+    dependencyGraphGuardMarker,
+    "",
+    "### Dependency removals noted",
+    "",
+    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require `/allow-dependencies-change`.",
+    "",
+    ...removalLines,
+    "",
+    `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
+    "",
+    "A later push that adds or changes dependency graph entries will require a fresh security approval.",
   ].join("\n");
 }
 
@@ -534,12 +557,12 @@ async function readBase64FileAtRef(api, { owner, repo, path, ref }) {
 }
 
 async function collectDependencyManifestChanges(api, { owner, repo, pullRequest, files }) {
-  const manifestPaths = files
-    .map((file) => file.filename)
-    .filter((filename) => typeof filename === "string" && isDependencyManifest(filename))
-    .toSorted((left, right) => left.localeCompare(right));
+  const manifestFiles = files
+    .filter((file) => typeof file.filename === "string" && isDependencyManifest(file.filename))
+    .toSorted((left, right) => left.filename.localeCompare(right.filename));
   const changes = [];
-  for (const path of manifestPaths) {
+  for (const file of manifestFiles) {
+    const path = file.filename;
     const [baseManifest, headManifest] = await Promise.all([
       readJsonFileAtRef(api, {
         owner,
@@ -722,6 +745,27 @@ async function main() {
         renderClearedDependencyGuardComment({ headSha: pullRequest.head?.sha }),
       );
     }
+    return;
+  }
+
+  const dependencyGraphChanges = await api.paginate(
+    `/repos/${owner}/${repo}/dependency-graph/compare/${pullRequest.base?.sha}...${pullRequest.head?.sha}`,
+  );
+  if (isRemovalOnlyDependencyGraphChange(dependencyGraphChanges)) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await upsertComment(
+      existingGuardComment,
+      renderRemovalOnlyDependencyComment({
+        dependencyGraphChanges,
+        headSha: pullRequest.head?.sha,
+      }),
+    );
+    await writeSummary(
+      "## Dependency Guard\n\nDependency removals are informational and do not require security approval.",
+    );
+    console.log("Dependency removals detected; guard is informational.");
     return;
   }
 
