@@ -496,10 +496,7 @@ describe("generateSummary thinking options", () => {
       streamFn,
     );
 
-    expect(result).toEqual({
-      ok: true,
-      value: { summary: "summary", usage: summaryMessage.usage },
-    });
+    expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
   });
 });

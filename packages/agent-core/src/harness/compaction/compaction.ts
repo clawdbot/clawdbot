@@ -698,8 +698,8 @@ async function runSummarizationCompletion(params: {
   });
 }
 
-/** Generate or update a conversation summary for compaction. */
-export async function generateSummary(
+/** Generate or update a conversation summary while retaining provider usage internally. */
+async function generateSummaryWithUsage(
   currentMessages: AgentMessage[],
   model: Model,
   reserveTokens: number,
@@ -740,6 +740,36 @@ export async function generateSummary(
     runtime,
     errorLabel: "Summarization",
   });
+}
+
+/** Generate or update a conversation summary for compaction. */
+export async function generateSummary(
+  currentMessages: AgentMessage[],
+  model: Model,
+  reserveTokens: number,
+  apiKey: string | undefined,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+  thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreCompletionRuntimeDeps,
+): Promise<Result<string, CompactionError>> {
+  const result = await generateSummaryWithUsage(
+    currentMessages,
+    model,
+    reserveTokens,
+    apiKey,
+    headers,
+    signal,
+    customInstructions,
+    previousSummary,
+    thinkingLevel,
+    streamFn,
+    runtime,
+  );
+  return result.ok ? ok(result.value.summary) : err(result.error);
 }
 
 /** Prepared inputs for a compaction run. */
@@ -952,7 +982,7 @@ export async function compact(
     let historySummary = "No prior history.";
     let historyUsage: Usage | undefined;
     if (messagesToSummarize.length > 0) {
-      const historyResult = await generateSummary(
+      const historyResult = await generateSummaryWithUsage(
         messagesToSummarize,
         model,
         settings.reserveTokens,
@@ -990,7 +1020,7 @@ export async function compact(
       ? combineSummarizationUsage(historyUsage, turnPrefixResult.value.usage)
       : turnPrefixResult.value.usage;
   } else {
-    const summaryResult = await generateSummary(
+    const summaryResult = await generateSummaryWithUsage(
       messagesToSummarize,
       model,
       settings.reserveTokens,
