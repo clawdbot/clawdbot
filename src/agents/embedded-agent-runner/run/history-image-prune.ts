@@ -129,9 +129,7 @@ function factOwnsMarkerIdentity(identity: string, media: MediaFact[]): boolean {
     // prompt marker text remains relative. Derive aliases only from an
     // explicitly recorded workspace so unrelated absolute facts stay distinct.
     const aliases = [fact.path, fact.url, ...resolveWorkspaceRelativeMarkerAliases(fact)];
-    return aliases.some(
-      (alias) => alias && normalizeMarkerIdentity(alias) === normalizedIdentity,
-    );
+    return aliases.some((alias) => alias && normalizeMarkerIdentity(alias) === normalizedIdentity);
   });
 }
 
