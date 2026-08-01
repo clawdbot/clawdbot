@@ -43,6 +43,32 @@ the repair. Revalidate each replacement annotation during release planning
 too, since plugin ownership and config footprint can change as providers
 and channels move out of core.
 
+## Plugin Inspector
+
+[`@openclaw/plugin-inspector`](https://github.com/openclaw/plugin-inspector) is
+maintained outside the core OpenClaw repository. It consumes public
+compatibility, manifest, SDK, hook, and registrar surfaces without publishing
+an inspector binary from the main `openclaw` package.
+
+Plugin authors should run its static compatibility check during development and
+in CI, then add trusted runtime capture or a local OpenClaw checkout when those
+checks provide useful evidence. See
+[Plugin Inspector](/plugins/plugin-inspector) for the author workflow, command
+surface, reports, and CI examples.
+
+### Maintainer acceptance lane
+
+The release-only [Plugin Prerelease workflow](/ci#plugin-prerelease) runs an
+informational Plugin Inspector advisory sweep across bundled plugin fixtures.
+The workflow pins the Inspector version, compares against the candidate
+OpenClaw checkout, and uploads its reports for compatibility triage.
+
+Keep the advisory separate from blocking repo-local tests. OpenClaw's own
+guards cover the SDK export map, compatibility registry metadata, deprecated
+SDK-import burn-down, bundled extension import boundaries, and runtime behavior.
+Inspector findings show how the public package surfaces look to external plugin
+authors and need maintainer triage before they become a blocking release gate.
+
 ## Deprecation policy
 
 OpenClaw should not remove a documented plugin contract in the same release
@@ -168,42 +194,6 @@ TypeScript `@deprecated` annotation names its replacement:
   `admission`, writing the legacy boolean does not rewrite the ingress
   graph.
 - `chatType` moves to `admission.conversation.kind`.
-
-## Plugin inspector package
-
-The plugin inspector should live outside the core OpenClaw repo as a
-separate package/repository backed by the versioned compatibility and
-manifest contracts. The day-one CLI should be:
-
-```sh
-openclaw-plugin-inspector ./my-plugin
-```
-
-It should emit manifest/schema validation, the contract compatibility
-version being checked, install/source metadata checks, cold-path import
-checks, and deprecation/compatibility warnings. Use `--json` for stable
-machine-readable output in CI annotations. OpenClaw core should expose
-contracts and fixtures the inspector can consume, but should not publish the
-inspector binary from the main `openclaw` package.
-
-### Maintainer acceptance lane
-
-Use Crabbox-backed Blacksmith Testbox for the installable-package acceptance
-lane when validating the external inspector against OpenClaw plugin
-packages. Run it from a clean OpenClaw checkout after the package is built:
-
-```sh
-pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
-pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
-pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
-```
-
-Keep this lane opt-in for maintainers, since it installs an external npm
-package and may inspect plugin packages cloned outside the repo. The local
-repo guards cover the SDK export map, compatibility registry metadata,
-deprecated SDK-import burn-down, and bundled extension import boundaries;
-Testbox inspector proof covers the package as external plugin authors
-consume it.
 
 ## Release notes
 

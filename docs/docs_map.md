@@ -6008,13 +6008,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/compatibility
 - Headings:
   - H2: Compatibility registry
+  - H2: Plugin Inspector
+  - H3: Maintainer acceptance lane
   - H2: Deprecation policy
   - H2: Current compatibility areas
   - H3: Channel prompt-context identifier aliases
   - H3: WhatsApp inbound callback flat aliases
   - H3: WhatsApp inbound admission fields
-  - H2: Plugin inspector package
-  - H3: Maintainer acceptance lane
   - H2: Release notes
 
 ## plugins/copilot.md
@@ -6301,6 +6301,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Inspect status and audit history
   - H2: 1Password CLI behavior
   - H2: Error codes
+
+## plugins/plugin-inspector.md
+
+- Route: /plugins/plugin-inspector
+- Headings:
+  - H2: Where it fits
+  - H2: Recommended workflow
+  - H2: Quick start
+  - H2: Assert expected registrations
+  - H2: GitHub Actions
+  - H2: Compare against an OpenClaw checkout
+  - H2: Plugins that ship skills
+  - H2: Reports and full reference
+  - H2: Related
 
 ## plugins/plugin-inventory.md
 
@@ -7848,7 +7862,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/sdk-testing
 - Headings:
-  - H2: Test utilities
+  - H2: External plugin workflow
+  - H2: OpenClaw repository test utilities
   - H3: Available exports
   - H3: Types
   - H2: Testing target resolution

@@ -373,6 +373,16 @@ Oxlint is not type-aware, so it cannot enforce these annotations. The generated
 - `contracts.tools` matches the declared tool names.
 - `package.json` points `openclaw.extensions` at the selected runtime entry.
 
+Add Plugin Inspector when CI should also catch broader package compatibility,
+SDK import, hook, registration, and contract issues:
+
+```bash
+npx @openclaw/plugin-inspector ci --no-openclaw
+```
+
+See [Plugin Inspector](/plugins/plugin-inspector) for runtime capture, report
+artifacts, and a complete CI example.
+
 ## Install and inspect locally
 
 From a separate OpenClaw checkout or installed CLI, install the package path:
@@ -468,5 +478,6 @@ Check these in order:
 - [Plugin entry points](/plugins/sdk-entrypoints)
 - [Plugin SDK subpaths](/plugins/sdk-subpaths)
 - [Plugin manifest](/plugins/manifest)
+- [Plugin Inspector](/plugins/plugin-inspector)
 - [Plugins CLI](/cli/plugins)
 - [ClawHub publishing](/clawhub/publishing)

@@ -4,12 +4,15 @@ title: "Plugin testing"
 sidebarTitle: "Testing"
 read_when:
   - You are writing tests for a plugin
+  - You are adding plugin validation or runtime proof to CI
   - You need test utilities from the plugin SDK
   - You want to understand contract tests for bundled plugins
 ---
 
-Reference for test utilities, patterns, and lint enforcement for OpenClaw
-plugins.
+External plugins should test their own behavior, validate the package contract,
+and prove the installed runtime. OpenClaw also has repo-local helpers for its
+bundled plugins; those helpers are documented later on this page but are not
+public package exports for third-party plugins.
 
 <Tip>
   **Looking for test examples?** The how-to guides include worked test examples:
@@ -17,7 +20,40 @@ plugins.
   [Provider plugin tests](/plugins/sdk-provider-plugins#step-6-test).
 </Tip>
 
-## Test utilities
+## External plugin workflow
+
+Run these checks from the plugin package root:
+
+```bash
+npm run build
+npm test
+npx @openclaw/plugin-inspector inspect --no-openclaw
+```
+
+Add runtime capture when static inspection cannot prove registrations made by
+`register(api)`:
+
+```bash
+npx @openclaw/plugin-inspector inspect --no-openclaw --runtime --mock-sdk --allow-execute
+```
+
+Runtime capture imports plugin code. Use it only for code you trust and intend
+to execute.
+
+Then install or load the packed artifact in OpenClaw and prove at least one real
+plugin behavior:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+```
+
+Provider, channel, network, service, and CLI backend plugins also need live
+tests for their external systems. Tool plugins created with `defineToolPlugin`
+should also run `openclaw plugins build --check` and
+`openclaw plugins validate`. See [Plugin Inspector](/plugins/plugin-inspector)
+for repeatable scripts, reports, checkout comparison, and CI integration.
+
+## OpenClaw repository test utilities
 
 These subpaths are repo-local source entrypoints for OpenClaw's own bundled
 plugin tests. They are not published `package.json` exports for third-party
@@ -375,6 +411,7 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test
 
 ## Related
 
+- [Plugin Inspector](/plugins/plugin-inspector) -- package compatibility and CI
 - [SDK Overview](/plugins/sdk-overview) -- import conventions
 - [SDK Channel Plugins](/plugins/sdk-channel-plugins) -- channel plugin interface
 - [SDK Provider Plugins](/plugins/sdk-provider-plugins) -- provider plugin hooks

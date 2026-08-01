@@ -868,6 +868,18 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Plugin Inspector",
+    "target": "Plugin Inspector"
+  },
+  {
+    "source": "Plugin testing",
+    "target": "插件测试"
+  },
+  {
+    "source": "Plugin compatibility",
+    "target": "插件兼容性"
+  },
+  {
     "source": "Tool plugins",
     "target": "工具插件"
   },

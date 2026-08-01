@@ -158,8 +158,19 @@ local proof.
 
   </Step>
 
-  <Step title="Test the runtime">
-    For an installed or external plugin, inspect the loaded runtime:
+  <Step title="Test and inspect">
+    Run a static compatibility check from an external plugin package root:
+
+    ```bash
+    npx @openclaw/plugin-inspector inspect --no-openclaw
+    ```
+
+    Plugin Inspector checks package metadata, the manifest, SDK imports, hooks,
+    registrations, and declared contracts without importing plugin code. See
+    [Plugin Inspector](/plugins/plugin-inspector) for repeatable scripts,
+    runtime capture, checkout comparison, and CI integration.
+
+    After installing or loading the plugin, inspect the loaded runtime:
 
     ```bash
     openclaw plugins inspect my-plugin --runtime --json
@@ -360,13 +371,20 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
+<Check>Plugin Inspector static compatibility check passes (external plugins)</Check>
+<Check>Installed runtime inspection proves the expected registrations</Check>
+<Check>Plugin-shipped skills load and work in a fresh session, when present</Check>
 <Check>Tests pass (`pnpm test <bundled-plugin-root>/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
 ## Test against beta releases
 
 1. Watch [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) releases (`Watch` > `Releases`). Beta tags look like `v2026.3.N-beta.1`. You can also follow [@openclaw](https://x.com/openclaw) on X for release announcements.
-2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
+2. Test your plugin against the beta tag as soon as it appears. Compare against a
+   checkout of that tag with
+   `npx @openclaw/plugin-inspector ci --openclaw ../openclaw`, then
+   install the plugin into that version and prove its runtime behavior. The
+   window before stable is typically only a few hours.
 3. Post in your plugin's thread in the `plugin-forum` Discord channel ([discord.gg/clawd](https://discord.gg/clawd)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
 4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Link the issue in your thread.
 5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway.
@@ -393,6 +411,9 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
   <Card title="Testing" icon="test-tubes" href="/plugins/sdk-testing">
     Test utilities and patterns
   </Card>
+  <Card title="Plugin Inspector" icon="scan-search" href="/plugins/plugin-inspector">
+    Compatibility checks and CI
+  </Card>
   <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
     Full manifest schema reference
   </Card>
@@ -402,3 +423,4 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 - [Plugin hooks](/plugins/hooks)
 - [Plugin architecture](/plugins/architecture)
+- [Skills](/tools/skills#plugins-and-skills)
