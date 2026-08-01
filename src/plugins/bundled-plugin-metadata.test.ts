@@ -471,6 +471,22 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps QA runner discovery on narrow bundled runtime sidecars", () => {
+    const runnerPlugins = listRepoBundledPluginMetadata().filter(
+      (entry) => (entry.manifest.qaRunners?.length ?? 0) > 0,
+    );
+    expect(runnerPlugins.length).toBeGreaterThan(0);
+
+    for (const plugin of runnerPlugins) {
+      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+      expectArtifactPresence(plugin?.runtimeSidecarArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+    }
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
       | { schema?: { type?: unknown } }
