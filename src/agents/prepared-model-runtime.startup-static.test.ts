@@ -163,7 +163,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
-const { prepareScopedReadOnlyModelCatalog } =
+const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
@@ -206,6 +206,40 @@ describe("prepared model runtime Gateway catalog mode", () => {
         providerDiscoveryEntriesOnly: true,
         providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
       }),
+    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("uses live provider catalogs for an explicit read-only list scope", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+
+    await prepareScopedReadOnlyLiveModelCatalog(
+      {
+        agentId: "default",
+        agentDir: "/tmp/prepared-live-agent",
+        config,
+        inheritedAuthDir: "/tmp/prepared-live-agent",
+        workspaceDir: "/tmp/prepared-live-workspace",
+        env: {},
+        readOnly: true,
+      },
+      ["anthropic"],
+    );
+
+    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-live-agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic"],
+        providerDiscoveryTimeoutMs: expect.any(Number),
+      }),
+    );
+    expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ providerDiscoveryEntriesOnly: true }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });

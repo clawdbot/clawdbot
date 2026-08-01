@@ -55,6 +55,7 @@ const modelRegistryState = {
   findError: undefined as unknown,
 };
 let previousExitCode: typeof process.exitCode;
+let previousOpenAiApiKey: string | undefined;
 
 vi.mock("./models/load-config.js", () => ({
   loadModelsConfigWithSource: vi.fn(async () => {
@@ -251,6 +252,8 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  previousOpenAiApiKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   modelRegistryState.models = [];
   modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
@@ -274,6 +277,11 @@ beforeEach(() => {
 
 afterEach(() => {
   process.exitCode = previousExitCode;
+  if (previousOpenAiApiKey === undefined) {
+    delete process.env.OPENAI_API_KEY;
+  } else {
+    process.env.OPENAI_API_KEY = previousOpenAiApiKey;
+  }
 });
 
 describe("models list/status", () => {

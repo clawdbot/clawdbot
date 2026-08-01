@@ -691,6 +691,7 @@ export async function prepareAgentCatalogSource(
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
+  sourceOptions: { providerDiscoveryProviderIds?: readonly string[] } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
   const options = {
@@ -703,10 +704,13 @@ export async function prepareAgentCatalogSource(
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
-          providerDiscoveryProviderIds: providerIds,
+          providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
         }
       : {
           providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
+          ...(sourceOptions.providerDiscoveryProviderIds
+            ? { providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds }
+            : {}),
         }),
   };
   if (!persist) {

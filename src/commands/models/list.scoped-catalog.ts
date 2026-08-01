@@ -9,6 +9,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   loadManifestCatalogRowsForList,
   loadStaticManifestCatalogRowsForList,
+  resolveManifestCatalogCoverageForList,
 } from "./list.manifest-catalog.js";
 
 type PersistedCatalogModule = typeof import("./list.persisted-catalog.js");
@@ -60,18 +61,20 @@ function routeKey(entry: ModelCatalogEntry): string {
 function resolveConfiguredProviderCoverage(
   cfg: OpenClawConfig,
   providerIds: ReadonlySet<string>,
+  ownedProviderIds: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const coveredProviders = new Set<string>();
   for (const [provider, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
     const normalizedProvider = normalizeProviderId(provider);
     if (
       providerIds.has(normalizedProvider) &&
+      !ownedProviderIds.has(normalizedProvider) &&
       (providerConfig.models ?? []).some(
         (model) => providerConfig.api !== undefined || model.api !== undefined,
       )
     ) {
-      // Explicit provider rows are emitted by appendConfiguredProviderRows.
-      // Runtime discovery here would duplicate that source and load the full provider runtime.
+      // Unowned custom providers have no runtime catalog beyond their explicit rows.
+      // Plugin-owned providers remain discoverable unless models.mode is replace.
       coveredProviders.add(normalizedProvider);
     }
   }
@@ -174,6 +177,11 @@ export async function loadScopedListModelCatalogSnapshot(params: {
     providerIds,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
   }).map((entry) => enrichPersistedEntry(entry, manifestByKey.get(entryKey(entry))));
+  const { ownedProviderIds, completeProviderIds } = resolveManifestCatalogCoverageForList({
+    cfg: params.cfg,
+    providerIds,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+  });
   const admittedEntries = new Map<string, ModelCatalogEntry>();
   for (const entry of [...staticEntries, ...persistedEntries]) {
     admittedEntries.set(entryKey(entry), entry);
@@ -196,8 +204,8 @@ export async function loadScopedListModelCatalogSnapshot(params: {
     staticEntries,
   };
   const coveredProviders = new Set([
-    ...lightweightSnapshot.entries.map((entry) => normalizeProviderId(entry.provider)),
-    ...resolveConfiguredProviderCoverage(params.cfg, providerIds),
+    ...completeProviderIds,
+    ...resolveConfiguredProviderCoverage(params.cfg, providerIds, ownedProviderIds),
   ]);
   const runtimeProviderIds = new Set(
     (params.runtimeProviderIds ?? params.providerIds)
@@ -210,8 +218,8 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   if (uncoveredProviders.length === 0) {
     return mergeSnapshotEntries([lightweightSnapshot]);
   }
-  const { prepareScopedReadOnlyModelCatalog } = await preparedScopedCatalogModuleLoader.load();
-  const fallbackSnapshot = await prepareScopedReadOnlyModelCatalog(
+  const { prepareScopedReadOnlyLiveModelCatalog } = await preparedScopedCatalogModuleLoader.load();
+  const fallbackSnapshot = await prepareScopedReadOnlyLiveModelCatalog(
     {
       config: params.cfg,
       ...(params.agentId ? { agentId: params.agentId } : {}),
