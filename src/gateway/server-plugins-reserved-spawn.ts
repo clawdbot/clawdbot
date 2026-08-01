@@ -41,7 +41,7 @@ type ReservedSubagentCleanupHolder = {
   release: () => void;
 };
 
-export const RESERVED_SUBAGENT_TASK_MAX_BYTES = 256 * 1024;
+export const RESERVED_SUBAGENT_TASK_MAX_BYTES = 4 * 1024;
 
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",

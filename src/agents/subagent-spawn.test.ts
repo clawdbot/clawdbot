@@ -2561,6 +2561,59 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(deleteAttempts).toBe(3);
   });
 
+  it("uses the post-fork child session identity for reserved cleanup", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["main"] } },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method.startsWith("sessions.")) {
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "fail after fork so reserved cleanup must target the forked child identity",
+        agentId: "main",
+        context: "fork",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "main",
+        preallocatedChildSessionKey: "agent:main:subagent:reserved-fork-cleanup-child",
+        preallocatedRunId: "reserved-fork-cleanup-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-fork-cleanup-claim",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: "forked-session-id",
+        },
+      },
+    });
+    const deleteParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
+      .filter(([method]) => method === "sessions.delete")
+      .map(([, params]) => requireRecord(params));
+    expect(deleteParams).toEqual(
+      expect.arrayContaining([expect.objectContaining({ expectedSessionId: "forked-session-id" })]),
+    );
+  });
+
   it("returns reserved cleanup indeterminate at the deletion timeout boundary", async () => {
     const cleanupApi = await import("./subagent-spawn-cleanup.js");
     hoisted.callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));

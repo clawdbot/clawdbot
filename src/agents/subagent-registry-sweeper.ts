@@ -15,9 +15,11 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import {
+  failedSpawnCleanupTerminalError,
   markSpawnFailureCleanupTerminalState,
   reconcileOrphanedRun,
   safeRemoveAttachmentsDir,
+  shouldDeleteArchivedSubagentSession,
 } from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { reconcileProvisionalSubagentKill } from "./subagent-registry-sweep-kill.js";
@@ -36,7 +38,6 @@ import {
   resolveProvisionalSessionCleanupProof,
   type ProvisionalSessionCleanupIdentity,
 } from "./subagent-spawn-cleanup.js";
-
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
@@ -45,10 +46,8 @@ const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
 const SUSPENDED_DELIVERY_SOFT_CAP = 25;
 const SUSPENDED_DELIVERY_HARD_CAP = 50;
 const SUSPENDED_DELIVERY_PRESSURE_TARGET = 10;
-
 type LifecycleController = ReturnType<typeof createSubagentRegistryLifecycleController>;
 type LifecycleOptions = Parameters<typeof createSubagentRegistryLifecycleController>[0];
-
 export async function retireSupersededSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -73,7 +72,6 @@ export async function retireSupersededSubagentRun(params: {
     await safeRemoveAttachmentsDir(params.entry);
   }
 }
-
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -173,11 +171,7 @@ export function createSubagentRegistrySweeper(params: {
     return typeof entry.endedAt === "number" && isDeliverySuspended(entry);
   }
 
-  function markSpawnFailureCleanupDeleted(
-    runId: string,
-    entry: SubagentRunRecord,
-    now: number,
-  ): void {
+  function markSpawnFailureCleanupDeleted(runId: string, entry: SubagentRunRecord, now: number) {
     markSpawnFailureCleanupTerminalState(entry, {
       now,
       status: "deleted",
@@ -186,6 +180,7 @@ export function createSubagentRegistrySweeper(params: {
     resumedRuns.delete(runId);
     params.clearPendingLifecycleError(runId);
     params.clearPendingLifecycleTimeout(runId);
+    entry.archiveAtMs ??= now + SESSION_RUN_TTL_MS;
     entry.deleteCleanupDispatchedAt ??= now;
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
@@ -199,18 +194,16 @@ export function createSubagentRegistrySweeper(params: {
     entry: SubagentRunRecord,
     now: number,
     status: "missing" | "replaced",
-  ): void {
+  ) {
     markSpawnFailureCleanupTerminalState(entry, {
       now,
       status,
-      error:
-        status === "missing"
-          ? "subagent spawn failed before startup and the provisional session was already absent"
-          : "subagent spawn failed before startup and a replacement session proved the provisional session is gone",
+      error: failedSpawnCleanupTerminalError(status),
     });
     resumedRuns.delete(runId);
     params.clearPendingLifecycleError(runId);
     params.clearPendingLifecycleTimeout(runId);
+    entry.archiveAtMs ??= now + SESSION_RUN_TTL_MS;
   }
 
   async function reconcileSpawnFailureCleanup(
@@ -682,15 +675,17 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         params.clearPendingLifecycleError(runId);
-        try {
-          await deleteSession(entry.childSessionKey);
-        } catch (error) {
-          params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
-            runId,
-            childSessionKey: entry.childSessionKey,
-            error,
-          });
-          continue;
+        if (shouldDeleteArchivedSubagentSession(entry)) {
+          try {
+            await deleteSession(entry.childSessionKey);
+          } catch (error) {
+            params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
+              runId,
+              childSessionKey: entry.childSessionKey,
+              error,
+            });
+            continue;
+          }
         }
         runs.delete(runId);
         mutated = true;

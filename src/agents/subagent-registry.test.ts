@@ -706,6 +706,60 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("archives replaced failed-spawn cleanup records without deleting the replacement session", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:worker:subagent:failed-spawn-reused-archive-child";
+    const runId = "failed-spawn-reused-archive-run";
+    const sessionIdentity = {
+      expectedSessionId: "archive-original-session",
+      expectedLifecycleRevision: "archive-original-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: "archive-replacement-session",
+          lifecycleRevision: "archive-replacement-lifecycle",
+          updatedAt: now,
+          status: "running",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("must not delete replacement"),
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "failed spawn with reused key and finite archive",
+        cleanup: "keep",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+
+    const replaced = expectDefined(mod.getSubagentRunByRunId(runId), "replaced quarantine run");
+    expect(replaced.spawnFailureCleanup).toMatchObject({ status: "replaced" });
+    expect(replaced.archiveAtMs).toBeGreaterThan(now);
+
+    vi.setSystemTime(replaced.archiveAtMs ?? now);
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+  });
+
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {
     const now = Date.now();
     let releaseDelete: (() => void) | undefined;

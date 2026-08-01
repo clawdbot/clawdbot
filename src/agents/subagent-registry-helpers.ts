@@ -114,6 +114,23 @@ export function markSpawnFailureCleanupTerminalState(
   };
 }
 
+export function isTerminalSpawnFailureCleanupStatus(status: unknown): boolean {
+  return status === "deleted" || status === "missing" || status === "replaced";
+}
+
+export function failedSpawnCleanupTerminalError(status: "missing" | "replaced"): string {
+  return status === "missing"
+    ? "subagent spawn failed before startup and the provisional session was already absent"
+    : "subagent spawn failed before startup and a replacement session proved the provisional session is gone";
+}
+
+export function shouldDeleteArchivedSubagentSession(entry: SubagentRunRecord): boolean {
+  return (
+    entry.cleanup !== "keep" &&
+    !isTerminalSpawnFailureCleanupStatus(entry.spawnFailureCleanup?.status)
+  );
+}
+
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,

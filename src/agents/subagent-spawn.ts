@@ -1,8 +1,3 @@
-/**
- * Subagent spawn executor.
- *
- * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
- */
 import { promises as fs } from "node:fs";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -27,7 +22,8 @@ import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupIdentityOption,
   failedSpawnCleanupIdentity,
-  reservedCleanupState,
+  applyReservedCleanupState,
+  refreshProvisionalSessionCleanupIdentity,
   type ProvisionalSessionDeletionOutcome,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
@@ -66,7 +62,6 @@ import {
   mergeDeliveryContext,
 } from "./subagent-spawn.runtime.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
-
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 export async function spawnSubagentDirect(
@@ -218,7 +213,7 @@ export async function spawnSubagentDirect(
     if (initialSession.status === "error") {
       return { status: "error", error: initialSession.error, childSessionKey };
     }
-    const provisionalSessionCleanupIdentity = captureCleanupIdentity(initialSession.entry);
+    let provisionalSessionCleanupIdentity = captureCleanupIdentity(initialSession.entry);
     const cleanupProvisionedSessionForFailedSpawn = async (
       options?: Partial<Parameters<typeof cleanupFailedSpawnBeforeAgentStart>[0]>,
     ) => {
@@ -234,15 +229,11 @@ export async function spawnSubagentDirect(
       return cleanupResult;
     };
     const withReservedCleanupResult = (result: SpawnSubagentResult): SpawnSubagentResult =>
-      reservedFailureCleanupOutcome && result.status !== "accepted"
-        ? {
-            ...result,
-            reservedCleanup: reservedCleanupState(
-              reservedFailureCleanupOutcome,
-              provisionalSessionCleanupIdentity,
-            ),
-          }
-        : result;
+      applyReservedCleanupState(
+        result,
+        reservedFailureCleanupOutcome,
+        provisionalSessionCleanupIdentity,
+      );
     const preparedSpawnContext = await prepareSubagentSessionContext({
       cfg,
       contextMode,
@@ -251,6 +242,10 @@ export async function spawnSubagentDirect(
       requesterInternalKey,
       childSessionKey,
     });
+    provisionalSessionCleanupIdentity = refreshProvisionalSessionCleanupIdentity(
+      provisionalSessionCleanupIdentity,
+      preparedSpawnContext.status === "ok" ? preparedSpawnContext.childEntry : undefined,
+    );
     if (preparedSpawnContext.status === "error") {
       await cleanupProvisionedSessionForFailedSpawn({
         emitLifecycleHooks: false,

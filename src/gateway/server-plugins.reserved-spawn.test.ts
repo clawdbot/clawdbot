@@ -226,6 +226,57 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 
+  it("applies the reserved task byte limit to raw UTF-8 input", async () => {
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+      mode: "run",
+    });
+    const exactLimitTask = "a".repeat(RESERVED_SUBAGENT_TASK_MAX_BYTES);
+
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          task: exactLimitTask,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+
+    const multibyteOverLimitTask = `${"€".repeat(
+      Math.floor(RESERVED_SUBAGENT_TASK_MAX_BYTES / Buffer.byteLength("€", "utf8")),
+    )}€`;
+    expect(Buffer.byteLength(multibyteOverLimitTask, "utf8")).toBeGreaterThan(
+      RESERVED_SUBAGENT_TASK_MAX_BYTES,
+    );
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          childSessionKey: "agent:worker:subagent:plugin-reserved-child-utf8",
+          runId: "plugin-reserved-run-utf8",
+          task: multibyteOverLimitTask,
+        }),
+      ),
+    ).rejects.toThrow(`${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit`);
+
+    const rawWhitespaceOverLimitTask = `${" ".repeat(RESERVED_SUBAGENT_TASK_MAX_BYTES)}x`;
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          childSessionKey: "agent:worker:subagent:plugin-reserved-child-raw",
+          runId: "plugin-reserved-run-raw",
+          task: rawWhitespaceOverLimitTask,
+        }),
+      ),
+    ).rejects.toThrow(`${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit`);
+  });
+
   it("forwards only generic reservation and ownership data", async () => {
     const runtime = createGatewaySubagentRuntime();
     const dedupe: GatewayRequestContext["dedupe"] = new Map();

@@ -50,6 +50,13 @@ export function captureProvisionalSessionCleanupIdentity(
   });
 }
 
+export function refreshProvisionalSessionCleanupIdentity(
+  current: ProvisionalSessionCleanupIdentity | undefined,
+  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">,
+): ProvisionalSessionCleanupIdentity | undefined {
+  return captureProvisionalSessionCleanupIdentity(entry) ?? current;
+}
+
 export function provisionalSessionCleanupIdentityMatches(
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt"> | undefined,
   identity?: ProvisionalSessionCleanupIdentity,
@@ -97,6 +104,16 @@ export function reservedCleanupState(
     sessionDeletion,
     ...(identity ? { sessionIdentity: identity } : {}),
   };
+}
+
+export function applyReservedCleanupState<T extends { status: string }>(
+  result: T,
+  sessionDeletion?: ProvisionalSessionDeletionOutcome,
+  identity?: ProvisionalSessionCleanupIdentity,
+): T {
+  return sessionDeletion && result.status !== "accepted"
+    ? { ...result, reservedCleanup: reservedCleanupState(sessionDeletion, identity) }
+    : result;
 }
 
 export function failedSpawnCleanupIdentity(identity?: ProvisionalSessionCleanupIdentity): {
