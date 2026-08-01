@@ -905,16 +905,7 @@ describe("registerPreActionHooks", () => {
   it.each([
     {
       name: "keeps a remote call migration-free",
-      argv: [
-        "node",
-        "openclaw",
-        "gateway",
-        "--token",
-        "secret",
-        "call",
-        "health",
-        "--json",
-      ],
+      argv: ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"],
       expectedPath: ["gateway", "call"],
       expectedMigration: false,
     },
