@@ -18,6 +18,7 @@ type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
 type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
+const TEMPLATE_ALT_TEXT_LIMIT = 1500;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 type TemplatePayloadAction = {
@@ -76,6 +77,10 @@ function truncateOptionalTemplateText(
   return value === undefined ? undefined : truncateTemplateText(value, limit);
 }
 
+function resolveTemplateAltText(value: string | undefined, fallback: string): string {
+  return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
+}
+
 function formatProductCarouselText(description: string, price?: string): string {
   if (!price) {
     return description;
@@ -119,7 +124,7 @@ export function createConfirmTemplate(
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? truncateTemplateText(text, 400),
+    altText: resolveTemplateAltText(altText, text),
     template,
   };
 }
@@ -161,9 +166,10 @@ export function createButtonTemplate(
 
   return {
     type: "template",
-    altText:
-      truncateOptionalTemplateText(options?.altText, 400) ??
-      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
+    altText: resolveTemplateAltText(
+      options?.altText,
+      normalizedTitle ? `${normalizedTitle}: ${text}` : text,
+    ),
     template,
   };
 }
@@ -188,7 +194,7 @@ export function createTemplateCarousel(
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(options?.altText, 400) ?? "View carousel",
+    altText: resolveTemplateAltText(options?.altText, "View carousel"),
     template,
   };
 }
@@ -234,7 +240,7 @@ export function createImageCarousel(
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? "View images",
+    altText: resolveTemplateAltText(altText, "View images"),
     template,
   };
 }
