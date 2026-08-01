@@ -115,8 +115,14 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   if (!hostname) {
     return false;
   }
+  // OpenRouter proxies Anthropic and honors per-block `cache_control` markers,
+  // including the 1-hour `ttl: "1h"` extension (per OpenRouter prompt-caching
+  // docs). Treat it as long-TTL-eligible so env-driven and conservative
+  // defaults reach OpenRouter-routed Anthropic models the same way they reach
+  // api.anthropic.com directly.
   return (
     hostname === "api.anthropic.com" ||
+    hostname === "openrouter.ai" ||
     hostname === "aiplatform.googleapis.com" ||
     hostname === "aiplatform.us.rep.googleapis.com" ||
     hostname === "aiplatform.eu.rep.googleapis.com" ||
@@ -124,19 +130,31 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   );
 }
 
-/** Resolve Anthropic cache-control marker retention for a request endpoint. */
+/**
+ * Resolve Anthropic cache-control marker retention for a request endpoint.
+ *
+ * `longTtlEligibleRoute` lets a caller that has *already* verified the route is
+ * a long-TTL-eligible provider path (e.g. the OpenRouter stream wrapper, which
+ * treats `provider: "openrouter"` with no `baseUrl` as a verified default route)
+ * opt that route into implicit/env-driven 1-hour TTL even when `baseUrl` is
+ * undefined and hostname gating cannot see it.
+ */
 export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
+  longTtlEligibleRoute = false,
 ): AnthropicEphemeralCacheControl | undefined {
   const retention = resolveCacheRetention(cacheRetention);
   if (retention === "none") {
     return undefined;
   }
   // Trust explicit long-retention opt-ins for Anthropic-compatible custom providers.
-  // Keep hostname gating for implicit/env-driven long retention so defaults stay conservative.
+  // Keep hostname gating for implicit/env-driven long retention so defaults stay conservative,
+  // but also honor a caller-verified long-TTL route so the OpenRouter default route
+  // (verified by the wrapper, baseUrl undefined) is not stuck on the 5-minute marker.
   const ttl =
-    retention === "long" && (cacheRetention === "long" || isLongTtlEligibleEndpoint(baseUrl))
+    retention === "long" &&
+    (cacheRetention === "long" || longTtlEligibleRoute || isLongTtlEligibleEndpoint(baseUrl))
       ? "1h"
       : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
