@@ -982,11 +982,18 @@ function deferClaudeLiveSyntheticResult(
     if (session.currentTurn !== turn || !turn.deferredSyntheticOutput) {
       return;
     }
-    const terminalOutput = turn.deferredSyntheticOutput;
     turn.syntheticContinuationTimer = null;
     turn.deferredSyntheticOutput = null;
     emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
-    finishTurn(session, terminalOutput);
+    closeLiveSession(
+      session,
+      "abort",
+      createTimeoutError(
+        session,
+        "Claude resumed session ended with a synthetic placeholder and no assistant response.",
+        "cli_no_output_timeout",
+      ),
+    );
   }, graceMs);
   emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
 }

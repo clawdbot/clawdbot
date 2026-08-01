@@ -597,7 +597,7 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
-  it("expires a terminal resumed placeholder through the existing empty-result path", async () => {
+  it("marks a terminal resumed placeholder as safe for cache-preserving recovery", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const driver = installLiveStdoutDriver();
     const resultPromise = startLiveTurn({
@@ -631,16 +631,19 @@ describe("claude live session provisional results", () => {
     );
 
     let settled = false;
-    void resultPromise.then(() => {
+    void resultPromise.catch(() => {
       settled = true;
+    });
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      reason: "timeout",
+      code: "cli_no_output_timeout",
     });
     await vi.advanceTimersByTimeAsync(29_999);
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
-    expect(result.output.text).toBe("");
-    expect(driver.cancel).not.toHaveBeenCalled();
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("expires the synthetic grace before a matching short no-output watchdog", async () => {
@@ -676,18 +679,21 @@ describe("claude live session provisional results", () => {
       ]),
     );
 
-    await vi.advanceTimersByTimeAsync(999);
     let settled = false;
-    void resultPromise.then(() => {
+    void resultPromise.catch(() => {
       settled = true;
     });
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      reason: "timeout",
+      code: "cli_no_output_timeout",
+    });
+    await vi.advanceTimersByTimeAsync(999);
     await Promise.resolve();
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
-    expect(result.output.text).toBe("");
-    expect(driver.cancel).not.toHaveBeenCalled();
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it.each([

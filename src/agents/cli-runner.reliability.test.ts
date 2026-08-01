@@ -1999,7 +1999,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
+  it("forks a terminal synthetic resume without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -2068,6 +2068,12 @@ describe("runCliAgent reliability", () => {
                       role: "assistant",
                       content: [{ type: "text", text: "No response requested." }],
                     },
+                  }),
+                  JSON.stringify({
+                    type: "result",
+                    subtype: "success",
+                    session_id: "stale-live",
+                    result: "",
                   }),
                 ].join("\n") + "\n",
               );
