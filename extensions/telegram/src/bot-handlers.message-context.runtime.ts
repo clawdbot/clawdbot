@@ -11,6 +11,7 @@ import type {
 } from "./bot-message-context.types.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import {
   buildTelegramSelfSenderName,
   isTelegramHistoryEntryAfterAmbientWatermark,
@@ -155,7 +156,10 @@ export function createTelegramMessageContextRuntime({
         runtimeCfg.messages?.groupChat?.historyLimit ??
         DEFAULT_GROUP_HISTORY_LIMIT,
     );
-    const dmHistoryLimit = Math.max(0, runtimeTelegramCfg.dmHistoryLimit ?? 10);
+    const dmHistoryLimit = resolveTelegramDmHistoryLimit({
+      config: runtimeTelegramCfg,
+      senderId: msg.from?.id,
+    });
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
