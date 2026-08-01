@@ -344,7 +344,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     await result!.dispose();
   });
 
-  it("carries session tool overrides into both scoped runtimes", async () => {
+  it("carries session tool overrides into the static runtime it opens", async () => {
     mocks.setResolveImpl(async (params) =>
       makeRuntime({ sessionId: params.sessionId, requesterSenderId: "authed" }),
     );
@@ -363,12 +363,14 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       toolOverrides,
     });
 
-    // Both bridges replace surfaces that honored these overrides natively.
-    expect(mocks.getOrCreateRequesterScopedMcpRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ toolOverrides }),
-    );
+    // The static branch replaces a surface that honored these overrides natively.
     expect(mocks.getOrCreateStaticScopedMcpRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ toolOverrides }),
+    );
+    // The requester-scoped branch keeps today's behaviour: it never received
+    // them, and changing that is a separate behaviour change.
+    expect(mocks.getOrCreateRequesterScopedMcpRuntime).toHaveBeenCalledWith(
+      expect.not.objectContaining({ toolOverrides }),
     );
     await result?.dispose();
   });

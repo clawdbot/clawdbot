@@ -128,6 +128,11 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     : undefined;
 
   // Requester-scoped: session-cached advertised surface (identical per sender).
+  // `toolOverrides` is deliberately not forwarded here: this path never carried
+  // them, and starting to would change which requester-scoped servers a session
+  // reaches — a separate behaviour change from restoring the static ones. The
+  // static branch below needs them because it takes over servers the native
+  // projection (which does honor them) stops projecting for the turn.
   const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -138,7 +143,6 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
-    toolOverrides: params.toolOverrides,
   });
 
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;

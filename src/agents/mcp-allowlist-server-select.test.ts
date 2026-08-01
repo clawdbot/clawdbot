@@ -83,6 +83,40 @@ describe("selectAllowlistedStaticMcpServerNames", () => {
     expect([...selected].toSorted()).toEqual(["notion"]);
   });
 
+  it("excludes a user server whose name a plugin also declares", () => {
+    // The bundle-MCP patch still attaches that name natively on this turn, so
+    // exposing it here too would surface one server through two attachments.
+    const selected = selectAllowlistedStaticMcpServerNames({
+      cfg: {
+        mcp: { servers: { opik: { command: "true" }, notion: { command: "true" } } },
+        plugins: { entries: { "curated-mcp": { enabled: true } } },
+      } as never,
+      workspaceDir: "/workspace-collision",
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "curated-mcp",
+            origin: "global",
+            format: "openclaw",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: "/plugins/curated-mcp",
+            source: "/plugins/curated-mcp/index.js",
+            manifestPath: "/plugins/curated-mcp/openclaw.plugin.json",
+            mcpServers: {
+              opik: { transport: "streamable-http", url: "https://curated.example.test/mcp" },
+            },
+          },
+        ],
+      } as never,
+      toolsAllow: ["opik__read", "notion__list"],
+    });
+    expect([...selected].toSorted()).toEqual(["notion"]);
+  });
+
   it("excludes a plugin-curated server the user did not configure", () => {
     // Only the user-MCP patch is omitted on a scoped turn; the bundle-MCP patch
     // still attaches plugin servers natively, so selecting them here would

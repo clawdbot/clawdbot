@@ -6,7 +6,7 @@
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import { loadEnabledBundleMcpConfig, type BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
@@ -65,9 +65,10 @@ function isMcpServerToolAllowlisted(
 /**
  * Names of **user-configured static** MCP servers the effective allowlist
  * references. Requester-scoped servers are excluded (they resolve on their own
- * path), and so are plugin-curated bundle MCP servers: only the user-MCP patch
- * is omitted on a scoped turn, while the bundle-MCP patch still attaches
- * natively, so taking those over here would surface them twice. Safe names come
+ * path), and so is any name a plugin declares — including one an operator also
+ * configures under the same name: only the user-MCP patch is omitted on a scoped
+ * turn, while the bundle-MCP patch still attaches those natively, so taking them
+ * over here would surface one server through two attachments. Safe names come
  * from the FULL declared set so a collision suffix matches the model-facing tool
  * id the operator's allowlist targets. Returns an empty set when the allowlist
  * imposes no restriction (nothing to narrow to a subset).
@@ -103,8 +104,21 @@ export function selectAllowlistedStaticMcpServerNames(params: {
   const userConfiguredServerNames = new Set(
     Object.keys(normalizeConfiguredMcpServers(params.cfg?.mcp?.servers)),
   );
+  // A name a plugin also declares keeps its own native bundle-MCP patch, which
+  // is not omitted for this turn. Taking it over here would surface one server
+  // through two attachments at once, so the bridge takes over only what the
+  // omitted patch actually gave up.
+  const pluginProvidedServerNames = new Set(
+    Object.keys(
+      loadEnabledBundleMcpConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        manifestRegistry: params.manifestRegistry,
+      }).config.mcpServers,
+    ),
+  );
   for (const [serverName, server] of Object.entries(staticServers)) {
-    if (!userConfiguredServerNames.has(serverName)) {
+    if (!userConfiguredServerNames.has(serverName) || pluginProvidedServerNames.has(serverName)) {
       continue;
     }
     const safeServerName = safeServerNamesByServer.get(serverName) ?? serverName;
