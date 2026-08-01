@@ -1783,6 +1783,152 @@ describe("prepareCliRunContext", () => {
     expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
   });
 
+  it("keeps a chat-window message that first appears before the accepted watermark", async () => {
+    // Window membership is not append-only: mergeMessages reserves slots for pinned
+    // reply targets, so a turn that pins one drops an older recent message that the
+    // next turn (with nothing pinned) brings back below the watermark. Positional
+    // trimming would drop it permanently even though it was never delivered.
+    const neverSent = "Pat: squeezed out of the previous window";
+    const watermarkMessage = "Lee: already delivered";
+    const latestMessage = "Pat: latest group message";
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "latest ask",
+      currentInboundContext: {
+        text: [
+          "Conversation context:",
+          neverSent,
+          watermarkMessage,
+          latestMessage,
+          "Current message:",
+        ].join("\n"),
+        conversationContext: {
+          beforeText: "",
+          header: "Conversation context:",
+          messages: [
+            { key: "telegram:11", text: neverSent },
+            { key: "telegram:12", text: watermarkMessage },
+            { key: "telegram:13", text: latestMessage },
+          ],
+          afterText: "Current message:",
+        },
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        inboundContextWatermark: {
+          version: 1,
+          localSessionId: "session-test",
+          deliveredMessageKeys: ["telegram:10", "telegram:12"],
+        },
+      },
+    });
+
+    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    expect(context.params.prompt).not.toContain(watermarkMessage);
+    expect(context.params.prompt).toContain(neverSent);
+    expect(context.params.prompt).toContain(latestMessage);
+  });
+
+  it("sends only chat-window messages after the accepted CLI session watermark", async () => {
+    const oldVoice = "Pat: old voice transcript [audio telegram:file/old-voice]";
+    const oldReplyTarget = "Lee: explicitly replied-to older turn";
+    const latestMessage = "Pat: latest group message";
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "latest ask",
+      currentInboundContext: {
+        text: [
+          "Conversation info:",
+          "Conversation context:",
+          oldVoice,
+          oldReplyTarget,
+          latestMessage,
+          "Current message:",
+        ].join("\n"),
+        conversationContext: {
+          beforeText: "Conversation info:",
+          header: "Conversation context:",
+          messages: [
+            { key: "telegram:10", text: oldVoice },
+            { key: "telegram:11", text: oldReplyTarget, retainOnResume: true },
+            { key: "telegram:12", text: latestMessage },
+          ],
+          afterText: "Current message:",
+        },
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        inboundContextWatermark: {
+          version: 1,
+          localSessionId: "session-test",
+          deliveredMessageKeys: ["telegram:10"],
+        },
+      },
+    });
+
+    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    expect(context.params.prompt).not.toContain(oldVoice);
+    expect(context.params.prompt).not.toContain("telegram:file/old-voice");
+    expect(context.params.prompt).toContain(oldReplyTarget);
+    expect(context.params.prompt).toContain(latestMessage);
+    expect(context.inboundContextWatermark).toEqual({
+      version: 1,
+      localSessionId: "session-test",
+      deliveredMessageKeys: ["telegram:10", "telegram:11", "telegram:12"],
+    });
+  });
+
+  it.each([
+    {
+      name: "a different local session owner",
+      watermark: {
+        version: 1 as const,
+        localSessionId: "previous-local-session",
+        deliveredMessageKeys: ["telegram:10"],
+      },
+    },
+    {
+      name: "a delivered set that covers none of the current projection",
+      watermark: {
+        version: 1 as const,
+        localSessionId: "session-test",
+        deliveredMessageKeys: ["telegram:missing"],
+      },
+    },
+  ])("keeps the full conversation context for $name", async ({ watermark }) => {
+    const oldContext = "Pat: context that must not be lost";
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "latest ask",
+      currentInboundContext: {
+        text: `Conversation context:\n${oldContext}`,
+        conversationContext: {
+          beforeText: "",
+          header: "Conversation context:",
+          messages: [{ key: "telegram:10", text: oldContext }],
+          afterText: "",
+        },
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        inboundContextWatermark: watermark,
+      },
+    });
+
+    expect(context.params.prompt).toContain(oldContext);
+    expect(context.inboundContextWatermark).toEqual({
+      version: 1,
+      localSessionId: "session-test",
+      deliveredMessageKeys: ["telegram:10"],
+    });
+  });
+
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),

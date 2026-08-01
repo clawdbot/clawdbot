@@ -1261,6 +1261,9 @@ export async function runPreparedCliAgent(
                     ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
                   ...(reseedReceipt ? { reseedReceipt } : {}),
+                  ...(context.inboundContextWatermark
+                    ? { inboundContextWatermark: context.inboundContextWatermark }
+                    : {}),
                 },
               }
             : {}),

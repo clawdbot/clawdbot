@@ -353,4 +353,75 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");
     expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   });
+  it("forwards a conversation projection that reconstructs the current inbound context", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "what changed?",
+      BodyStripped: "what changed?",
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "what changed?",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:\nPat: earlier",
+      inboundConversationContext: {
+        beforeText: "",
+        header: "Conversation context:",
+        messages: [{ key: "telegram:10", text: "Pat: earlier" }],
+        afterText: "",
+      },
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    const projection = envelope.currentInboundContext?.conversationContext;
+    expect(projection).toBeDefined();
+    const rebuilt = [
+      projection?.beforeText,
+      [projection?.header, ...(projection?.messages ?? []).map((message) => message.text)].join(
+        "\n",
+      ),
+      projection?.afterText,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    expect(envelope.currentInboundContext?.text).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(rebuilt).toBe(envelope.currentInboundContext?.text);
+  });
+
+  it("does not forward a conversation projection for room events", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "",
+      BodyStripped: "",
+      Provider: "telegram",
+      ChatType: "group",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Bob: yes",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:\nAlice: lunch?",
+      inboundConversationContext: {
+        beforeText: "",
+        header: "Conversation context:",
+        messages: [{ key: "telegram:10", text: "Alice: lunch?" }],
+        afterText: "",
+      },
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    // Room-event text is wrapped by buildRoomEventContext, which the unframed
+    // projection cannot reconstruct; trimming it would drop the event envelope.
+    expect(envelope.currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(envelope.currentInboundContext?.conversationContext).toBeUndefined();
+  });
 });

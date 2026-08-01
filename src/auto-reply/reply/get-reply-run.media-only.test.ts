@@ -626,6 +626,7 @@ describe("runPreparedReply media-only handling", () => {
       },
       expect.anything(),
       undefined,
+      {},
     );
   });
 
@@ -2801,6 +2802,7 @@ describe("runPreparedReply media-only handling", () => {
       expect.anything(),
       expect.anything(),
       undefined,
+      {},
     );
     expect(consumeSessionSkillSuggestionMock).not.toHaveBeenCalled();
     expect(sessionEntry.pendingSkillSuggestion).toBeDefined();

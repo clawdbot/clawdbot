@@ -128,11 +128,11 @@ export function retainTelegramGroupHistoryPromptContext(params: {
     if (!isTelegramChatWindowPromptContext(entry)) {
       return [entry];
     }
-    if (entryKeys.size === 0) {
-      return [];
-    }
     const payload = telegramChatWindowPayload(entry);
     const messages = telegramPromptMessages(payload).filter((message) => {
+      if (message["is_reply_target"] === true) {
+        return true;
+      }
       const key = telegramPromptMessageKey(message);
       return Boolean(key && entryKeys.has(key));
     });

@@ -346,10 +346,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry,
   );
   let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
+  let inboundContextProjection: NonNullable<Parameters<typeof buildInboundUserContextPrefix>[3]> =
+    {};
   let inboundUserContext = buildInboundUserContextPrefix(
     inboundUserContextSessionCtx,
     envelopeOptions,
     inboundContextSessionEntry,
+    inboundContextProjection,
   );
   const refreshInboundContextAfterAdmissionWait = async () => {
     if (isHeartbeat) {
@@ -361,10 +364,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         : (sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry);
     inboundContextSessionEntry = await resolveContextSessionEntry(latestSessionEntry);
     activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
+    inboundContextProjection = {};
     inboundUserContext = buildInboundUserContextPrefix(
       inboundUserContextSessionCtx,
       envelopeOptions,
       inboundContextSessionEntry,
+      inboundContextProjection,
     );
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
@@ -374,6 +379,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     baseBody: baseBodyFinal,
     hasUserBody,
     inboundUserContext,
+    inboundConversationContext: inboundContextProjection.conversationContext,
     activeGoalContext,
     inboundUserContextPromptJoiner,
     isBareSessionReset,
@@ -440,7 +446,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     getSessionEntry: () => sessionEntry,
     isMainSession,
     inboundUserContextPromptJoiner,
-    getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
+    getInboundContext: () => ({
+      activeGoalContext,
+      inboundUserContext,
+      inboundConversationContext: inboundContextProjection.conversationContext,
+    }),
     refreshInboundContextAfterAdmissionWait,
     allowEmptyAssistantReplyAsSilent,
   } as const;

@@ -46,6 +46,11 @@ describe("cli-session helpers", () => {
         localSessionId: "openclaw-session",
         userTurnDisposition: "persisted",
       },
+      inboundContextWatermark: {
+        version: 1,
+        localSessionId: "openclaw-session",
+        deliveredMessageKeys: ["telegram:42"],
+      },
     });
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
@@ -67,6 +72,11 @@ describe("cli-session helpers", () => {
         promptHash: "a".repeat(64),
         localSessionId: "openclaw-session",
         userTurnDisposition: "persisted",
+      },
+      inboundContextWatermark: {
+        version: 1,
+        localSessionId: "openclaw-session",
+        deliveredMessageKeys: ["telegram:42"],
       },
     });
   });
@@ -182,6 +192,28 @@ describe("cli-session helpers", () => {
 
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
     expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toBeUndefined();
+  });
+
+  it("preserves inbound context watermarks only for the same native CLI session", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+    };
+    const watermark = {
+      version: 1 as const,
+      localSessionId: "openclaw-session",
+      deliveredMessageKeys: ["telegram:42"],
+    };
+
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "cli-session-1",
+      inboundContextWatermark: watermark,
+    });
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.inboundContextWatermark).toEqual(watermark);
+
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.inboundContextWatermark).toBeUndefined();
   });
 
   it("force-reuses explicitly attached CLI sessions despite metadata drift", () => {

@@ -143,7 +143,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
-    const { activeGoalContext, inboundUserContext } = context.getInboundContext();
+    const { activeGoalContext, inboundUserContext, inboundConversationContext } =
+      context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
       sessionCtx,
@@ -151,6 +152,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       prefixedBody: prefixedBodyCore,
       hasUserBody,
       inboundUserContext,
+      inboundConversationContext,
       activeGoalContext,
       inboundUserContextPromptJoiner,
       isBareSessionReset,

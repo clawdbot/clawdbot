@@ -73,6 +73,17 @@ export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  /**
+   * Structured chat-window projection used only for conservative native-session deltas.
+   * Producers must keep `[beforeText, header + messages, afterText]` a lossless rebuild of
+   * `text`; consumers drop already-sent messages and rejoin the remaining parts.
+   */
+  conversationContext?: {
+    beforeText: string;
+    header: string;
+    afterText: string;
+    messages: Array<{ key?: string; text: string; retainOnResume?: true }>;
+  };
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
   injectedGoalContexts?: string[];
 };

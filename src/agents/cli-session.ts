@@ -7,7 +7,10 @@ import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
-import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import {
+  normalizeCliSessionInboundContextWatermark,
+  normalizeCliSessionReseedReceipt,
+} from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
 import { isFailoverError } from "./failover-error.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
@@ -44,7 +47,14 @@ export function setCliSessionBinding(
     normalizeOptionalString(previousBinding?.sessionId) === trimmed
       ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
       : undefined;
+  const previousInboundContextWatermark =
+    normalizeOptionalString(previousBinding?.sessionId) === trimmed
+      ? normalizeCliSessionInboundContextWatermark(previousBinding?.inboundContextWatermark)
+      : undefined;
   const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
+  const inboundContextWatermark =
+    normalizeCliSessionInboundContextWatermark(binding.inboundContextWatermark) ??
+    previousInboundContextWatermark;
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
     [normalized]: {
@@ -82,6 +92,7 @@ export function setCliSessionBinding(
         ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
         : {}),
       ...(reseedReceipt ? { reseedReceipt } : {}),
+      ...(inboundContextWatermark ? { inboundContextWatermark } : {}),
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };

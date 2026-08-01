@@ -117,6 +117,21 @@ export function refreshActiveGoalContext(
         activeGoalContext,
       })
     : undefined;
+  const refreshedConversationContext = context.conversationContext
+    ? {
+        ...context.conversationContext,
+        beforeText: refreshActiveGoalContextText({
+          text: context.conversationContext.beforeText,
+          injectedGoals,
+          activeGoalContext,
+        }),
+        afterText: refreshActiveGoalContextText({
+          text: context.conversationContext.afterText,
+          injectedGoals,
+          activeGoalContext,
+        }),
+      }
+    : undefined;
   if (!refreshedText) {
     return undefined;
   }
@@ -126,6 +141,7 @@ export function refreshActiveGoalContext(
     ...(refreshedResumableText !== undefined
       ? { resumableText: refreshedResumableText || undefined }
       : {}),
+    ...(refreshedConversationContext ? { conversationContext: refreshedConversationContext } : {}),
     injectedGoalContexts: activeGoalContext ? [activeGoalContext] : undefined,
   };
 }
@@ -335,19 +351,42 @@ function formatChatWindowMessage(
   return `${details.length > 0 ? `${details.join(" ")} ` : ""}${sender}: ${content}`;
 }
 
-function formatChatWindowStructuredContext(
+type InboundConversationContextProjection = NonNullable<
+  CurrentInboundPromptContext["conversationContext"]
+>;
+
+type RenderedChatWindow = {
+  text: string;
+  projection?: Pick<InboundConversationContextProjection, "header" | "messages">;
+};
+
+function renderChatWindowStructuredContext(
   entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
   envelope?: EnvelopeFormatOptions,
-): string | undefined {
+): RenderedChatWindow | undefined {
   if (!isChatWindowStructuredContext(entry)) {
     return undefined;
   }
-  const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
-  const lines = messages.flatMap((message) => {
-    const line = formatChatWindowMessage(message, envelope);
-    return line ? [line] : [];
+  const rawMessages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+  const messages = rawMessages.flatMap((message) => {
+    const text = formatChatWindowMessage(message, envelope);
+    if (!text) {
+      return [];
+    }
+    const messageId = isRecord(message)
+      ? normalizePromptMetadataString(message["message_id"])
+      : undefined;
+    return [
+      {
+        text,
+        ...(messageId ? { key: messageId } : {}),
+        ...(isRecord(message) && message["is_reply_target"] === true
+          ? { retainOnResume: true as const }
+          : {}),
+      },
+    ];
   });
-  if (lines.length === 0) {
+  if (messages.length === 0) {
     return undefined;
   }
   const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
@@ -356,8 +395,19 @@ function formatChatWindowStructuredContext(
   // Dropping the old "untrusted" qualifier means the parenthetical can now be empty for
   // plugin entries that omit order/relation; emit a bare label instead of `Chat window ():`.
   const qualifiers = [order, relation].filter(Boolean).join(", ");
-  const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
-  return [markInboundContextLabel(header), ...lines].join("\n");
+  const header = markInboundContextLabel(qualifiers ? `${label} (${qualifiers}):` : `${label}:`);
+  const projectionMessages = messages.map((message) => ({
+    ...(message.key ? { key: message.key } : {}),
+    text: message.text,
+    ...(message.retainOnResume ? { retainOnResume: true as const } : {}),
+  }));
+  const canProject =
+    label === "Conversation context" &&
+    messages.every((message) => message.key || message.retainOnResume === true);
+  return {
+    text: [header, ...messages.map((message) => message.text)].join("\n"),
+    ...(canProject ? { projection: { header, messages: projectionMessages } } : {}),
+  };
 }
 
 function isChatWindowStructuredContext(
@@ -627,6 +677,7 @@ export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
   sessionEntry?: SessionEntry,
+  projectionTarget?: { conversationContext?: InboundConversationContextProjection },
 ): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
@@ -760,13 +811,27 @@ export function buildInboundUserContextPrefix(
     blocks.push(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
   }
 
+  let projectedConversationBlock:
+    | { blockIndex: number; projection: RenderedChatWindow["projection"] }
+    | undefined;
+  let ambiguousConversationProjection = false;
   for (const entry of structuredContext) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const chatWindow = formatChatWindowStructuredContext(entry, envelope);
+    const chatWindow = renderChatWindowStructuredContext(entry, envelope);
     if (chatWindow) {
-      blocks.push(chatWindow);
+      if (chatWindow.projection) {
+        if (projectedConversationBlock) {
+          ambiguousConversationProjection = true;
+        } else {
+          projectedConversationBlock = {
+            blockIndex: blocks.length,
+            projection: chatWindow.projection,
+          };
+        }
+      }
+      blocks.push(chatWindow.text);
       continue;
     }
     blocks.push(
@@ -823,6 +888,18 @@ export function buildInboundUserContextPrefix(
     blocks.push(currentMessageContext);
   }
 
-  return blocks.filter(Boolean).join("\n\n");
+  const nonEmptyBlocks = blocks.filter(Boolean);
+  if (
+    projectionTarget &&
+    projectedConversationBlock?.projection &&
+    !ambiguousConversationProjection
+  ) {
+    projectionTarget.conversationContext = {
+      beforeText: nonEmptyBlocks.slice(0, projectedConversationBlock.blockIndex).join("\n\n"),
+      ...projectedConversationBlock.projection,
+      afterText: nonEmptyBlocks.slice(projectedConversationBlock.blockIndex + 1).join("\n\n"),
+    };
+  }
+  return nonEmptyBlocks.join("\n\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

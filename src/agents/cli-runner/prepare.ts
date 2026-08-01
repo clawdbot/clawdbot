@@ -6,6 +6,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { CliSessionInboundContextWatermark } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -239,6 +240,57 @@ function prependCliSessionDriftUserContext(
     ...context,
     text: [note, context.text].join("\n\n"),
     ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
+  };
+}
+
+function selectResumedInboundConversationContext(params: {
+  context: RunCliAgentParams["currentInboundContext"];
+  binding: RunCliAgentParams["cliSessionBinding"];
+  localSessionId: string;
+  reusableCliSessionId?: string;
+}): {
+  context: RunCliAgentParams["currentInboundContext"];
+  nextWatermark?: CliSessionInboundContextWatermark;
+} {
+  const context = params.context;
+  const projection = context?.conversationContext;
+  // Every keyed message in this window is delivered by the end of this turn: either the
+  // native session already held it, or the filter below leaves it in the prompt.
+  const windowMessageKeys = projection?.messages.flatMap((message) =>
+    message.key ? [message.key] : [],
+  );
+  const nextWatermark = windowMessageKeys?.length
+    ? {
+        version: 1 as const,
+        localSessionId: params.localSessionId,
+        deliveredMessageKeys: windowMessageKeys,
+      }
+    : undefined;
+  if (!projection || !params.reusableCliSessionId) {
+    return { context, nextWatermark };
+  }
+
+  const watermark = params.binding?.inboundContextWatermark;
+  if (!watermark || watermark.localSessionId !== params.localSessionId) {
+    return { context, nextWatermark };
+  }
+  const deliveredKeys = new Set(watermark.deliveredMessageKeys);
+  const messages = projection.messages.filter(
+    (message) => message.retainOnResume === true || !message.key || !deliveredKeys.has(message.key),
+  );
+  const conversationBlock =
+    messages.length > 0
+      ? [projection.header, ...messages.map((message) => message.text)].join("\n")
+      : undefined;
+  const resumableText = [projection.beforeText, conversationBlock, projection.afterText]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+  return {
+    context: {
+      ...context,
+      resumableText,
+    },
+    nextWatermark,
   };
 }
 
@@ -1358,6 +1410,7 @@ export async function prepareCliRunContext(
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
     const reusableCliSessionId = resolveReusableCliSessionId(reusableCliSession);
+    let inboundContextWatermark: CliSessionInboundContextWatermark | undefined;
     const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
     if (invalidatedReason) {
       cliBackendLog.info(
@@ -1483,8 +1536,15 @@ export async function prepareCliRunContext(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!isSideQuestion) {
+      const resumedInboundContext = selectResumedInboundConversationContext({
+        context: params.currentInboundContext,
+        binding: params.cliSessionBinding,
+        localSessionId: params.sessionId,
+        reusableCliSessionId,
+      });
+      inboundContextWatermark = resumedInboundContext.nextWatermark;
       const currentInboundContext = prependCliSessionDriftUserContext(
-        params.currentInboundContext,
+        resumedInboundContext.context,
         reusableCliSession,
       );
       const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
@@ -1494,8 +1554,7 @@ export async function prepareCliRunContext(
       const runCurrentInboundPrompt = buildCurrentInboundPrompt({
         context: currentInboundContext,
         prompt: preparedPrompt,
-        preferResumableText:
-          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId),
+        preferResumableText: Boolean(reusableCliSessionId),
       });
       historyPromptCurrentTurn = annotateInterSessionPromptText(
         fullCurrentInboundPrompt,
@@ -1666,6 +1725,7 @@ export async function prepareCliRunContext(
       backendResolved,
       preparedBackend: preparedBackendFinal,
       reusableCliSession,
+      ...(inboundContextWatermark ? { inboundContextWatermark } : {}),
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
         : {}),

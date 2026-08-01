@@ -231,6 +231,57 @@ describe("buildTelegramMessageContext prompt context", () => {
     );
   });
 
+  it("drops stale cached voice and media context before rebuilding group history", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 12,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot continue",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "11",
+              sender: "Pat",
+              timestamp: 1_700_000_001_000,
+              body: "latest retained turn",
+            },
+          ],
+        ],
+      ]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "10",
+                sender: "Pat",
+                body: "old voice transcript",
+                media_type: "audio/ogg",
+                media_ref: "telegram:file/old-voice",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const rendered = JSON.stringify(ctx?.ctxPayload.ChannelStructuredContext);
+    expect(rendered).toContain("latest retained turn");
+    expect(rendered).not.toContain("old voice transcript");
+    expect(rendered).not.toContain("telegram:file/old-voice");
+  });
+
   it("applies the ambient watermark before truncating the history window", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       message: {

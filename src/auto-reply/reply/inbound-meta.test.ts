@@ -1213,6 +1213,73 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("2025");
   });
 
+  it("projects stable conversation message boundaries for resumed CLI deltas", () => {
+    const projection: Parameters<typeof buildInboundUserContextPrefix>[3] = {};
+    const text = buildInboundUserContextPrefix(
+      createChatWindowContext({
+        chatType: "group",
+        label: "Conversation context",
+        context: { MessageSid: "3" },
+        payload: {
+          order: "chronological",
+          relation: "selected_for_current_message",
+          messages: [
+            {
+              message_id: "telegram:1",
+              sender: "Pat",
+              body: "old voice transcript",
+              media_type: "audio/ogg",
+              media_path: "media://inbound/voice-1.ogg",
+            },
+            {
+              message_id: "telegram:2",
+              sender: "Lee",
+              body: "reply target",
+              is_reply_target: true,
+            },
+          ],
+        },
+      }),
+      undefined,
+      undefined,
+      projection,
+    );
+
+    expect(projection.conversationContext).toMatchObject({
+      messages: [
+        {
+          key: "telegram:1",
+          text: expect.stringContaining("media://inbound/voice-1.ogg"),
+        },
+        {
+          key: "telegram:2",
+          text: expect.stringContaining("reply target"),
+          retainOnResume: true,
+        },
+      ],
+    });
+    expect(text).toContain(projection.conversationContext?.header);
+  });
+
+  it("refreshes goal context inside the resumed conversation projection", () => {
+    const oldGoal = "Active goal: old";
+    const context = {
+      text: `Conversation context:\n#1 Pat: hi\n\n${oldGoal}`,
+      conversationContext: {
+        beforeText: "",
+        header: "Conversation context:",
+        messages: [{ key: "1", text: "#1 Pat: hi" }],
+        afterText: oldGoal,
+      },
+      injectedGoalContexts: [oldGoal],
+    };
+
+    const refreshed = refreshActiveGoalContext(context, createGoalSessionEntry("complete"));
+
+    expect(refreshed?.conversationContext?.afterText).not.toContain(oldGoal);
+    expect(refreshed?.conversationContext?.afterText).toBe("");
+  });
+
   it("canonicalizes untrusted chat-window media paths before transcript rendering", () => {
     const text = buildInboundUserContextPrefix(
       createChatWindowContext({

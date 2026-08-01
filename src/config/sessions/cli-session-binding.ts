@@ -1,7 +1,13 @@
 // CLI session binding lookup shared by session lifecycle and agent runtime code.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from "./types.js";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type {
+  CliSessionBinding,
+  CliSessionInboundContextWatermark,
+  CliSessionReseedReceipt,
+  SessionEntry,
+} from "./types.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
@@ -27,6 +33,19 @@ export function normalizeCliSessionReseedReceipt(
     localSessionId,
     userTurnDisposition,
   };
+}
+
+export function normalizeCliSessionInboundContextWatermark(
+  value: CliSessionInboundContextWatermark | undefined,
+): CliSessionInboundContextWatermark | undefined {
+  const localSessionId = normalizeOptionalString(value?.localSessionId);
+  // Rebuilt from the current chat window on every turn, never appended, so the persisted
+  // row stays bounded by the configured window size.
+  const deliveredMessageKeys = normalizeUniqueTrimmedStringList(value?.deliveredMessageKeys);
+  if (value?.version !== 1 || !localSessionId || deliveredMessageKeys.length === 0) {
+    return undefined;
+  }
+  return { version: 1, localSessionId, deliveredMessageKeys };
 }
 
 /**
@@ -88,6 +107,9 @@ export function getCliSessionBinding(
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
       reseedReceipt: normalizeCliSessionReseedReceipt(fromBindings?.reseedReceipt),
+      inboundContextWatermark: normalizeCliSessionInboundContextWatermark(
+        fromBindings?.inboundContextWatermark,
+      ),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];

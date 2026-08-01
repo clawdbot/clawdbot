@@ -114,6 +114,7 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
+  inboundConversationContext?: CurrentInboundPromptContext["conversationContext"];
   activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
@@ -214,6 +215,19 @@ export function buildReplyPromptEnvelopeBase(
   const currentInboundContextText = isRoomEvent
     ? roomEventContext
     : [inboundUserContext, userRequestDeliveryDirective].filter(Boolean).join("\n\n");
+  // Consumers rebuild the current-turn text from this projection to drop already-sent
+  // chat-window messages, so it must reconstruct `text` exactly. Room-event framing is
+  // added around the projection and cannot be rebuilt from it; those turns already drop
+  // the chat window through resumableRoomEventContext.
+  const projectedConversationContext =
+    !isRoomEvent && params.inboundConversationContext
+      ? {
+          ...params.inboundConversationContext,
+          afterText: [params.inboundConversationContext.afterText, userRequestDeliveryDirective]
+            .filter(Boolean)
+            .join("\n\n"),
+        }
+      : undefined;
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -248,6 +262,9 @@ export function buildReplyPromptEnvelopeBase(
           text: currentInboundContextText,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
+          ...(projectedConversationContext
+            ? { conversationContext: projectedConversationContext }
+            : {}),
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
         }
       : undefined;

@@ -14,6 +14,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type {
+  CliSessionInboundContextWatermark,
   CliSessionBinding,
   SessionEntry,
   SessionToolOverrides,
@@ -293,6 +294,8 @@ export type PreparedCliRunContext = {
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
+  /** Advance only after this exact inbound context was accepted by the native session. */
+  inboundContextWatermark?: CliSessionInboundContextWatermark;
   /** Resume is safe only while the exact managed Claude stdio child still exists. */
   requiredClaudeLiveSessionGeneration?: string;
   hadSessionFile: boolean;

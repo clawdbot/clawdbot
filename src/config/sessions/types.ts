@@ -89,6 +89,18 @@ export type CliSessionReseedReceipt = {
   userTurnDisposition: "persisted" | "omitted";
 };
 
+export type CliSessionInboundContextWatermark = {
+  version: 1;
+  /** OpenClaw transcript owner whose context was accepted by the native session. */
+  localSessionId: string;
+  /**
+   * Chat-window message keys a successful native turn already carried. Membership, not
+   * position: the window reserves slots for pinned reply targets, so an undelivered
+   * message can appear below a previously delivered one.
+   */
+  deliveredMessageKeys: string[];
+};
+
 export type SessionDiffBaseline = {
   version: 1;
   sessionId: string;
@@ -117,6 +129,8 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Conservative delta boundary for repeated inbound chat-window context. */
+  inboundContextWatermark?: CliSessionInboundContextWatermark;
 };
 
 type AcpSessionBinding = {
