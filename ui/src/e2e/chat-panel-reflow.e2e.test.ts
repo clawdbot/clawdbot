@@ -44,7 +44,7 @@ async function expectMessagesNotToOverlap(page: import("playwright").Page): Prom
             return { bottom: rect.bottom, index, top: rect.top };
           })
           .filter((rect) => rect.bottom > 0 && rect.top < window.innerHeight)
-          .sort((a, b) => a.top - b.top);
+          .toSorted((a, b) => a.top - b.top);
         return visible.slice(1).flatMap((current, index) => {
           const previous = visible[index];
           if (!previous || current.top >= previous.bottom - 1) {
