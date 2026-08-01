@@ -558,6 +558,12 @@ function createCronPromptExecutor(params: {
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          sessionTarget: {
+            agentId: params.agentId,
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.runSessionKey,
+            storePath: params.cronSession.storePath,
+          },
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",
@@ -569,7 +575,6 @@ function createCronPromptExecutor(params: {
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
-          sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,

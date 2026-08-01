@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { sendMessageMSTeams } from "./send.js";
+import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 const serviceUrl = "https://smba.trafficmanager.net/amer";
 const conversationId = "19:channel@thread.tacv2";
@@ -173,6 +173,15 @@ type AttachmentRoutingCase = {
   expectedConversationId: string;
 };
 
+type StructuredRoutingCase = {
+  label: string;
+  conversationType: "channel" | "groupChat" | "personal";
+  replyStyle: "thread" | "top-level";
+  threadActivityId?: string;
+  storedThreadId?: string;
+  expectedConversationId: string;
+};
+
 const attachmentRoutingCases: AttachmentRoutingCase[] = [
   {
     label: "channel attachment in its stored thread root",
@@ -205,6 +214,69 @@ const attachmentRoutingCases: AttachmentRoutingCase[] = [
   },
 ];
 
+const structuredRoutingCases: StructuredRoutingCase[] = [
+  {
+    label: "threaded channel",
+    conversationType: "channel",
+    replyStyle: "thread",
+    threadActivityId: "thread-root-1",
+    storedThreadId: "thread-root-1",
+    expectedConversationId: `${conversationId};messageid=thread-root-1`,
+  },
+  {
+    label: "top-level channel",
+    conversationType: "channel",
+    replyStyle: "top-level",
+    storedThreadId: "thread-root-1",
+    expectedConversationId: conversationId,
+  },
+  {
+    label: "group chat",
+    conversationType: "groupChat",
+    replyStyle: "top-level",
+    storedThreadId: "group-activity-1",
+    expectedConversationId: conversationId,
+  },
+  {
+    label: "personal chat",
+    conversationType: "personal",
+    replyStyle: "top-level",
+    storedThreadId: "personal-activity-1",
+    expectedConversationId: conversationId,
+  },
+];
+
+type StructuredSender = {
+  label: string;
+  send: (cfg: OpenClawConfig) => Promise<unknown>;
+};
+
+const structuredSenders: StructuredSender[] = [
+  {
+    label: "presentation card",
+    send: async (cfg) =>
+      await sendAdaptiveCardMSTeams({
+        cfg,
+        to: conversationId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [{ type: "TextBlock", text: "Deploy finished" }],
+        },
+      }),
+  },
+  {
+    label: "poll",
+    send: async (cfg) =>
+      await sendPollMSTeams({
+        cfg,
+        to: conversationId,
+        question: "Ship it?",
+        options: ["Yes", "No"],
+      }),
+  },
+];
+
 describe("Microsoft Teams SharePoint attachment thread routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -231,6 +303,9 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
           },
           conversationType,
           replyStyle,
+          ...(replyStyle === "thread" && conversationType === "channel"
+            ? { threadActivityId: threadId ?? activityId }
+            : {}),
           sdkCloudOptions: { cloud: "Public" },
           tokenProvider: { getAccessToken: vi.fn(async () => "token") },
           sharePointSiteId: "sharepoint-site-1",
@@ -306,4 +381,55 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
       expect(result.messageId).toBe("text-message-1");
     });
   });
+});
+
+describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ send }) => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(structuredRoutingCases)(
+    "sends to the resolved $label identity through the real Teams SDK",
+    async ({
+      conversationType,
+      replyStyle,
+      threadActivityId,
+      storedThreadId,
+      expectedConversationId,
+    }) => {
+      await withRealTeamsSdkHttp(async ({ api, requests }) => {
+        mockState.resolveMSTeamsSendContext.mockResolvedValue({
+          app: { api },
+          appId: "app-id",
+          conversationId,
+          ref: {
+            serviceUrl,
+            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
+            user: { id: "29:user" },
+            conversation: { id: conversationId, conversationType },
+            activityId: "incoming-activity-1",
+            ...(storedThreadId ? { threadId: storedThreadId } : {}),
+          },
+          conversationType,
+          replyStyle,
+          ...(threadActivityId ? { threadActivityId } : {}),
+          sdkCloudOptions: { cloud: "Public" },
+          tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        await send({} as OpenClawConfig);
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          path: `${new URL(serviceUrl).pathname}/v3/conversations/${expectedConversationId}/activities`,
+          body: {
+            type: "message",
+            conversation: { id: expectedConversationId, conversationType },
+            attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }],
+          },
+        });
+      });
+    },
+  );
 });

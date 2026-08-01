@@ -2278,11 +2278,18 @@ jobs:
               # The i18n verify covers keys extracted from every ui/ source,
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
+              lint_args=(--threads=8)
+              if [ "$(nproc)" -lt 8 ]; then
+                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
+                # the core process size and its threads so type-aware oxlint
+                # does not intermittently lose the runner under memory pressure.
+                lint_args=(--split-core --threads=1)
+              fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint --threads=8
+                pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs --threads=8
+                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check

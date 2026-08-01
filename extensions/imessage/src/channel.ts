@@ -12,6 +12,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-re
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -24,7 +25,6 @@ import {
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
 import {
-  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -42,7 +42,10 @@ import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
-import { sanitizeOutboundText } from "./monitor/sanitize-outbound.js";
+import {
+  sanitizeIMessageFinalOutboundText,
+  sanitizeOutboundText,
+} from "./monitor/sanitize-outbound.js";
 import type { IMessageProbe } from "./probe.js";
 import { imessageSetupContract } from "./setup-core.js";
 import {
@@ -417,12 +420,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: chunkTextForOutbound,
-        chunkerMode: "text",
+        chunker: chunkMarkdownText,
+        chunkerMode: "markdown",
         textChunkLimit: 4000,
         // Native formatting consumes Markdown ranges, so preserve bold and strike semantics.
         sanitizeText: ({ text }) =>
-          sanitizeForPlainText(sanitizeOutboundText(text), { style: "markdown" }),
+          sanitizeForPlainText(sanitizeIMessageFinalOutboundText(sanitizeOutboundText(text)).text, {
+            style: "markdown",
+          }),
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
           shouldSuppressLocalIMessageExecApprovalPrompt({ cfg, accountId, payload, hint }),
         beforeDeliverPayload: async ({ payload, hint }) => {
