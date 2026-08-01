@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **macOS Nix defaults:** avoid asking Foundation for the app's own defaults domain as a suite while preserving the stable Nix lookup for renamed app bundles, eliminating the launch-time NSUserDefaults warning. Fixes #88909. Thanks @onlinejourno.
 - **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
 - **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.
 - **Microsoft Teams message-tool replies:** keep automatic live previews from duplicating a message already delivered to the current Teams conversation, while preserving distinct follow-up text and cross-conversation sends. Fixes #116397. (#116398) Thanks @a-tokyo.
