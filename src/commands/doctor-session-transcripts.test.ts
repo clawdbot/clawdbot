@@ -2,19 +2,89 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../agents/sessions/session-manager.js";
+import { openFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 
 const note = vi.hoisted(() => vi.fn());
+const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
+const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
+const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
+vi.mock("./doctor-session-sqlite.js", () => ({
+  runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-session-incognito-key-repair.js", () => ({
+  repairReservedIncognitoSessionKeys,
+}));
+
+vi.mock("./doctor-session-delivery-state.js", () => ({
+  repairCanonicalSessionDeliveryStates,
+}));
+
+vi.mock("./doctor-session-canonical-keys.js", () => ({
+  repairCanonicalSessionKeys,
+}));
+
+vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-sqlite-maintenance-lock.js")>();
+  return {
+    ...actual,
+    withDoctorSqliteMaintenanceLock,
+  };
+});
+
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import {
+  detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
-  repairBrokenSessionTranscriptFile,
+  sessionTranscriptIssueToHealthFinding,
+  sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
+import { DoctorSqliteMaintenanceLockUnavailableError } from "./doctor-sqlite-maintenance-lock.js";
+
+async function repairBrokenSessionTranscriptFile(params: {
+  filePath: string;
+  shouldRepair: boolean;
+}) {
+  const [issue] = await detectSessionTranscriptHealthIssues({
+    sessionDirs: [path.dirname(params.filePath)],
+  });
+  if (!issue) {
+    return {
+      filePath: params.filePath,
+      broken: false,
+      repaired: false,
+      originalEntries: 0,
+      activeEntries: 0,
+      legacyOpenAICodexEntries: 0,
+    };
+  }
+  if (!params.shouldRepair) {
+    return issue;
+  }
+
+  await noteSessionTranscriptHealth({
+    sessionDirs: [path.dirname(params.filePath)],
+    shouldRepair: true,
+  });
+  const backupPrefix = `${path.basename(params.filePath)}.pre-doctor-`;
+  const backupName = (await fs.readdir(path.dirname(params.filePath))).find(
+    (entry) => entry.startsWith(backupPrefix) && entry.endsWith(".bak"),
+  );
+  return {
+    ...issue,
+    repaired: true,
+    ...(backupName ? { backupPath: path.join(path.dirname(params.filePath), backupName) } : {}),
+  };
+}
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -39,6 +109,22 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
+    repairCanonicalSessionDeliveryStates
+      .mockReset()
+      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
+    repairCanonicalSessionKeys.mockReset().mockResolvedValue({
+      archivedTranscriptDirectories: [],
+      foundGroups: 0,
+      repairBatches: 0,
+      removedRows: 0,
+      repairedGroups: 0,
+      scannedStores: 0,
+    });
+    runDoctorSessionSqlite.mockReset();
+    withDoctorSqliteMaintenanceLock
+      .mockReset()
+      .mockImplementation(async (params: { run: () => unknown }) => await params.run());
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
   });
 
@@ -104,7 +190,7 @@ describe("doctor session transcript repair", () => {
     expect(result.repaired).toBe(true);
     expect(result.originalEntries).toBe(6);
     expect(result.activeEntries).toBe(3);
-    if (result.backupPath === undefined) {
+    if (!("backupPath" in result) || result.backupPath === undefined) {
       throw new Error("expected transcript backup path");
     }
     await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
@@ -148,6 +234,179 @@ describe("doctor session transcript repair", () => {
     expect(message).toContain("legacy state");
     expect(message).toContain('Run "openclaw doctor --fix"');
     expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
+  });
+
+  it("maps affected transcripts to structured findings and dry-run effects", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+    const sessionsDir = path.dirname(filePath);
+
+    const [issue] = await detectSessionTranscriptHealthIssues({ sessionDirs: [sessionsDir] });
+
+    if (!issue) {
+      throw new Error("expected session transcript health issue");
+    }
+    expect(issue?.filePath).toBe(filePath);
+    expect(sessionTranscriptIssueToHealthFinding(issue)).toMatchObject({
+      checkId: "core/doctor/session-transcripts",
+      severity: "info",
+      path: filePath,
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(sessionTranscriptIssueToRepairEffect(issue)).toEqual({
+      kind: "file",
+      action: "would-rewrite-session-transcript",
+      target: filePath,
+      dryRunSafe: false,
+    });
+    expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
+  });
+
+  it("runs session SQLite import through the public doctor repair path", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 2,
+        archivedUnreferencedJsonlFiles: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
+
+    await noteSessionTranscriptHealth({
+      cfg,
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: true,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      cfg,
+      env,
+      mode: "import",
+    });
+    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
+    expect(
+      expectDefined(runDoctorSessionSqlite.mock.invocationCallOrder[0], "SQLite import call order"),
+    ).toBeLessThan(
+      expectDefined(
+        repairReservedIncognitoSessionKeys.mock.invocationCallOrder[0],
+        "reserved key repair call order",
+      ),
+    );
+    expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
+      env,
+      operation: "session SQLite import",
+      run: expect.any(Function),
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Legacy entries: 1"),
+      "Session SQLite",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
+      "Session SQLite",
+    );
+  });
+
+  it("keeps session SQLite dry-run read-only without taking maintenance ownership", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
+
+    await noteSessionTranscriptHealth({
+      cfg,
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: false,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      cfg,
+      env,
+      mode: "dry-run",
+    });
+    expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
+  });
+
+  it("skips session SQLite import when the Gateway owns the state lock", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
+      new DoctorSqliteMaintenanceLockUnavailableError(
+        "session SQLite import",
+        new GatewayLockError("gateway already running"),
+      ),
+    );
+
+    await expect(
+      noteSessionTranscriptHealth({
+        cfg: {},
+        env,
+        sessionSqlite: true,
+        shouldRepair: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Skipped: Gateway or another SQLite maintenance command owns the state directory",
+      ),
+      "Session SQLite",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('run "openclaw doctor --fix" for session-store maintenance'),
+      "Session SQLite",
+    );
+  });
+
+  it("keeps non-lock session SQLite import failures fatal", async () => {
+    withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(new Error("SQLite import failed"));
+
+    await expect(
+      noteSessionTranscriptHealth({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        sessionSqlite: true,
+        shouldRepair: true,
+      }),
+    ).rejects.toThrow("SQLite import failed");
   });
 
   it("repairs supported current-version linear transcripts", async () => {
@@ -261,7 +520,7 @@ describe("doctor session transcript repair", () => {
     expect(repairedRecords.find((entry) => entry.id === "plugin-metadata")).toMatchObject({
       parentId: "active-assistant",
     });
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))
       .trim()
@@ -327,7 +586,7 @@ describe("doctor session transcript repair", () => {
     expect(repaired).toContain("answer");
     expect(repaired).toContain('"id":"append-root"');
     expect(repaired).not.toContain("stale");
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     expect(reopened.buildSessionContext().messages).toHaveLength(3);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))
@@ -386,7 +645,7 @@ describe("doctor session transcript repair", () => {
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
 
     expect(result.repaired).toBe(true);
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     expect(reopened.buildSessionContext().messages).toHaveLength(3);
     reopened.appendMessage({ role: "user", content: "new root", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))
@@ -430,7 +689,33 @@ describe("doctor session transcript repair", () => {
     expect(result.repaired).toBe(true);
     expect(result.legacyOpenAICodexEntries).toBe(1);
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
-    const assistant = JSON.parse(lines[1]);
+    const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
+    expect(assistant.message.provider).toBe("openai");
+    expect(assistant.message.api).toBe("openai-chatgpt-responses");
+  });
+
+  it("rewrites shipped codex transcript provider metadata", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "codex",
+          api: "openai-chatgpt-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+
+    expect(result.repaired).toBe(true);
+    expect(result.legacyOpenAICodexEntries).toBe(1);
+    const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
     expect(assistant.message.provider).toBe("openai");
     expect(assistant.message.api).toBe("openai-chatgpt-responses");
   });

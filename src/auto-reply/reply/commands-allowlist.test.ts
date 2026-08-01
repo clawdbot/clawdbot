@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
 import {
@@ -17,6 +17,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import type { ConfigSnapshotMock } from "./commands.test-harness.js";
@@ -256,15 +257,15 @@ async function withTempConfigPath<T>(
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-allowlist-config-"));
   const configPath = path.join(dir, "openclaw.json");
   const previous = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
   try {
     return await run(configPath);
   } finally {
     if (previous === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     } else {
-      process.env.OPENCLAW_CONFIG_PATH = previous;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", previous);
     }
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
@@ -410,6 +411,30 @@ describe("handleAllowlistCommand", () => {
     for (const testCase of cases) {
       await testCase.run();
     }
+  });
+
+  it("keeps group allowlist edits out of the DM pairing store", async () => {
+    await withTempConfigPath(
+      { channels: { telegram: { groupAllowFrom: ["123"] } } },
+      async (configPath) => {
+        const params = buildAllowlistParams("/allowlist add group 789", {
+          commands: { text: true, config: true },
+          channels: { telegram: { groupAllowFrom: ["123"] } },
+        } as OpenClawConfig);
+        params.command.senderIsOwner = true;
+
+        const result = await handleAllowlistCommand(params, true);
+
+        expect(result?.shouldContinue).toBe(false);
+        const written = await readJsonFile<OpenClawConfig>(configPath);
+        expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
+        expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+        expect(result?.reply?.text).toContain(
+          "group allowlist added: channels.telegram.groupAllowFrom.",
+        );
+        expect(result?.reply?.text).not.toContain("pairing store");
+      },
+    );
   });
 
   it("uses the configured default account for omitted-account list", async () => {
@@ -704,6 +729,42 @@ describe("handleAllowlistCommand", () => {
     });
   });
 
+  it("keeps all-scope store edits on the DM pairing store", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"], configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist remove all --store 789", cfg);
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("DM allowlist removed in pairing store");
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      entry: "789",
+      accountId: "default",
+    });
+  });
+
+  it("rejects group-scoped store edits because pairing stores authorize DMs only", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"], configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add group --store 789", cfg);
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Pairing-store allowlist edits apply to DMs only");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
     removeChannelAllowFromStoreEntryMock
       .mockResolvedValueOnce({
@@ -806,7 +867,7 @@ describe("handleAllowlistCommand", () => {
         const written = await readJsonFile<OpenClawConfig>(configPath);
         const channelConfig = written.channels?.[testCase.provider];
         expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
-        expect(channelConfig?.dm?.allowFrom).toBeUndefined();
+        expect(channelConfig?.dm).not.toHaveProperty("allowFrom");
         expect(result?.reply?.text).toContain(`channels.${testCase.provider}.allowFrom`);
       });
     }

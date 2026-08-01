@@ -4,10 +4,10 @@ export function parseMacosDsclUserHomeLine(line: string): { user: string; home: 
   if (!match) {
     return null;
   }
-  return { user: match[1], home: match[2] };
+  return { user: match[1]!, home: match[2]! };
 }
 
 export function isLikelyMacosDesktopHome(home: string | undefined): boolean {
   const normalized = home?.trim();
-  return Boolean(normalized) && /(?:^|\/)Users\/[^/]+$/u.test(normalized);
+  return normalized !== undefined && /(?:^|\/)Users\/[^/]+$/u.test(normalized);
 }

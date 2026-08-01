@@ -25,7 +25,12 @@ export function normalizeSecretInput(value: unknown): string {
   const chars: string[] = [];
   for (const char of collapsed) {
     const codePoint = char.codePointAt(0);
-    if (typeof codePoint === "number" && codePoint <= 0xff) {
+    const isControl =
+      typeof codePoint === "number" &&
+      ((codePoint >= 0x00 && codePoint <= 0x1f) ||
+        codePoint === 0x7f ||
+        (codePoint >= 0x80 && codePoint <= 0x9f));
+    if (typeof codePoint === "number" && codePoint <= 0xff && !isControl) {
       chars.push(char);
     }
   }

@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
@@ -210,6 +214,87 @@ describe("Mattermost model picker", () => {
           data: providerData,
         }),
       ).toBe("openai/gpt-5");
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves current and parent model overrides from targeted session entries", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
+    try {
+      const storePath = path.join(testDir, "agents", "{agentId}", "sessions", "sessions.json");
+      const supportStorePath = path.join(testDir, "agents", "support", "sessions", "sessions.json");
+      const parentSessionKey = "agent:support:mattermost:default:channel-1";
+      const childSessionKey = "agent:support:mattermost:default:child-with-explicit-parent";
+      const directSessionKey = "agent:support:mattermost:default:direct-1";
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: parentSessionKey,
+        entry: {
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-5",
+          chatType: "channel",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "channel-1" } }),
+          sessionId: "parent-session",
+          updatedAt: 1,
+        },
+      });
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: childSessionKey,
+        entry: {
+          parentSessionKey,
+          chatType: "channel",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "child-with-explicit-parent" },
+          }),
+          sessionId: "child-session",
+          updatedAt: 2,
+        },
+      });
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: directSessionKey,
+        entry: {
+          providerOverride: "openai",
+          modelOverride: "gpt-5",
+          chatType: "channel",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "direct-1" } }),
+          sessionId: "direct-session",
+          updatedAt: 3,
+        },
+      });
+      const cfg: OpenClawConfig = {
+        session: {
+          store: storePath,
+        },
+      };
+
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: directSessionKey,
+          },
+          data,
+          readConsistency: "latest",
+        }),
+      ).toBe("openai/gpt-5");
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: childSessionKey,
+          },
+          data,
+          readConsistency: "latest",
+        }),
+      ).toBe("anthropic/claude-sonnet-4-5");
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }

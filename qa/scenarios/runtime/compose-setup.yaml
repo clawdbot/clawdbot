@@ -1,0 +1,35 @@
+title: Docker Compose setup evidence
+
+scenario:
+  id: compose-setup
+  surface: containers
+  category: containers.container-setup
+  coverage:
+    secondary:
+      - containers.docker-compose-mounts-and-secrets
+  objective: Launch the documented Docker Compose topology from the package-backed functional image and record the exact package, image, and service container identities.
+  successCriteria:
+    - The scheduler builds the real package artifact and package-backed functional image through the canonical Docker planner.
+    - "`docker compose up` starts the documented `openclaw-gateway` service with isolated state, config, workspace, and auth-profile mounts."
+    - The Gateway reaches healthy state and the documented container-side health command passes.
+    - "The `openclaw-cli` Compose service runs successfully in the Gateway network namespace."
+    - Evidence records the package digest and version, functional image ID, and Gateway and CLI container IDs.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - docker-compose.yml
+    - scripts/e2e/compose-setup.sh
+    - scripts/lib/docker-e2e-scenarios.mjs
+    - scripts/package-openclaw-for-docker.mjs
+    - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    summary: Builds the package-backed functional image, launches the documented Compose services, validates health, and records artifact identities.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --lane
+      - compose-setup

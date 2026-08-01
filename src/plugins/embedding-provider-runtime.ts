@@ -12,10 +12,8 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 
-export { listRegisteredEmbeddingProviders };
-
 /** Lists embedding provider adapters registered directly with the process registry. */
-export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
+function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
 }
 
@@ -28,7 +26,7 @@ export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderA
   });
 }
 
-export function resolveConfiguredEmbeddingProviderId(
+function resolveConfiguredEmbeddingProviderId(
   providerId: string,
   cfg?: OpenClawConfig,
 ): string | undefined {
@@ -55,14 +53,3 @@ export function getEmbeddingProvider(
     getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
 }
-
-export type {
-  EmbeddingInput,
-  EmbeddingProvider,
-  EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
-  EmbeddingProviderRuntime,
-  RegisteredEmbeddingProvider,
-} from "./embedding-providers.js";

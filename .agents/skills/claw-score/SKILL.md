@@ -146,7 +146,7 @@ Default guidance:
 
 Default Completeness bands:
 
-- `Lovable` (95-100): complete across expected workflows, variants, and
+- `Clawesome` (95-100): complete across expected workflows, variants, and
   recovery branches, with only minor polish gaps.
 - `Stable` (80-95): the expected workflow set is broadly present, with only
   bounded missing branches.
@@ -172,7 +172,7 @@ Default Completeness bands:
 
 Bands:
 
-- `Lovable`: 95-100
+- `Clawesome`: 95-100
 - `Stable`: 80-95
 - `Beta`: 70-80
 - `Alpha`: 50-70

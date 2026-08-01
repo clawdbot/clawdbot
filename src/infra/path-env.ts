@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
   /** Executable whose directory should stay first for shebang-compatible child processes. */
@@ -49,6 +50,73 @@ function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string)
   return existingPathParts.has(dirPath) || isDirectory(dirPath);
 }
 
+function realpathExistingPath(candidate: string): string | undefined {
+  const suffix: string[] = [];
+  let current = candidate;
+  while (true) {
+    try {
+      return path.resolve(fs.realpathSync.native(current), ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isSameOrChildPath(candidate: string, parent: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isFilesystemRoot(dirPath: string): boolean {
+  return path.dirname(dirPath) === dirPath;
+}
+
+function normalizeTrustedPackageManagerRoot(params: {
+  value: string | undefined;
+  cwd: string | undefined;
+  homeDir: string;
+}): string | undefined {
+  const trimmed = params.value?.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return undefined;
+  }
+  const normalized = path.normalize(trimmed);
+  if (normalized === "/proc" || normalized.startsWith(`/proc${path.sep}`)) {
+    return undefined;
+  }
+  if (!params.cwd) {
+    return normalized;
+  }
+
+  const cwd = path.resolve(params.cwd);
+  const homeDir = path.resolve(params.homeDir);
+  if (cwd === homeDir || isFilesystemRoot(cwd)) {
+    return normalized;
+  }
+  if (isSameOrChildPath(normalized, cwd)) {
+    return undefined;
+  }
+
+  const realCandidate = realpathExistingPath(normalized);
+  const realCwd = realpathExistingPath(cwd);
+  const realHome = realpathExistingPath(homeDir);
+  if (
+    realCwd &&
+    realCwd !== realHome &&
+    !isFilesystemRoot(realCwd) &&
+    realCandidate &&
+    isSameOrChildPath(realCandidate, realCwd)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function isLinuxbrewPath(dirPath: string): boolean {
   return dirPath.split(path.sep).includes(".linuxbrew");
 }
@@ -67,6 +135,25 @@ function resolvePathBootstrapBrewDirs(params: {
   );
 }
 
+function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform }): string {
+  const miseDataDir = process.env.MISE_DATA_DIR;
+  if (miseDataDir !== undefined) {
+    return miseDataDir;
+  }
+
+  // Match mise's override/XDG/platform order; candidate validation and PATH
+  // placement remain owned by the existing bootstrap policy below.
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  if (xdgDataHome !== undefined) {
+    return path.join(xdgDataHome, "mise");
+  }
+  if (params.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(params.homeDir, "AppData", "Local");
+    return path.join(localAppData, "mise");
+  }
+  return path.join(params.homeDir, ".local", "share", "mise");
+}
+
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
   return normalizeUniqueStringEntries([
     ...(params.prepend ?? []),
@@ -80,7 +167,7 @@ function candidateBinDirs(
   existingPathParts: ReadonlySet<string>,
 ): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd ?? tryProcessCwd();
   const homeDir = opts.homeDir ?? os.homedir();
   const platform = opts.platform ?? process.platform;
 
@@ -114,7 +201,7 @@ function candidateBinDirs(
   const allowProjectLocalBin =
     opts.allowProjectLocalBin === true ||
     isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN);
-  if (allowProjectLocalBin) {
+  if (allowProjectLocalBin && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
     if (isExecutable(path.join(localBinDir, "openclaw"))) {
       append.push(localBinDir);
@@ -130,18 +217,38 @@ function candidateBinDirs(
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
   append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
-  const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
+  const pnpmHome = normalizeTrustedPackageManagerRoot({
+    value: process.env.PNPM_HOME,
+    cwd,
+    homeDir,
+  });
+  if (pnpmHome) {
+    append.push(pnpmHome);
+    append.push(path.join(pnpmHome, "bin"));
+  }
+  const npmPrefix = normalizeTrustedPackageManagerRoot({
+    value: process.env.NPM_CONFIG_PREFIX,
+    cwd,
+    homeDir,
+  });
+  if (npmPrefix) {
+    append.push(path.join(npmPrefix, "bin"));
+  }
+  const miseDataDir = resolveMiseDataDir({ homeDir, platform });
   const miseShims = path.join(miseDataDir, "shims");
   if (isKnownPathDir(existingPathParts, miseShims)) {
     append.push(miseShims);
   }
   if (platform === "darwin") {
+    append.push(path.join(homeDir, "Library", "pnpm", "bin"));
     append.push(path.join(homeDir, "Library", "pnpm"));
   }
   if (process.env.XDG_BIN_HOME) {
     append.push(process.env.XDG_BIN_HOME);
   }
   append.push(path.join(homeDir, ".local", "bin"));
+  append.push(path.join(homeDir, ".npm-global", "bin"));
+  append.push(path.join(homeDir, ".local", "share", "pnpm", "bin"));
   append.push(path.join(homeDir, ".local", "share", "pnpm"));
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));

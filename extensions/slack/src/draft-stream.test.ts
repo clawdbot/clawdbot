@@ -32,6 +32,7 @@ function createDraftStreamHarness(
     maxChars?: number;
     send?: DraftSendFn;
     edit?: DraftEditFn;
+    eventScope?: DraftStreamParams["eventScope"];
     remove?: DraftRemoveFn;
     warn?: DraftWarnFn;
   } = {},
@@ -46,6 +47,7 @@ function createDraftStreamHarness(
     token: "xoxb-test",
     throttleMs: 250,
     maxChars: params.maxChars,
+    eventScope: params.eventScope,
     send,
     edit,
     remove,
@@ -72,6 +74,37 @@ describe("createSlackDraftStream", () => {
     });
   });
 
+  it("uses the enterprise event client for draft writes", async () => {
+    const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_TEST",
+      client,
+    };
+    const { stream, send, edit, remove } = createDraftStreamHarness({ eventScope });
+
+    stream.update("hello");
+    await stream.flush();
+    stream.update("hello world");
+    await stream.flush();
+    await stream.clear();
+
+    expect(send).toHaveBeenCalledWith(
+      "channel:C123",
+      "hello",
+      expect.objectContaining({ client, enterpriseEventScope: eventScope }),
+    );
+    expect(edit).toHaveBeenCalledWith(
+      "C123",
+      "111.222",
+      "hello world",
+      expect.objectContaining({ client }),
+    );
+    expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
+  });
+
   it("sends and edits rich draft blocks with text fallback", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
     const blocks = [{ type: "divider" }] as const;
@@ -91,6 +124,21 @@ describe("createSlackDraftStream", () => {
     expect(editCall?.[1]).toBe("111.222");
     expect(editCall?.[2]).toBe("updated fallback");
     expect((editCall?.[3] as { blocks?: unknown } | undefined)?.blocks).toEqual([...blocks]);
+  });
+
+  it("edits changed blocks even when fallback text is unchanged", async () => {
+    const { stream, edit } = createDraftStreamHarness();
+    const firstBlocks = [{ type: "divider" }] as const;
+    const latestBlocks = [{ type: "section", text: { type: "mrkdwn", text: "latest" } }] as const;
+
+    stream.update({ text: "same fallback", blocks: [...firstBlocks] });
+    await stream.flush();
+    stream.update({ text: "same fallback", blocks: [...latestBlocks] });
+    await stream.flush();
+
+    const editCall = mockCalls<Parameters<DraftEditFn>>(edit)[0];
+    expect(editCall?.[2]).toBe("same fallback");
+    expect((editCall?.[3] as { blocks?: unknown } | undefined)?.blocks).toEqual([...latestBlocks]);
   });
 
   it("forwards identity to the initial send call", async () => {

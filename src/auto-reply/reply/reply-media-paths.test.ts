@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
 const resolveAgentScopedOutboundMediaAccess = vi.hoisted(() => vi.fn());
+const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 vi.mock("../../agents/sandbox.js", () => ({
   ensureSandboxWorkspaceForSession,
@@ -86,7 +88,10 @@ describe("createReplyMediaPathNormalizer", () => {
         localRoots: workspaceDir ? [workspaceDir] : undefined,
         readFile: async () => Buffer.from("image"),
       }));
-    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    stateDirEnvSnapshot.restore();
   });
 
   it("stages workspace-relative media through shared outbound attachment loading", async () => {
@@ -355,7 +360,7 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("keeps managed generated media under the shared media root", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -377,7 +382,7 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -406,7 +411,7 @@ describe("createReplyMediaPathNormalizer", () => {
       await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
       await fs.writeFile(outsideFile, "secret", "utf8");
       await fs.symlink(outsideFile, symlinkPath);
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const normalize = createReplyMediaPathNormalizer({
         cfg: {},
         sessionKey: "session-key",

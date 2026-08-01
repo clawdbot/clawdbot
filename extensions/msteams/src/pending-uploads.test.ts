@@ -1,13 +1,19 @@
 // Msteams tests cover pending uploads plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearPendingUploads,
   getPendingUpload,
-  getPendingUploadCount,
   removePendingUpload,
   setPendingUploadActivityId,
   storePendingUpload,
 } from "./pending-uploads.js";
+
+const createdUploadIds = new Set<string>();
+
+function storePendingUploadForTest(upload: Parameters<typeof storePendingUpload>[0]): string {
+  const id = storePendingUpload(upload);
+  createdUploadIds.add(id);
+  return id;
+}
 
 function requirePendingUpload(id: string) {
   const upload = getPendingUpload(id);
@@ -20,17 +26,19 @@ function requirePendingUpload(id: string) {
 describe("pending-uploads", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    clearPendingUploads();
   });
 
   afterEach(() => {
-    clearPendingUploads();
+    for (const id of createdUploadIds) {
+      removePendingUpload(id);
+    }
+    createdUploadIds.clear();
     vi.useRealTimers();
   });
 
   describe("storePendingUpload", () => {
     it("stores and retrieves a pending upload", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         contentType: "text/plain",
@@ -47,7 +55,7 @@ describe("pending-uploads", () => {
     });
 
     it("stores consentCardActivityId when provided", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
@@ -59,7 +67,7 @@ describe("pending-uploads", () => {
     });
 
     it("stores without consentCardActivityId when not provided", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
@@ -70,7 +78,7 @@ describe("pending-uploads", () => {
     });
 
     it("auto-removes entry after TTL expires", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
@@ -85,7 +93,7 @@ describe("pending-uploads", () => {
 
   describe("removePendingUpload", () => {
     it("removes the entry immediately", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
@@ -96,56 +104,41 @@ describe("pending-uploads", () => {
     });
 
     it("clears the TTL timer so it does not fire after explicit removal", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
       });
 
-      expect(getPendingUploadCount()).toBe(1);
+      expect(getPendingUpload(id)).toBeDefined();
       removePendingUpload(id);
-      expect(getPendingUploadCount()).toBe(0);
+      expect(getPendingUpload(id)).toBeUndefined();
 
       // Advance past TTL — timer should have been cleared and count stays 0
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      expect(getPendingUploadCount()).toBe(0);
+      expect(getPendingUpload(id)).toBeUndefined();
     });
 
     it("leaves existing uploads untouched for undefined id", () => {
-      storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
       });
 
       removePendingUpload(undefined);
-      expect(getPendingUploadCount()).toBe(1);
+      expect(getPendingUpload(id)).toBeDefined();
     });
 
     it("leaves the store empty for unknown ids", () => {
       removePendingUpload("non-existent-id");
-      expect(getPendingUploadCount()).toBe(0);
-    });
-  });
-
-  describe("clearPendingUploads", () => {
-    it("removes all entries and cancels timers", () => {
-      storePendingUpload({ buffer: Buffer.from("a"), filename: "a.txt", conversationId: "c1" });
-      storePendingUpload({ buffer: Buffer.from("b"), filename: "b.txt", conversationId: "c2" });
-      expect(getPendingUploadCount()).toBe(2);
-
-      clearPendingUploads();
-      expect(getPendingUploadCount()).toBe(0);
-
-      // TTL timers should have been cleared — no side-effects after advance
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      expect(getPendingUploadCount()).toBe(0);
+      expect(getPendingUpload("non-existent-id")).toBeUndefined();
     });
   });
 
   describe("setPendingUploadActivityId", () => {
     it("sets the consentCardActivityId on an existing upload", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
@@ -159,7 +152,7 @@ describe("pending-uploads", () => {
 
     it("leaves the store empty for unknown upload ids", () => {
       setPendingUploadActivityId("non-existent", "activity-xyz");
-      expect(getPendingUploadCount()).toBe(0);
+      expect(getPendingUpload("non-existent")).toBeUndefined();
     });
   });
 
@@ -173,7 +166,7 @@ describe("pending-uploads", () => {
     });
 
     it("returns undefined when entry is past TTL but timer has not yet fired", () => {
-      const id = storePendingUpload({
+      const id = storePendingUploadForTest({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Tavily API module exposes the plugin public contract.
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
@@ -6,14 +7,9 @@ import {
   TAVILY_GENERIC_SEARCH_SCHEMA,
 } from "./web-search-shared.js";
 
-type TavilySearchProviderModule = typeof import("./src/tavily-search-provider.js");
-
-let tavilySearchProviderModulePromise: Promise<TavilySearchProviderModule> | undefined;
-
-function loadTavilySearchProviderModule(): Promise<TavilySearchProviderModule> {
-  tavilySearchProviderModulePromise ??= import("./src/tavily-search-provider.js");
-  return tavilySearchProviderModulePromise;
-}
+const loadTavilySearchProviderModule = createLazyRuntimeModule(
+  () => import("./src/tavily-search-provider.js"),
+);
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {

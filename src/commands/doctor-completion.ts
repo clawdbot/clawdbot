@@ -5,44 +5,71 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { isErrno } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 
-export type ShellCompletionStatusOptions = {
+type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
-function resolveCompletionReloadPath(shell: CompletionShell): string {
-  if (shell === "powershell") {
-    return resolveCompletionProfilePath("powershell");
+export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
+  generationMode: "core-only" | "full";
+};
+
+const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+
+function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
+  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
+    return err;
   }
-  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+  return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
 }
 
-function formatCompletionReloadNote(
+async function installCompletionForDoctor(
   shell: CompletionShell,
+  cliName: string,
   action: "installed" | "upgraded",
-): string {
-  const profilePath = resolveCompletionReloadPath(shell);
-  return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
+): Promise<void> {
+  try {
+    await installCompletion(shell, true, cliName);
+    const reloadCommand = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
+    note(
+      `Shell completion ${action}. Restart your shell or run: ${reloadCommand}`,
+      "Shell completion",
+    );
+  } catch (err) {
+    // Completion is optional, but only profile permission failures are safe to downgrade.
+    const writeError = findProfileWriteError(err);
+    if (!writeError) {
+      throw err;
+    }
+    const profilePath = writeError.path ?? resolveCompletionProfilePath(shell);
+    note(
+      `Shell completion not ${action}: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+      "Shell completion",
+    );
+  }
 }
 
 /** Generate the completion cache by spawning the CLI. */
 async function generateCompletionCache(
-  options: ShellCompletionStatusOptions = {},
+  options: CompletionCacheGenerationOptions,
 ): Promise<boolean> {
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
@@ -58,9 +85,16 @@ async function generateCompletionCache(
   if (options.shell) {
     args.push("--shell", options.shell);
   }
+  const env = { ...process.env };
+  // The mode is explicit so ambient repair state cannot silently change a full user-facing cache.
+  if (options.generationMode === "core-only") {
+    env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] = "1";
+  } else {
+    delete env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV];
+  }
   const result = spawnSync(process.execPath, args, {
     cwd: root,
-    env: process.env,
+    env,
     encoding: "utf-8",
     timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
@@ -159,7 +193,7 @@ export function shellCompletionStatusToRepairEffects(
   return effects;
 }
 
-export type DoctorCompletionOptions = {
+type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
 
@@ -185,7 +219,7 @@ export async function doctorShellCompletion(
     );
 
     if (!status.cacheExists) {
-      const generated = await generateCompletionCache();
+      const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
           `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
@@ -195,8 +229,7 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    await installCompletionForDoctor(status.shell, cliName, "upgraded");
     return;
   }
 
@@ -205,7 +238,7 @@ export async function doctorShellCompletion(
       `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
       "Shell completion",
     );
-    const generated = await generateCompletionCache();
+    const generated = await generateCompletionCache({ generationMode: "core-only" });
     if (generated) {
       note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
     } else {
@@ -228,7 +261,7 @@ export async function doctorShellCompletion(
     });
 
     if (shouldInstall) {
-      const generated = await generateCompletionCache();
+      const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
           `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
@@ -237,16 +270,15 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      await installCompletionForDoctor(status.shell, cliName, "installed");
     }
   }
 }
 
 /** Ensures the shell completion cache exists without prompting during setup/update flows. */
 export async function ensureCompletionCacheExists(
-  binName = "openclaw",
-  options: ShellCompletionStatusOptions = {},
+  binName: string,
+  options: CompletionCacheGenerationOptions,
 ): Promise<boolean> {
   const shell = options.shell ?? resolveShellFromEnv();
   const cacheExists = await completionCacheExists(shell, binName);

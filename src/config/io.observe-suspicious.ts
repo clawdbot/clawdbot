@@ -1,6 +1,6 @@
 import { isRecord } from "../utils.js";
 
-export type ConfigObserveSuspiciousBaseline = {
+type ConfigObserveSuspiciousBaseline = {
   bytes: number;
   hasMeta: boolean;
   gatewayMode: string | null;

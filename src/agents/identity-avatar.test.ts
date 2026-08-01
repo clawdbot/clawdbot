@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "./identity-avatar.js";
 
@@ -233,6 +234,27 @@ describe("resolveAgentAvatar", () => {
     if (data.kind === "data") {
       expect(data.source).toBe("data:image/png;base64,aaaa");
     }
+  });
+
+  it("preserves generic and oversized data URIs at the public resolution boundary", () => {
+    const oversized = `data:image/png;base64,${"A".repeat(AVATAR_MAX_DATA_URL_CHARS)}`;
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "generic", identity: { avatar: "data:text/plain,avatar" } },
+          { id: "oversized", identity: { avatar: oversized } },
+        ],
+      },
+    };
+
+    expect(resolveAgentAvatar(cfg, "generic")).toMatchObject({
+      kind: "data",
+      url: "data:text/plain,avatar",
+    });
+    expect(resolveAgentAvatar(cfg, "oversized")).toMatchObject({
+      kind: "data",
+      url: oversized,
+    });
   });
 
   it("resolves local avatar from ui.assistant.avatar when no agents.list identity is set", async () => {

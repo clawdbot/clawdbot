@@ -8,6 +8,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
 import {
+  buildGoogleLiveCatalogProvider,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -47,21 +48,21 @@ export function buildGoogleProvider(): ProviderPlugin {
       createProviderApiKeyAuthMethod({
         providerId: "google",
         methodId: "api-key",
-        label: "Google Gemini API key",
-        hint: "AI Studio / Gemini API key",
+        label: "Google AI Studio API key",
+        hint: "Supported API-key access from aistudio.google.com/apikey",
         optionKey: "geminiApiKey",
         flagName: "--gemini-api-key",
         envVar: "GEMINI_API_KEY",
-        promptMessage: "Enter Gemini API key",
+        promptMessage: "Enter Google AI Studio API key",
         defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
         expectedProviders: ["google"],
         applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
         wizard: {
           choiceId: "gemini-api-key",
-          choiceLabel: "Google Gemini API key",
+          choiceLabel: "Google AI Studio API key",
           groupId: "google",
           groupLabel: "Google",
-          groupHint: "Gemini API key + OAuth",
+          groupHint: "Supported API-key setup",
         },
       }),
     ],
@@ -79,6 +80,24 @@ export function buildGoogleProvider(): ProviderPlugin {
           "google-vertex": buildGoogleVertexStaticCatalogProvider(),
         },
       }),
+    },
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderApiKey("google");
+        if (!auth.apiKey) {
+          return null;
+        }
+        return {
+          providers: {
+            google: await buildGoogleLiveCatalogProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+            "google-vertex": buildGoogleVertexStaticCatalogProvider(),
+          },
+        };
+      },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>

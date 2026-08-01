@@ -2,7 +2,7 @@
 import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilot-routing.js";
 import { createRuntimePluginModelSelectionHelpers } from "./runtime-plugin-install.js";
 
-export const COPILOT_RUNTIME_PLUGIN_ID = "copilot";
+const COPILOT_RUNTIME_PLUGIN_ID = "copilot";
 const COPILOT_RUNTIME_PLUGIN_LABEL = "GitHub Copilot agent runtime";
 const COPILOT_RUNTIME_PLUGIN_NPM_SPEC = "@openclaw/copilot";
 const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR = {

@@ -55,6 +55,11 @@ describe("parseAbsoluteTimeMs", () => {
       expect(parseAbsoluteTimeMs("2024-01-15T10:30:00z")).toBe(expected);
     });
 
+    it("parses RFC 3339 lowercase t and z separators", () => {
+      const expected = Date.parse("2024-01-15T10:30:00Z");
+      expect(parseAbsoluteTimeMs("2024-01-15t10:30:00z")).toBe(expected);
+    });
+
     it("parses datetime with milliseconds and Z", () => {
       const expected = Date.parse("2024-01-15T10:30:45.123Z");
       expect(parseAbsoluteTimeMs("2024-01-15T10:30:45.123Z")).toBe(expected);

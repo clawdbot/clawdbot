@@ -12,19 +12,18 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
-import {
-  hasProcessedFeishuMessage,
-  recordProcessedFeishuMessage,
-  warmupDedupFromPluginState,
-} from "./dedup.js";
+import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
+import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -45,7 +44,7 @@ export type FeishuReactionCreatedEvent = {
   action_time?: string;
 };
 
-export type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
+type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
   reaction_id?: string;
 };
 
@@ -78,8 +77,9 @@ export async function resolveReactionSyntheticEvent(
 
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
-  const senderId = event.user_id?.open_id;
-  const senderUserId = event.user_id?.user_id;
+  const senderOpenId = event.user_id?.open_id?.trim();
+  const senderUserId = event.user_id?.user_id?.trim();
+  const senderId = senderOpenId || senderUserId;
   if (!emoji || !messageId || !senderId) {
     return null;
   }
@@ -136,14 +136,18 @@ export async function resolveReactionSyntheticEvent(
   return {
     sender: {
       sender_id: {
-        open_id: senderId,
+        ...(senderOpenId ? { open_id: senderOpenId } : {}),
         ...(senderUserId ? { user_id: senderUserId } : {}),
       },
       sender_type: "user",
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      // Synthetic IDs are local-only; replies and topic routing must retain the real message facts.
+      reply_target_message_id: messageId,
       typing_target_message_id: messageId,
+      ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
+      ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
@@ -170,6 +174,16 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  vcAutoJoin: boolean;
+  /** Owning account signal; retrying handlers must propagate it. */
+  abortSignal?: AbortSignal;
+  /**
+   * Optional status sink. When provided, the message handler will publish
+   * `lastEventAt` on every inbound message for message recency. Transport
+   * liveness is published by the transport layer.
+   */
+  statusSink?: FeishuStatusSink;
+  resolveIngressLifecycle?: (data: unknown) => FeishuIngressLifecycle | undefined;
 };
 
 function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
@@ -271,7 +285,8 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget, abortSignal } =
+    context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -300,10 +315,11 @@ function registerEventHandlers(
       resolveDebounceText: ({ event, botOpenId, botName }) =>
         parseFeishuMessageEvent(event, botOpenId, botName).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
-      recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
+      resolveIngressLifecycle: context.resolveIngressLifecycle,
+      ...(context.statusSink ? { statusSink: context.statusSink } : {}),
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
@@ -338,6 +354,16 @@ function registerEventHandlers(
       accountId,
       runtime,
       fireAndForget,
+      abortSignal,
+      resolveIngressLifecycle: context.resolveIngressLifecycle,
+    }),
+    "vc.bot.meeting_invited_v1": createFeishuVcMeetingInvitedHandler({
+      cfg,
+      accountId,
+      runtime,
+      fireAndForget,
+      channelRuntime,
+      autoJoin: context.vcAutoJoin,
     }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
@@ -437,11 +463,16 @@ function registerEventHandlers(
   });
 }
 
-export type BotOpenIdSource =
-  | { kind: "prefetched"; botOpenId?: string; botName?: string }
+type BotOpenIdSource =
+  | {
+      kind: "prefetched";
+      botOpenId?: string;
+      botName?: string;
+      source?: "provider" | "cache";
+    }
   | { kind: "fetch" };
 
-export type MonitorSingleAccountParams = {
+type MonitorSingleAccountParams = {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   channelRuntime?: PluginRuntime["channel"];
@@ -449,6 +480,12 @@ export type MonitorSingleAccountParams = {
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
   fireAndForget?: boolean;
+  /**
+   * Optional status sink for Feishu channel health. When provided, it is
+   * propagated to the event dispatcher for message recency and the transport
+   * layer for lifecycle status.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -459,13 +496,23 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? {
+          botOpenId: botOpenIdSource.botOpenId,
+          botName: botOpenIdSource.botName,
+          source: botOpenIdSource.source,
+        }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  if (!botOpenId && !abortSignal?.aborted) {
-    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
+  if ((!botOpenId || botIdentity.source === "cache") && !abortSignal?.aborted) {
+    startBotIdentityRecovery({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      currentSource: botIdentity.source,
+    });
   }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
@@ -484,9 +531,27 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
   try {
     const eventDispatcher = createEventDispatcher(account);
+    // Minimal dispatcher doubles exercise handlers directly and intentionally
+    // omit invoke; production SDK dispatchers always provide the receive seam.
+    const durableIngress =
+      typeof (eventDispatcher as { invoke?: unknown }).invoke === "function"
+        ? createFeishuDurableIngress({
+            accountId,
+            dispatcher: eventDispatcher,
+            ...(account.encryptKey ? { encryptKey: account.encryptKey } : {}),
+            runtime: runtime ?? {},
+          })
+        : undefined;
+    const durableEventDispatcher = durableIngress
+      ? (Object.assign(Object.create(eventDispatcher), {
+          invoke: durableIngress.invoke,
+        }) as Lark.EventDispatcher)
+      : eventDispatcher;
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
-    const channelRuntime = params.channelRuntime ?? getFeishuRuntime().channel;
+    const channelRuntime = params.channelRuntime?.inbound
+      ? params.channelRuntime
+      : getFeishuRuntime().channel;
 
     registerEventHandlers(eventDispatcher, {
       cfg,
@@ -495,12 +560,37 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      vcAutoJoin: account.config.vcAutoJoin === true,
+      abortSignal,
+      ...(durableIngress ? { resolveIngressLifecycle: durableIngress.resolveLifecycle } : {}),
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
-    if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    try {
+      durableIngress?.start();
+      if (connectionMode === "webhook") {
+        return await monitorWebhook({
+          account,
+          accountId,
+          runtime,
+          abortSignal,
+          eventDispatcher: durableEventDispatcher,
+          ...(durableIngress ? { invokeWebhookEvent: durableIngress.invokeWebhook } : {}),
+          ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+        });
+      }
+      return await monitorWebSocket({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher: durableEventDispatcher,
+        ...(durableIngress ? { setSocketTerminator: durableIngress.setSocketTerminator } : {}),
+        ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+      });
+    } finally {
+      await durableIngress?.stop();
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
   } finally {
     threadBindingManager?.stop();
   }

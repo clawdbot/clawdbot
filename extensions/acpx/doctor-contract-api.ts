@@ -1,7 +1,10 @@
 // ACPX doctor contract migrates shipped plugin-owned runtime state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   normalizeAcpxProcessLease,
   normalizeAcpxProcessLeaseFile,
@@ -26,15 +29,6 @@ function resolveLegacyProcessLeasePath(stateDir: string): string {
   return path.join(stateDir, "acpx", ACPX_LEGACY_PROCESS_LEASE_FILE);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function readLegacyGatewayInstanceId(filePath: string): Promise<string | null> {
   try {
     const value = (await fs.readFile(filePath, "utf8")).trim();
@@ -52,27 +46,6 @@ async function readLegacyOpenProcessLeases(filePath: string): Promise<AcpxProces
     return leaseFile.leases.filter((lease) => lease.state === "open" || lease.state === "closing");
   } catch {
     return [];
-  }
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ACPX ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ACPX ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ACPX ${params.label} legacy source: ${String(err)}`);
   }
 }
 
@@ -171,9 +144,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
 
       if (gatewayInstanceId) {
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: gatewayInstancePath,
-          label: "gateway-instance-id",
+          label: "ACPX gateway-instance-id",
           changes,
           warnings,
         });
@@ -193,9 +166,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated ACPX process leases -> plugin state (${imported} imported, ${alreadyPresent} already present)`,
         );
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: processLeasePath,
-          label: "process-leases",
+          label: "ACPX process-leases",
           changes,
           warnings,
         });

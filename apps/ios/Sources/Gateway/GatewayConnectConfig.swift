@@ -7,9 +7,9 @@ import OpenClawKit
 /// - a `role=node` session for device capabilities (`node.invoke.*`)
 /// - a `role=operator` session for chat/talk/config (`chat.*`, `talk.*`, etc.)
 ///
-/// Both sessions should derive all connection inputs from this config so we
-/// don't accidentally persist gateway-scoped state under different keys.
-struct GatewayConnectConfig {
+/// Both sessions derive routing and authentication ownership from the route's
+/// `stableID`. TLS certificate pins prove transport trust but are not gateway identity.
+struct GatewayConnectConfig: Sendable {
     let url: URL
     let stableID: String
     let tls: GatewayTLSParams?
@@ -18,17 +18,15 @@ struct GatewayConnectConfig {
     let password: String?
     let nodeOptions: GatewayConnectOptions
 
-    /// Stable, non-empty identifier used for gateway-scoped persistence keys.
+    /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
     var effectiveStableID: String {
-        let trimmed = self.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return self.url.absoluteString }
-        return trimmed
+        GatewayStableIdentifier.exact(self.stableID) ?? self.url.absoluteString
     }
 
     func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {
         self.url == other.url &&
-            self.stableID == other.stableID &&
+            Self.sameStableID(self.effectiveStableID, other.effectiveStableID) &&
             Self.sameTLS(self.tls, other.tls) &&
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
@@ -64,6 +62,8 @@ struct GatewayConnectConfig {
             lhs.clientDisplayName == rhs.clientDisplayName &&
             lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
+            lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
+            Self.sameOptionalStableID(lhs.deviceAuthGatewayID, rhs.deviceAuthGatewayID) &&
             lhsScopes == rhsScopes &&
             lhsCaps == rhsCaps &&
             lhsCommands == rhsCommands &&
@@ -74,5 +74,20 @@ struct GatewayConnectConfig {
         values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .sorted()
+    }
+
+    private static func sameStableID(_ lhs: String, _ rhs: String) -> Bool {
+        ExactOpaqueIdentifierKey(lhs) == ExactOpaqueIdentifierKey(rhs)
+    }
+
+    private static func sameOptionalStableID(_ lhs: String?, _ rhs: String?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (lhs?, rhs?):
+            self.sameStableID(lhs, rhs)
+        default:
+            false
+        }
     }
 }

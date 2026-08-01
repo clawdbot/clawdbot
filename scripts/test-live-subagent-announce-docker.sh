@@ -134,7 +134,7 @@ fi
 
 echo "==> Run subagent announce live test in Docker"
 echo "==> Target: src/agents/subagent-announce.live.test.ts"
-echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.5}"
+echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.6-luna}"
 echo "==> Profile file: $PROFILE_STATUS"
 DOCKER_RUN_ARGS=()
 openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_SUBAGENT_DOCKER_RUN_TIMEOUT:-1200s}"

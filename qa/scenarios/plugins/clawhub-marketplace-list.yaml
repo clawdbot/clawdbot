@@ -1,0 +1,32 @@
+title: ClawHub marketplace list package lane
+
+scenario:
+  id: clawhub-marketplace-list
+  surface: clawhub
+  category: clawhub.plugin-lifecycle-and-health
+  coverage:
+    primary:
+      - clawhub.marketplace-list
+    secondary:
+      - clawhub.update-by-plugin-id
+      - clawhub.uninstall-config-index-policy-file-cleanup
+  objective: Verify package-installed marketplace listing, install, update, and uninstall behavior through the release plugin marketplace lane.
+  successCriteria:
+    - A fixture marketplace is written into the package-installed home.
+    - The package-installed CLI lists the fixture marketplace as JSON and includes the expected plugin.
+    - The marketplace plugin installs by marketplace shortcut, exposes its CLI, updates by plugin id, and exposes the updated CLI output.
+    - Uninstall removes the plugin CLI and install metadata.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/release-plugin-marketplace-docker.sh
+    - scripts/e2e/lib/release-plugin-marketplace/scenario.sh
+    - scripts/e2e/lib/release-scenarios/write-marketplace.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the release-plugin-marketplace Docker E2E lane as QA Lab evidence for ClawHub marketplace list coverage.
+    args:
+      - --lane
+      - release-plugin-marketplace

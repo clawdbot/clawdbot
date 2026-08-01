@@ -21,6 +21,10 @@ export type OAuthCredentials = {
   projectId?: string;
   accountId?: string;
   chatgptPlanType?: string;
+  /** Non-secret subscription plan captured from external CLI logins (e.g. "max"). */
+  subscriptionType?: string;
+  /** Non-secret rate-limit tier captured from external CLI logins (e.g. "default_max_20x"). */
+  rateLimitTier?: string;
   idToken?: string;
 };
 
@@ -102,6 +106,7 @@ export type ProfileUsageStats = {
   blockedReason?: AuthProfileBlockedReason;
   blockedSource?: AuthProfileBlockedSource;
   blockedModel?: string;
+  blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;
@@ -110,6 +115,7 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  lastProbeAt?: number;
 };
 
 /** Durable, non-secret auth profile selection state. */
@@ -146,6 +152,12 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     /** True when the runtime external profile set was freshly resolved, even if empty. */
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
+
+/** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
+export type RuntimeAuthProfileStore = AuthProfileStore & {
+  runtimeLocalProfileIds?: string[];
+  runtimeInheritsMainState?: boolean;
+};
 
 /** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {

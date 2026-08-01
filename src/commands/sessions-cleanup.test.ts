@@ -91,6 +91,7 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+      modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
       maxEntries: 500,
       resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
       maxDiskBytes: null,
@@ -126,6 +127,7 @@ describe("sessionsCleanupCommand", () => {
         cappedKeys: Set<string>;
         budgetEvictedKeys: Set<string>;
         dmScopeRetiredKeys: Set<string>;
+        modelRunPrunedKeys?: Set<string>;
       }) => {
         if (params.dmScopeRetiredKeys.has(params.key)) {
           return "retire-dm-scope";
@@ -192,6 +194,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 1,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -224,13 +227,14 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 0,
       capped: 2,
       diskBudget: {
@@ -258,15 +262,17 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
     mocks.callGateway.mockResolvedValue({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -293,13 +299,14 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -307,6 +314,32 @@ describe("sessionsCleanupCommand", () => {
       applied: true,
       appliedCount: 1,
     });
+  });
+
+  it("preserves a Gateway-owned store path in human output", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: remoteStorePath,
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ enforce: true }, runtime);
+
+    expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
@@ -323,6 +356,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: {
@@ -343,6 +377,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -360,13 +395,14 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 2,
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 1,
       capped: 0,
       diskBudget: {
@@ -400,6 +436,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 0,
             capped: 0,
             diskBudget: null,
@@ -411,6 +448,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -429,13 +467,14 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 1,
       afterCount: 0,
       missing: 1,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 0,
       capped: 0,
       diskBudget: null,
@@ -458,6 +497,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             unreferencedArtifacts: {
@@ -478,6 +518,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -491,6 +532,7 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
+    expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
     const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
@@ -620,6 +662,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -631,6 +674,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
         {
           summary: {
@@ -642,6 +686,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -653,6 +698,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -676,13 +722,14 @@ describe("sessionsCleanupCommand", () => {
       stores: [
         {
           agentId: "main",
-          storePath: "/resolved/main-sessions.json",
+          storePath: "/resolved/main-sessions.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 1,
           capped: 0,
           diskBudget: null,
@@ -690,13 +737,14 @@ describe("sessionsCleanupCommand", () => {
         },
         {
           agentId: "work",
-          storePath: "/resolved/work-sessions.json",
+          storePath: "/resolved/work-sessions.work.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 1,
           capped: 0,
           diskBudget: null,

@@ -3,7 +3,7 @@
  *
  * Produces colored line and intra-line highlights for the Pi TUI review surfaces.
  */
-import * as Diff from "diff";
+import { diffWords } from "diff";
 import { theme } from "../theme/theme.js";
 
 /**
@@ -15,7 +15,10 @@ function parseDiffLine(line: string): { prefix: string; lineNum: string; content
   if (!match) {
     return null;
   }
-  return { prefix: match[1], lineNum: match[2], content: match[3] };
+  const [, prefix, lineNum, content] = match;
+  return prefix !== undefined && lineNum !== undefined && content !== undefined
+    ? { prefix, lineNum, content }
+    : null;
 }
 
 /**
@@ -34,50 +37,28 @@ function renderIntraLineDiff(
   oldContent: string,
   newContent: string,
 ): { removedLine: string; addedLine: string } {
-  const wordDiff = Diff.diffWords(oldContent, newContent);
-
   let removedLine = "";
   let addedLine = "";
-  let isFirstRemoved = true;
-  let isFirstAdded = true;
+  const seen = { added: false, removed: false };
 
-  for (const part of wordDiff) {
-    if (part.removed) {
-      let value = part.value;
-      // Strip leading whitespace from the first removed part
-      if (isFirstRemoved) {
-        const leadingWs = value.match(/^(\s*)/)?.[1] || "";
-        value = value.slice(leadingWs.length);
-        removedLine += leadingWs;
-        isFirstRemoved = false;
-      }
-      if (value) {
-        removedLine += theme.inverse(value);
-      }
-    } else if (part.added) {
-      let value = part.value;
-      // Strip leading whitespace from the first added part
-      if (isFirstAdded) {
-        const leadingWs = value.match(/^(\s*)/)?.[1] || "";
-        value = value.slice(leadingWs.length);
-        addedLine += leadingWs;
-        isFirstAdded = false;
-      }
-      if (value) {
-        addedLine += theme.inverse(value);
-      }
-    } else {
-      removedLine += part.value;
-      addedLine += part.value;
+  for (const part of diffWords(oldContent, newContent)) {
+    const kind = part.added ? "added" : part.removed ? "removed" : undefined;
+    let value = part.value;
+    if (kind) {
+      const changed = seen[kind] ? value : value.trimStart();
+      const leadingWhitespace = value.slice(0, value.length - changed.length);
+      value = leadingWhitespace + (changed ? theme.inverse(changed) : "");
+      seen[kind] = true;
+    }
+    if (!part.added) {
+      removedLine += value;
+    }
+    if (!part.removed) {
+      addedLine += value;
     }
   }
 
   return { removedLine, addedLine };
-}
-
-interface RenderDiffOptions {
-  /** File path (unused, kept for API compatibility) */
-  filePath?: string;
 }
 
 /**
@@ -86,13 +67,16 @@ interface RenderDiffOptions {
  * - Removed lines: red, with inverse on changed tokens
  * - Added lines: green, with inverse on changed tokens
  */
-export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): string {
+export function renderDiff(diffText: string): string {
   const lines = diffText.split("\n");
   const result: string[] = [];
 
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     const parsed = parseDiffLine(line);
 
     if (!parsed) {
@@ -105,7 +89,8 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       // Collect consecutive removed lines
       const removedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
+        const currentLine = lines.at(i);
+        const p = currentLine === undefined ? null : parseDiffLine(currentLine);
         if (!p || p.prefix !== "-") {
           break;
         }
@@ -116,7 +101,8 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       // Collect consecutive added lines
       const addedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
+        const currentLine = lines.at(i);
+        const p = currentLine === undefined ? null : parseDiffLine(currentLine);
         if (!p || p.prefix !== "+") {
           break;
         }
@@ -129,6 +115,9 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       if (removedLines.length === 1 && addedLines.length === 1) {
         const removed = removedLines[0];
         const added = addedLines[0];
+        if (!removed || !added) {
+          continue;
+        }
 
         const { removedLine, addedLine } = renderIntraLineDiff(
           replaceTabs(removed.content),

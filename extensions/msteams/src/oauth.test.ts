@@ -2,20 +2,26 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+);
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 import {
@@ -209,6 +215,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     expect(body.get("code")).toBe("auth-code");
     expect(body.get("code_verifier")).toBe("pkce-verifier");
     expect(body.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
   it("throws on a 400 error response", async () => {

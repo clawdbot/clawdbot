@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +26,6 @@ const ACP_LIVE_IDLE_MIN_CHARS = 80;
 const ACP_LIVE_SOFT_FLUSH_CHARS = 220;
 const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
-const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
 type AcpProjectedDeliveryMeta = {
@@ -50,9 +51,9 @@ function truncateText(input: string, maxChars: number): string {
     return input;
   }
   if (maxChars <= 1) {
-    return input.slice(0, maxChars);
+    return truncateUtf16Safe(input, maxChars);
   }
-  return `${input.slice(0, maxChars - 1)}…`;
+  return `${truncateUtf16Safe(input, maxChars - 1)}…`;
 }
 
 function hashText(text: string): string {
@@ -349,7 +350,7 @@ export function createAcpReplyProjector(params: {
       return;
     }
     const status = normalizeToolStatus(event.status);
-    const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
+    const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
   };
 
@@ -367,7 +368,7 @@ export function createAcpReplyProjector(params: {
     const hash = hashText(renderedToolSummary);
     const toolCallId = normalizeOptionalString(event.toolCallId);
     const status = normalizeToolStatus(event.status);
-    const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
+    const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     const isStart = status === "in_progress" || event.tag === "tool_call";
 
     if (settings.repeatSuppression) {
@@ -462,7 +463,7 @@ export function createAcpReplyProjector(params: {
         return;
       }
       const remaining = settings.maxOutputChars - emittedOutputChars;
-      const accepted = remaining < text.length ? text.slice(0, remaining) : text;
+      const accepted = remaining < text.length ? truncateUtf16Safe(text, remaining) : text;
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
@@ -479,6 +480,9 @@ export function createAcpReplyProjector(params: {
         }
       }
       if (accepted.length < text.length) {
+        // A split code point can leave the accepted prefix shorter than the remaining budget.
+        // Exhaust it after any drop so later deltas cannot skip past omitted text.
+        emittedOutputChars = settings.maxOutputChars;
         await emitTruncationNotice();
       }
       return;

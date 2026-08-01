@@ -1,7 +1,9 @@
 // Fetches and normalizes MiniMax provider usage records.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
@@ -59,10 +61,42 @@ const PERCENT_KEYS = [
   "usageRatio",
 ] as const;
 
-// MiniMax's usage_percent / usagePercent fields report the remaining quota
-// as a percentage, not the consumed quota. Treat them as "remaining percent"
-// and invert to get usedPercent. Count-based fromCounts always takes priority.
+// Legacy usage_percent / usagePercent fields report remaining quota, not consumption.
+// Generic payloads keep count priority; canonical model rows opt into the provider's
+// dedicated remaining-percent fields as their authoritative values.
 const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
+
+const CURRENT_INTERVAL_TOTAL_KEYS = [
+  "current_interval_total_count",
+  "currentIntervalTotalCount",
+] as const;
+const CURRENT_INTERVAL_REMAINING_KEYS = [
+  "current_interval_usage_count",
+  "currentIntervalUsageCount",
+] as const;
+const CURRENT_INTERVAL_REMAINING_PERCENT_KEYS = [
+  "current_interval_remaining_percent",
+  "currentIntervalRemainingPercent",
+] as const;
+const CURRENT_INTERVAL_STATUS_KEYS = ["current_interval_status", "currentIntervalStatus"] as const;
+const CURRENT_WEEKLY_TOTAL_KEYS = [
+  "current_weekly_total_count",
+  "currentWeeklyTotalCount",
+] as const;
+const CURRENT_WEEKLY_REMAINING_KEYS = [
+  "current_weekly_usage_count",
+  "currentWeeklyUsageCount",
+] as const;
+const CURRENT_WEEKLY_REMAINING_PERCENT_KEYS = [
+  "current_weekly_remaining_percent",
+  "currentWeeklyRemainingPercent",
+] as const;
+const CURRENT_WEEKLY_STATUS_KEYS = ["current_weekly_status", "currentWeeklyStatus"] as const;
+const MODEL_REMAINING_PERCENT_KEYS = [
+  ...CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
+  ...CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
+] as const;
+const NO_USAGE_KEYS = [] as const;
 
 const USED_KEYS = [
   "used",
@@ -184,13 +218,7 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
 }
 
 function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(record, keys);
 }
 
 function parseEpoch(value: unknown): number | undefined {
@@ -199,6 +227,10 @@ function parseEpoch(value: unknown): number | undefined {
     return asDateTimestampMs(timestampMs);
   }
   if (typeof value === "string" && value.trim()) {
+    const numeric = parseFiniteNumber(value);
+    if (numeric !== undefined) {
+      return parseEpoch(numeric);
+    }
     const parsed = Date.parse(value);
     return asDateTimestampMs(parsed);
   }
@@ -211,7 +243,7 @@ function hasAny(record: Record<string, unknown>, keys: readonly string[]): boole
 
 function scoreUsageRecord(record: Record<string, unknown>): number {
   let score = 0;
-  if (hasAny(record, PERCENT_KEYS)) {
+  if (hasAny(record, PERCENT_KEYS) || hasAny(record, MODEL_REMAINING_PERCENT_KEYS)) {
     score += 4;
   }
   if (hasAny(record, TOTAL_KEYS)) {
@@ -307,10 +339,38 @@ function deriveWindowLabel(payload: Record<string, unknown>): string {
   return "5h";
 }
 
-function deriveUsedPercent(payload: Record<string, unknown>): number | null {
-  const total = pickNumber(payload, TOTAL_KEYS);
-  let used = pickNumber(payload, USED_KEYS);
-  const remaining = pickNumber(payload, REMAINING_KEYS);
+function deriveUsedPercent(
+  payload: Record<string, unknown>,
+  keys: {
+    total?: readonly string[];
+    used?: readonly string[];
+    remaining?: readonly string[];
+    percent?: readonly string[];
+    remainingPercent?: readonly string[];
+    remainingPercentUnit?: "percent" | "ratio-or-percent";
+    preferRemainingPercent?: boolean;
+  } = {},
+): number | null {
+  const remainingPercentRaw = pickNumber(payload, keys.remainingPercent ?? REMAINING_PERCENT_KEYS);
+  const remainingPercentUnit = keys.remainingPercentUnit ?? "ratio-or-percent";
+  const fromRemainingPercent =
+    remainingPercentRaw === undefined
+      ? null
+      : clampPercent(
+          100 -
+            clampPercent(
+              remainingPercentUnit === "ratio-or-percent" && remainingPercentRaw <= 1
+                ? remainingPercentRaw * 100
+                : remainingPercentRaw,
+            ),
+        );
+  if (keys.preferRemainingPercent === true && fromRemainingPercent !== null) {
+    return fromRemainingPercent;
+  }
+
+  const total = pickNumber(payload, keys.total ?? TOTAL_KEYS);
+  let used = pickNumber(payload, keys.used ?? USED_KEYS);
+  const remaining = pickNumber(payload, keys.remaining ?? REMAINING_KEYS);
   if (used === undefined && remaining !== undefined && total !== undefined) {
     used = total - remaining;
   }
@@ -325,51 +385,124 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
     return fromCounts;
   }
 
-  const percentRaw = pickNumber(payload, PERCENT_KEYS);
+  const percentRaw = pickNumber(payload, keys.percent ?? PERCENT_KEYS);
   if (percentRaw !== undefined) {
     return clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
   }
 
   // usage_percent / usagePercent in MiniMax's API represents remaining quota,
   // not consumed quota. Invert to get usedPercent.
-  const remainingPercentRaw = pickNumber(payload, REMAINING_PERCENT_KEYS);
-  if (remainingPercentRaw !== undefined) {
-    const remainingNormalized = clampPercent(
-      remainingPercentRaw <= 1 ? remainingPercentRaw * 100 : remainingPercentRaw,
-    );
-    return clampPercent(100 - remainingNormalized);
+  if (fromRemainingPercent !== null) {
+    return fromRemainingPercent;
   }
 
   return null;
 }
 
-// Prefer the entry whose model_name matches a chat/text model (e.g. "MiniMax-M*")
-// and that has a non-zero current_interval_total_count.  Models with total_count === 0
-// (speech, video, image) are not relevant to the coding-plan budget.
+function hasModelUsageEvidence(record: Record<string, unknown>): boolean {
+  return (
+    hasAny(record, MODEL_REMAINING_PERCENT_KEYS) ||
+    (pickNumber(record, CURRENT_INTERVAL_TOTAL_KEYS) ?? 0) > 0 ||
+    (pickNumber(record, CURRENT_WEEKLY_TOTAL_KEYS) ?? 0) > 0
+  );
+}
+
+function isChatModelUsageRecord(record: Record<string, unknown>): boolean {
+  const name = normalizeLowercaseStringOrEmpty(
+    typeof record.model_name === "string" ? record.model_name : "",
+  );
+  return name === "general" || name.startsWith("minimax-m");
+}
+
+function isBoundedMinimaxStatus(status: number | undefined): boolean {
+  return status === 1 || status === 2;
+}
+
+function isBoundedModelUsageRecord(record: Record<string, unknown>): boolean {
+  return (
+    isBoundedMinimaxStatus(pickNumber(record, CURRENT_INTERVAL_STATUS_KEYS)) ||
+    isBoundedMinimaxStatus(pickNumber(record, CURRENT_WEEKLY_STATUS_KEYS))
+  );
+}
+
+// MiniMax's current API uses `general` for the chat quota and can report zero counts
+// with authoritative percentage fields. Prefer that owner before status-based fallbacks.
 function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
-  const records = modelRemains.filter(isRecord);
+  const records = modelRemains.filter(isRecord).filter(hasModelUsageEvidence);
   if (records.length === 0) {
     return undefined;
   }
 
-  const chatRecord = records.find((r) => {
-    const name = typeof r.model_name === "string" ? r.model_name : "";
-    const total = parseFiniteNumber(r.current_interval_total_count);
-    return (
-      normalizeLowercaseStringOrEmpty(name).startsWith("minimax-m") &&
-      total !== undefined &&
-      total > 0
-    );
-  });
+  return (
+    records.find(isChatModelUsageRecord) ?? records.find(isBoundedModelUsageRecord) ?? records[0]
+  );
+}
 
-  if (chatRecord) {
-    return chatRecord;
+function pickEpoch(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const parsed = parseEpoch(record[key]);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function shouldExposeMinimaxWindow(
+  record: Record<string, unknown>,
+  statusKeys: readonly string[],
+): boolean {
+  // MiniMax status 3 is unlimited. UsageWindow cannot represent infinity, so a 0%-used
+  // bounded bar would be misleading; legacy rows without status remain visible.
+  return pickNumber(record, statusKeys) !== 3;
+}
+
+function deriveMinimaxModelWindows(record: Record<string, unknown>): {
+  recognized: boolean;
+  windows: UsageWindow[];
+} {
+  const windows: UsageWindow[] = [];
+  const currentUsedPercent = deriveUsedPercent(record, {
+    total: CURRENT_INTERVAL_TOTAL_KEYS,
+    used: NO_USAGE_KEYS,
+    remaining: CURRENT_INTERVAL_REMAINING_KEYS,
+    percent: NO_USAGE_KEYS,
+    remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
+    remainingPercentUnit: "percent",
+    preferRemainingPercent: true,
+  });
+  if (
+    currentUsedPercent !== null &&
+    shouldExposeMinimaxWindow(record, CURRENT_INTERVAL_STATUS_KEYS)
+  ) {
+    windows.push({
+      label: deriveWindowLabel(record),
+      usedPercent: currentUsedPercent,
+      resetAt: pickEpoch(record, ["end_time", "endTime"]),
+    });
   }
 
-  return records.find((r) => {
-    const total = parseFiniteNumber(r.current_interval_total_count);
-    return total !== undefined && total > 0;
+  const weeklyUsedPercent = deriveUsedPercent(record, {
+    total: CURRENT_WEEKLY_TOTAL_KEYS,
+    used: NO_USAGE_KEYS,
+    remaining: CURRENT_WEEKLY_REMAINING_KEYS,
+    percent: NO_USAGE_KEYS,
+    remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
+    remainingPercentUnit: "percent",
+    preferRemainingPercent: true,
   });
+  if (weeklyUsedPercent !== null && shouldExposeMinimaxWindow(record, CURRENT_WEEKLY_STATUS_KEYS)) {
+    windows.push({
+      label: "Week",
+      usedPercent: weeklyUsedPercent,
+      resetAt: pickEpoch(record, ["weekly_end_time", "weeklyEndTime"]),
+    });
+  }
+
+  return {
+    recognized: currentUsedPercent !== null || weeklyUsedPercent !== null,
+    windows,
+  };
 }
 
 function resolveMinimaxUsageUrl(baseUrl?: string): string {
@@ -418,7 +551,9 @@ export async function fetchMinimaxUsage(
     });
   }
 
-  const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;
+  const data = await readProviderJsonResponse<MinimaxUsageResponse>(res, "minimax usage").catch(
+    () => null,
+  );
   if (!isRecord(data)) {
     return {
       provider: "minimax",
@@ -447,42 +582,45 @@ export async function fetchMinimaxUsage(
   const chatRemains = modelRemains ? pickChatModelRemains(modelRemains) : undefined;
 
   const usageSource = chatRemains ?? payload;
-  const candidates = collectUsageCandidates(usageSource);
   let usageRecord: Record<string, unknown> = usageSource;
-  let usedPercent: number | null = null;
-  for (const candidate of candidates) {
-    const candidatePercent = deriveUsedPercent(candidate);
-    if (candidatePercent !== null) {
-      usageRecord = candidate;
-      usedPercent = candidatePercent;
-      break;
+  const modelUsage = chatRemains ? deriveMinimaxModelWindows(chatRemains) : undefined;
+  let windows = modelUsage?.windows ?? [];
+  if (modelUsage?.recognized !== true) {
+    const candidates = collectUsageCandidates(usageSource);
+    let usedPercent: number | null = null;
+    for (const candidate of candidates) {
+      const candidatePercent = deriveUsedPercent(candidate);
+      if (candidatePercent !== null) {
+        usageRecord = candidate;
+        usedPercent = candidatePercent;
+        break;
+      }
     }
-  }
-  if (usedPercent === null) {
-    usedPercent = deriveUsedPercent(usageSource);
-  }
-  if (usedPercent === null) {
-    return {
-      provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
-      windows: [],
-      error: "Unsupported response shape",
-    };
-  }
+    if (usedPercent === null) {
+      usedPercent = deriveUsedPercent(usageSource);
+    }
+    if (usedPercent === null) {
+      return {
+        provider: "minimax",
+        displayName: PROVIDER_LABELS.minimax,
+        windows: [],
+        error: "Unsupported response shape",
+      };
+    }
 
-  const resetAt =
-    parseEpoch(pickString(usageRecord, RESET_KEYS)) ??
-    parseEpoch(pickNumber(usageRecord, RESET_KEYS)) ??
-    parseEpoch(pickString(payload, RESET_KEYS)) ??
-    parseEpoch(pickNumber(payload, RESET_KEYS));
-  const windowLabel = chatRemains ? deriveWindowLabel(chatRemains) : deriveWindowLabel(usageRecord);
-  const windows: UsageWindow[] = [
-    {
-      label: windowLabel,
-      usedPercent,
-      resetAt,
-    },
-  ];
+    const resetAt =
+      parseEpoch(pickString(usageRecord, RESET_KEYS)) ??
+      parseEpoch(pickNumber(usageRecord, RESET_KEYS)) ??
+      parseEpoch(pickString(payload, RESET_KEYS)) ??
+      parseEpoch(pickNumber(payload, RESET_KEYS));
+    windows = [
+      {
+        label: deriveWindowLabel(usageRecord),
+        usedPercent,
+        resetAt,
+      },
+    ];
+  }
 
   const modelName =
     chatRemains && typeof chatRemains.model_name === "string" ? chatRemains.model_name : undefined;

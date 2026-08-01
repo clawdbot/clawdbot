@@ -13,8 +13,8 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { loadActiveCallsFromStore } from "./manager/store.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
   setVoiceCallStateRuntime({
@@ -27,6 +27,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
       }) as never,
     },
   });
@@ -63,7 +66,6 @@ describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
@@ -103,6 +105,53 @@ describe("CallManager verification on restore", () => {
     expect(manager.getActiveCalls()).toHaveLength(0);
   });
 
+  it("resolves a terminal call from persisted state after restore", async () => {
+    const { call, manager } = await initializeManager({
+      callOverrides: { state: "completed", endReason: "completed", endedAt: Date.now() },
+    });
+
+    expect(manager.getCall(call.callId as string)).toBeUndefined();
+    expect(await manager.getCallFromMemoryOrStore(call.callId as string)).toMatchObject({
+      callId: call.callId,
+      state: "completed",
+    });
+    expect(await manager.getCallFromMemoryOrStore(call.providerCallId as string)).toMatchObject({
+      callId: call.callId,
+      state: "completed",
+    });
+  });
+
+  it("prefers active provider state before persisted fallback", async () => {
+    const storePath = createTestStorePath();
+    writeCallsToStore(storePath, [
+      makePersistedCall({
+        callId: "call-target",
+        providerCallId: "provider-completed",
+        state: "completed",
+        endReason: "completed",
+        endedAt: Date.now(),
+      }),
+      makePersistedCall({
+        callId: "call-active",
+        providerCallId: "call-target",
+        state: "answered",
+      }),
+    ]);
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+
+    expect(manager.getCallByProviderCallId("call-target")?.callId).toBe("call-active");
+    expect(await manager.getCallFromMemoryOrStore("call-target")).toMatchObject({
+      callId: "call-active",
+      state: "answered",
+    });
+  });
+
   it("keeps calls reported active by provider", async () => {
     const { call, manager } = await initializeManager({
       providerResult: { status: "in-progress", isTerminal: false },
@@ -135,7 +184,6 @@ describe("CallManager verification on restore", () => {
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
 
-    await flushPendingCallRecordWritesForTest();
     expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
   });
 

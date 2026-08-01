@@ -1,5 +1,6 @@
 // Codex plugin module implements command plugins management behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   buildCodexCommandPickerPresentation,
@@ -19,11 +20,11 @@ export type CodexPluginsManagementIO = {
   mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
 };
 
-export type CodexPluginConfigEntry = {
+type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
-  allow_destructive_actions?: boolean | "auto";
+  allow_destructive_actions?: boolean | "auto" | "ask";
 };
 
 export type CodexPluginsConfigBlock = {
@@ -79,7 +80,7 @@ export async function handleCodexPluginsSubcommand(
     if (!target || args.length > 1) {
       return { text: `Usage: /codex plugins ${normalized} <name>` };
     }
-    if (!canMutateCodexPlugins(ctx)) {
+    if (!canMutateCodexHost(ctx)) {
       return {
         text: `Only an owner or operator.admin gateway client can run /codex plugins ${normalized}.`,
       };
@@ -197,14 +198,7 @@ function buildPluginNamePickerReply(
   };
 }
 
-function canMutateCodexPlugins(ctx: PluginCommandContext): boolean {
-  if (ctx.senderIsOwner === true) {
-    return true;
-  }
-  return ctx.gatewayClientScopes?.includes("operator.admin") === true;
-}
-
-export function buildPluginsHelp(): string {
+function buildPluginsHelp(): string {
   return [
     "Codex sub-plugin management (writes only to ~/.openclaw/openclaw.json, never to ~/.codex/config.toml):",
     "- /codex plugins                  (alias for list)",
@@ -214,7 +208,7 @@ export function buildPluginsHelp(): string {
   ].join("\n");
 }
 
-export function formatPluginList(
+function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
   options: { globalEnabled?: boolean } = {},
 ): string {

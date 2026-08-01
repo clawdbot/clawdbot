@@ -56,11 +56,13 @@ describe("resolveChannelApprovalAdapter", () => {
     const delivery = { hasConfiguredDmRoute: vi.fn() };
     const nativeRuntime = createNativeRuntimeStub();
     const describeExecApprovalSetup = vi.fn();
+    const describePluginApprovalSetup = vi.fn();
 
     expect(
       resolveChannelApprovalAdapter({
         approvalCapability: {
           describeExecApprovalSetup,
+          describePluginApprovalSetup,
           delivery,
           nativeRuntime,
           authorizeActorAction: vi.fn(),
@@ -68,6 +70,7 @@ describe("resolveChannelApprovalAdapter", () => {
       }),
     ).toEqual({
       describeExecApprovalSetup,
+      describePluginApprovalSetup,
       delivery,
       nativeRuntime,
       render: undefined,

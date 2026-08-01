@@ -1,6 +1,8 @@
 /** Reusable group-intro prompt assertions shared by auto-reply trigger tests. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeCfg } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
@@ -8,6 +10,25 @@ type InboundMessage = Parameters<GetReplyFromConfig>[0];
 
 export function registerGroupIntroPromptCases(): void {
   describe("group intro prompts", () => {
+    beforeEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "telegram" }),
+              messaging: { defaultMarkdownTableMode: "block" },
+            },
+          },
+        ]),
+      );
+    });
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+    });
+
     type GroupIntroCase = {
       name: string;
       message: InboundMessage;
@@ -24,6 +45,16 @@ export function registerGroupIntroPromptCases(): void {
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
       'Any prose describing silence is wrong; the whole final answer must be only "NO_REPLY".';
+    const automaticGroupDeliveryGuidance = [
+      "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
+      "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+    ];
+    const automaticChannelDeliveryGuidance = [
+      "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
+      "Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+    ];
     const cases: GroupIntroCase[] = [
       {
         name: "discord",
@@ -55,7 +86,8 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+          "You are in a WhatsApp group chat.",
+          ...automaticGroupDeliveryGuidance,
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -80,6 +112,26 @@ export function registerGroupIntroPromptCases(): void {
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
         ],
         forbidden: ["Avoid Markdown tables"],
+      },
+      {
+        name: "mattermost-channel",
+        message: {
+          Body: "release status",
+          From: "mattermost:channel:town-square",
+          To: "channel:town-square",
+          ChatType: "channel",
+          GroupSubject: "Town Square",
+          Provider: "mattermost",
+        },
+        expected: [
+          "You are in a Mattermost channel.",
+          ...automaticChannelDeliveryGuidance,
+          groupParticipationNote,
+          groupSilentNote,
+          groupSilentProseGuard,
+          "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
+        ],
+        forbidden: ["Mattermost group chat"],
       },
       {
         name: "whatsapp-always-on",
@@ -107,7 +159,7 @@ export function registerGroupIntroPromptCases(): void {
         },
         expected: [
           "You are in a WhatsApp group chat.",
-          "Activation: always-on (you receive every group message).",
+          "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.",
           'If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "NO_REPLY".',
           "Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.",
           groupSilentProseGuard,
@@ -127,10 +179,7 @@ export function registerGroupIntroPromptCases(): void {
             silentToken: "NO_REPLY",
           }),
           buildGroupIntro({
-            cfg,
-            sessionCtx: testCase.message,
             defaultActivation: testCase.defaultActivation ?? "mention",
-            silentToken: "NO_REPLY",
           }),
         ]
           .filter(Boolean)

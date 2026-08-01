@@ -1,11 +1,12 @@
 // Discord plugin module implements rest behavior.
-import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
+import { gunzipSync } from "node:zlib";
 import {
   clampTimerTimeoutMs,
   parseFiniteNumber,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -22,11 +23,11 @@ import {
 } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, RateLimitError } from "./rest-errors.js";
+export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-export type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = RestRequestPriority;
-export type RequestSchedulerOptions = {
+type RuntimeProfile = "serverless" | "persistent";
+type RequestPriority = RestRequestPriority;
+type RequestSchedulerOptions = {
   lanes?: Partial<
     Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
   >;
@@ -61,7 +62,7 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-export type QueuedRequest = {
+type QueuedRequest = {
   method: string;
   path: string;
   data?: RequestData;
@@ -89,6 +90,28 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
   background: { staleAfterMs: 20_000, weight: 1 },
 };
 
+// Cap the REST response body well above any legitimate Discord JSON payload
+// (bulk message/member fetches stay in the low hundreds of KB) so a controlled
+// or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
+const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const GZIP_MAGIC = [0x1f, 0x8b] as const;
+
+function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
+  return new Error(
+    `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
+  );
+}
+
+async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
+  const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
+    chunkTimeoutMs: idleTimeoutMs,
+    onOverflow: ({ size }) => createResponseBodyOverflowError(size),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  return decodeResponseBody(buffer);
+}
+
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
     return undefined;
@@ -100,50 +123,31 @@ function coerceResponseBody(raw: string): unknown {
   }
 }
 
-function escapeMultipartQuotedValue(value: string): string {
-  return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
+function decodeResponseBody(buffer: Buffer): string {
+  if (!buffer.byteLength) {
+    return "";
+  }
+  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
+    try {
+      return gunzipSync(buffer, {
+        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
+      }).toString("utf8");
+    } catch (err: unknown) {
+      if (isZlibMaxOutputLengthError(err)) {
+        throw createResponseBodyOverflowError("decompressed output");
+      }
+      throw err;
+    }
+  }
+  return buffer.toString("utf8");
 }
 
-async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
-  const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
-  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
-  const chunks: Buffer[] = [];
-  const push = (value: string | Buffer) => {
-    chunks.push(typeof value === "string" ? Buffer.from(value) : value);
-  };
-  for (const [key, value] of body.entries()) {
-    push(`--${boundary}\r\n`);
-    const escapedKey = escapeMultipartQuotedValue(key);
-    if (typeof value === "string") {
-      push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
-      push(value);
-      push("\r\n");
-      continue;
-    }
-    const filename = (value as Blob & { name?: unknown }).name;
-    const escapedFilename = escapeMultipartQuotedValue(
-      typeof filename === "string" && filename.length > 0 ? filename : "blob",
-    );
-    push(`Content-Disposition: form-data; name="${escapedKey}"; filename="${escapedFilename}"\r\n`);
-    if (value.type) {
-      push(`Content-Type: ${value.type}\r\n`);
-    }
-    push("\r\n");
-    push(Buffer.from(await value.arrayBuffer()));
-    push("\r\n");
-  }
-  push(`--${boundary}--\r\n`);
-  return Buffer.concat(chunks) as unknown as BodyInit;
-}
-
-async function normalizeFetchBody(
-  body: BodyInit | undefined,
-  headers: Headers,
-): Promise<BodyInit | undefined> {
-  if (body instanceof FormData) {
-    return await formDataToMultipartBody(body, headers);
-  }
-  return body;
+function isZlibMaxOutputLengthError(err: unknown): boolean {
+  return (
+    err instanceof RangeError &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE"
+  );
 }
 
 export class RequestClient {
@@ -246,10 +250,10 @@ export class RequestClient {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
-        body: await normalizeFetchBody(body, headers),
+        body,
         signal,
       });
-      const text = await response.text();
+      const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {

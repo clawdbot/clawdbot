@@ -6,25 +6,41 @@
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
-export type DraftStreamLoop = {
-  update: (text: string) => void;
+export type DraftStreamLoop<T = string> = {
+  update: (value: T) => void;
   flush: () => Promise<void>;
   stop: () => void;
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
+  takePending?: () => T;
 };
 
-/** Creates a single-flight draft stream loop that preserves the newest pending text. */
-export function createDraftStreamLoop(params: {
+type CreatedDraftStreamLoop<T> = DraftStreamLoop<T> & {
+  takePending: () => T;
+};
+
+/** Creates a single-flight draft stream loop that preserves the newest pending value. */
+export function createDraftStreamLoop<T = string>(params: {
   throttleMs: number;
   isStopped: () => boolean;
-  sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  /** Empty sentinel and predicate for non-string payloads. */
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
   onBackgroundFlushError?: (err: unknown) => void;
-}): DraftStreamLoop {
+}): CreatedDraftStreamLoop<T> {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
+  const emptyValue = params.emptyValue ?? ("" as T);
+  const isEmpty =
+    params.isEmpty ?? ((value: T) => typeof value === "string" && value.trim().length === 0);
+  // String callers historically treated only "" as absent between sends,
+  // while trim-empty text is discarded at the top of the next flush.
+  const hasPendingValue = (value: T) =>
+    typeof value === "string" ? value.length > 0 : !isEmpty(value);
   let lastSentAt = 0;
-  let pendingText = "";
+  let pendingValue = emptyValue;
   let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -38,21 +54,23 @@ export function createDraftStreamLoop(params: {
         await inFlightPromise;
         continue;
       }
-      const text = pendingText;
-      if (!text.trim()) {
-        pendingText = "";
+      const value = pendingValue;
+      if (isEmpty(value)) {
+        pendingValue = emptyValue;
         return;
       }
-      pendingText = "";
+      pendingValue = emptyValue;
       let current: Promise<void | boolean> | undefined;
       try {
-        current = Promise.resolve(params.sendOrEditStreamMessage(text)).finally(() => {
+        current = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
           if (inFlightPromise === current) {
             inFlightPromise = undefined;
           }
         });
       } catch (err) {
-        pendingText ||= text;
+        if (!hasPendingValue(pendingValue)) {
+          pendingValue = value;
+        }
         throw err;
       }
       inFlightPromise = current;
@@ -60,15 +78,17 @@ export function createDraftStreamLoop(params: {
       try {
         sent = await current;
       } catch (err) {
-        pendingText ||= text;
+        if (!hasPendingValue(pendingValue)) {
+          pendingValue = value;
+        }
         throw err;
       }
       if (sent === false) {
-        pendingText = text;
+        pendingValue = value;
         return;
       }
       lastSentAt = Date.now();
-      if (!pendingText) {
+      if (!hasPendingValue(pendingValue)) {
         return;
       }
     }
@@ -95,11 +115,11 @@ export function createDraftStreamLoop(params: {
   };
 
   return {
-    update: (text: string) => {
+    update: (value: T) => {
       if (params.isStopped()) {
         return;
       }
-      pendingText = text;
+      pendingValue = value;
       if (inFlightPromise) {
         schedule();
         return;
@@ -112,14 +132,14 @@ export function createDraftStreamLoop(params: {
     },
     flush,
     stop: () => {
-      pendingText = "";
+      pendingValue = emptyValue;
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
       }
     },
     resetPending: () => {
-      pendingText = "";
+      pendingValue = emptyValue;
     },
     resetThrottleWindow: () => {
       lastSentAt = 0;
@@ -132,6 +152,15 @@ export function createDraftStreamLoop(params: {
       if (inFlightPromise) {
         await inFlightPromise;
       }
+    },
+    takePending: () => {
+      const value = pendingValue;
+      pendingValue = emptyValue;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      return value;
     },
   };
 }

@@ -1,4 +1,6 @@
 // Voice model catalog helpers shared by TTS and realtime voice plugins.
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+
 export type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
 
 /** Capability flags advertised by a voice model catalog entry. */
@@ -61,17 +63,8 @@ function normalizeTimeoutMs(value: unknown): number | undefined {
 }
 
 function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
-  const raw = normalizeString(value);
-  if (!raw) {
-    return undefined;
-  }
-  const slashIndex = raw.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === raw.length - 1) {
-    return undefined;
-  }
-  const provider = normalizeLowercaseString(raw.slice(0, slashIndex));
-  const model = normalizeString(raw.slice(slashIndex + 1));
-  return provider && model ? { provider, model } : undefined;
+  const parsed = typeof value === "string" ? parseModelCatalogRef(value) : null;
+  return parsed ? { provider: parsed.provider, model: parsed.modelId } : undefined;
 }
 
 function sameProvider(left: string | undefined, right: string | undefined): boolean {
@@ -88,7 +81,7 @@ export function providerMatchesId(provider: VoiceModelProvider, providerId?: str
 }
 
 /** Find the provider metadata for a configured provider id or alias. */
-export function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
+function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
   providers: readonly T[];
   providerId?: string;
 }): T | undefined {

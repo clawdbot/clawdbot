@@ -25,35 +25,45 @@ export function listChannelPlugins(): ChannelPlugin[] {
  * Returns a loaded channel plugin without falling back to bundled metadata.
  */
 export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return getLoadedChannelPluginById(resolvedId) as ChannelPlugin | undefined;
+  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
 }
 
 /**
  * Returns the package/install origin for a loaded channel plugin.
  */
 export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined {
+  return normalizeOptionalString(getLoadedChannelPluginEntryById(id)?.origin);
+}
+
+/**
+ * Resolves the active channel implementation together with host-owned provenance.
+ */
+export function resolveChannelPluginRegistration(
+  id: ChannelId,
+): { plugin: ChannelPlugin; origin?: string } | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
-  return normalizeOptionalString(getLoadedChannelPluginEntryById(resolvedId)?.origin) ?? undefined;
+  // Resolve implementation and provenance together. Loaded overrides win and
+  // must never borrow bundled authority from the fallback with the same id.
+  const loadedEntry = getLoadedChannelPluginEntryById(resolvedId);
+  if (loadedEntry) {
+    const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
+    return {
+      plugin: loadedEntry.plugin as ChannelPlugin,
+      ...(origin ? { origin } : {}),
+    };
+  }
+  const plugin = getBundledChannelPlugin(resolvedId);
+  return plugin ? { plugin, origin: "bundled" } : undefined;
 }
 
 /**
  * Returns the active channel plugin, with bundled fallback for built-in channels.
  */
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  // Loaded plugins win over bundled fallbacks so installed plugin state can pin
-  // or override a bundled channel during runtime.
-  return getLoadedChannelPlugin(resolvedId) ?? getBundledChannelPlugin(resolvedId);
+  return resolveChannelPluginRegistration(id)?.plugin;
 }
 
 /**

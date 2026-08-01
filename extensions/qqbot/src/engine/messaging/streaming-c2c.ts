@@ -15,6 +15,7 @@
  *    it is treated as a new message.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
 import {
@@ -24,6 +25,8 @@ import {
   type MessageResponse,
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
+import { claimMessageReply } from "./outbound-reply.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
 import {
@@ -542,7 +545,7 @@ export class StreamingController {
    */
   async onDeliver(payload: { text?: string }): Promise<void> {
     const rawLen = payload.text?.length ?? 0;
-    const preview = (payload.text ?? "").slice(0, 60).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(payload.text ?? "", 60).replace(/\n/g, "\\n");
     this.logDebug(
       `onDeliver: rawLen=${rawLen}, phase=${this.phase}, streamMsgId=${this.streamMsgId}, sentIndex=${this.sentIndex}, sentChunks=${this.sentStreamChunkCount}, firstCB=${this.firstCallbackSource}, preview="${preview}"`,
     );
@@ -789,7 +792,7 @@ export class StreamingController {
         }
 
         this.logInfo(
-          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${found.textBefore.slice(0, 40)}"`,
+          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${truncateUtf16Safe(found.textBefore, 40)}"`,
         );
 
         // ---- 1.1 终结当前流式会话（如果有的话） ----
@@ -812,7 +815,7 @@ export class StreamingController {
         if (found.mediaPath && this.deps.mediaContext) {
           const item: SendQueueItem = { type: found.itemType, content: found.mediaPath };
           this.logDebug(
-            `processMediaTags: sending ${found.itemType}: ${found.mediaPath.slice(0, 80)}`,
+            `processMediaTags: sending ${found.itemType}: ${truncateUtf16Safe(found.mediaPath, 80)}`,
           );
           await sendMediaQueue([item], this.deps.mediaContext);
           this.sentMediaCount++;
@@ -998,6 +1001,14 @@ export class StreamingController {
         return;
       }
       const firstText = safeText;
+      // A stream session is one passive reply: claim once before its first
+      // POST, then reuse the same msg_seq for all later chunks in the session.
+      const passive = claimMessageReply(this.deps.replyToMsgId);
+      if (!passive.allowed) {
+        this.logWarn(`stream budget unavailable; falling back to static delivery`);
+        this.transition("aborted", "doStartStreaming", "passive_budget_exhausted");
+        return;
+      }
       const resp = await this.sendStreamChunk(
         firstText,
         StreamInputState.GENERATING,
@@ -1107,7 +1118,7 @@ export class StreamingController {
 // ============ 流式媒体发送 ============
 
 /** 流式媒体发送上下文（由 gateway 注入到 StreamingController） */
-interface StreamingMediaContext {
+interface StreamingMediaContext extends OutboundMediaAccessContext {
   /** 账户信息 */
   account: GatewayAccount;
   /** 事件信息 */
@@ -1131,6 +1142,11 @@ interface StreamingMediaContext {
  */
 function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
   const { account, event, log } = ctx;
+  const mediaAccessContext: OutboundMediaAccessContext = {
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
+    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+  };
 
   const mediaTarget: MediaTargetContext = {
     targetType: event.type,
@@ -1143,6 +1159,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     logPrefix: `[qqbot:${account.accountId}]`,
+    ...mediaAccessContext,
   };
 
   const qualifiedTarget =
@@ -1154,6 +1171,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     log,
+    ...mediaAccessContext,
   };
 }
 
@@ -1173,8 +1191,8 @@ async function sendMediaQueue(queue: SendQueueItem[], ctx: StreamingMediaContext
 
 /**
  * 是否对私聊走 QQ 官方 C2C `stream_messages` 流式 API。
- * - `streaming: true` 等效于 `mode: "partial"` 且 `c2cStreamApi: true`。
- * - 仍支持对象里显式设 `c2cStreamApi: true` 以兼容旧配置；仅 C2C 场景生效。
+ * - `streaming.nativeTransport: true` 启用；仅 C2C 场景生效。
+ * - 旧的 `streaming: true` 布尔与 `c2cStreamApi` 键由 `openclaw doctor --fix` 迁移。
  */
 export function shouldUseOfficialC2cStream(
   account: GatewayAccount,
@@ -1183,12 +1201,6 @@ export function shouldUseOfficialC2cStream(
   if (targetType !== "c2c") {
     return false;
   }
-  const s = account.config?.streaming;
-  if (s === true) {
-    return true;
-  }
-  if (s && typeof s === "object" && s.c2cStreamApi === true) {
-    return true;
-  }
-  return false;
+  return account.config?.streaming?.nativeTransport === true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

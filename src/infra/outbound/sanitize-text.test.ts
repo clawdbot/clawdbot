@@ -1,7 +1,10 @@
 // Verifies plain-text sanitization strips runtime scaffolding, tool-call blocks,
 // prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
-import { sanitizeForPlainText, stripInternalRuntimeScaffolding } from "./sanitize-text.js";
+import { escapeInternalRuntimeContextDelimiters } from "../../agents/internal-runtime-context.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
+import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
+import { sanitizeForPlainText } from "./sanitize-text.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeForPlainText
@@ -41,6 +44,17 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<code>foo()</code>")).toBe("`foo()`");
   });
 
+  it("converts attributed inline tags without matching tag-name prefixes", () => {
+    const attributed = `<strong title="b>"><em title='i>'><del data-note="s>"><code class='c>'>x</code></del></em></strong>`;
+    expect(sanitizeForPlainText(attributed)).toBe("*_~`x`~_*");
+    expect(sanitizeForPlainText(attributed, { style: "markdown" })).toBe("**_~~`x`~~_**");
+    expect(
+      sanitizeForPlainText(
+        '<bold title="b">b</bold><strikeout title="s">s</strikeout><codebase>c</codebase>',
+      ),
+    ).toBe("bsc");
+  });
+
   // --- block elements -----------------------------------------------------
 
   it("converts <p> and <div> to newlines", () => {
@@ -50,6 +64,9 @@ describe("sanitizeForPlainText", () => {
   it("converts headings to bold text with newlines", () => {
     expect(sanitizeForPlainText("<h1>Title</h1>")).toBe("\n*Title*\n");
     expect(sanitizeForPlainText("<h3>Section</h3>")).toBe("\n*Section*\n");
+    expect(sanitizeForPlainText('<h2 title="section">Markdown</h2>', { style: "markdown" })).toBe(
+      "\n**Markdown**\n",
+    );
   });
 
   it("converts <li> to bullet points", () => {
@@ -118,6 +135,56 @@ describe("sanitizeForPlainText", () => {
 });
 
 describe("stripInternalRuntimeScaffolding", () => {
+  it.each([
+    ["backtick fence", "```json", "```"],
+    ["tilde fence", "~~~json", "~~~"],
+    ["unterminated fence", "```json", ""],
+  ])("preserves plain-text tool-call examples inside a %s", (_name, open, close) => {
+    const example = [open, "[server]", '{"host":"example.test"}', "[/server]", close]
+      .filter(Boolean)
+      .join("\n");
+
+    expect(stripInternalRuntimeScaffolding(example)).toBe(example);
+  });
+
+  it("preserves indented plain-text tool-call examples", () => {
+    const example = ["    [read]", '    {"path":"example.txt"}', "    [/read]"].join("\n");
+
+    expect(stripInternalRuntimeScaffolding(example)).toBe(example);
+  });
+
+  it("still strips unfenced plain-text tool calls", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["before", "[read]", '{"path":"secret.txt"}', "[/read]", "after"].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("preserves fenced examples across nested outbound payload fields", () => {
+    const example = ["```json", "[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const stripped = stripInternalRuntimeScaffoldingFromPayload({
+      text: example,
+      channelData: {
+        example,
+        leaked: ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n"),
+      },
+    });
+
+    expect(stripped).toMatchObject({
+      text: example,
+      channelData: { example, leaked: "" },
+    });
+  });
+
+  it("does not let Markdown fences bypass private runtime scaffolding removal", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["```xml", "<system-reminder>private runtime data</system-reminder>", "```"].join("\n"),
+      ),
+    ).toBe(["```xml", "", "```"].join("\n"));
+  });
+
   it("removes closed, self-closing, and stray internal runtime tags", () => {
     expect(
       stripInternalRuntimeScaffolding(
@@ -154,6 +221,74 @@ describe("stripInternalRuntimeScaffolding", () => {
         ].join("\n"),
       ),
     ).toBe("before\nafter");
+  });
+
+  it("removes complete internal runtime context blocks glued to visible text", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private runtime metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+      ),
+    ).toBe("before  after");
+  });
+
+  it("preserves inline marker mentions before a later complete runtime context block", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
+          "visible",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private runtime metadata",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?\nvisible\nafter");
+  });
+
+  it("removes marker-shaped private text from complete inline runtime context blocks", () => {
+    const escapedPrivateContext = escapeInternalRuntimeContextDelimiters(
+      "private <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>nested<<<END_OPENCLAW_INTERNAL_CONTEXT>>> metadata",
+    );
+    expect(
+      stripInternalRuntimeScaffolding(
+        `before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>${escapedPrivateContext}<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after`,
+      ),
+    ).toBe("before  after");
+
+    expect(
+      stripInternalRuntimeScaffolding(
+        "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private <<<END_OPENCLAW_INTERNAL_CONTEXT>>> metadata<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+      ),
+    ).toBe("before  after");
+  });
+
+  it("removes indented runtime context delimiters without leaving marker fragments", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "  <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "\t<<<END_OPENCLAW_INTERNAL_CONTEXT>>>  ",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("preserves visible whitespace around removed runtime context", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before  ",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "    indented code",
+        ].join("\n"),
+      ),
+    ).toBe("before  \n    indented code");
   });
 
   it("unwraps standalone untrusted child-result marker lines", () => {
@@ -209,6 +344,9 @@ describe("stripInternalRuntimeScaffolding", () => {
   });
 
   it("preserves inline delimiter mentions", () => {
+    expect(stripInternalRuntimeScaffolding("what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?")).toBe(
+      "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
+    );
     expect(
       stripInternalRuntimeScaffolding("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention"),
     ).toBe("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention");

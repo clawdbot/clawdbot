@@ -5,9 +5,7 @@ scenario:
   surface: character
   coverage:
     primary:
-      - character.persona
-    secondary:
-      - workspace.artifacts
+      - session-memory.instruction-profile-persona
   objective: Capture a natural multi-turn C-3PO-flavored character conversation with real workspace help so another model can later grade naturalness, vibe, and funniness from the raw transcript.
   successCriteria:
     - Agent gets a natural multi-turn conversation, and any missed replies stay visible in the transcript instead of aborting capture.
@@ -92,17 +90,16 @@ flow:
               - set: beforeOutboundCount
                 value:
                   expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId).length"
-              - call: state.addInboundMessage
-                args:
-                  - conversation:
-                      id:
-                        ref: config.conversationId
-                      kind: direct
-                    senderId: alice
-                    senderName:
-                      ref: config.senderName
-                    text:
-                      expr: turn.text
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: direct
+                  senderId: alice
+                  senderName:
+                    ref: config.senderName
+                  text:
+                    expr: turn.text
               - try:
                   actions:
                     - call: waitForOutboundMessage

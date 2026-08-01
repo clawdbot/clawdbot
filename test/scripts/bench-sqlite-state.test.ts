@@ -1,6 +1,7 @@
 // Bench SQLite State tests cover benchmark CLI argument safety.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { parseSqliteStateBenchmarkCli } from "../../scripts/lib/sqlite-state-benchmark-cli.js";
 
 function runBench(args: string[]) {
   return spawnSync(
@@ -23,28 +24,29 @@ describe("scripts/bench-sqlite-state", () => {
   });
 
   it("rejects missing output values before seeding benchmark databases", () => {
-    const result = runBench(["--output", "--profile", "smoke"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("error: --output requires a value");
+    expect(() => parseSqliteStateBenchmarkCli(["--output", "--profile", "smoke"])).toThrow(
+      "--output requires a value",
+    );
   });
 
   it("rejects short flag output values before seeding benchmark databases", () => {
-    const result = runBench(["--output", "-h"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("error: --output requires a value");
+    expect(() => parseSqliteStateBenchmarkCli(["--output", "-h"])).toThrow(
+      "--output requires a value",
+    );
   });
 
   it("rejects invalid profiles without printing a stack trace", () => {
-    const result = runBench(["--profile", "huge"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe(
-      'error: --profile must be one of smoke, default, large; got "huge"',
+    expect(() => parseSqliteStateBenchmarkCli(["--profile", "huge"])).toThrow(
+      '--profile must be one of smoke, default, large; got "huge"',
     );
+  });
+
+  it("rejects duplicate single-value controls before seeding benchmark databases", () => {
+    expect(() =>
+      parseSqliteStateBenchmarkCli(["--profile", "smoke", "--profile", "large"]),
+    ).toThrow("--profile was provided more than once");
+    expect(parseSqliteStateBenchmarkCli(["--help", "--profile", "huge"])).toEqual({
+      help: true,
+    });
   });
 });

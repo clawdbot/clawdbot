@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
+  warn: (message: string) => `warn:${message}`,
 }));
 
 let logVerbose: typeof import("openclaw/plugin-sdk/runtime-env").logVerbose;
@@ -17,7 +18,8 @@ const makeRuntime = () => ({
 
 describe("attachDiscordGatewayLogging", () => {
   beforeAll(async () => {
-    ({ logVerbose } = await import("openclaw/plugin-sdk/runtime-env"));
+    const { logVerbose: loadedLogVerbose } = await import("openclaw/plugin-sdk/runtime-env");
+    logVerbose = loadedLogVerbose;
     ({ attachDiscordGatewayLogging } = await import("./gateway-logging.js"));
   });
 
@@ -57,7 +59,7 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup();
   });
 
-  it("logs warnings and metrics only to verbose", () => {
+  it("promotes warnings while keeping metrics verbose-only", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
 
@@ -71,7 +73,9 @@ describe("attachDiscordGatewayLogging", () => {
 
     const logVerboseMock = vi.mocked(logVerbose);
     expect(logVerboseMock).toHaveBeenCalledTimes(2);
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "warn:discord gateway warning: High latency detected: 1200ms",
+    );
 
     cleanup();
   });

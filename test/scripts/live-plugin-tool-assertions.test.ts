@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/live-plugin-tool/assertions.mjs";
@@ -68,7 +69,7 @@ describe("live plugin tool assertions", () => {
         OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: "240",
       });
 
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       const config = JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8"));
       expect(config.models.providers.openai.timeoutSeconds).toBe(240);
       expect(config.agents.defaults.timeoutSeconds).toBe(240);
@@ -115,7 +116,75 @@ describe("live plugin tool assertions", () => {
 
       const result = runAssertion(root);
 
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("reads causal tool evidence from the canonical SQLite transcript", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const databasePath = path.join(
+      root,
+      "state",
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [{ text: "live-plugin-slug" }],
+      });
+      mkdirSync(path.dirname(databasePath), { recursive: true });
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(`
+          CREATE TABLE transcript_events (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            event_json TEXT NOT NULL
+          )
+        `);
+        const insert = database.prepare(
+          "INSERT INTO transcript_events (session_id, seq, event_json) VALUES (?, ?, ?)",
+        );
+        insert.run(
+          "live-plugin-tool",
+          1,
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "call-live-plugin-tool",
+                  name: "e2e_slug_probe",
+                },
+              ],
+            },
+          }),
+        );
+        insert.run(
+          "live-plugin-tool",
+          2,
+          JSON.stringify({
+            message: {
+              role: "tool",
+              tool_call_id: "call-live-plugin-tool",
+              content: "live-plugin-slug",
+            },
+          }),
+        );
+      } finally {
+        database.close();
+      }
+
+      const result = runAssertion(root);
+
+      expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -162,7 +231,7 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("session transcript did not show");
-      expect(result.stderr).toContain("after checking 2 jsonl file(s)");
+      expect(result.stderr).toContain("0 SQLite event(s) and 2 jsonl file(s)");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -322,7 +391,7 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("session transcript did not show");
-      expect(result.stderr).toContain("after checking 1 jsonl file(s)");
+      expect(result.stderr).toContain("0 SQLite event(s) and 1 jsonl file(s)");
       expect(result.stderr).toContain("session.jsonl");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_SESSION_CONTENT");
     } finally {

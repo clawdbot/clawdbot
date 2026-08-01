@@ -177,8 +177,14 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expectErrorMessage("Expected dark|light|none");
+    expectErrorMessage("Expected dark|light|no-preference|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("passes no-preference through to /set/media", async () => {
+    const request = await runBrowserCommandAndGetRequest(["set", "media", "no-preference"]);
+
+    expect(request.body).toMatchObject({ colorScheme: "no-preference" });
   });
 
   it("rejects invalid geolocation numbers before dispatch", async () => {

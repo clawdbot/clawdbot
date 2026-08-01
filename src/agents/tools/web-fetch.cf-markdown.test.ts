@@ -6,7 +6,7 @@ import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createBaseWebFetchToolConfig, makeFetchHeaders } from "./web-fetch.test-harness.js";
+import { createBaseWebFetchToolConfig } from "./web-fetch.test-harness.js";
 
 const lookupMock = vi.fn();
 const baseToolConfig = createBaseWebFetchToolConfig({
@@ -14,24 +14,27 @@ const baseToolConfig = createBaseWebFetchToolConfig({
 });
 
 function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
-  return {
-    ok: true,
+  return new Response(body, {
     status: 200,
-    headers: makeFetchHeaders({
+    headers: {
       "content-type": "text/markdown; charset=utf-8",
       ...extraHeaders,
-    }),
-    text: async () => body,
-  } as Response;
+    },
+  });
 }
 
-function htmlResponse(body: string): Response {
-  return {
-    ok: true,
+function htmlResponse(body: string, contentType = "text/html; charset=utf-8"): Response {
+  return new Response(body, {
     status: 200,
-    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
-    text: async () => body,
-  } as Response;
+    headers: { "content-type": contentType },
+  });
+}
+
+function jsonResponse(body: string, contentType = "application/json; charset=utf-8"): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": contentType },
+  });
 }
 
 describe("web_fetch Cloudflare Markdown for Agents", () => {
@@ -86,6 +89,25 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(details?.text).toContain("server-rendered markdown");
   });
 
+  it("recognizes markdown response media types case-insensitively", async () => {
+    const md = "# Mixed Case\n\nStill markdown.";
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(markdownResponse(md, { "content-type": "Text/Markdown; charset=utf-8" }));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/case" });
+    const details = result?.details as
+      | { status?: number; extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.status).toBe(200);
+    expect(details?.extractor).toBe("cf-markdown");
+    expect(details?.contentType).toBe("text/markdown");
+    expect(details?.text).toContain("Mixed Case");
+  });
+
   it("falls back to readability for text/html responses", async () => {
     const html =
       "<html><body><article><h1>HTML Page</h1><p>Content here.</p></article></body></html>";
@@ -98,6 +120,71 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const details = result?.details as { extractor?: string; contentType?: string } | undefined;
     expect(details?.extractor).toBe("readability");
     expect(details?.contentType).toBe("text/html");
+  });
+
+  it("recognizes HTML response media types case-insensitively", async () => {
+    const html =
+      "<html><body><article><h1>Mixed HTML</h1><p>Content here.</p></article></body></html>";
+    const fetchSpy = vi.fn().mockResolvedValue(htmlResponse(html, "Text/HTML; Charset=UTF-8"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/mixed-html" });
+    const details = result?.details as { extractor?: string; contentType?: string } | undefined;
+    expect(details?.extractor).toBe("readability");
+    expect(details?.contentType).toBe("text/html");
+  });
+
+  it("recognizes JSON response media types case-insensitively", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('{"mixed":true}', "Application/JSON; Charset=UTF-8"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/mixed-json" });
+    const details = result?.details as
+      | { extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.extractor).toBe("json");
+    expect(details?.contentType).toBe("application/json");
+    expect(details?.text).toContain('"mixed": true');
+  });
+
+  it("does not treat JSON subtype prefixes as application/json", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('{"sequence":true}', "application/json-seq"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/json-seq" });
+    const details = result?.details as
+      | { extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.extractor).toBe("raw");
+    expect(details?.contentType).toBe("application/json-seq");
+    expect(details?.text).toContain('{"sequence":true}');
+  });
+
+  it("handles structured +json subtypes as JSON", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('{"patch":true}', "Application/JSON-Patch+JSON"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/json-patch" });
+    const details = result?.details as
+      | { extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.extractor).toBe("json");
+    expect(details?.contentType).toBe("application/json-patch+json");
+    expect(details?.text).toContain('"patch": true');
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {

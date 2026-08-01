@@ -1,13 +1,13 @@
 // Imessage tests cover actions plugin behavior.
-import { EventEmitter } from "node:events";
+import { access, readFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const spawnMock = vi.hoisted(() => vi.fn());
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
+const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: spawnMock,
+vi.mock("./cli-output.js", () => ({
+  runIMessageCliJsonCommand: runIMessageCliJsonCommandMock,
 }));
 
 vi.mock("./client.js", () => ({
@@ -20,26 +20,8 @@ const { imessageActionsRuntime, findChatGuidForTest, normalizeDirectChatIdentifi
 afterEach(() => {
   vi.restoreAllMocks();
   createIMessageRpcClientMock.mockReset();
-  spawnMock.mockReset();
+  runIMessageCliJsonCommandMock.mockReset();
 });
-
-function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: true }) {
-  spawnMock.mockImplementationOnce(() => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
-      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
-      kill: (signal: string) => void;
-    };
-    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    child.kill = vi.fn();
-    queueMicrotask(() => {
-      child.stdout.emit("data", `${JSON.stringify(payload)}\n`);
-      child.emit("close", 0);
-    });
-    return child;
-  });
-}
 
 function mockRpcChatList(chats: Array<Record<string, unknown>>) {
   const request = vi.fn().mockResolvedValue({ chats });
@@ -50,7 +32,7 @@ function mockRpcChatList(chats: Array<Record<string, unknown>>) {
 
 describe("imessage actions runtime", () => {
   it("passes the configured Messages db path to private API bridge commands", async () => {
-    mockSpawnJsonResponse();
+    runIMessageCliJsonCommandMock.mockResolvedValue({ success: true });
 
     await imessageActionsRuntime.sendReaction({
       chatGuid: "iMessage;+;chat0000",
@@ -63,9 +45,11 @@ describe("imessage actions runtime", () => {
       },
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "imsg",
-      [
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+      cliPath: "imsg",
+      dbPath: "/tmp/messages.db",
+      timeoutMs: undefined,
+      args: [
         "tapback",
         "--chat",
         "iMessage;+;chat0000",
@@ -75,13 +59,199 @@ describe("imessage actions runtime", () => {
         "like",
         "--part",
         "0",
-        "--db",
-        "/tmp/messages.db",
-        "--json",
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
+    });
   });
+
+  it("preserves canonical CLI wrapper errors", async () => {
+    const wrapperError = new Error("imsg failed");
+    runIMessageCliJsonCommandMock.mockRejectedValue(wrapperError);
+
+    await expect(
+      imessageActionsRuntime.sendReaction({
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        reaction: "like",
+        options: {
+          cliPath: "imsg",
+          chatGuid: "iMessage;+;chat0000",
+        },
+      }),
+    ).rejects.toBe(wrapperError);
+  });
+
+  it("suppresses the imsg poll caption when the caller already rendered context", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({
+      guid: "poll-guid",
+      poll: {
+        options: [
+          { id: " option-allow ", text: "Allow" },
+          { id: "option-deny", text: " Deny " },
+        ],
+      },
+    });
+
+    const result = await imessageActionsRuntime.sendPoll({
+      chatGuid: "iMessage;+;chat0000",
+      question: "Approval details",
+      choices: ["Allow", "Deny"],
+      suppressComment: true,
+      options: {
+        cliPath: "imsg",
+        dbPath: "/tmp/messages.db",
+        chatGuid: "iMessage;+;chat0000",
+      },
+    });
+
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+      cliPath: "imsg",
+      dbPath: "/tmp/messages.db",
+      timeoutMs: undefined,
+      args: [
+        "poll",
+        "send",
+        "--chat",
+        "iMessage;+;chat0000",
+        "--question",
+        "Approval details",
+        "--option",
+        "Allow",
+        "--option",
+        "Deny",
+        "--no-comment",
+      ],
+    });
+    expect(result).toEqual({
+      messageId: "poll-guid",
+      pollOptions: [
+        { id: "option-allow", text: "Allow" },
+        { id: "option-deny", text: "Deny" },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "attachment uploads",
+      filename: "Quarterly results.pdf",
+      command: "send-attachment",
+      send: (filename: string, buffer: Uint8Array) =>
+        imessageActionsRuntime.sendAttachment({
+          chatGuid: "iMessage;+;chat0000",
+          filename,
+          buffer,
+          options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+        }),
+    },
+    {
+      name: "rich-message attachments",
+      filename: "Family photo.png",
+      command: "send-rich",
+      send: (filename: string, buffer: Uint8Array) =>
+        imessageActionsRuntime.sendRichMessage({
+          chatGuid: "iMessage;+;chat0000",
+          text: "photo",
+          attachment: { kind: "buffer", filename, buffer },
+          options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+        }),
+    },
+    {
+      name: "group icons",
+      filename: "Group portrait.jpeg",
+      command: "chat-photo",
+      send: (filename: string, buffer: Uint8Array) =>
+        imessageActionsRuntime.setGroupIcon({
+          chatGuid: "iMessage;+;chat0000",
+          filename,
+          buffer,
+          options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+        }),
+    },
+  ])("preserves the original filename for $name", async ({ filename, command, send }) => {
+    const bytes = Uint8Array.from([1, 2, 3]);
+    let stagedPath = "";
+    runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+      stagedPath = args[args.indexOf("--file") + 1] ?? "";
+      expect(args[0]).toBe(command);
+      await expect(readFile(stagedPath)).resolves.toEqual(Buffer.from(bytes));
+      return { guid: "p:0/sent-message" };
+    });
+
+    await send(filename, bytes);
+
+    expect(basename(stagedPath)).toBe(filename);
+    await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["../../Quarterly results.pdf", "..\\..\\Quarterly results.pdf"])(
+    "keeps staged attachment filename %s inside its private workspace",
+    async (filename) => {
+      let stagedPath = "";
+      runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+        stagedPath = args[args.indexOf("--file") + 1] ?? "";
+        return { guid: "p:0/sent-message" };
+      });
+
+      await imessageActionsRuntime.sendAttachment({
+        chatGuid: "iMessage;+;chat0000",
+        filename,
+        buffer: Uint8Array.from([1]),
+        options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+      });
+
+      expect(basename(stagedPath)).toBe("Quarterly results.pdf");
+      await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("removes the private attachment workspace after a failed send", async () => {
+    const sendError = new Error("imsg rejected the attachment");
+    let stagedPath = "";
+    runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+      stagedPath = args[args.indexOf("--file") + 1] ?? "";
+      throw sendError;
+    });
+
+    await expect(
+      imessageActionsRuntime.sendAttachment({
+        chatGuid: "iMessage;+;chat0000",
+        filename: "Quarterly results.pdf",
+        buffer: Uint8Array.from([1]),
+        options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+      }),
+    ).rejects.toBe(sendError);
+
+    await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    { filename: `${"📎".repeat(80)}.pdf`, extension: ".pdf" },
+    { filename: `${"a".repeat(210)}.pdf`, extension: ".pdf" },
+    { filename: `${"📎".repeat(100)}.png`, extension: ".png" },
+    { filename: `../../${"a".repeat(210)}.pdf`, extension: ".pdf" },
+  ])(
+    "preserves $extension when long attachment names exceed sanitizer or filesystem limits",
+    async ({ filename, extension }) => {
+      const bytes = Uint8Array.from([1, 2, 3]);
+      let stagedPath = "";
+      runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+        stagedPath = args[args.indexOf("--file") + 1] ?? "";
+        await expect(readFile(stagedPath)).resolves.toEqual(Buffer.from(bytes));
+        return { guid: "p:0/sent-message" };
+      });
+
+      await imessageActionsRuntime.sendAttachment({
+        chatGuid: "iMessage;+;chat0000",
+        filename,
+        buffer: bytes,
+        options: { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" },
+      });
+
+      expect(basename(stagedPath).endsWith(extension)).toBe(true);
+      expect(Buffer.byteLength(basename(stagedPath), "utf8")).toBeLessThanOrEqual(240);
+      await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
@@ -92,12 +262,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;second");
 
@@ -123,12 +295,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;second");
 
@@ -260,6 +434,9 @@ describe("normalizeDirectChatIdentifier", () => {
   });
   it("leaves group identifiers (iMessage;+;chat...) unchanged", () => {
     expect(normalizeDirectChatIdentifierForTest("iMessage;+;chat0000")).toBe("iMessage;+;chat0000");
+    expect(normalizeDirectChatIdentifierForTest("iMessage;+;Some@example.com")).toBe(
+      "iMessage;+;Some@example.com",
+    );
   });
   it("leaves bare values unchanged", () => {
     expect(normalizeDirectChatIdentifierForTest("+12069106512")).toBe("+12069106512");

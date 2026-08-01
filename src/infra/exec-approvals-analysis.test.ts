@@ -10,7 +10,7 @@ import {
   resolvePlannedSegmentArgv,
   windowsEscapeArg,
 } from "./exec-approvals-analysis.js";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 
 describe("exec argv analysis", () => {
   it("parses argv commands", () => {
@@ -188,9 +188,15 @@ describe("Windows shell analysis", () => {
 
 describe("Windows enforced shell command rendering", () => {
   it("builds enforced command for simple Windows command", () => {
+    // Resolve from a fixture PATH: host python3 locations (e.g. Homebrew's
+    // python@3.x Cellar path) contain characters that trigger quoting and make
+    // the rendered command host-dependent.
+    const dir = makeTempDir();
+    const python3 = makeExecutable(dir, "python3");
     const analysis = analyzeWindowsShellCommand({
       command: "python3 a.py",
       platform: "win32",
+      env: makePathEnv(dir),
     });
 
     expect(analysis.ok).toBe(true);
@@ -201,7 +207,7 @@ describe("Windows enforced shell command rendering", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.command).toMatch(/^& .+python3(?:\.\d+)? a\.py$/);
+    expect(result.command).toBe(`& ${python3} a.py`);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {

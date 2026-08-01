@@ -6,11 +6,11 @@ read_when:
 title: "General troubleshooting"
 ---
 
-If you only have 2 minutes, use this page as a triage front door.
+Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 
 ## First 60 seconds
 
-Run this exact ladder in order:
+Run this ladder in order:
 
 ```bash
 openclaw status
@@ -22,22 +22,25 @@ openclaw channels status --probe
 openclaw logs --follow
 ```
 
-Good output in one line:
+Good output, one line each:
 
-- `openclaw status` → shows configured channels and no obvious auth errors.
-- `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `Capability: ...` tells you what auth level the probe could prove, and `Read probe: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` → `Runtime: running`, `Connectivity probe: ok`, and a plausible `Capability: ...` line. Use `--require-rpc` if you need read-scope RPC proof too.
-- `openclaw doctor` → no blocking config/service errors.
-- `openclaw channels status --probe` → reachable gateway returns live per-account
-  transport state plus probe/audit results such as `works` or `audit ok`; if the
-  gateway is unreachable, the command falls back to config-only summaries.
-- `openclaw logs --follow` → steady activity, no repeating fatal errors.
+- `openclaw status` shows configured channels, no auth errors.
+- `openclaw status --all` produces a full, shareable report.
+- `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
+  auth level the probe proved; `Read probe: limited - missing scope:
+operator.read` is degraded diagnostics, not a connect failure.
+- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe:
+ok`, and a plausible `Capability: ...`. Add `--require-rpc` to also require
+  read-scope RPC proof.
+- `openclaw doctor` reports no blocking config/service errors.
+- `openclaw channels status --probe` returns live per-account transport state
+  (`works` / `audit ok`) when the gateway is reachable; falls back to
+  config-only summaries when it is not.
+- `openclaw logs --follow` shows steady activity, no repeating fatal errors.
 
 ## Assistant feels limited or missing tools
 
-If the assistant cannot inspect files, run commands, use browser automation, or
-see expected tools, check the effective tool profile first:
+Check the effective tool profile:
 
 ```bash
 openclaw status
@@ -47,51 +50,46 @@ openclaw doctor
 
 Common causes:
 
-- `tools.profile: "messaging"` is intentionally narrow for chat-only agents.
-- `tools.profile: "coding"` is the usual profile for repository, file, shell,
-  and runtime workflows.
-- `tools.profile: "full"` exposes the broadest tool set and should be limited
-  to trusted operator-controlled agents.
-- Per-agent `agents.list[].tools` overrides can narrow or expand the root
-  profile for one agent.
+- `tools.profile: "minimal"` allows only `session_status`.
+- `tools.profile: "messaging"` is narrow, for chat-only agents.
+- `tools.profile: "coding"` is the default for new local configs (repo, file,
+  shell, and runtime work).
+- `tools.profile: "full"` removes profile restrictions; limit to trusted
+  operator-controlled agents.
+- Per-agent `agents.entries.*.tools` overrides narrow or expand the root profile
+  for one agent.
 
-Change the root or per-agent tool profile, then restart or reload the Gateway
-and run `openclaw status --all` again. See [Tools](/tools) for the profile
-model and allow/deny overrides.
+Change the profile, restart or reload the Gateway, then recheck with
+`openclaw status --all`. Full profile/group table: [Tool profiles](/gateway/config-tools#tool-profiles).
 
 ## Anthropic long context 429
 
-If you see:
-`HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
-go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`
+→ [Anthropic 429 extra usage required for long context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
 ## Local OpenAI-compatible backend works directly but fails in OpenClaw
 
-If your local or self-hosted `/v1` backend answers small direct
-`/v1/chat/completions` probes but fails on `openclaw infer model run` or normal
-agent turns:
+Your local/self-hosted `/v1` backend answers direct `/v1/chat/completions`
+probes but fails on `openclaw infer model run` or normal agent turns:
 
-1. If the error mentions `messages[].content` expecting a string, set
+1. Error mentions `messages[].content` expecting a string: set
    `models.providers.<provider>.models[].compat.requiresStringContent: true`.
-2. If the backend still fails only on OpenClaw agent turns, set
+2. Still fails only on OpenClaw agent turns: set
    `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
-3. If tiny direct calls still work but larger OpenClaw prompts crash the
-   backend, treat the remaining issue as an upstream model/server limitation and
-   continue in the deep runbook:
-   [/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
+3. Tiny direct calls work but larger OpenClaw prompts crash the backend: that
+   is an upstream model/server limit, not an OpenClaw bug. Continue in
+   [Local OpenAI-compatible backend passes direct probes but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
 
 ## Plugin install fails with missing openclaw extensions
 
-If install fails with `package.json missing openclaw.extensions`, the plugin package
-is using an old shape that OpenClaw no longer accepts.
+`package.json missing openclaw.extensions` means the plugin package uses a
+shape OpenClaw no longer accepts.
 
 Fix in the plugin package:
 
-1. Add `openclaw.extensions` to `package.json`.
-2. Point entries at built runtime files (usually `./dist/index.js`).
-3. Republish the plugin and run `openclaw plugins install <package>` again.
-
-Example:
+1. Add `openclaw.extensions` to `package.json`, pointing at built runtime
+   files (usually `./dist/index.js`).
+2. Republish, then run `openclaw plugins install <package>` again.
 
 ```json
 {
@@ -107,34 +105,30 @@ Reference: [Plugin architecture](/plugins/architecture)
 
 ## Install policy blocks plugin installs or updates
 
-If an update finishes but plugins are stale, disabled, or show messages such as
-`blocked by install policy`, `install policy failed closed`, or
-`Disabled "<plugin>" after plugin update failure`, check
-`security.installPolicy`.
+Update finishes but plugins are stale, disabled, or show `blocked by install
+policy`, `install policy failed closed`, or `Disabled "<plugin>" after plugin
+update failure`: check `security.installPolicy`.
 
-Install policy runs on plugin installs and updates. OpenClaw-owned plugin
+Install policy runs on plugin installs and updates. `@openclaw/*` plugin
 versions normally move with the OpenClaw release, so an OpenClaw update can
-also need matching `@openclaw/*` plugin updates during post-update sync.
+need a matching plugin update during post-update sync.
 
-Avoid these broad policy shapes unless you also maintain the matching upgrade
-rule:
+Avoid these policy shapes unless you also maintain the matching upgrade rule:
 
-- Freezing OpenClaw-owned plugins to one exact old version, such as allowing
-  only `@openclaw/*@2026.5.3`.
-- Blocking by source kind alone, such as every npm, network, or
-  `request.mode: "update"` plugin request.
-- Treating the policy command as optional. When `security.installPolicy` is
-  enabled, a missing, slow, unreadable, or permission-blocked policy executable
-  fails closed.
-- Approving plugin versions without considering the policy request's
-  `openclawVersion` and the plugin candidate metadata.
+- Freezing OpenClaw-owned plugins to one exact old version (for example, only
+  `@openclaw/*@2026.5.3`).
+- Blocking by source kind alone (every npm, network, or `request.mode:
+"update"` request).
+- Treating the policy command as optional: when `security.installPolicy` is
+  enabled, a missing, slow, unreadable, or permission-blocked policy
+  executable fails closed.
+- Approving versions without checking the request's `openclawVersion` against
+  plugin candidate metadata.
 
-Safer policy rules allow trusted OpenClaw-owned plugin updates when the
-candidate is compatible with the current OpenClaw host, instead of pinning a
-single release forever. If you block npm by default, make a narrow exception
-for the trusted `@openclaw/*` plugin packages or plugin ids you use. If you
-differentiate install and update requests, apply the same trust rule to
-`request.mode: "update"`.
+Prefer rules that allow trusted `@openclaw/*` updates compatible with the
+current host, instead of pinning one release forever. If you block npm by
+default, add a narrow exception for the plugin ids you use, and apply the same
+trust rule to `request.mode: "update"` as to installs.
 
 Recovery:
 
@@ -144,10 +138,9 @@ openclaw plugins update --all
 openclaw status --all
 ```
 
-If the policy is intentionally strict, relax it for the trusted OpenClaw upgrade
+If the policy is intentionally strict, relax it for the trusted upgrade
 window, rerun `openclaw plugins update --all`, then restore the stricter rule.
-If a plugin was disabled after update failure, inspect it and re-enable it only
-after the update succeeds:
+If update failure disabled a plugin, inspect before re-enabling:
 
 ```bash
 openclaw plugins inspect <plugin-id> --runtime --json
@@ -158,37 +151,33 @@ Reference: [Operator install policy](/tools/skills-config#operator-install-polic
 
 ## Plugin present but blocked by suspicious ownership
 
-If `openclaw doctor`, setup, or startup warnings show:
+`openclaw doctor`, setup, or startup warnings show:
 
 ```text
 blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)
 plugin present but blocked
 ```
 
-the plugin files are owned by a different Unix user than the process loading
-them. Do not remove the plugin config. Fix the file ownership or run OpenClaw as
-the same user that owns the state directory.
+The plugin files are owned by a different Unix user than the process loading
+them. Do not remove the plugin config; fix the file ownership, or run
+OpenClaw as the user that owns the state directory.
 
-Docker installs normally run as `node` (uid `1000`). For the default Docker
-setup, repair the host bind mounts:
+Docker installs run as `node` (uid `1000`). Repair the host bind mounts:
 
 ```bash
 sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 openclaw doctor --fix
 ```
 
-If you intentionally run OpenClaw as root, repair the managed plugin root to
-root ownership instead:
+If you intentionally run OpenClaw as root, repair the managed plugin root
+instead:
 
 ```bash
 sudo chown -R root:root /path/to/openclaw-config/npm
 openclaw doctor --fix
 ```
 
-Deeper docs:
-
-- [Plugin path ownership](/tools/plugin#blocked-plugin-path-ownership)
-- [Docker permissions](/install/docker#permissions-and-eacces)
+Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#shell-helpers-optional)
 
 ## Decision tree
 
@@ -222,25 +211,22 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    Good output looks like:
+    Good output:
 
     - `Runtime: running`
     - `Connectivity probe: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
-    - Your channel shows transport connected and, where supported, `works` or `audit ok` in `channels status --probe`
-    - Sender appears approved (or DM policy is open/allowlist)
+    - Channel shows transport connected and, where supported, `works` or
+      `audit ok` in `channels status --probe`
+    - Sender is approved (or DM policy is open/allowlist)
 
-    Common log signatures:
+    Log signatures:
 
-    - `drop guild message (mention required` → mention gating blocked the message in Discord.
-    - `pairing request` → sender is unapproved and waiting for DM pairing approval.
-    - `blocked` / `allowlist` in channel logs → sender, room, or group is filtered.
+    - `drop guild message (mention required` → Discord mention gating blocked the message.
+    - `pairing request` → sender unapproved, waiting on DM pairing approval.
+    - `blocked` / `allowlist` in channel logs → sender, room, or group filtered.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#no-replies](/gateway/troubleshooting#no-replies)
-    - [/channels/troubleshooting](/channels/troubleshooting)
-    - [/channels/pairing](/channels/pairing)
+    Deep pages: [No replies](/gateway/troubleshooting#no-replies), [Channel troubleshooting](/channels/troubleshooting), [Pairing](/channels/pairing)
 
   </Accordion>
 
@@ -253,36 +239,23 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    Good output looks like:
+    Good output:
 
-    - `Dashboard: http://...` is shown in `openclaw gateway status`
+    - `Dashboard: http://...` shown in `openclaw gateway status`
     - `Connectivity probe: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
-    Common log signatures:
+    Log signatures:
 
     - `device identity required` → HTTP/non-secure context cannot complete device auth.
-    - `origin not allowed` → browser `Origin` is not allowed for the Control UI
-      gateway target.
-    - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
-    - That cached-token retry reuses the cached scope set stored with the paired
-      device token. Explicit `deviceToken` / explicit `scopes` callers keep
-      their requested scope set instead.
-    - On the async Tailscale Serve Control UI path, failed attempts for the same
-      `{scope, ip}` are serialized before the limiter records the failure, so a
-      second concurrent bad retry can already show `retry later`.
-    - `too many failed authentication attempts (retry later)` from a localhost
-      browser origin → repeated failures from that same `Origin` are temporarily
-      locked out; another localhost origin uses a separate bucket.
+    - `origin not allowed` → browser `Origin` is not allowed for the Control UI gateway target.
+    - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → one trusted device-token retry may occur automatically, reusing the paired token's cached scopes.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
-    - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
+    - `too many failed authentication attempts (retry later)` → repeated failures from that browser `Origin` are temporarily locked out; other localhost origins use separate buckets. See [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity) for the Tailscale Serve concurrent-retry nuance.
+    - `gateway connect failed:` → UI targets the wrong URL/port, or the gateway is unreachable.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#dashboard-control-ui-connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity)
-    - [/web/control-ui](/web/control-ui)
-    - [/gateway/authentication](/gateway/authentication)
+    Deep pages: [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity), [Control UI](/web/control-ui), [Authentication](/gateway/authentication)
 
   </Accordion>
 
@@ -295,24 +268,20 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    Good output looks like:
+    Good output:
 
     - `Service: ... (loaded)`
     - `Runtime: running`
     - `Connectivity probe: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
 
-    Common log signatures:
+    Log signatures:
 
-    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
-    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or config is missing the local-mode stamp and needs repair.
+    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid auth path (token/password, or trusted-proxy where configured).
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#gateway-service-not-running](/gateway/troubleshooting#gateway-service-not-running)
-    - [/gateway/background-process](/gateway/background-process)
-    - [/gateway/configuration](/gateway/configuration)
+    Deep pages: [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running), [Background process](/gateway/background-process), [Configuration](/gateway/configuration)
 
   </Accordion>
 
@@ -325,22 +294,19 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    Good output looks like:
+    Good output:
 
-    - Channel transport is connected.
+    - Channel transport connected.
     - Pairing/allowlist checks pass.
-    - Mentions are detected where required.
+    - Mentions detected where required.
 
-    Common log signatures:
+    Log signatures:
 
     - `mention required` → group mention gating blocked processing.
-    - `pairing` / `pending` → DM sender is not approved yet.
+    - `pairing` / `pending` → DM sender not approved yet.
     - `not_in_channel`, `missing_scope`, `Forbidden`, `401/403` → channel permission token issue.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#channel-connected-messages-not-flowing](/gateway/troubleshooting#channel-connected-messages-not-flowing)
-    - [/channels/troubleshooting](/channels/troubleshooting)
+    Deep pages: [Channel connected, messages not flowing](/gateway/troubleshooting#channel-connected-messages-not-flowing), [Channel troubleshooting](/channels/troubleshooting)
 
   </Accordion>
 
@@ -354,27 +320,22 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    Good output looks like:
+    Good output:
 
-    - `cron.status` shows enabled with a next wake.
+    - `cron status` shows the scheduler enabled with a next wake.
     - `cron runs` shows recent `ok` entries.
-    - Heartbeat is enabled and not outside active hours.
+    - Heartbeat is enabled and inside active hours.
 
-    Common log signatures:
+    Log signatures:
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
-    - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding.
-    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
-    - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
-    - `requests-in-flight` → main lane busy; heartbeat wake was deferred.
+    - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
+    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
+    - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
+    - `requests-in-flight` → main lane busy; heartbeat wake deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
-    - [/gateway/heartbeat](/gateway/heartbeat)
+    Deep pages: [Cron and heartbeat delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery), [Scheduled tasks: Troubleshooting](/automation/cron-jobs#troubleshooting), [Heartbeat](/gateway/heartbeat)
 
   </Accordion>
 
@@ -387,24 +348,20 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    Good output looks like:
+    Good output:
 
-    - Node is listed as connected and paired for role `node`.
+    - Node listed as connected and paired for role `node`.
     - Capability exists for the command you are invoking.
-    - Permission state is granted for the tool.
+    - Permission state granted for the tool.
 
-    Common log signatures:
+    Log signatures:
 
-    - `NODE_BACKGROUND_UNAVAILABLE` → bring node app to foreground.
-    - `*_PERMISSION_REQUIRED` → OS permission was denied/missing.
+    - `NODE_BACKGROUND_UNAVAILABLE` → bring the node app to the foreground.
+    - `*_PERMISSION_REQUIRED` → OS permission denied/missing.
     - `SYSTEM_RUN_DENIED: approval required` → exec approval is pending.
-    - `SYSTEM_RUN_DENIED: allowlist miss` → command not on exec allowlist.
+    - `SYSTEM_RUN_DENIED: allowlist miss` → command not on the exec allowlist.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
-    - [/nodes/troubleshooting](/nodes/troubleshooting)
-    - [/tools/exec-approvals](/tools/exec-approvals)
+    Deep pages: [Node paired, tool fails](/gateway/troubleshooting#node-paired-tool-fails), [Node troubleshooting](/nodes/troubleshooting), [Exec approvals](/tools/exec-approvals)
 
   </Accordion>
 
@@ -418,14 +375,16 @@ flowchart TD
 
     What changed:
 
-    - If `tools.exec.host` is unset, the default is `auto`.
-    - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
-    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.host` defaults to `auto`, which resolves to `sandbox`
+      when a sandbox runtime is active, `gateway` otherwise.
+    - `host=auto` only routes; the no-prompt behavior comes from
+      `security=full` plus `ask=off` on gateway/node.
+    - Unset `tools.exec.security` defaults to `full` on `gateway`/`node`.
     - Unset `tools.exec.ask` defaults to `off`.
-    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
+    - If you are seeing approvals, some host-local or per-session policy
+      tightened exec away from these defaults.
 
-    Restore current default no-approval behavior:
+    Restore the current no-approval defaults:
 
     ```bash
     openclaw config set tools.exec.host gateway
@@ -436,21 +395,18 @@ flowchart TD
 
     Safer alternatives:
 
-    - Set only `tools.exec.host=gateway` if you just want stable host routing.
-    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
-    - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
+    - Set only `tools.exec.host=gateway` for stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` for host exec with review on
+      allowlist misses.
+    - Enable sandbox mode so `host=auto` resolves back to `sandbox`.
 
-    Common log signatures:
+    Log signatures:
 
     - `Approval required.` → command is waiting on `/approve ...`.
     - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
     - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
 
-    Deep pages:
-
-    - [/tools/exec](/tools/exec)
-    - [/tools/exec-approvals](/tools/exec-approvals)
-    - [/gateway/security#what-the-audit-checks-high-level](/gateway/security#what-the-audit-checks-high-level)
+    Deep pages: [Exec](/tools/exec), [Exec approvals](/tools/exec-approvals), [Security: What the audit checks](/gateway/security#what-the-audit-checks-high-level)
 
   </Accordion>
 
@@ -463,29 +419,24 @@ flowchart TD
     openclaw doctor
     ```
 
-    Good output looks like:
+    Good output:
 
     - Browser status shows `running: true` and a chosen browser/profile.
-    - `openclaw` starts, or `user` can see local Chrome tabs.
+    - `openclaw` profile starts, or `user` profile sees local Chrome tabs.
 
-    Common log signatures:
+    Log signatures:
 
-    - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
+    - `unknown command "browser"` → `plugins.allow` is set and excludes `browser`.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
-    - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme.
-    - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
+    - `browser.cdpUrl must be http(s) or ws(s)` → configured CDP URL uses an unsupported scheme.
+    - `browser.cdpUrl has invalid port` → configured CDP URL has a bad or out-of-range port.
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
-    - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from this host.
-    - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no live CDP target.
-    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release emulation state without restarting the gateway.
+    - `Remote CDP for profile "<name>" is not reachable` → configured remote CDP endpoint unreachable from this host.
+    - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
+    - Stale viewport/dark-mode/locale/offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the control session and release emulation state without restarting the gateway.
 
-    Deep pages:
-
-    - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
-    - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
-    - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-    - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
+    Deep pages: [Browser tool fails](/gateway/troubleshooting#browser-tool-fails), [Missing browser command or tool](/tools/browser#missing-browser-command-or-tool), [Browser: Linux troubleshooting](/tools/browser-linux-troubleshooting), [Browser: WSL2/Windows remote CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
   </Accordion>
 
@@ -497,4 +448,4 @@ flowchart TD
 - [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
 - [Doctor](/gateway/doctor) — automated health checks and repairs
 - [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
-- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues
+- [Scheduled tasks: Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues

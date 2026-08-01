@@ -29,6 +29,31 @@ function setInstallNumberField<Key extends keyof Omit<InstalledPluginInstallReco
   }
 }
 
+function setInstallBooleanField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
+  target: InstalledPluginInstallRecordInfo,
+  key: Key,
+  value: PluginInstallRecord[Key],
+): void {
+  if (typeof value === "boolean") {
+    target[key] = value as InstalledPluginInstallRecordInfo[Key];
+  }
+}
+
+function setInstallStringArrayField<
+  Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">,
+>(target: InstalledPluginInstallRecordInfo, key: Key, value: PluginInstallRecord[Key]): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const normalized = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (normalized.length > 0) {
+    target[key] = normalized as InstalledPluginInstallRecordInfo[Key];
+  }
+}
+
 function normalizeInstallRecord(
   record: PluginInstallRecord | undefined,
 ): InstalledPluginInstallRecordInfo | undefined {
@@ -53,6 +78,22 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "clawhubTrustDisposition", record.clawhubTrustDisposition);
+  setInstallStringField(normalized, "clawhubTrustScanStatus", record.clawhubTrustScanStatus);
+  setInstallStringField(
+    normalized,
+    "clawhubTrustModerationState",
+    record.clawhubTrustModerationState,
+  );
+  setInstallStringArrayField(normalized, "clawhubTrustReasons", record.clawhubTrustReasons);
+  setInstallBooleanField(normalized, "clawhubTrustPending", record.clawhubTrustPending);
+  setInstallBooleanField(normalized, "clawhubTrustStale", record.clawhubTrustStale);
+  setInstallStringField(normalized, "clawhubTrustCheckedAt", record.clawhubTrustCheckedAt);
+  setInstallStringField(
+    normalized,
+    "clawhubTrustAcknowledgedAt",
+    record.clawhubTrustAcknowledgedAt,
+  );
   setInstallStringField(normalized, "artifactKind", record.artifactKind);
   setInstallStringField(normalized, "artifactFormat", record.artifactFormat);
   setInstallStringField(normalized, "npmIntegrity", record.npmIntegrity);

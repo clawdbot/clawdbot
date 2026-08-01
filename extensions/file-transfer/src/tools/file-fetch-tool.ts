@@ -73,7 +73,9 @@ export function createFileFetchTool(): AnyAgentTool {
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);
 
-      const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType);
+      // Extension-derived image MIME can accompany an empty payload when there
+      // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
+      const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
       const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
 
       const content: Array<
@@ -82,7 +84,8 @@ export function createFileFetchTool(): AnyAgentTool {
       if (isInlineImage) {
         content.push({ type: "image", data: base64, mimeType });
       } else if (isInlineText) {
-        const text = buffer.toString("utf-8");
+        const decodedText = buffer.toString("utf-8");
+        const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
         const wrappedText = wrapExternalContent(
           `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
           { source: "unknown" },

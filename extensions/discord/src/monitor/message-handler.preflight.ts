@@ -5,18 +5,20 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   logInboundDrop,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
-  recordDroppedChannelInboundHistory,
-  toInboundMediaFacts,
+  toHistoryMediaEntries,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -31,11 +33,13 @@ import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
+import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
 import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
 import {
+  hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
   resolveDiscordMentionState,
@@ -64,9 +68,14 @@ import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
+  resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -157,51 +166,48 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  return toInboundMediaFacts(mediaList, { kind: "image", messageId: params.message.id });
+  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
+  return (await toInboundMediaFactsWithMetadata(mediaList, { messageId: params.message.id })).map(
+    (media, index) => ({
+      path: media.path,
+      url: media.url,
+      contentType: media.contentType,
+      kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+      durationMs: media.durationMs,
+      width: media.width,
+      height: media.height,
+      transcribed: media.transcribed,
+      messageId: media.messageId,
+    }),
+  );
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
   preflight: DiscordMessagePreflightParams;
   historyKey: string;
   message: DiscordMessagePreflightContext["message"];
-  entry?: HistoryEntry;
+  entry?: DiscordHistoryEntry;
 }) {
-  if (params.preflight.historyLimit <= 0) {
+  if (!params.entry || params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordDroppedChannelInboundHistory({
-    input: {
-      id: params.message.id,
-      timestamp: params.entry?.timestamp,
-      rawText: params.entry?.body ?? "",
-      textForAgent: params.entry?.body,
-      raw: params.message,
-    },
-    admission: { kind: "drop", reason: "discord-preflight", recordHistory: true },
-    preflight: {
-      message: params.entry
-        ? {
-            rawBody: params.entry.body,
-            body: params.entry.body,
-            bodyForAgent: params.entry.body,
-            senderLabel: params.entry.sender,
-            envelopeFrom: params.entry.sender,
-          }
-        : undefined,
-      history: {
-        key: params.historyKey,
-        historyMap: params.preflight.guildHistories,
-        limit: params.preflight.historyLimit,
-        recordOnDrop: true,
-        mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
-        shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
-      },
-      media: () =>
-        resolveDiscordHistoryMediaForPendingRecord({
+  await createChannelHistoryWindow<DiscordHistoryEntry>({
+    historyMap: params.preflight.guildHistories,
+  }).recordWithMedia({
+    historyKey: params.historyKey,
+    entry: params.entry,
+    limit: params.preflight.historyLimit,
+    mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
+    messageId: params.message.id,
+    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    media: async () =>
+      toHistoryMediaEntries(
+        await resolveDiscordHistoryMediaForPendingRecord({
           preflight: params.preflight,
           message: params.message,
         }),
-    },
+        { messageId: params.message.id },
+      ),
   });
 }
 
@@ -234,17 +240,32 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfNeeded({
+  const hydration = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
   });
+  message = hydration.message;
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
+  // Shared turn admission cannot undo pending history recorded by channel preflight.
+  // Consult the same generic registry before mention/history drops can admit an echo.
+  if (
+    isRecentOutboundMessageIdentity({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      messageId: message.id,
+      ...(webhookId ? { sourceId: webhookId } : {}),
+    })
+  ) {
+    logVerbose(`discord: drop recent outbound echo message ${message.id}`);
+    return null;
+  }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
   if (isPreflightAborted(params.abortSignal)) {
@@ -266,7 +287,6 @@ export async function preflightDiscordMessage(
       : undefined;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding: injectedBoundThreadBinding,
@@ -293,6 +313,7 @@ export async function preflightDiscordMessage(
   }
   const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
     message,
+    webhookId,
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });
@@ -405,7 +426,6 @@ export async function preflightDiscordMessage(
   } = routeState;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding,
@@ -432,7 +452,9 @@ export async function preflightDiscordMessage(
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
   );
   const hasAnyMention =
     !isDirectMessage &&
@@ -528,6 +550,8 @@ export async function preflightDiscordMessage(
     historyLimit: params.historyLimit,
     message,
     senderLabel: sender.label,
+    sender,
+    memberRoleIds,
   });
 
   const threadOwnerId = threadChannel
@@ -733,7 +757,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (!messageText) {
+  const hasNativeMedia =
+    (message.attachments?.length ?? 0) > 0 || resolveDiscordMessageStickers(message).length > 0;
+  if (!messageText && !hasNativeMedia) {
     logDebug(`[discord-preflight] drop: empty content`);
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;
@@ -768,6 +794,38 @@ export async function preflightDiscordMessage(
           nowMs: resolveTimestampMs(message.timestamp),
         }
       : undefined;
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before media download, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return null;
+    }
+  }
+
+  // Discord CDN attachment URLs expire; download now (receipt time) instead
+  // of after the run queue, which may delay processing past the URL TTL.
+  const mediaResolveOptions = {
+    fetchImpl: params.discordRestFetch,
+    ssrfPolicy: params.cfg.browser?.ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  };
+  const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const forwardedMedia = await resolveForwardedMediaList(
+    message,
+    params.mediaMaxBytes,
+    mediaResolveOptions,
+  );
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  preparedMedia.push(...forwardedMedia);
 
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
@@ -791,6 +849,7 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
+    preparedMedia,
     wasMentioned,
     route: effectiveRoute,
     threadBinding,
@@ -812,6 +871,7 @@ export async function preflightDiscordMessage(
     channelAllowlistConfigured,
     channelAllowed,
     shouldRequireMention,
+    groupRequireMention: shouldRequireMentionByConfig,
     hasAnyMention,
     hasControlCommand: hasControlCommandInMessage,
     allowTextCommands,
@@ -820,6 +880,6 @@ export async function preflightDiscordMessage(
     inboundEventKind,
     canDetectMention,
     historyEntry,
-    botLoopProtection,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -51,9 +52,24 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
-  runId?: string,
+  context: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    runId?: string;
+  },
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const { agentId, sessionKey, runId } = context;
+  // Snapshot the prepared session once; tool results must never rediscover
+  // mutable session identity after a later turn has started.
+  const sessionId = context.sessionId ?? sessionManager.getSessionId?.();
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -89,7 +105,14 @@ function buildAgentToolResultMiddlewareFactory(
         isError: event.isError,
         result: current,
       });
-      const isError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isAcceptedSessionSpawn =
+        event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
+      const isError =
+        !isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const clearsAcceptedSessionSpawnError =
+        isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -102,6 +125,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(isError ? { isError: true } : {}),
+        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
     });
   };
@@ -169,6 +193,9 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
@@ -184,11 +211,8 @@ export function buildEmbeddedExtensionFactories(params: {
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
-      maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
-      identifierInstructions: compactionCfg?.identifierInstructions,
-      customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
@@ -203,6 +227,13 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    }),
+  );
   return factories;
 }

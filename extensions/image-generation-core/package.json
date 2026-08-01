@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/image-generation-core",
-  "version": "2026.6.9",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw image generation runtime package",
   "type": "module",

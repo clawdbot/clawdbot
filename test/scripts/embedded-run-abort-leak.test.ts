@@ -53,6 +53,16 @@ describe("scripts/embedded-run-abort-leak", () => {
     expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
   });
 
+  it("rejects duplicate thresholds before writing heap snapshots", () => {
+    const snapDir = makeTempRoot();
+    const result = runHarness(["--snap-dir", snapDir, "--iters", "1", "--iters", "2", "--quiet"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --iters was provided more than once");
+    expect(readdirSync(snapDir)).toEqual([]);
+  });
+
   it("rejects missing snapshot directories before writing heap snapshots", () => {
     const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
 

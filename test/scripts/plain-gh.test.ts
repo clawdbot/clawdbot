@@ -4,7 +4,13 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { execPlainGh, plainGhEnv, resolvePlainGhBin } from "../../scripts/lib/plain-gh.mjs";
+import {
+  execGhApiRead,
+  execPlainGh,
+  plainGhEnv,
+  PLAIN_GH_SYSTEM_CANDIDATES,
+  resolvePlainGhBin,
+} from "../../scripts/lib/plain-gh.mjs";
 
 const tempDirs: string[] = [];
 
@@ -30,6 +36,7 @@ printf 'FORCE_COLOR=%s\\n' "\${FORCE_COLOR-}"
 printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
+printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -64,6 +71,16 @@ describe("plain gh helpers", () => {
     ).toBe(ghPath);
   });
 
+  it("prefers package-manager gh paths over bin shims", () => {
+    const realGh = makeFakeGh();
+    const shimGh = makeFakeGh();
+
+    expect(resolvePlainGhBin({ PATH: shimGh }, [realGh, shimGh])).toBe(realGh);
+    expect(PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/bin/gh"),
+    );
+  });
+
   it("normalizes color environment for JSON-safe gh output", () => {
     expect(
       plainGhEnv({
@@ -80,6 +97,21 @@ describe("plain gh helpers", () => {
     });
     expect(plainGhEnv({ COLORTERM: "truecolor" })).not.toHaveProperty("COLORTERM");
     expect(plainGhEnv({ GH_FORCE_TTY: "120" })).not.toHaveProperty("GH_FORCE_TTY");
+  });
+
+  it("routes explicit GET reads through the PATH shim", () => {
+    const ghPath = makeFakeGh();
+    const output = execGhApiRead("repos/openclaw/openclaw/pulls/1", {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: "/identity-sensitive/plain-gh",
+        PATH: `${path.dirname(ghPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(output).toContain("argv=api repos/openclaw/openclaw/pulls/1 --method GET");
+    expect(output).toContain("OPENCLAW_GH_BIN_SET=");
   });
 
   it("runs the shell helper with color disabled", () => {
@@ -135,5 +167,8 @@ describe("plain gh helpers", () => {
 
     expect(helper).toContain("type -P gh");
     expect(helper).not.toContain("command -v gh");
+    expect(helper.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      helper.indexOf("/opt/homebrew/bin/gh"),
+    );
   });
 });

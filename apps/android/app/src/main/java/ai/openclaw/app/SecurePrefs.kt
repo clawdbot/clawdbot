@@ -2,6 +2,10 @@
 
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayCustomHeaders
+import ai.openclaw.app.gateway.GatewayRegistryStore
+import ai.openclaw.app.gateway.GatewayStoreMigration
+import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
@@ -9,11 +13,27 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
+
+@Serializable
+data class GatewayCredentials(
+  val token: String? = null,
+  val bootstrapToken: String? = null,
+  val password: String? = null,
+) {
+  internal fun normalized(): GatewayCredentials =
+    copy(
+      token = token?.trim()?.takeIf { it.isNotEmpty() },
+      bootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
+      password = password?.trim()?.takeIf { it.isNotEmpty() },
+    )
+}
 
 /**
  * Reactive settings facade for Android node preferences and encrypted gateway credentials.
@@ -23,10 +43,8 @@ class SecurePrefs(
   private val securePrefsOverride: SharedPreferences? = null,
 ) {
   companion object {
-    val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
-    private const val voiceWakeModeKey = "voiceWake.mode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
     private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
@@ -39,10 +57,24 @@ class SecurePrefs(
     private const val notificationsForwardingQuietEndKey = "notifications.forwarding.quietEnd"
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
-    private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val notificationsForwardingSessionKeyPrefix = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val installedAppsDisclosureConsentVersionKey =
+      "device.apps.prominentDisclosure.consentVersion"
+    private const val currentInstalledAppsDisclosureConsentVersion = 1
+    private const val accessibilityControlEnabledKey = "mobileUi.accessibilityControl.enabled"
+    private const val cameraEnabledKey = "camera.enabled"
+    private const val preferredCameraFacingKey = "camera.preferredFacing"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val preferredAudioInputDeviceKey = "voice.preferredAudioInputDevice"
+    private const val voiceWakeEnabledKey = "voiceWake.enabled"
+    private const val voiceWakeWordsKey = "voiceWake.triggerWords"
     private const val appearanceThemeModeKey = "appearance.themeMode"
+    private const val chatModelFavoritesKey = "chat.modelFavorites"
+    private const val chatModelRecentsKey = "chat.modelRecents"
+    private const val sessionCustomGroupsKey = "sessions.customGroups"
+    private const val maxChatModelRecents = 5
+    private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
 
   private val appContext = context.applicationContext
@@ -51,6 +83,7 @@ class SecurePrefs(
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
+  private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
@@ -64,11 +97,19 @@ class SecurePrefs(
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
 
+  // Lazy so plain-preference reads never touch the encrypted store (Robolectric
+  // has no AndroidKeyStore); the one-time legacy migration runs before the first
+  // gateway-state read, which is the earliest the registry can be observed.
+  val gatewayRegistry: GatewayRegistryStore by lazy {
+    GatewayStoreMigration(this).run()
+    GatewayRegistryStore(this, ::handleActiveGatewayChanged)
+  }
+
   private val _displayName =
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(loadCameraEnabled())
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode = MutableStateFlow(loadLocationMode())
@@ -97,12 +138,6 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getBoolean("gateway.manual.tls", true))
   val manualTls: StateFlow<Boolean> = _manualTls
 
-  private val _gatewayToken = MutableStateFlow("")
-  val gatewayToken: StateFlow<String> = _gatewayToken
-
-  private val _gatewayBootstrapToken = MutableStateFlow("")
-  val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
-
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
   val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
@@ -118,8 +153,12 @@ class SecurePrefs(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
   private val _installedAppsSharingEnabled =
-    MutableStateFlow(plainPrefs.getBoolean(installedAppsSharingEnabledKey, false))
+    MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
+
+  private val _accessibilityControlEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(accessibilityControlEnabledKey, false))
+  val accessibilityControlEnabled: StateFlow<Boolean> = _accessibilityControlEnabled
 
   private val _notificationForwardingEnabled =
     MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
@@ -161,30 +200,45 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20).coerceAtLeast(1))
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> = _notificationForwardingMaxEventsPerMinute
 
-  private val _notificationForwardingSessionKey =
-    MutableStateFlow(
-      plainPrefs
-        .getString(notificationsForwardingSessionKeyKey, "")
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() },
-    )
-  val notificationForwardingSessionKey: StateFlow<String?> = _notificationForwardingSessionKey
-
-  private val _wakeWords = MutableStateFlow(loadWakeWords())
-  val wakeWords: StateFlow<List<String>> = _wakeWords
-
-  private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
-  val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
+  private val _notificationForwardingSessionKey by lazy {
+    MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
+  }
+  val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
 
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
+  private val _voiceWakeEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceWakeEnabledKey, false))
+  val voiceWakeEnabled: StateFlow<Boolean> = _voiceWakeEnabled
+
+  private val _voiceWakeWords = MutableStateFlow(loadVoiceWakeWords())
+  val voiceWakeWords: StateFlow<List<String>> = _voiceWakeWords
+
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  private val _preferredCameraFacing =
+    MutableStateFlow(plainPrefs.getString(preferredCameraFacingKey, null).takeIf { it == "back" } ?: "front")
+  val preferredCameraFacing: StateFlow<String> = _preferredCameraFacing
+
+  private val _preferredAudioInputDevice =
+    MutableStateFlow(plainPrefs.getString(preferredAudioInputDeviceKey, null)?.takeIf(String::isNotBlank))
+  val preferredAudioInputDevice: StateFlow<String?> = _preferredAudioInputDevice
 
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
+
+  private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
+  val modelFavorites: StateFlow<List<String>> = _modelFavorites
+
+  private val _modelRecents = MutableStateFlow(loadChatModelRefs(chatModelRecentsKey))
+  val modelRecents: StateFlow<List<String>> = _modelRecents
+
+  // Custom session group names the user created locally; assigned groups also
+  // persist server-side via the session category field (mirrors web localStorage).
+  private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
+  val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -199,7 +253,7 @@ class SecurePrefs(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("camera.enabled", value) }
+    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
     _cameraEnabled.value = value
   }
 
@@ -239,20 +293,6 @@ class SecurePrefs(
     _manualTls.value = value
   }
 
-  fun setGatewayToken(value: String) {
-    val trimmed = value.trim()
-    securePrefs.edit { putString("gateway.manual.token", trimmed) }
-    _gatewayToken.value = trimmed
-  }
-
-  fun setGatewayPassword(value: String) {
-    saveGatewayPassword(value)
-  }
-
-  fun setGatewayBootstrapToken(value: String) {
-    saveGatewayBootstrapToken(value)
-  }
-
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value
@@ -263,9 +303,41 @@ class SecurePrefs(
     _canvasDebugStatusEnabled.value = value
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, value) }
-    _installedAppsSharingEnabled.value = value
+  fun grantInstalledAppsDisclosureConsent() {
+    plainPrefs.edit {
+      putBoolean(installedAppsSharingEnabledKey, true)
+      putInt(installedAppsDisclosureConsentVersionKey, currentInstalledAppsDisclosureConsentVersion)
+    }
+    _installedAppsSharingEnabled.value = true
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    plainPrefs.edit {
+      putBoolean(installedAppsSharingEnabledKey, false)
+      remove(installedAppsDisclosureConsentVersionKey)
+    }
+    _installedAppsSharingEnabled.value = false
+  }
+
+  fun setAccessibilityControlEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
+    _accessibilityControlEnabled.value = value
+  }
+
+  private fun loadInstalledAppsSharingEnabled(): Boolean {
+    val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
+    val consentVersion = plainPrefs.getInt(installedAppsDisclosureConsentVersionKey, 0)
+    if (enabled && consentVersion == currentInstalledAppsDisclosureConsentVersion) return true
+
+    // A shipped opt-in without this disclosure version cannot authorize package-inventory access.
+    // Canonicalize both keys so every later enable starts with fresh affirmative consent.
+    if (enabled || consentVersion != 0) {
+      plainPrefs.edit {
+        putBoolean(installedAppsSharingEnabledKey, false)
+        remove(installedAppsDisclosureConsentVersionKey)
+      }
+    }
+    return false
   }
 
   internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {
@@ -291,11 +363,9 @@ class SecurePrefs(
     val quietEnd =
       normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
         ?: "07:00"
-    val sessionKey =
-      plainPrefs
-        .getString(notificationsForwardingSessionKeyKey, "")
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
+    // NotificationListenerService owns a separate SecurePrefs facade, so resolve the persisted
+    // pointer per event rather than trusting that facade's process-local registry flow.
+    val sessionKey = loadNotificationForwardingSessionKey(gatewayRegistry.storedActiveStableId())
 
     val quietHoursEnabled =
       plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
@@ -311,6 +381,7 @@ class SecurePrefs(
       quietEnd = quietEnd,
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
+      selfPackageName = normalizedAppPackage,
     )
   }
 
@@ -371,73 +442,75 @@ class SecurePrefs(
   }
 
   internal fun setNotificationForwardingSessionKey(value: String?) {
+    val stableId = gatewayRegistry.activeStableId.value ?: return
     val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
     plainPrefs.edit {
-      putString(notificationsForwardingSessionKeyKey, normalized.orEmpty())
+      putString(notificationForwardingSessionKeyKey(stableId), normalized.orEmpty())
     }
     _notificationForwardingSessionKey.value = normalized
   }
 
-  /** Loads manual or instance-scoped gateway token material from encrypted preferences. */
-  fun loadGatewayToken(): String? {
-    val manual =
-      _gatewayToken.value.trim().ifEmpty {
-        val stored = securePrefs.getString("gateway.manual.token", null)?.trim().orEmpty()
-        if (stored.isNotEmpty()) _gatewayToken.value = stored
-        stored
-      }
-    if (manual.isNotEmpty()) return manual
-    // Per-instance tokens keep reused Android installs from sharing stale gateway auth.
-    val key = "gateway.token.${_instanceId.value}"
-    val stored = securePrefs.getString(key, null)?.trim()
-    return stored?.takeIf { it.isNotEmpty() }
+  fun loadGatewayCredentials(stableId: String): GatewayCredentials {
+    // Credential reads are gateway state; force the lazy registry so the one-time
+    // legacy migration has run before the first per-gateway bundle is resolved.
+    gatewayRegistry
+    val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
+    return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
   }
 
-  /** Loads the bootstrap token used during gateway setup and device-token handoff. */
-  fun loadGatewayBootstrapToken(): String? {
-    val key = "gateway.bootstrapToken.${_instanceId.value}"
-    val stored =
-      _gatewayBootstrapToken.value.trim().ifEmpty {
-        val persisted = securePrefs.getString(key, null)?.trim().orEmpty()
-        if (persisted.isNotEmpty()) {
-          _gatewayBootstrapToken.value = persisted
-        }
-        persisted
-      }
-    return stored.takeIf { it.isNotEmpty() }
-  }
-
-  fun saveGatewayBootstrapToken(token: String) {
-    val key = "gateway.bootstrapToken.${_instanceId.value}"
-    val trimmed = token.trim()
-    securePrefs.edit { putString(key, trimmed) }
-    _gatewayBootstrapToken.value = trimmed
-  }
-
-  fun loadGatewayPassword(): String? {
-    val key = "gateway.password.${_instanceId.value}"
-    val stored = securePrefs.getString(key, null)?.trim()
-    return stored?.takeIf { it.isNotEmpty() }
-  }
-
-  fun saveGatewayPassword(password: String) {
-    val key = "gateway.password.${_instanceId.value}"
-    securePrefs.edit { putString(key, password.trim()) }
-  }
-
-  /** Clears manual/setup credentials without removing persisted role-specific device tokens. */
-  fun clearGatewaySetupAuth() {
-    val instanceId = _instanceId.value
+  fun saveGatewayCredentials(
+    stableId: String,
+    credentials: GatewayCredentials,
+  ) {
     securePrefs.edit {
-      // Clear both current manual credentials and instance-scoped setup credentials after pairing/reset.
-      remove("gateway.manual.token")
-      remove("gateway.token.$instanceId")
-      remove("gateway.bootstrapToken.$instanceId")
-      remove("gateway.password.$instanceId")
+      putString(gatewayCredentialsKey(stableId), json.encodeToString(credentials.normalized()))
     }
-    _gatewayToken.value = ""
-    _gatewayBootstrapToken.value = ""
   }
+
+  fun saveGatewayCredentials(
+    stableId: String,
+    token: String? = null,
+    bootstrapToken: String? = null,
+    password: String? = null,
+  ) {
+    saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password))
+  }
+
+  fun clearGatewayCredentials(stableId: String) {
+    securePrefs.edit { remove(gatewayCredentialsKey(stableId)) }
+  }
+
+  /**
+   * Custom proxy headers are per-gateway credentials (Cloudflare Access-style service tokens).
+   * They live in the encrypted store like the other gateway secrets and are read at connect
+   * time; never log their values.
+   */
+  fun loadGatewayCustomHeaders(stableId: String): Map<String, String> {
+    val raw = securePrefs.getString(gatewayCustomHeadersKey(stableId), null) ?: return emptyMap()
+    val stored =
+      runCatching { json.decodeFromString<Map<String, String>>(raw) }.getOrElse { return emptyMap() }
+    return GatewayCustomHeaders.sanitized(stored)
+  }
+
+  fun saveGatewayCustomHeaders(
+    stableId: String,
+    headers: Map<String, String>,
+  ) {
+    val key = gatewayCustomHeadersKey(stableId)
+    val sanitized = GatewayCustomHeaders.sanitized(headers)
+    if (sanitized.isEmpty()) {
+      securePrefs.edit { remove(key) }
+      return
+    }
+    securePrefs.edit { putString(key, json.encodeToString(sanitized)) }
+  }
+
+  /** Forgets one gateway's proxy credentials; forgetting a gateway is the removal boundary. */
+  fun clearGatewayCustomHeaders(stableId: String) {
+    securePrefs.edit { remove(gatewayCustomHeadersKey(stableId)) }
+  }
+
+  private fun gatewayCustomHeadersKey(stableId: String) = "$gatewayCustomHeadersKeyPrefix${stableId.trim()}"
 
   /** Loads the pinned gateway TLS fingerprint for a discovered/manual stable endpoint id. */
   fun loadGatewayTlsFingerprint(stableId: String): String? {
@@ -454,6 +527,17 @@ class SecurePrefs(
     plainPrefs.edit { putString(key, fingerprint.trim()) }
   }
 
+  fun clearGatewayTlsFingerprint(stableId: String) {
+    plainPrefs.edit { remove("gateway.tls.$stableId") }
+  }
+
+  fun clearNotificationForwardingSessionKey(stableId: String) {
+    plainPrefs.edit { remove(notificationForwardingSessionKeyKey(stableId)) }
+    if (gatewayRegistry.activeStableId.value == stableId) {
+      _notificationForwardingSessionKey.value = null
+    }
+  }
+
   fun getString(key: String): String? = securePrefs.getString(key, null)
 
   fun putString(
@@ -463,8 +547,76 @@ class SecurePrefs(
     securePrefs.edit { putString(key, value) }
   }
 
+  // KTX edit(commit = true) discards commit's Boolean; the identity migration fails closed on it.
+  @Suppress("UseKtx")
+  internal fun putStringSynchronously(
+    key: String,
+    value: String,
+  ): Boolean = securePrefs.edit().putString(key, value).commit()
+
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
+  }
+
+  internal fun containsSecureKey(key: String): Boolean = securePrefs.contains(key)
+
+  internal fun secureKeys(): Set<String> = securePrefs.all.keys
+
+  internal fun removeSecureKeys(keys: List<String>) {
+    securePrefs.edit { keys.forEach { remove(it) } }
+  }
+
+  internal fun moveSecureString(
+    sourceKey: String,
+    destinationKey: String?,
+  ) {
+    val value = securePrefs.getString(sourceKey, null)
+    securePrefs.edit {
+      if (destinationKey != null && value != null) putString(destinationKey, value)
+      remove(sourceKey)
+    }
+  }
+
+  internal fun getPlainString(key: String): String? = plainPrefs.getString(key, null)
+
+  internal fun getPlainBoolean(
+    key: String,
+    defaultValue: Boolean,
+  ): Boolean = plainPrefs.getBoolean(key, defaultValue)
+
+  internal fun getPlainInt(
+    key: String,
+    defaultValue: Int,
+  ): Int = plainPrefs.getInt(key, defaultValue)
+
+  internal fun movePlainString(
+    sourceKey: String,
+    destinationKey: String?,
+  ) {
+    val value = plainPrefs.getString(sourceKey, null)?.trim()?.takeIf { it.isNotEmpty() }
+    plainPrefs.edit(commit = true) {
+      if (destinationKey != null && value != null) putString(destinationKey, value)
+      remove(sourceKey)
+    }
+  }
+
+  private fun gatewayCredentialsKey(stableId: String): String {
+    val normalized = stableId.trim()
+    require(normalized.isNotEmpty()) { "Gateway stable id cannot be empty" }
+    return "gateway.credentials.$normalized"
+  }
+
+  private fun notificationForwardingSessionKeyKey(stableId: String): String = "$notificationsForwardingSessionKeyPrefix.$stableId"
+
+  private fun loadNotificationForwardingSessionKey(stableId: String?): String? =
+    stableId
+      ?.let(::notificationForwardingSessionKeyKey)
+      ?.let { plainPrefs.getString(it, null) }
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+
+  private fun handleActiveGatewayChanged(stableId: String?) {
+    _notificationForwardingSessionKey.value = loadNotificationForwardingSessionKey(stableId)
   }
 
   private fun createSecurePrefs(
@@ -500,23 +652,20 @@ class SecurePrefs(
     return resolved
   }
 
-  /** Persists sanitized voice wake triggers and updates the reactive settings flow. */
-  fun setWakeWords(words: List<String>) {
-    val sanitized = WakeWords.sanitize(words, defaultWakeWords)
-    val encoded =
-      JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    plainPrefs.edit { putString("voiceWake.triggerWords", encoded) }
-    _wakeWords.value = sanitized
-  }
-
-  fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    plainPrefs.edit { putString(voiceWakeModeKey, mode.rawValue) }
-    _voiceWakeMode.value = mode
-  }
-
   fun setVoiceMicEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
     _voiceMicEnabled.value = value
+  }
+
+  fun setVoiceWakeEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(voiceWakeEnabledKey, value) }
+    _voiceWakeEnabled.value = value
+  }
+
+  fun setVoiceWakeWords(words: List<String>) {
+    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
+    plainPrefs.edit { putString(voiceWakeWordsKey, JsonArray(sanitized.map(::JsonPrimitive)).toString()) }
+    _voiceWakeWords.value = sanitized
   }
 
   fun setSpeakerEnabled(value: Boolean) {
@@ -524,9 +673,68 @@ class SecurePrefs(
     _speakerEnabled.value = value
   }
 
+  fun setPreferredCameraFacing(value: String) {
+    val facing = value.takeIf { it == "back" } ?: "front"
+    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
+    _preferredCameraFacing.value = facing
+  }
+
+  fun setPreferredAudioInputDevice(value: String?) {
+    val key = value?.takeIf(String::isNotBlank)
+    plainPrefs.edit {
+      if (key == null) remove(preferredAudioInputDeviceKey) else putString(preferredAudioInputDeviceKey, key)
+    }
+    _preferredAudioInputDevice.value = key
+  }
+
+  private fun loadVoiceWakeWords(): List<String> {
+    val stored = plainPrefs.getString(voiceWakeWordsKey, null) ?: return VoiceWakePreferences.defaultTriggerWords
+    val decoded =
+      runCatching {
+        (json.parseToJsonElement(stored) as? JsonArray)
+          ?.mapNotNull { (it as? JsonPrimitive)?.content }
+      }.getOrNull()
+    return VoiceWakePreferences.sanitizeTriggerWords(decoded.orEmpty())
+  }
+
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
     _appearanceThemeMode.value = mode
+  }
+
+  fun toggleModelFavorite(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next =
+      if (trimmed in _modelFavorites.value) {
+        _modelFavorites.value - trimmed
+      } else {
+        _modelFavorites.value + trimmed
+      }
+    persistChatModelRefs(chatModelFavoritesKey, next)
+    _modelFavorites.value = next
+  }
+
+  fun recordModelRecent(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
+    persistChatModelRefs(chatModelRecentsKey, next)
+    _modelRecents.value = next
+  }
+
+  fun setSessionCustomGroups(groups: List<String>) {
+    val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
+    persistChatModelRefs(sessionCustomGroupsKey, sanitized)
+    _sessionCustomGroups.value = sanitized
+  }
+
+  private fun persistChatModelRefs(
+    key: String,
+    refs: List<String>,
+  ) {
+    val encoded = JsonArray(refs.map(::JsonPrimitive)).toString()
+    plainPrefs.edit { putString(key, encoded) }
   }
 
   private fun loadNotificationForwardingPackages(): Set<String> {
@@ -550,45 +758,45 @@ class SecurePrefs(
     }
   }
 
-  private fun loadVoiceWakeMode(): VoiceWakeMode {
-    val raw = plainPrefs.getString(voiceWakeModeKey, null)
-    val resolved = VoiceWakeMode.fromRawValue(raw)
-
-    // Default ON (foreground) when unset, but keep "always" opt-in through explicit settings.
-    if (raw.isNullOrBlank()) {
-      plainPrefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
-    }
-
-    return resolved
-  }
-
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
-    val resolved = LocationMode.fromRawValue(raw)
-    if (raw?.trim()?.lowercase() == "always") {
-      // Migrate old "always" configs to the current while-using contract.
+    val stored = LocationMode.fromRawValue(raw)
+    val resolved =
+      if (stored == LocationMode.Always && !SensitiveFeatureConfig.backgroundLocationEnabled) {
+        LocationMode.WhileUsing
+      } else {
+        stored
+      }
+    if (resolved != stored) {
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved
   }
 
-  private fun loadWakeWords(): List<String> {
-    val raw = plainPrefs.getString("voiceWake.triggerWords", null)?.trim()
-    if (raw.isNullOrEmpty()) return defaultWakeWords
+  private fun loadCameraEnabled(): Boolean {
+    if (plainPrefs.contains(cameraEnabledKey)) {
+      return plainPrefs.getBoolean(cameraEnabledKey, false)
+    }
+    val migratedValue = hadPlainPrefsBeforeInit
+    plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
+    return migratedValue
+  }
+
+  private fun loadChatModelRefs(key: String): List<String> {
+    val raw = plainPrefs.getString(key, null)?.trim()
+    if (raw.isNullOrEmpty()) return emptyList()
     return try {
-      val element = json.parseToJsonElement(raw)
-      val array = element as? JsonArray ?: return defaultWakeWords
-      val decoded =
-        array.mapNotNull { item ->
+      val array = json.parseToJsonElement(raw) as? JsonArray ?: return emptyList()
+      array
+        .mapNotNull { item ->
           when (item) {
             is JsonNull -> null
             is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
             else -> null
           }
-        }
-      WakeWords.sanitize(decoded, defaultWakeWords)
+        }.distinct()
     } catch (_: Throwable) {
-      defaultWakeWords
+      emptyList()
     }
   }
 }

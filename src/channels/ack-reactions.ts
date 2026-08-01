@@ -22,10 +22,10 @@ export type AckReactionHandle = {
  */
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
+  inboundEventKind?: "user_request" | "room_event";
   isDirect: boolean;
   isGroup: boolean;
   isMentionableGroup: boolean;
-  requireMention: boolean;
   canDetectMention: boolean;
   effectiveWasMentioned: boolean;
   shouldBypassMention?: boolean;
@@ -35,6 +35,11 @@ export type AckReactionGateParams = {
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
+    return false;
+  }
+  // Ambient room events stay silent unless the operator explicitly chose the
+  // unconditional scope. This keeps every channel on the same `all` contract.
+  if (params.inboundEventKind === "room_event" && scope !== "all") {
     return false;
   }
   if (scope === "all") {
@@ -50,12 +55,11 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
     if (!params.isMentionableGroup) {
       return false;
     }
-    if (!params.requireMention) {
-      return false;
-    }
     if (!params.canDetectMention) {
       return false;
     }
+    // Whether the group *requires* a mention is a separate policy: a group that
+    // answers everything still acks the messages that address the agent.
     // Group activation can stand in for a literal mention when another gate already established
     // that this inbound message belongs to the active conversation.
     return params.effectiveWasMentioned || params.shouldBypassMention === true;
@@ -95,7 +99,6 @@ export function shouldAckReactionForWhatsApp(params: {
     isDirect: false,
     isGroup: true,
     isMentionableGroup: true,
-    requireMention: true,
     canDetectMention: true,
     effectiveWasMentioned: params.wasMentioned,
     shouldBypassMention: params.groupActivated,

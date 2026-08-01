@@ -62,12 +62,32 @@ describe("parsePageRange", () => {
     expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("throws when no requested pages are within maxPages", () => {
+    expect(() => parsePageRange("999", 20)).toThrow('No PDF pages matched requested range "999"');
+  });
+
   it("deduplicates and sorts", () => {
     expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
   });
 
   it("throws on invalid page number", () => {
     expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
+  });
+
+  it("throws on fractional page numbers", () => {
+    expect(() => parsePageRange("1.5", 20)).toThrow('Invalid page number: "1.5"');
+    expect(() => parsePageRange("1,2.5", 20)).toThrow('Invalid page number: "2.5"');
+  });
+
+  it("throws on unsafe integer page numbers and ranges", () => {
+    const unsafePage = String(Number.MAX_SAFE_INTEGER + 1);
+    const maxPages = 20;
+    expect(() => parsePageRange(unsafePage, maxPages)).toThrow(
+      `Invalid page number: "${unsafePage}"`,
+    );
+    expect(() => parsePageRange(`1-${unsafePage}`, maxPages)).toThrow(
+      `Invalid page range: "${unsafePage}"`,
+    );
   });
 
   it("throws on invalid range (start > end)", () => {

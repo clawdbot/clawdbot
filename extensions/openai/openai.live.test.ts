@@ -12,17 +12,16 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.5";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.6-luna";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2";
 const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-5.4-mini";
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
@@ -97,22 +96,23 @@ function resolveLiveOpenAISkipReason(error: unknown): string | null {
   return null;
 }
 
+/**
+ * Builds a synthetic config carrying only the live OpenAI credential this suite needs.
+ * Deliberately does not read the operator's real ~/.openclaw config: strict schema
+ * validation on that real, possibly-unmigrated file must never gate live provider tests.
+ */
 function createLiveConfig(): OpenClawConfig {
-  const cfg = getRuntimeConfig();
   return {
-    ...cfg,
     models: {
-      ...cfg.models,
       providers: {
-        ...cfg.models?.providers,
         openai: {
-          ...cfg.models?.providers?.openai,
           apiKey: OPENAI_API_KEY,
           baseUrl: "https://api.openai.com/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createLiveTtsConfig(): ResolvedTtsConfig {

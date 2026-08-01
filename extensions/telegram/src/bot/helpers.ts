@@ -36,17 +36,22 @@ import {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
-  renderTelegramTextEntities,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessageBody,
   resolveTelegramTextContent,
-  resolveTelegramMediaPlaceholder,
-  resolveTelegramRichMessagePlaceholder,
   type TelegramForwardedContext,
+  type TelegramMediaKind,
   type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
-export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
+export type {
+  TelegramForwardedContext,
+  TelegramMediaKind,
+  TelegramTextEntity,
+} from "./body-helpers.js";
 export {
   buildSenderLabel,
   buildSenderName,
@@ -54,13 +59,12 @@ export {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
-  renderTelegramTextEntities,
-  resolveTelegramMediaPlaceholder,
-  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramPrimaryMedia,
 };
 
-const TELEGRAM_GENERAL_TOPIC_ID = 1;
+export const TELEGRAM_GENERAL_TOPIC_ID = 1;
 const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
 const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
 const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
@@ -201,7 +205,7 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
@@ -218,7 +222,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
@@ -246,6 +251,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -323,7 +329,7 @@ export class TelegramPairingStoreReadError extends Error {
 }
 
 // Could add bounded retries to absorb short FD-pressure spikes; deferred. See #85555.
-export async function loadTelegramPairingStoreIfNeeded(params: {
+async function loadTelegramPairingStoreIfNeeded(params: {
   cfg?: OpenClawConfig;
   allowFrom?: Array<string | number>;
   groupAllowOverride?: Array<string | number>;
@@ -427,6 +433,10 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
     return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
+  if (thread.scope === "none") {
+    return undefined;
+  }
+
   // Telegram rejects message_thread_id=1 for General forum topic
   if (normalized === TELEGRAM_GENERAL_TOPIC_ID) {
     return undefined;
@@ -482,7 +492,6 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 
 export function resolveTelegramStreamMode(telegramCfg?: {
   streaming?: unknown;
-  streamMode?: unknown;
 }): TelegramStreamMode {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }
@@ -587,6 +596,7 @@ export type TelegramReplyTarget = {
   senderId?: string;
   senderUsername?: string;
   body?: string;
+  mediaType?: TelegramMediaKind;
   kind: "reply" | "quote";
   source: "reply_to_message" | "external_reply";
   quoteText?: string;
@@ -615,6 +625,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const replyMedia = resolveTelegramPrimaryMedia(replyLike);
   const rawReplyText =
     replyLike && typeof replyLike.text === "string"
       ? replyLike.text
@@ -625,24 +636,20 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody =
-      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
+    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
-      if (!body) {
-        const locationData = extractTelegramLocation(replyLike);
-        if (locationData) {
-          body = formatLocationText(locationData);
-        }
+      const locationData = extractTelegramLocation(replyLike);
+      if (locationData) {
+        body = formatLocationText(locationData);
       }
     }
   }
   if (!body && !replyLike) {
     return null;
   }
-  if (!body && !filteredQuoteText && !filteredReplyText) {
+  if (!body && !replyMedia && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
@@ -664,6 +671,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
     body: body || undefined,
+    mediaType: replyMedia?.kind,
     kind,
     source,
     quoteText: kind === "quote" ? quoteText : undefined,

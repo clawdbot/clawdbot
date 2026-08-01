@@ -8,10 +8,8 @@ const { close, configureSqliteConnectionPragmas } = vi.hoisted(() => ({
   configureSqliteConnectionPragmas: vi.fn(),
 }));
 
-vi.mock("node:sqlite", () => ({
-  DatabaseSync: vi.fn(function DatabaseSync() {
-    return { close };
-  }),
+vi.mock("openclaw/plugin-sdk/sqlite-runtime", () => ({
+  openNodeSqliteDatabase: vi.fn(() => ({ close })),
 }));
 vi.mock("openclaw/plugin-sdk/plugin-state-runtime", () => ({
   configureSqliteConnectionPragmas,

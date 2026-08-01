@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements gateway log redaction behavior.
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
@@ -19,6 +20,8 @@ const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
   "client_secret",
   "cookie",
   "driverToken",
+  "privateKey",
+  "authTag",
   "sutToken",
   "leaseToken",
   "refreshToken",
@@ -39,6 +42,11 @@ const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
   "token",
 ]);
 const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = Object.freeze(["cookie", "set-cookie", "x-api-key"]);
+const TELEGRAM_BOT_TOKEN_RE = /\d{6,}:[A-Za-z0-9_-]{20,}/gu;
+
+function redactTelegramBotTokens(text: string) {
+  return text.replace(TELEGRAM_BOT_TOKEN_RE, (token) => `${token.slice(0, 6)}…${token.slice(-4)}`);
+}
 
 function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
   const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
@@ -52,21 +60,41 @@ function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
 
 function redactSecretValueKey(text: string, key: string) {
   const escapedKey = escapeRegExp(key);
+  const valuePattern = `[^\\s"';,]+|"(?:\\\\.|[^"\\\\])*"|'[^']*'`;
   return text
     .replace(new RegExp(`([?#&]${escapedKey}=)[^&\\s]+`, "gi"), "$1<redacted>")
     .replace(
-      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
     .replace(
-      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
-    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"), `$1"<redacted>"`);
+    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"), `$1"<redacted>"`);
+}
+
+function redactStructuredSecretLine(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  return text.replace(
+    new RegExp(`(^|[\\r\\n])(\\s*"?${escapedKey}"?\\s*[:=]\\s*).*$`, "gim"),
+    `$1$2<redacted>`,
+  );
+}
+
+function redactStructuredSecretArray(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  const quotedString = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+  const quotedStringArray = `\\[\\s*(?:${quotedString})(?:\\s*,\\s*(?:${quotedString}))*\\s*\\]`;
+  return text.replace(
+    new RegExp(`("?${escapedKey}"?\\s*[:=]\\s*)${quotedStringArray}`, "gi"),
+    `$1<redacted>`,
+  );
 }
 
 export function redactQaGatewayDebugText(text: string) {
-  let redacted = text;
+  let redacted = redactSensitiveText(redactTelegramBotTokens(text), { mode: "tools" });
+  redacted = redactStructuredSecretArray(redacted, "authTag");
   for (const key of QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS) {
     const escapedKey = escapeRegExp(key);
     redacted = redacted.replace(
@@ -91,6 +119,9 @@ export function redactQaGatewayDebugText(text: string) {
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
     redacted = redactSecretValueKey(redacted, key);
   }
+  for (const key of ["authTag", "privateKey"]) {
+    redacted = redactStructuredSecretLine(redacted, key);
+  }
   return redacted
     .replaceAll(/\bsk-ant-oat01-[A-Za-z0-9_-]+\b/g, "<redacted>")
     .replaceAll(/\bBearer\s+[^\s"'<>]{8,}/gi, "Bearer <redacted>")
@@ -100,7 +131,9 @@ export function redactQaGatewayDebugText(text: string) {
         "gi",
       ),
       "$1<redacted>",
-    );
+    )
+    .replace(/(^|[\r\n])([^\S\r\n]*)::/gu, "$1$2: :")
+    .replaceAll("##[", "# #[");
 }
 
 export function formatQaGatewayLogsForError(logs: string) {

@@ -58,7 +58,7 @@ export function parseCsvFilter(raw?: string): Set<string> | null {
 }
 
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.videoGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.video);
 }
 
 export function canRunBufferBackedVideoToVideoLiveLane(params: {

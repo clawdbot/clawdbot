@@ -42,6 +42,7 @@ export async function authorizeSlackDirectMessage(params: {
   if (params.ctx.dmPolicy === "pairing") {
     await createChannelPairingChallengeIssuer({
       channel: "slack",
+      accountId: params.accountId,
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({
           channel: "slack",

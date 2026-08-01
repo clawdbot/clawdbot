@@ -1,6 +1,6 @@
 ---
 name: qqbot-channel
-description: QQ channel management skill. Use qqbot_channel_api to list guilds and channels, inspect members, publish posts, manage announcements, and work with schedules through the QQ Open Platform HTTP API with automatic token authentication.
+description: QQ channel management skill. Use qqbot_channel_api for explicit QQ channel-management requests; confirm write, delete, and bulk actions before calling authenticated QQ Open Platform endpoints.
 metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qqbot"] } } }
 ---
 
@@ -18,14 +18,24 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 
 ## 🔧 工具参数
 
-| 参数     | 类型   | 必填 | 说明                                                                         |
-| -------- | ------ | ---- | ---------------------------------------------------------------------------- |
-| `method` | string | 是   | HTTP 方法：`GET`, `POST`, `PUT`, `PATCH`, `DELETE`                           |
-| `path`   | string | 是   | API 路径（不含域名），如 `/guilds/{guild_id}/channels`，需替换占位符为实际值 |
-| `body`   | object | 否   | 请求体 JSON（POST/PUT/PATCH 使用）                                           |
-| `query`  | object | 否   | URL 查询参数键值对，值为字符串类型                                           |
+| 参数            | 类型    | 必填 | 说明                                                                         |
+| --------------- | ------- | ---- | ---------------------------------------------------------------------------- |
+| `method`        | string  | 是   | HTTP 方法：`GET`, `POST`, `PUT`, `PATCH`, `DELETE`                           |
+| `path`          | string  | 是   | API 路径（不含域名），如 `/guilds/{guild_id}/channels`，需替换占位符为实际值 |
+| `body`          | object  | 否   | 请求体 JSON（POST/PUT/PATCH 使用）                                           |
+| `query`         | object  | 否   | URL 查询参数键值对，值为字符串类型                                           |
+| `confirmed`     | boolean | 否   | `DELETE` 必须传 `true`，表示用户已确认精确删除目标                           |
+| `bulkConfirmed` | boolean | 否   | 批量 `DELETE`（如删除全部公告）必须额外传 `true`                             |
 
 > 基础 URL：`https://api.sgroup.qq.com`，鉴权头 `Authorization: QQBot {token}` 由工具自动填充。
+
+## 🛡️ 安全边界
+
+- 只在用户明确要求管理 QQ 频道、子频道、公告、论坛帖子或日程时调用写入接口。
+- `POST`、`PUT`、`PATCH` 和 `DELETE` 会修改真实 QQ 资源。调用前先复述目标频道/子频道/帖子/日程和预期改动；删除、批量删除、公告覆盖等不可逆或大范围操作必须等用户确认后再执行。
+- 删除前优先用 `GET`/列表接口查出候选项，让用户选择具体 ID；不要根据模糊名称猜测删除目标。
+- `DELETE` 请求必须传 `confirmed: true`，否则工具会拒绝执行。`announces/all` 这样的批量操作还必须传 `bulkConfirmed: true`，只有在用户明确说要删除全部公告并再次确认后才可使用。
+- 成员资料、头像 URL、频道图标等属于用户/群组资料。默认只总结必要字段；只有用户要求查看头像/图标或视觉比对时才内联展示图片，不要无关转发头像 URL。
 
 ---
 
@@ -40,13 +50,13 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 
 ### 子频道（Channel）
 
-| 操作           | 方法     | 路径                          | 参数说明                                                                                                                                  |
-| -------------- | -------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| 获取子频道列表 | `GET`    | `/guilds/{guild_id}/channels` | —                                                                                                                                         |
-| 获取子频道详情 | `GET`    | `/channels/{channel_id}`      | —                                                                                                                                         |
-| 创建子频道     | `POST`   | `/guilds/{guild_id}/channels` | body: `name`\*, `type`\*, `position`\*, `sub_type`, `parent_id`, `private_type`, `private_user_ids`, `speak_permission`, `application_id` |
-| 修改子频道     | `PATCH`  | `/channels/{channel_id}`      | body: `name`, `position`, `parent_id`, `private_type`, `speak_permission`（至少一个）                                                     |
-| 删除子频道     | `DELETE` | `/channels/{channel_id}`      | ⚠️ 不可逆                                                                                                                                 |
+| 操作           | 方法    | 路径                          | 参数说明                                                                                                                                  |
+| -------------- | ------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 获取子频道列表 | `GET`   | `/guilds/{guild_id}/channels` | —                                                                                                                                         |
+| 获取子频道详情 | `GET`   | `/channels/{channel_id}`      | —                                                                                                                                         |
+| 创建子频道     | `POST`  | `/guilds/{guild_id}/channels` | body: `name`\*, `type`\*, `position`\*, `sub_type`, `parent_id`, `private_type`, `private_user_ids`, `speak_permission`, `application_id` |
+| 修改子频道     | `PATCH` | `/channels/{channel_id}`      | body: `name`, `position`, `parent_id`, `private_type`, `speak_permission`（至少一个）                                                     |
+| 删除子频道     | —       | 见受确认保护的删除流程        | 破坏性操作；不要在未确认时调用                                                                                                            |
 
 **子频道类型（type）**：`0`=文字, `2`=语音, `4`=分组(position≥2), `10005`=直播, `10006`=应用, `10007`=论坛
 
@@ -61,28 +71,28 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 
 ### 公告（Announces）
 
-| 操作     | 方法     | 路径                                        | 参数说明                                                                                         |
-| -------- | -------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 创建公告 | `POST`   | `/guilds/{guild_id}/announces`              | body: `message_id`, `channel_id`, `announces_type`(0=成员,1=欢迎), `recommend_channels`(最多3条) |
-| 删除公告 | `DELETE` | `/guilds/{guild_id}/announces/{message_id}` | message_id 设 `all` 删除所有                                                                     |
+| 操作     | 方法   | 路径                           | 参数说明                                                                                         |
+| -------- | ------ | ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| 创建公告 | `POST` | `/guilds/{guild_id}/announces` | body: `message_id`, `channel_id`, `announces_type`(0=成员,1=欢迎), `recommend_channels`(最多3条) |
+| 删除公告 | —      | 见受确认保护的删除流程         | 破坏性操作；批量删除需二次确认                                                                   |
 
 ### 论坛（Forum）— 仅私域机器人
 
-| 操作         | 方法     | 路径                                                 | 参数说明                                                                       |
-| ------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| 获取帖子列表 | `GET`    | `/channels/{channel_id}/threads`                     | —                                                                              |
-| 获取帖子详情 | `GET`    | `/channels/{channel_id}/threads/{thread_id}`         | —                                                                              |
-| 发表帖子     | `PUT`    | `/channels/{channel_id}/threads`                     | body: `title`\*, `content`\*, `format`(1=文本,2=HTML,3=Markdown,4=JSON，默认3) |
-| 删除帖子     | `DELETE` | `/channels/{channel_id}/threads/{thread_id}`         | ⚠️ 不可逆                                                                      |
-| 发表评论     | `POST`   | `/channels/{channel_id}/threads/{thread_id}/comment` | body: `thread_author`\*, `content`\*, `thread_create_time`, `image`            |
+| 操作         | 方法   | 路径                                                 | 参数说明                                                                       |
+| ------------ | ------ | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 获取帖子列表 | `GET`  | `/channels/{channel_id}/threads`                     | —                                                                              |
+| 获取帖子详情 | `GET`  | `/channels/{channel_id}/threads/{thread_id}`         | —                                                                              |
+| 发表帖子     | `PUT`  | `/channels/{channel_id}/threads`                     | body: `title`\*, `content`\*, `format`(1=文本,2=HTML,3=Markdown,4=JSON，默认3) |
+| 删除帖子     | —      | 见受确认保护的删除流程                               | 破坏性操作；不要在未确认时调用                                                 |
+| 发表评论     | `POST` | `/channels/{channel_id}/threads/{thread_id}/comment` | body: `thread_author`\*, `content`\*, `thread_create_time`, `image`            |
 
 ### 日程（Schedule）
 
-| 操作     | 方法     | 路径                                             | 参数说明                                                                                        |
-| -------- | -------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| 创建日程 | `POST`   | `/channels/{channel_id}/schedules`               | body: `{ schedule: { name*, start_timestamp*, end_timestamp*, jump_channel_id, remind_type } }` |
-| 修改日程 | `PATCH`  | `/channels/{channel_id}/schedules/{schedule_id}` | body: `{ schedule: { name*, start_timestamp*, end_timestamp*, jump_channel_id, remind_type } }` |
-| 删除日程 | `DELETE` | `/channels/{channel_id}/schedules/{schedule_id}` | ⚠️ 不可逆                                                                                       |
+| 操作     | 方法    | 路径                                             | 参数说明                                                                                        |
+| -------- | ------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| 创建日程 | `POST`  | `/channels/{channel_id}/schedules`               | body: `{ schedule: { name*, start_timestamp*, end_timestamp*, jump_channel_id, remind_type } }` |
+| 修改日程 | `PATCH` | `/channels/{channel_id}/schedules/{schedule_id}` | body: `{ schedule: { name*, start_timestamp*, end_timestamp*, jump_channel_id, remind_type } }` |
+| 删除日程 | —       | 见受确认保护的删除流程                           | 破坏性操作；不要在未确认时调用                                                                  |
 
 **提醒类型（remind_type）**：`"0"`=不提醒, `"1"`=开始时, `"2"`=5分钟前, `"3"`=15分钟前, `"4"`=30分钟前, `"5"`=60分钟前
 
@@ -180,14 +190,17 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 }
 ```
 
-### 删除所有公告
+### 受确认保护的删除流程
 
-```json
-{
-  "method": "DELETE",
-  "path": "/guilds/123456/announces/all"
-}
-```
+删除类 QQ API 不作为普通速查示例暴露。若用户明确要求删除资源，先读取并复述目标对象，确认后再调用 `qqbot_channel_api`：`method` 设为 `"DELETE"`，`confirmed` 设为 `true`，`path` 使用已确认对象对应的资源路径。
+
+| 删除对象 | 已确认后使用的 `path`                            | 额外要求                                 |
+| -------- | ------------------------------------------------ | ---------------------------------------- |
+| 子频道   | `/channels/{channel_id}`                         | 确认子频道 ID 和名称                     |
+| 单条公告 | `/guilds/{guild_id}/announces/{message_id}`      | 确认公告 ID                              |
+| 全部公告 | `/guilds/{guild_id}/announces/all`               | 用户再次确认后再传 `bulkConfirmed: true` |
+| 帖子     | `/channels/{channel_id}/threads/{thread_id}`     | 确认帖子 ID、标题/作者                   |
+| 日程     | `/channels/{channel_id}/schedules/{schedule_id}` | 确认日程 ID、名称/时间                   |
 
 ---
 
@@ -222,7 +235,7 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 
 ### 展示成员头像
 
-成员详情返回的 `user.avatar` 是头像 URL，**必须使用 Markdown 图片语法展示**，让用户直接看到头像图片，而非纯文本链接：
+成员详情返回的 `user.avatar` 是头像 URL。默认只展示昵称、ID、加入时间等必要字段；当用户明确要求查看头像/图标或头像是当前任务的必要依据时，再用 Markdown 图片语法内联展示：
 
 ```
 成员信息：
@@ -231,7 +244,7 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 ![头像]({user.avatar})
 ```
 
-> **禁止**将头像 URL 作为纯文本或超链接展示（如 `查看头像`），必须用 `![描述](URL)` 语法内联显示。频道的 `icon` 字段同理。
+不要无关输出原始头像 URL 或把头像作为普通链接转发。频道的 `icon` 字段同理：仅在用户明确需要查看时展示。
 
 ---
 
@@ -255,8 +268,8 @@ metadata: { "openclaw": { "emoji": "📡", "requires": { "config": ["channels.qq
 3. **成员列表翻页**时可能返回重复成员，需按 `user.id` 去重
 4. **公告**的两种类型（消息公告和推荐子频道公告）会互相顶替
 5. **日程**的时间戳为毫秒级字符串
-6. **删除操作不可逆**，请谨慎使用
+6. **删除操作不可逆**，必须先确认精确目标并传 `confirmed: true`；批量删除需二次确认并传 `bulkConfirmed: true`
 7. **论坛操作**仅私域机器人可用
 8. **子频道分组**（type=4）的 `position` 必须 >= 2
 9. **日程操作**有频率限制：单个管理员每天 10 次，单个频道每天 100 次
-10. **头像/图标展示**：成员 `user.avatar` 和频道 `icon` 等图片 URL 必须使用 Markdown 图片语法 `![描述](URL)` 展示，禁止作为纯文本或超链接展示
+10. **头像/图标展示**：成员 `user.avatar` 和频道 `icon` 等图片 URL 属于资料信息；默认总结必要字段，只在用户明确需要查看图片时用 Markdown 图片语法 `![描述](URL)` 展示

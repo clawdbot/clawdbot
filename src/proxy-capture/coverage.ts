@@ -1,5 +1,4 @@
 // Proxy capture coverage helpers summarize which network calls were captured.
-import process from "node:process";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import type { CaptureProtocol } from "./types.js";
 
@@ -125,7 +124,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 
 let warnedCoverageSessionKey: string | null = null;
 
-export function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
+function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
   // Return copies because callers may render/sort/filter entries for CLI output.
   return DEBUG_PROXY_COVERAGE_ENTRIES.map((entry) => ({
     ...entry,
@@ -133,7 +132,7 @@ export function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
   }));
 }
 
-export function summarizeDebugProxyCoverage(
+function summarizeDebugProxyCoverage(
   entries: readonly DebugProxyCoverageEntry[] = DEBUG_PROXY_COVERAGE_ENTRIES,
 ): DebugProxyCoverageSummary {
   let captured = 0;
@@ -168,7 +167,7 @@ export function buildDebugProxyCoverageReport() {
 
 export function maybeWarnAboutDebugProxyCoverage(
   settings: DebugProxySettings = resolveDebugProxySettings(),
-  warn: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
+  warn: (message: string) => void = (message) => console.warn(message),
 ): void {
   if (!settings.enabled || !settings.required) {
     return;

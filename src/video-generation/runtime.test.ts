@@ -26,7 +26,25 @@ const runtimeDeps = {
 } satisfies NonNullable<Parameters<typeof generateVideo>[1]>;
 
 function runGenerateVideo(params: GenerateVideoParams) {
-  return generateVideo(params, runtimeDeps);
+  const defaults = params.cfg.agents?.defaults as
+    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
+        videoGenerationModel?: unknown;
+      })
+    | undefined;
+  const cfg =
+    defaults?.videoGenerationModel !== undefined && defaults.mediaModels?.video === undefined
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...defaults,
+              mediaModels: { ...defaults.mediaModels, video: defaults.videoGenerationModel },
+            },
+          },
+        }
+      : params.cfg;
+  return generateVideo({ ...params, cfg }, runtimeDeps);
 }
 
 function requireAttempt(
@@ -1164,7 +1182,8 @@ describe("video-generation runtime", () => {
     await expect(
       runGenerateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" }),
     ).rejects.toThrow(
-      'No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
+      'No video-generation model configured. Set agents.defaults.mediaModels.video.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

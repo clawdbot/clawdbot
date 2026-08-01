@@ -26,6 +26,11 @@ function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): b
 }
 
 function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
+  if (entry.killReconciliation) {
+    // The killed row is a reconciliation tombstone. Its session owns the
+    // provider result until the sweeper accepts completion or finalizes cancellation.
+    return true;
+  }
   if (isCleanupCompleteForMaintenance(entry)) {
     return false;
   }
@@ -38,7 +43,7 @@ function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
 }
 
 /** Lists child session keys protected from session-store maintenance pruning. */
-export function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
+function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   const keys = new Set<string>();
   for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
     if (!shouldPreserveForMaintenance(entry)) {

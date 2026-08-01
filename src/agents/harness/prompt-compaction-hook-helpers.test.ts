@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -7,6 +11,26 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("forwards a per-turn tool restriction to native harness adapters", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "answer directly",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+  });
+
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "",
@@ -22,45 +46,97 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
   });
 
-  it("uses precomputed agent-start context without a global hook runner", async () => {
+  it("runs heartbeat_prompt_contribution on a heartbeat turn and prepends its contribution", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "heartbeat_prompt_contribution",
+          handler: () => ({ prependContext: "Run the base-heartbeat skill." }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "Read HEARTBEAT.md.",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    expect(result.prompt).toBe("Run the base-heartbeat skill.\n\nRead HEARTBEAT.md.");
+    // The heartbeat contribution affects only the prompt, not developer instructions.
+    expect(result.developerInstructions).toBe("base instructions");
+  });
+
+  it("runs heartbeat contributions before other prompt-build hooks", async () => {
+    const calls: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "heartbeat_prompt_contribution",
+          handler: () => {
+            calls.push("heartbeat");
+            return { prependContext: "heartbeat context" };
+          },
+        },
+        {
+          hookName: "before_prompt_build",
+          handler: () => {
+            calls.push("before_prompt_build");
+            return { prependContext: "prompt context" };
+          },
+        },
+      ]),
+    );
+
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "hello",
       developerInstructions: "base instructions",
       messages: [],
-      ctx: {
-        agentId: "agent-1",
-        sessionKey: "session-1",
-        workspaceDir: "/workspace",
-      },
-      beforeAgentStartResult: {
-        prependContext: "cached context",
-        systemPrompt: "cached instructions",
-      },
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
     });
 
-    expect(result).toEqual({
-      prompt: "cached context\n\nhello",
-      developerInstructions: "cached instructions",
-      promptInputRange: { start: 16, end: 21 },
-    });
+    expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
+    expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
   });
 
-  it("keeps an empty input range between prepended and appended context", async () => {
+  it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {
+    const handler = vi.fn(() => ({ prependContext: "should not appear" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "heartbeat_prompt_contribution", handler }]),
+    );
+
     const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "",
+      prompt: "hello",
       developerInstructions: "base instructions",
       messages: [],
-      ctx: {},
-      beforeAgentStartResult: {
-        appendContext: "appended context",
-        prependContext: "prepended context",
-      },
+      ctx: { trigger: "user", agentId: "agent-1", sessionKey: "session-1" },
     });
 
-    expect(result).toEqual({
-      prompt: "prepended context\n\nappended context",
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.prompt).toBe("hello");
+  });
+
+  it("skips heartbeat_prompt_contribution for commitment-only heartbeat lifecycle turns", async () => {
+    const heartbeatHandler = vi.fn(() => ({ prependContext: "global heartbeat context" }));
+    const promptHandler = vi.fn(() => ({ prependContext: "turn policy" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "heartbeat_prompt_contribution", handler: heartbeatHandler },
+        { hookName: "before_prompt_build", handler: promptHandler },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "due commitment",
       developerInstructions: "base instructions",
-      promptInputRange: { start: 17, end: 17 },
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
+      bootstrapContextRunKind: "commitment-only",
     });
+
+    expect(heartbeatHandler).not.toHaveBeenCalled();
+    expect(promptHandler).toHaveBeenCalledTimes(1);
+    expect(result.prompt).toBe("turn policy\n\ndue commitment");
   });
 });

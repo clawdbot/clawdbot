@@ -1,23 +1,13 @@
 // Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import {
-  resolveAllAgentSessionStoreTargetsSync,
-  type SessionStoreTarget,
-} from "../config/sessions/targets.js";
+  resolveSessionEntryAccessTarget,
+  updateResolvedSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../gateway/session-store-key.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -37,10 +27,6 @@ const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
 const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
 const MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH = 512;
 const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
-
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
 
 function normalizeNamespace(value: string): string {
   return value.trim();
@@ -81,129 +67,6 @@ function isExpired(entry: unknown, now: number) {
     return true;
   }
   return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
-}
-
-function findStoreKeysIgnoreCase(store: Record<string, unknown>, targetKey: string): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  const matches: string[] = [];
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
-      matches.push(key);
-    }
-  }
-  return matches;
-}
-
-function findFreshestStoreMatch(
-  store: Record<string, SessionEntry>,
-  ...candidates: string[]
-): { entry: SessionEntry; key: string } | undefined {
-  let freshest: { entry: SessionEntry; key: string } | undefined;
-  for (const candidate of candidates) {
-    const trimmed = normalizeOptionalString(candidate) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const exact = store[trimmed];
-    if (exact && (!freshest || (exact.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
-      freshest = { entry: exact, key: trimmed };
-    }
-    for (const legacyKey of findStoreKeysIgnoreCase(store, trimmed)) {
-      const entry = store[legacyKey];
-      if (entry && (!freshest || (entry.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
-        freshest = { entry, key: legacyKey };
-      }
-    }
-  }
-  return freshest;
-}
-
-function resolveSessionStoreCandidates(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): SessionStoreTarget[] {
-  const storeConfig = params.cfg.session?.store;
-  const defaultTarget = {
-    agentId: params.agentId,
-    storePath: resolveStorePath(storeConfig, { agentId: params.agentId }),
-  };
-  if (!isStorePathTemplate(storeConfig)) {
-    return [defaultTarget];
-  }
-  const targets = new Map<string, SessionStoreTarget>();
-  targets.set(defaultTarget.storePath, defaultTarget);
-  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
-    if (target.agentId === params.agentId) {
-      targets.set(target.storePath, target);
-    }
-  }
-  return [...targets.values()];
-}
-
-function buildSessionStoreScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
-
-function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKey: string }): {
-  storePath: string;
-  entry?: SessionEntry;
-  canonicalKey: string;
-  storeKey: string;
-} {
-  const key = normalizeOptionalString(params.sessionKey) ?? "";
-  const cfg = params.cfg;
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
-  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const scanTargets = buildSessionStoreScanTargets({ cfg, key, canonicalKey, agentId });
-  const candidates = resolveSessionStoreCandidates({ cfg, agentId });
-  const fallback = candidates[0] ?? {
-    agentId,
-    storePath: resolveStorePath(cfg.session?.store, { agentId }),
-  };
-  let selectedStorePath = fallback.storePath;
-  let selectedMatch = findFreshestStoreMatch(loadSessionStore(fallback.storePath), ...scanTargets);
-  for (let index = 1; index < candidates.length; index += 1) {
-    const candidate = candidates[index];
-    if (!candidate) {
-      continue;
-    }
-    const match = findFreshestStoreMatch(loadSessionStore(candidate.storePath), ...scanTargets);
-    if (
-      match &&
-      (!selectedMatch || (match.entry.updatedAt ?? 0) >= (selectedMatch.entry.updatedAt ?? 0))
-    ) {
-      selectedStorePath = candidate.storePath;
-      selectedMatch = match;
-    }
-  }
-  return {
-    storePath: selectedStorePath,
-    entry: selectedMatch?.entry,
-    canonicalKey,
-    storeKey: selectedMatch?.key ?? canonicalKey,
-  };
 }
 
 function isPluginPromptInjectionEnabled(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -278,11 +141,6 @@ export async function enqueuePluginNextTurnInjection(params: {
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  if (!loaded.entry) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  const canonicalKey = loaded.canonicalKey ?? sessionKey;
   const now = params.now ?? Date.now();
   const record = toPluginNextTurnInjectionRecord({
     pluginId: params.pluginId,
@@ -290,13 +148,9 @@ export async function enqueuePluginNextTurnInjection(params: {
     injection: { ...params.injection, sessionKey, text },
     now,
   });
-  let enqueued = false;
-  let resultId = record.id;
-  await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry) {
-      return;
-    }
+  const updated = await updateResolvedSessionEntry({ cfg: params.cfg, sessionKey }, (entry) => {
+    let enqueued = false;
+    let resultId = record.id;
     const injections = { ...entry.pluginNextTurnInjections };
     // Guard against malformed/hand-edited persisted state — a non-array value
     // here would crash the spread/filter and break the whole session's enqueue.
@@ -311,22 +165,26 @@ export async function enqueuePluginNextTurnInjection(params: {
       resultId = duplicate.id;
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
-      return;
+      return { enqueued, id: resultId };
     }
     if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
-      return;
+      return { enqueued, id: resultId };
     }
     injections[params.pluginId] = [...existing, record];
     entry.pluginNextTurnInjections = injections;
     entry.updatedAt = now;
     enqueued = true;
+    return { enqueued, id: resultId };
   });
-  return { enqueued, id: resultId, sessionKey: canonicalKey };
+  if (!updated.found) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  return { ...updated.result, sessionKey: updated.canonicalKey };
 }
 
-export async function drainPluginNextTurnInjections(params: {
+async function drainPluginNextTurnInjections(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;
@@ -335,23 +193,22 @@ export async function drainPluginNextTurnInjections(params: {
   if (!sessionKey) {
     return [];
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  if (!loaded.entry) {
+  const target = resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey });
+  if (!target.entry) {
     return [];
   }
-  // Avoid the locked re-save in updateSessionStore when there is nothing queued.
+  // Avoid a locked session-entry rewrite when there is nothing queued.
   // Drain runs once per prompt build; the common case is no injections, so a
   // pre-flight read keeps prompt-build off the session-store write path.
   // (Concurrently-enqueued injections during this gap land on the next turn.)
   if (
-    !loaded.entry.pluginNextTurnInjections ||
-    Object.keys(loaded.entry.pluginNextTurnInjections).length === 0
+    !target.entry.pluginNextTurnInjections ||
+    Object.keys(target.entry.pluginNextTurnInjections).length === 0
   ) {
     return [];
   }
   const now = params.now ?? Date.now();
-  return await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
+  const updated = await updateResolvedSessionEntry({ cfg: params.cfg, sessionKey }, (entry) => {
     if (!entry?.pluginNextTurnInjections) {
       return [];
     }
@@ -384,6 +241,7 @@ export async function drainPluginNextTurnInjections(params: {
     }
     return drained;
   });
+  return updated.found ? updated.result : [];
 }
 
 export async function drainPluginNextTurnInjectionContext(params: {
@@ -408,8 +266,8 @@ export function getPluginSessionExtensionStateSync(params: {
   if (!pluginId || !sessionKey) {
     return undefined;
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  const value = loaded.entry?.pluginExtensions?.[pluginId] as
+  const target = resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey });
+  const value = target.entry?.pluginExtensions?.[pluginId] as
     | Record<string, PluginJsonValue>
     | undefined;
   return value ? (copyJsonValue(value) as Record<string, PluginJsonValue>) : undefined;
@@ -422,6 +280,7 @@ export async function patchPluginSessionExtension(params: {
   namespace: string;
   value?: PluginJsonValue;
   unset?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ ok: true; key: string; value?: PluginJsonValue } | { ok: false; error: string }> {
   const namespace = normalizeNamespace(params.namespace);
   const pluginId = params.pluginId.trim();
@@ -445,11 +304,6 @@ export async function patchPluginSessionExtension(params: {
   if (!registration) {
     return { ok: false, error: `unknown plugin session extension: ${pluginId}/${namespace}` };
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey: params.sessionKey });
-  if (!loaded.entry) {
-    return { ok: false, error: `unknown session key: ${params.sessionKey}` };
-  }
-  const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
   // Promote the projected value into a top-level SessionEntry slot when the
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
@@ -462,67 +316,70 @@ export async function patchPluginSessionExtension(params: {
     );
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
-  const nextValue = await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry) {
-      return undefined;
-    }
-    const entryRecord = entry as Record<string, unknown>;
-    const pluginExtensions = { ...entry.pluginExtensions };
-    const pluginState = { ...pluginExtensions[pluginId] };
-    if (params.unset === true) {
-      delete pluginState[namespace];
-    } else {
-      pluginState[namespace] = copyJsonValue(nextPluginValue);
-    }
-    if (Object.keys(pluginState).length > 0) {
-      pluginExtensions[pluginId] = pluginState;
-    } else {
-      delete pluginExtensions[pluginId];
-    }
-    if (Object.keys(pluginExtensions).length > 0) {
-      entry.pluginExtensions = pluginExtensions;
-    } else {
-      delete entry.pluginExtensions;
-    }
-    const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
-    const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
-    const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
-    if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
-      delete entryRecord[previousSlotKey.key];
-    }
-    if (slotKey && params.unset !== true) {
-      pluginSlotKeys[namespace] = slotKey;
-    } else {
-      delete pluginSlotKeys[namespace];
-    }
-    if (Object.keys(pluginSlotKeys).length > 0) {
-      storedSlotKeys[pluginId] = pluginSlotKeys;
-    } else {
-      delete storedSlotKeys[pluginId];
-    }
-    if (Object.keys(storedSlotKeys).length > 0) {
-      entry.pluginExtensionSlotKeys = storedSlotKeys;
-    } else {
-      delete entry.pluginExtensionSlotKeys;
-    }
-    if (slotKey) {
-      const projected = projectSessionExtensionValueForSlot({
-        registration,
-        sessionKey: canonicalKey,
-        sessionId: entry.sessionId,
-        nextValue: params.unset === true ? undefined : nextPluginValue,
-      });
-      if (projected === undefined) {
-        delete entryRecord[slotKey];
+  const updated = await updateResolvedSessionEntry(
+    { cfg: params.cfg, sessionKey: params.sessionKey },
+    (entry, context) => {
+      params.assertCurrent?.();
+      const entryRecord = entry as unknown as Record<string, unknown>;
+      const pluginExtensions = { ...entry.pluginExtensions };
+      const pluginState = { ...pluginExtensions[pluginId] };
+      if (params.unset === true) {
+        delete pluginState[namespace];
       } else {
-        entryRecord[slotKey] = projected;
+        pluginState[namespace] = copyJsonValue(nextPluginValue);
       }
-    }
-    entry.updatedAt = Date.now();
-    return pluginState[namespace] as PluginJsonValue | undefined;
-  });
-  return { ok: true, key: canonicalKey, value: nextValue };
+      if (Object.keys(pluginState).length > 0) {
+        pluginExtensions[pluginId] = pluginState;
+      } else {
+        delete pluginExtensions[pluginId];
+      }
+      if (Object.keys(pluginExtensions).length > 0) {
+        entry.pluginExtensions = pluginExtensions;
+      } else {
+        delete entry.pluginExtensions;
+      }
+      const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
+      const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
+      const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
+      if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
+        delete entryRecord[previousSlotKey.key];
+      }
+      if (slotKey && params.unset !== true) {
+        pluginSlotKeys[namespace] = slotKey;
+      } else {
+        delete pluginSlotKeys[namespace];
+      }
+      if (Object.keys(pluginSlotKeys).length > 0) {
+        storedSlotKeys[pluginId] = pluginSlotKeys;
+      } else {
+        delete storedSlotKeys[pluginId];
+      }
+      if (Object.keys(storedSlotKeys).length > 0) {
+        entry.pluginExtensionSlotKeys = storedSlotKeys;
+      } else {
+        delete entry.pluginExtensionSlotKeys;
+      }
+      if (slotKey) {
+        const projected = projectSessionExtensionValueForSlot({
+          registration,
+          sessionKey: context.canonicalKey,
+          sessionId: entry.sessionId,
+          nextValue: params.unset === true ? undefined : nextPluginValue,
+        });
+        if (projected === undefined) {
+          delete entryRecord[slotKey];
+        } else {
+          entryRecord[slotKey] = projected;
+        }
+      }
+      entry.updatedAt = Date.now();
+      return pluginState[namespace] as PluginJsonValue | undefined;
+    },
+  );
+  if (!updated.found) {
+    return { ok: false, error: `unknown session key: ${params.sessionKey}` };
+  }
+  return { ok: true, key: updated.canonicalKey, value: updated.result };
 }
 
 /**
@@ -558,13 +415,6 @@ function projectSessionExtensionValueForSlot(params: {
     return undefined;
   }
   return copyJsonValue(projected);
-}
-
-export async function projectPluginSessionExtensions(params: {
-  sessionKey: string;
-  entry: SessionEntry;
-}): Promise<PluginSessionExtensionProjection[]> {
-  return collectPluginSessionExtensionProjections(params);
 }
 
 function collectPluginSessionExtensionProjections(params: {

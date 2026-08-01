@@ -23,6 +23,9 @@ function detectSupportedImageMimeType(buffer: Uint8Array): string | null {
   if (startsWithAscii(buffer, 0, "RIFF") && startsWithAscii(buffer, 8, "WEBP")) {
     return "image/webp";
   }
+  if (startsWithAscii(buffer, 0, "BM") && isBmp(buffer)) {
+    return "image/bmp";
+  }
   return null;
 }
 
@@ -70,12 +73,59 @@ function isAnimatedPng(buffer: Uint8Array): boolean {
   return false;
 }
 
+function isBmp(buffer: Uint8Array): boolean {
+  if (buffer.length < 26) {
+    return false;
+  }
+  const declaredFileSize = readUint32LE(buffer, 2);
+  const pixelDataOffset = readUint32LE(buffer, 10);
+  const dibHeaderSize = readUint32LE(buffer, 14);
+  if (declaredFileSize !== 0 && declaredFileSize < 26) {
+    return false;
+  }
+  if (pixelDataOffset < 14 + dibHeaderSize) {
+    return false;
+  }
+  if (declaredFileSize !== 0 && pixelDataOffset >= declaredFileSize) {
+    return false;
+  }
+
+  let colorPlanes: number;
+  let bitsPerPixel: number;
+  if (dibHeaderSize === 12) {
+    colorPlanes = readUint16LE(buffer, 22);
+    bitsPerPixel = readUint16LE(buffer, 24);
+  } else if (dibHeaderSize >= 40 && dibHeaderSize <= 124) {
+    if (buffer.length < 30) {
+      return false;
+    }
+    colorPlanes = readUint16LE(buffer, 26);
+    bitsPerPixel = readUint16LE(buffer, 28);
+  } else {
+    return false;
+  }
+  return colorPlanes === 1 && [1, 4, 8, 16, 24, 32].includes(bitsPerPixel);
+}
+
+function readUint16LE(buffer: Uint8Array, offset: number): number {
+  return (buffer[offset] ?? 0) + ((buffer[offset + 1] ?? 0) << 8);
+}
+
 function readUint32BE(buffer: Uint8Array, offset: number): number {
   return (
     (buffer[offset] ?? 0) * 0x1000000 +
     ((buffer[offset + 1] ?? 0) << 16) +
     ((buffer[offset + 2] ?? 0) << 8) +
     (buffer[offset + 3] ?? 0)
+  );
+}
+
+function readUint32LE(buffer: Uint8Array, offset: number): number {
+  return (
+    (buffer[offset] ?? 0) +
+    ((buffer[offset + 1] ?? 0) << 8) +
+    ((buffer[offset + 2] ?? 0) << 16) +
+    (buffer[offset + 3] ?? 0) * 0x1000000
   );
 }
 

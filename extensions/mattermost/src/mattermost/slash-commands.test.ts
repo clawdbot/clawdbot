@@ -14,6 +14,7 @@ import {
 describe("slash-commands", () => {
   async function registerSingleStatusCommand(
     requestImpl: (path: string, init?: RequestInit) => Promise<unknown>,
+    description = "status",
   ) {
     const client: MattermostClient = {
       baseUrl: "https://chat.example.com",
@@ -30,7 +31,7 @@ describe("slash-commands", () => {
       commands: [
         {
           trigger: "oc_status",
-          description: "status",
+          description,
           autoComplete: true,
         },
       ],
@@ -160,6 +161,37 @@ describe("slash-commands", () => {
     expect(firstCommand.managed).toBe(false);
     expect(firstCommand.id).toBe("cmd-1");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("truncates command descriptions to Mattermost's UTF-8 byte limit", async () => {
+    const description = `${"x".repeat(127)}😀 trailing`;
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/commands?team_id=")) {
+        return [];
+      }
+      if (path === "/commands" && init?.method === "POST") {
+        const body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+        expect(body.description).toBe("x".repeat(127));
+        expect(body.auto_complete_desc).toBe("x".repeat(127));
+        expect(Buffer.byteLength(body.description, "utf8")).toBeLessThanOrEqual(128);
+        return {
+          id: "cmd-1",
+          token: "tok-1",
+          team_id: "team-1",
+          creator_id: "bot-user",
+          trigger: "oc_status",
+          method: MATTERMOST_SLASH_POST_METHOD,
+          url: "http://gateway/callback",
+          auto_complete: true,
+        };
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const result = await registerSingleStatusCommand(request, description);
+
+    expect(result).toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("skips foreign command trigger collisions instead of mutating non-owned commands", async () => {

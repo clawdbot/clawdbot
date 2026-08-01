@@ -1,5 +1,10 @@
 // Hyperlink markdown helpers render markdown links with TUI hyperlink styling.
-import type { Component, DefaultTextStyle, MarkdownTheme } from "@earendil-works/pi-tui";
+import type {
+  Component,
+  DefaultTextStyle,
+  MarkdownOptions,
+  MarkdownTheme,
+} from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 
@@ -17,9 +22,10 @@ export class HyperlinkMarkdown implements Component {
     paddingX: number,
     paddingY: number,
     theme: MarkdownTheme,
-    options?: DefaultTextStyle,
+    defaultTextStyle?: DefaultTextStyle,
+    options?: MarkdownOptions,
   ) {
-    this.inner = new Markdown(text, paddingX, paddingY, theme, options);
+    this.inner = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle, options);
     this.urls = extractUrls(text);
   }
 

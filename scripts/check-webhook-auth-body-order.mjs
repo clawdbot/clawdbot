@@ -33,7 +33,7 @@ function getCalleeName(expression) {
 /**
  * Finds request body reads that occur before webhook auth validation.
  */
-export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
+function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const lines = [];
   const visit = (node) => {

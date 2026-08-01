@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
   skillsChangeUnsub: vi.fn(),
+  ensureContextWindowCacheLoaded: vi.fn(),
+  ensureTaskRuntimeStateReady: vi.fn(),
   configureTaskRegistryMaintenance: vi.fn(),
   startTaskRegistryMaintenance: vi.fn(),
   getInspectableActiveTaskRestartBlockers: vi.fn(),
@@ -35,6 +37,14 @@ vi.mock("../skills/runtime/remote.js", () => ({
 
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
+}));
+
+vi.mock("../agents/context.js", () => ({
+  ensureContextWindowCacheLoaded: mocks.ensureContextWindowCacheLoaded,
+}));
+
+vi.mock("../tasks/runtime-internal.js", () => ({
+  ensureTaskRuntimeStateReady: mocks.ensureTaskRuntimeStateReady,
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
@@ -90,6 +100,9 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.registerSkillsChangeListener.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
+    mocks.ensureContextWindowCacheLoaded.mockReset();
+    mocks.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
+    mocks.ensureTaskRuntimeStateReady.mockReset();
     mocks.configureTaskRegistryMaintenance.mockReset();
     mocks.startTaskRegistryMaintenance.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReset();
@@ -114,14 +127,102 @@ describe("startGatewayEarlyRuntime", () => {
     );
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
+    await Promise.resolve();
+    expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskRuntimeStateReady).toHaveBeenCalledTimes(1);
     expect(mocks.configureTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.startTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskRuntimeStateReady.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      mocks.startTaskRegistryMaintenance.mock.invocationCallOrder[0] ?? Infinity,
+    );
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
     expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
     earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
+  });
+
+  it("broadcasts remote-node skill invalidations to operator clients", async () => {
+    const broadcast = vi.fn();
+
+    await startGatewayEarlyRuntime(
+      earlyRuntimeInput({
+        minimalTestGateway: false,
+        broadcast,
+      }),
+    );
+
+    const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+      | ((event: { reason: "remote-node" }) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+
+    listener?.({ reason: "remote-node" });
+
+    expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "remote-node" });
+    expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts local skill changes after the coalesced remote-bin refresh", async () => {
+    vi.useFakeTimers();
+    const broadcast = vi.fn();
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let finishRefresh: (() => void) | undefined;
+    mocks.refreshRemoteBinsForConnectedNodes.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    try {
+      await startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+          broadcast,
+          getSkillsRefreshTimer: () => refreshTimer,
+          setSkillsRefreshTimer: (timer) => {
+            refreshTimer = timer;
+          },
+        }),
+      );
+
+      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+        | ((event: { reason: "watch" }) => void)
+        | undefined;
+      listener?.({ reason: "watch" });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledWith({});
+      expect(broadcast).not.toHaveBeenCalled();
+
+      finishRefresh?.();
+      await Promise.resolve();
+      expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "watch" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails before discovery and task maintenance when task state cannot restore", async () => {
+    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
+      throw new Error("task-flow registry restore failed");
+    });
+
+    await expect(
+      startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+        }),
+      ),
+    ).rejects.toThrow("task-flow registry restore failed");
+
+    expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
+    expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });
 
   it("starts discovery with the current plugin registry services", async () => {

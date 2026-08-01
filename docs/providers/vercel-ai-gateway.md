@@ -15,12 +15,14 @@ access hundreds of models through a single endpoint.
 | Package       | `@openclaw/vercel-ai-gateway-provider` |
 | Auth          | `AI_GATEWAY_API_KEY`                   |
 | API           | Anthropic Messages compatible          |
+| Base URL      | `https://ai-gateway.vercel.sh`         |
 | Model catalog | Auto-discovered via `/v1/models`       |
 
 <Tip>
-OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
-`/models vercel-ai-gateway` includes current model refs such as
-`vercel-ai-gateway/openai/gpt-5.5` and
+OpenClaw auto-discovers the Gateway `/v1/models` catalog, so both the
+`/models vercel-ai-gateway` chat command and
+`openclaw models list --provider vercel-ai-gateway` include current model
+refs such as `vercel-ai-gateway/openai/gpt-5.5` and
 `vercel-ai-gateway/moonshotai/kimi-k2.6`.
 </Tip>
 
@@ -33,16 +35,11 @@ OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
     ```
   </Step>
   <Step title="Set the API key">
-    Run onboarding and choose the AI Gateway auth option:
-
     ```bash
     openclaw onboard --auth-choice ai-gateway-api-key
     ```
-
   </Step>
   <Step title="Set a default model">
-    Add the model to your OpenClaw config:
-
     ```json5
     {
       agents: {
@@ -52,7 +49,6 @@ OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
       },
     }
     ```
-
   </Step>
   <Step title="Verify the model is available">
     ```bash
@@ -63,8 +59,6 @@ OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
 
 ## Non-interactive example
 
-For scripted or CI setups, pass all values on the command line:
-
 ```bash
 openclaw onboard --non-interactive \
   --mode local \
@@ -74,8 +68,7 @@ openclaw onboard --non-interactive \
 
 ## Model ID shorthand
 
-OpenClaw accepts Vercel Claude shorthand model refs and normalizes them at
-runtime:
+OpenClaw normalizes Claude shorthand model refs at runtime:
 
 | Shorthand input                     | Normalized model ref                          |
 | ----------------------------------- | --------------------------------------------- |
@@ -83,8 +76,8 @@ runtime:
 | `vercel-ai-gateway/opus-4.6`        | `vercel-ai-gateway/anthropic/claude-opus-4-6` |
 
 <Tip>
-You can use either the shorthand or the fully qualified model ref in your
-configuration. OpenClaw resolves the canonical form automatically.
+Use either form in your configuration; OpenClaw resolves the canonical
+`anthropic/...` ref automatically.
 </Tip>
 
 ## Advanced configuration
@@ -104,21 +97,20 @@ configuration. OpenClaw resolves the canonical form automatically.
   </Accordion>
 
   <Accordion title="Provider routing">
-    Vercel AI Gateway routes requests to the upstream provider based on the model
-    ref prefix. For example, `vercel-ai-gateway/anthropic/claude-opus-4.6` routes
-    through Anthropic, while `vercel-ai-gateway/openai/gpt-5.5` routes through
-    OpenAI and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
-    MoonshotAI. Your single `AI_GATEWAY_API_KEY` handles authentication for all
-    upstream providers.
+    Vercel AI Gateway routes each request to the upstream provider named in the
+    model ref prefix. For example, `vercel-ai-gateway/anthropic/claude-opus-4.6`
+    routes through Anthropic, `vercel-ai-gateway/openai/gpt-5.5` routes through
+    OpenAI, and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
+    MoonshotAI. One `AI_GATEWAY_API_KEY` authenticates all upstream providers.
   </Accordion>
   <Accordion title="Thinking levels">
-    `/think` options follow trusted upstream model prefixes when OpenClaw knows
-    the upstream provider contract. `vercel-ai-gateway/anthropic/...` uses the
-    Claude thinking profile, including adaptive defaults for Claude 4.6 models.
-    `vercel-ai-gateway/openai/gpt-5.4`, `gpt-5.5`, and Codex-style refs expose
-    `/think xhigh` just like the direct OpenAI/OpenAI Codex providers. Other
-    namespaced refs keep the normal reasoning levels unless their catalog
-    metadata declares more.
+    `/think` options follow the upstream model prefix when OpenClaw recognizes
+    it. `vercel-ai-gateway/anthropic/...` uses the Claude thinking profile,
+    including the adaptive default for Claude 4.6 models. Trusted
+    `vercel-ai-gateway/openai/...` refs (`gpt-5.2` and newer, plus Codex
+    variants down to `gpt-5.1-codex`) expose `/think xhigh`. Other namespaced
+    refs keep the standard reasoning levels unless their catalog metadata
+    declares more.
   </Accordion>
 </AccordionGroup>
 

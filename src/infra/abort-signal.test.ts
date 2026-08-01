@@ -1,6 +1,33 @@
 // Covers abort signal wait helpers.
 import { describe, expect, it } from "vitest";
-import { waitForAbortSignal } from "./abort-signal.js";
+import { createAbortError, isAbortError, waitForAbortSignal } from "./abort-signal.js";
+
+describe("abort errors", () => {
+  it("creates a named error with an optional cause", () => {
+    const cause = { source: "caller" };
+    const error = createAbortError("stopped", { cause });
+
+    expect(error).toMatchObject({ name: "AbortError", message: "stopped", cause });
+  });
+
+  it("detects standard and legacy Node abort errors", () => {
+    expect(isAbortError(createAbortError("aborted"))).toBe(true);
+    expect(isAbortError({ name: "AbortError", message: "test" })).toBe(true);
+    expect(isAbortError(new Error("This operation was aborted"))).toBe(true);
+  });
+
+  it.each([
+    null,
+    undefined,
+    "string error",
+    42,
+    new Error("Operation aborted"),
+    new Error("aborted"),
+    new Error("Request was aborted"),
+  ])("rejects non-abort input %#", (value) => {
+    expect(isAbortError(value)).toBe(false);
+  });
+});
 
 describe("waitForAbortSignal", () => {
   it("resolves immediately when signal is missing", async () => {

@@ -6,15 +6,15 @@ read_when:
 title: "Qianfan"
 ---
 
-Qianfan is Baidu's MaaS platform, providing a **unified API** that routes requests to many models behind a single
-endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
+Qianfan is Baidu's MaaS platform: a unified, OpenAI-compatible API that routes requests to many models behind a single endpoint and API key. OpenClaw ships it as the official external plugin `@openclaw/qianfan-provider`.
 
-| Property | Value                             |
-| -------- | --------------------------------- |
-| Provider | `qianfan`                         |
-| Auth     | `QIANFAN_API_KEY`                 |
-| API      | OpenAI-compatible                 |
-| Base URL | `https://qianfan.baidubce.com/v2` |
+| Property      | Value                                    |
+| ------------- | ---------------------------------------- |
+| Provider      | `qianfan`                                |
+| Auth          | `QIANFAN_API_KEY`                        |
+| API           | OpenAI-compatible (`openai-completions`) |
+| Base URL      | `https://qianfan.baidubce.com/v2`        |
+| Default model | `qianfan/deepseek-v4-pro`                |
 
 ## Install plugin
 
@@ -32,12 +32,18 @@ openclaw gateway restart
     Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and ensure you have Qianfan API access enabled.
   </Step>
   <Step title="Generate an API key">
-    Create a new application or select an existing one, then generate an API key. The key format is `bce-v3/ALTAK-...`.
+    Create a new application or select an existing one, then generate an API key. Baidu Cloud keys use the `bce-v3/ALTAK-...` format.
   </Step>
   <Step title="Run onboarding">
     ```bash
     openclaw onboard --auth-choice qianfan-api-key
     ```
+
+    Non-interactive runs read the key from `--qianfan-api-key <key>` or
+    `QIANFAN_API_KEY`. Onboarding writes the provider config, adds the
+    `QIANFAN` alias for the default model, and sets `qianfan/deepseek-v4-pro`
+    as the default model when none is configured.
+
   </Step>
   <Step title="Verify the model is available">
     ```bash
@@ -48,25 +54,32 @@ openclaw gateway restart
 
 ## Built-in catalog
 
-| Model ref                            | Input       | Context | Max output | Reasoning | Notes         |
-| ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
-| `qianfan/deepseek-v3.2`              | text        | 98,304  | 32,768     | Yes       | Default model |
-| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000     | Yes       | Multimodal    |
+| Model ref                            | Input       | Context   | Max output | Reasoning | Notes                                                                      |
+| ------------------------------------ | ----------- | --------- | ---------- | --------- | -------------------------------------------------------------------------- |
+| `qianfan/deepseek-v4-pro`            | text        | 1,000,000 | 393,216    | Yes       | Current DeepSeek flagship                                                  |
+| `qianfan/ernie-5.1`                  | text        | 128,000   | 65,536     | No        | Latest ERNIE text flagship                                                 |
+| `qianfan/ernie-5.0`                  | text, image | 128,000   | 65,536     | Yes       | Current multimodal and thinking model                                      |
+| `qianfan/deepseek-v3.2`              | text        | 128,000   | 32,768     | No        | Deprecated onboarding compatibility default; replaced by `deepseek-v4-pro` |
+| `qianfan/ernie-5.0-thinking-preview` | text, image | 128,000   | 65,536     | Yes       | Deprecated alias; replaced by `ernie-5.0`                                  |
+
+The catalog is static; there is no live model discovery.
 
 <Tip>
-The default model ref is `qianfan/deepseek-v3.2`. You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
+You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
 </Tip>
 
 ## Config example
+
+This example explicitly selects the current DeepSeek flagship instead of the onboarding compatibility default.
 
 ```json5
 {
   env: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." },
   agents: {
     defaults: {
-      model: { primary: "qianfan/deepseek-v3.2" },
+      model: { primary: "qianfan/deepseek-v4-pro" },
       models: {
-        "qianfan/deepseek-v3.2": { alias: "QIANFAN" },
+        "qianfan/deepseek-v4-pro": { alias: "QIANFAN" },
       },
     },
   },
@@ -77,22 +90,18 @@ The default model ref is `qianfan/deepseek-v3.2`. You only need to override `mod
         api: "openai-completions",
         models: [
           {
-            id: "deepseek-v3.2",
-            name: "DEEPSEEK V3.2",
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 98304,
-            maxTokens: 32768,
-          },
-          {
-            id: "ernie-5.0-thinking-preview",
-            name: "ERNIE-5.0-Thinking-Preview",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 119000,
-            maxTokens: 64000,
+            cost: {
+              input: 1.771957,
+              output: 3.543915,
+              cacheRead: 0.147663,
+              cacheWrite: 0,
+            },
+            contextWindow: 1000000,
+            maxTokens: 393216,
           },
         ],
       },
@@ -101,24 +110,19 @@ The default model ref is `qianfan/deepseek-v3.2`. You only need to override `mod
 }
 ```
 
+<Note>
+Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v4-pro`).
+</Note>
+
 <AccordionGroup>
   <Accordion title="Transport and compatibility">
-    Qianfan runs through the OpenAI-compatible transport path, not native OpenAI request shaping. This means standard OpenAI SDK features work, but provider-specific parameters may not be forwarded.
-  </Accordion>
-
-  <Accordion title="Catalog and overrides">
-    The static catalog currently includes `deepseek-v3.2` and `ernie-5.0-thinking-preview`. Add or override `models.providers.qianfan` only when you need a custom base URL or model metadata.
-
-    <Note>
-    Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v3.2`).
-    </Note>
-
+    Qianfan runs through the OpenAI-compatible transport path, not native OpenAI request shaping. Standard OpenAI SDK features work, but provider-specific parameters may not be forwarded.
   </Accordion>
 
   <Accordion title="Troubleshooting">
     - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
-    - The default base URL is `https://qianfan.baidubce.com/v2`. Only change it if you use a custom endpoint or proxy.
+    - Only change the base URL if you use a custom endpoint or proxy.
 
   </Accordion>
 </AccordionGroup>

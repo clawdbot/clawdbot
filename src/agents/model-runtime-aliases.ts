@@ -1,6 +1,7 @@
 /**
  * Resolves CLI runtime aliases to provider/model auth labels and execution ids.
  */
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +14,30 @@ import {
 } from "./cli-backends.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+
+const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
+
+/** True for retired provider ids that should stay out of model selection surfaces. */
+export function isRetiredModelPickerProvider(provider: string): boolean {
+  return RETIRED_MODEL_PICKER_PROVIDERS.has(normalizeProviderId(provider));
+}
+
+/** Creates a provider visibility predicate for model picker rendering. */
+export function createModelPickerVisibleProviderPredicate(
+  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
+): (provider: string) => boolean {
+  const cliRuntimeProviders = new Set(
+    listCliRuntimeProviderIds({
+      config: params.config,
+      env: params.env,
+      includeSetupRegistry: params.includeSetupRegistry ?? false,
+    }),
+  );
+  return (provider: string): boolean => {
+    const normalized = normalizeProviderId(provider);
+    return !isRetiredModelPickerProvider(normalized) && !cliRuntimeProviders.has(normalized);
+  };
+}
 
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(
@@ -73,28 +98,23 @@ function normalizeRuntimeModelRefForComparison(
   options: RuntimeAliasComparisonOptions = {},
 ): string {
   const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed, options));
   }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
   const canonicalProvider = normalizeProviderId(
-    canonicalizeRuntimeAliasProvider(provider, options),
+    canonicalizeRuntimeAliasProvider(parsed.provider, options),
   );
-  return model ? `${canonicalProvider}/${model}` : canonicalProvider;
+  return `${canonicalProvider}/${parsed.modelId}`;
 }
 
 function normalizeRuntimeModelRefWithoutAlias(raw: string): string {
   const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return normalizeProviderId(trimmed);
   }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  const normalizedProvider = normalizeProviderId(provider);
-  return model ? `${normalizedProvider}/${model}` : normalizedProvider;
+  return `${parsed.provider}/${parsed.modelId}`;
 }
 
 export function areRuntimeModelRefsEquivalent(

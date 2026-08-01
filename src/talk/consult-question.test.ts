@@ -40,4 +40,14 @@ describe("realtime voice consult question helpers", () => {
       ),
     ).toBe("abcdefgh [truncated]");
   });
+
+  it("does not split a boundary emoji in truncated speakable text", () => {
+    const result = readSpeakableRealtimeVoiceToolResult(
+      { text: `${"a".repeat(7)}😀${"b".repeat(20)}` },
+      { maxChars: 23 },
+    );
+
+    expect(result).toBe(`${"a".repeat(7)} [truncated]`);
+    expect(result).toContain("[truncated]");
+  });
 });

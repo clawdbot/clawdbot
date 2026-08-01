@@ -1,8 +1,10 @@
 // Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   type CallMode,
 } from "../config.js";
@@ -34,6 +36,7 @@ type InitiateContext = Pick<
   | "providerCallIdMap"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "webhookUrl"
   | "streamSessionIssuer"
@@ -142,6 +145,7 @@ export async function initiateCall(
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
+  const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -186,11 +190,13 @@ export async function initiateCall(
     from,
     to,
     sessionKey: resolveVoiceCallSessionKey({
-      config: ctx.config,
+      config: { ...ctx.config, agentId },
       callId,
       phone: to,
       explicitSessionKey: sessionKey,
+      coreSession: ctx.coreSession,
     }),
+    agentId,
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
@@ -265,10 +271,15 @@ export async function initiateCall(
   }
 }
 
+export type SpeakOptions = {
+  listenAfterPlayback?: boolean;
+};
+
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
+  options?: SpeakOptions,
 ): Promise<{ success: boolean; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
@@ -288,16 +299,17 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const numberRouteKey =
-      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+    const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
+    const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
     await provider.playTts({
       callId,
       providerCallId,
       text,
       voice,
+      ...playbackOptions,
     });
 
     addTranscriptEntry(call, "bot", text);
@@ -448,7 +460,10 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    await speak(ctx, callId, prompt);
+    const speakResult = await speak(ctx, callId, prompt);
+    if (!speakResult.success) {
+      return speakResult;
+    }
 
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);

@@ -23,31 +23,7 @@ beforeAll(async () => {
 });
 
 describe("getMessageMSTeams", () => {
-  it("resolves user: target using graphChatId from store", async () => {
-    mockState.findPreferredDmByUserId.mockResolvedValue({
-      conversationId: "a:bot-framework-dm-id",
-      reference: { graphChatId: "19:graph-native-chat@thread.tacv2" },
-    });
-    mockState.fetchGraphJson.mockResolvedValue({
-      id: "msg-1",
-      body: { content: "From user DM" },
-      createdDateTime: "2026-03-23T12:00:00Z",
-    });
-
-    await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "user:aad-object-id-123",
-      messageId: "msg-1",
-    });
-
-    expect(mockState.findPreferredDmByUserId).toHaveBeenCalledWith("aad-object-id-123");
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent("19:graph-native-chat@thread.tacv2")}/messages/msg-1`,
-    });
-  });
-
-  it("falls back to conversationId when it starts with 19:", async () => {
+  it("resolves user targets whose stored conversation ID is Graph-native", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "19:resolved-chat@thread.tacv2",
       reference: {},
@@ -82,7 +58,7 @@ describe("getMessageMSTeams", () => {
     ).rejects.toThrow("No conversation found for user:unknown-user");
   });
 
-  it("throws when user: target has Bot Framework ID and no graphChatId", async () => {
+  it("throws when user: target has an opaque Bot Framework ID", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-framework-dm-id",
       reference: {},

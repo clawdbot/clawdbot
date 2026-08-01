@@ -1,10 +1,11 @@
 // Hook install service installs hook packages from archives and local sources.
-import fs from "node:fs/promises";
+
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
   scanPackageInstallSource,
@@ -13,18 +14,18 @@ import {
 } from "../plugins/install-security-scan.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
-let hookInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
+// HOOK.md is only parsed for frontmatter; a small cap prevents a malicious or
+// malformed hook package from OOMing the install path.
+const HOOK_MD_MAX_BYTES = 1024 * 1024;
 
-async function loadHookInstallRuntime() {
-  hookInstallRuntimePromise ??= import("./install.runtime.js");
-  return hookInstallRuntimePromise;
-}
+const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
 
 /** Logger contract used by hook install and update operations. */
-export type HookInstallLogger = {
+type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -51,6 +52,13 @@ export type InstallHooksResult =
       error: string;
       code?: string;
     };
+
+export const HOOK_INSTALL_ERROR_CODE = {
+  MISSING_OPENCLAW_HOOKS: "missing_openclaw_hooks",
+  EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
+} as const;
+
+type HookInstallErrorCode = (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
 
 /** Integrity drift payload surfaced when npm metadata no longer matches an install record. */
 export type HookNpmIntegrityDriftParams = {
@@ -223,16 +231,26 @@ export function resolveHookInstallDir(hookId: string, hooksDir?: string): string
   return targetDirResult.path;
 }
 
-async function ensureOpenClawHooks(manifest: HookPackageManifest) {
+function resolveOpenClawHooks(
+  manifest: HookPackageManifest,
+): { ok: true; entries: string[] } | { ok: false; error: string; code: HookInstallErrorCode } {
   const hooks = manifest[MANIFEST_KEY]?.hooks;
   if (!Array.isArray(hooks)) {
-    throw new Error("package.json missing openclaw.hooks");
+    return {
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    };
   }
   const list = normalizeTrimmedStringList(hooks);
   if (list.length === 0) {
-    throw new Error("package.json openclaw.hooks is empty");
+    return {
+      ok: false,
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    };
   }
-  return list;
+  return { ok: true, entries: list };
 }
 
 function resolveHookPackageKind(
@@ -345,8 +363,8 @@ async function resolveHookNameFromDir(hookDir: string): Promise<string> {
   if (!(await runtime.fileExists(hookMdPath))) {
     throw new Error(`HOOK.md missing in ${hookDir}`);
   }
-  const raw = await fs.readFile(hookMdPath, "utf-8");
-  const frontmatter = parseFrontmatter(raw);
+  const { buffer } = await readRegularFile({ filePath: hookMdPath, maxBytes: HOOK_MD_MAX_BYTES });
+  const frontmatter = parseFrontmatter(buffer.toString("utf-8"));
   return frontmatter.name || path.basename(hookDir);
 }
 
@@ -390,12 +408,11 @@ async function installHookPackageFromDir(
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  let hookEntries: string[];
-  try {
-    hookEntries = await ensureOpenClawHooks(manifest);
-  } catch (err) {
-    return { ok: false, error: String(err) };
+  const hookManifest = resolveOpenClawHooks(manifest);
+  if (!hookManifest.ok) {
+    return hookManifest;
   }
+  const hookEntries = hookManifest.entries;
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const hookPackId = pkgName ? unscopedPackageName(pkgName) : path.basename(params.packageDir);
@@ -639,7 +656,7 @@ async function installHookFromDir(
 }
 
 /** Install hooks from an archive after extracting and validating the archive root. */
-export async function installHooksFromArchive(
+async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
@@ -756,3 +773,4 @@ export async function installHooksFromPath(
     ...forwardParams,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

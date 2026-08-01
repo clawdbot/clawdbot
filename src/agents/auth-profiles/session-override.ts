@@ -14,14 +14,71 @@ import {
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
+const sessionAccessorLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
 );
 
-// Session-store writes are lazy-loaded so read-only auth resolution paths do not
-// import persistence code unless an override must be updated.
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+// Session accessor writes are lazy-loaded so read-only auth resolution paths do
+// not import persistence code unless an override must be updated.
+function loadSessionAccessor() {
+  return sessionAccessorLoader.load();
+}
+
+type SessionAuthProfileOverrideState = Pick<
+  SessionEntry,
+  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+>;
+
+function applySessionAuthProfileOverrideState(
+  entry: SessionEntry,
+  state: SessionAuthProfileOverrideState,
+  updatedAt: number,
+): void {
+  if (state.authProfileOverride === undefined) {
+    delete entry.authProfileOverride;
+  } else {
+    entry.authProfileOverride = state.authProfileOverride;
+  }
+  if (state.authProfileOverrideSource === undefined) {
+    delete entry.authProfileOverrideSource;
+  } else {
+    entry.authProfileOverrideSource = state.authProfileOverrideSource;
+  }
+  if (state.authProfileOverrideCompactionCount === undefined) {
+    delete entry.authProfileOverrideCompactionCount;
+  } else {
+    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
+  }
+  entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
+}
+
+async function persistSessionAuthProfileOverrideState(params: {
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  state: SessionAuthProfileOverrideState;
+  storePath?: string;
+}): Promise<void> {
+  const { sessionEntry, sessionStore, sessionKey, state, storePath } = params;
+  const updatedAt = Date.now();
+  applySessionAuthProfileOverrideState(sessionEntry, state, updatedAt);
+  sessionStore[sessionKey] = sessionEntry;
+  if (!storePath) {
+    return;
+  }
+  const persisted = await (
+    await loadSessionAccessor()
+  ).patchSessionEntry(
+    { storePath, sessionKey },
+    (current) => ({
+      ...state,
+      updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+    }),
+    { fallbackEntry: sessionEntry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
 }
 
 // Current session overrides are only valid when the selected provider can use
@@ -76,18 +133,17 @@ export async function clearSessionAuthProfileOverride(params: {
   storePath?: string;
 }) {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
-  delete sessionEntry.authProfileOverride;
-  delete sessionEntry.authProfileOverrideSource;
-  delete sessionEntry.authProfileOverrideCompactionCount;
-  sessionEntry.updatedAt = Date.now();
-  sessionStore[sessionKey] = sessionEntry;
-  if (storePath) {
-    await (
-      await loadSessionStoreRuntime()
-    ).updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
-    });
-  }
+  await persistSessionAuthProfileOverrideState({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    state: {
+      authProfileOverride: undefined,
+      authProfileOverrideSource: undefined,
+      authProfileOverrideCompactionCount: undefined,
+    },
+    storePath,
+  });
 }
 
 /** Resolves and optionally rotates the session auth-profile override. */
@@ -185,7 +241,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (candidate && !isProfileInCooldown(store, candidate)) {
         return candidate;
       }
     }
@@ -229,18 +285,17 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.authProfileOverrideSource !== "auto" ||
     sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
   if (shouldPersist) {
-    sessionEntry.authProfileOverride = next;
-    sessionEntry.authProfileOverrideSource = "auto";
-    sessionEntry.authProfileOverrideCompactionCount = compactionCount;
-    sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
-    if (storePath) {
-      await (
-        await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (storeLocal) => {
-        storeLocal[sessionKey] = sessionEntry;
-      });
-    }
+    await persistSessionAuthProfileOverrideState({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      state: {
+        authProfileOverride: next,
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: compactionCount,
+      },
+      storePath,
+    });
   }
 
   return next;

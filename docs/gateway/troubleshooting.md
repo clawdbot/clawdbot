@@ -7,11 +7,11 @@ title: "Troubleshooting"
 sidebarTitle: "Troubleshooting"
 ---
 
-This page is the deep runbook. Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
+This is the deep runbook. Start at [/help/troubleshooting](/help/troubleshooting) for the fast triage flow first.
 
 ## Command ladder
 
-Run these first, in this order:
+Run in this order:
 
 ```bash
 openclaw status
@@ -21,16 +21,15 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-Expected healthy signals:
+Healthy signals:
 
 - `openclaw gateway status` shows `Runtime: running`, `Connectivity probe: ok`, and a `Capability: ...` line.
 - `openclaw doctor` reports no blocking config/service issues.
-- `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
+- `openclaw channels status --probe` shows live per-account transport status and, where supported, `works` or `audit ok`.
 
 ## After an update
 
-Use this when an update finishes but the Gateway is down, channels are empty, or
-model calls start failing with 401s.
+Use when an update finishes but the Gateway is down, channels are empty, or model calls fail with 401s.
 
 ```bash
 openclaw status --all
@@ -42,20 +41,15 @@ openclaw gateway restart
 
 Look for:
 
-- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or
-  failed handoffs include the next command to run.
-- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix`
-  under Channels. That means the channel config still exists, but plugin
-  registration failed before the channel could load.
-- provider 401s after re-auth. `openclaw doctor --fix` checks for stale
-  per-agent OAuth auth shadows and removes the old copies so all agents resolve
-  the current shared profile.
+- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or failed handoffs include the next command to run.
+- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
+- Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
 ## Split brain installs and newer config guard
 
-Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.
+Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.
 
-OpenClaw stamps config writes with `meta.lastTouchedVersion`. Read-only commands can still inspect a config written by a newer OpenClaw, but process and service mutations refuse to continue from an older binary. Blocked actions include gateway service start, stop, restart, uninstall, forced service reinstall, service-mode gateway startup, and `gateway --force` port cleanup.
+OpenClaw stamps config writes with `meta.lastTouchedVersion`. Read-only commands can inspect a config written by a newer OpenClaw, but process and service mutations refuse to run from an older binary. Blocked actions: gateway service start/stop/restart/uninstall, forced service reinstall, service-mode gateway startup, and `gateway --force` port cleanup.
 
 ```bash
 which openclaw
@@ -88,7 +82,7 @@ For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_
 
 ## Protocol mismatch after rollback
 
-Use this when logs keep printing `protocol mismatch` after you downgrade or roll back OpenClaw. This means an older Gateway is running, but a newer local client process is still trying to reconnect with a protocol range that the older Gateway cannot speak.
+Use when logs keep printing `protocol mismatch` after a downgrade or rollback. An older Gateway is running, but a newer local client process is still reconnecting with a protocol range the older Gateway cannot speak.
 
 ```bash
 openclaw --version
@@ -101,29 +95,26 @@ openclaw logs --follow
 Look for:
 
 - `protocol mismatch ... client=... v<version> min=<n> max=<n> expected=<n>` in Gateway logs.
-- `Established clients:` in `openclaw gateway status --deep` or `Gateway clients` in `openclaw doctor --deep`. This lists active TCP clients connected to the Gateway port, including PIDs and command lines when the OS allows it.
+- `Established clients:` in `openclaw gateway status --deep` or `Gateway clients` in `openclaw doctor --deep`: active TCP clients connected to the Gateway port, with PIDs and command lines when the OS allows it.
 - A client process whose command line points at the newer OpenClaw install or wrapper you rolled back from.
 
 Fix:
 
 1. Stop or restart the stale OpenClaw client process shown by `gateway status --deep`.
-2. Restart apps or wrappers that embed OpenClaw, such as local dashboards, editors, app-server helpers, or long-running `openclaw logs --follow` shells.
+2. Restart apps or wrappers that embed OpenClaw: local dashboards, editors, app-server helpers, or long-running `openclaw logs --follow` shells.
 3. Re-run `openclaw gateway status --deep` or `openclaw doctor --deep` and confirm the stale client PID is gone.
 
 Do not make an older Gateway accept a newer incompatible protocol. Protocol bumps protect the wire contract; rollback recovery is a process/version cleanup problem.
 
 ## Skill symlink skipped as path escape
 
-Use this when logs include:
+Use when logs include:
 
 ```text
 Skipping escaped skill path outside its configured root: ... reason=symlink-escape
 ```
 
-OpenClaw treats every skill root as a containment boundary. A symlink under
-`~/.agents/skills`, `<workspace>/.agents/skills`, `<workspace>/skills`, or
-`~/.openclaw/skills` is skipped when its real target resolves outside that root
-unless the target is explicitly trusted.
+Every skill root is a containment boundary. A symlink under `~/.agents/skills`, `<workspace>/.agents/skills`, `<workspace>/skills`, or `~/.openclaw/skills` is skipped when its real target resolves outside that root, unless the target is explicitly trusted.
 
 Inspect the link:
 
@@ -133,8 +124,7 @@ realpath ~/.agents/skills/<name>
 openclaw config get skills.load
 ```
 
-If the target is intentional, configure both the direct skill root and the
-allowed symlink target:
+If the target is intentional, configure both the direct skill root and the allowed symlink target:
 
 ```json5
 {
@@ -147,16 +137,11 @@ allowed symlink target:
 }
 ```
 
-Then start a new session or wait for the skills watcher to refresh. Restart the
-gateway if the running process predates the config change.
+Then start a new session or wait for the skills watcher to refresh. Restart the gateway if the running process predates the config change.
 
-Do not use broad targets such as `~`, `/`, or a whole synced project folder.
-Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted
-`SKILL.md` directories.
+Do not use broad targets such as `~`, `/`, or a whole synced project folder. Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted `SKILL.md` directories.
 
-If Skill Workshop apply should also write through those trusted symlinked
-workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep
-it disabled for read-only shared skill roots.
+If Skill Workshop apply should also write through those trusted symlinked workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep it disabled for read-only shared skill roots.
 
 Related:
 
@@ -165,7 +150,7 @@ Related:
 
 ## Anthropic 429 extra usage required for long context
 
-Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+Use when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 ```bash
 openclaw logs --follow
@@ -175,7 +160,7 @@ openclaw config get agents.defaults.models
 
 Look for:
 
-- Selected Anthropic model is a GA-capable 1M Claude 4.x model, or the model has legacy `params.context1m: true`.
+- Selected Anthropic model is a GA-capable 1M Claude 4.x model (Opus 4.6/4.7/4.8, Sonnet 4.6), or the model config still carries legacy `params.context1m: true`.
 - Current Anthropic credential is not eligible for long-context usage.
 - Requests fail only on long sessions/model runs that need the 1M context path.
 
@@ -202,12 +187,9 @@ Related:
 
 ## Upstream 403 blocked responses
 
-Use this when an upstream LLM provider returns a generic `403` such as
-`Your request was blocked`.
+Use when an upstream LLM provider returns a generic `403` such as `Your request was blocked`.
 
-Do not assume this is always an OpenClaw configuration issue. The response can
-come from an upstream security layer such as a CDN, WAF, bot-management rule, or
-reverse proxy in front of an OpenAI-compatible endpoint.
+Do not assume this is always an OpenClaw configuration issue. The response can come from an upstream security layer such as a CDN, WAF, bot-management rule, or reverse proxy in front of an OpenAI-compatible endpoint.
 
 ```bash
 openclaw status
@@ -217,18 +199,15 @@ openclaw logs --follow
 
 Look for:
 
-- multiple models under the same provider failing in the same way
-- HTML or generic security text instead of a normal provider API error
-- provider-side security events for the same request time
-- a tiny direct `curl` probe succeeding while normal SDK-shaped requests fail
+- Multiple models under the same provider failing the same way.
+- HTML or generic security text instead of a normal provider API error.
+- Provider-side security events for the same request time.
+- A tiny direct `curl` probe succeeding while normal SDK-shaped requests fail.
 
-Fix the provider-side filtering first when the evidence points to a WAF/CDN
-block. Prefer a narrowly scoped allow or skip rule for the API path OpenClaw
-uses, and avoid disabling protection for the whole site.
+Fix the provider-side filtering first when evidence points to a WAF/CDN block. Prefer a narrowly scoped allow or skip rule for the API path OpenClaw uses, and avoid disabling protection for the whole site.
 
 <Warning>
-A successful minimal `curl` does not guarantee that real SDK-style requests will
-pass through the same upstream security layer.
+A successful minimal `curl` does not guarantee that real SDK-style requests will pass through the same upstream security layer.
 </Warning>
 
 Related:
@@ -239,11 +218,11 @@ Related:
 
 ## Local OpenAI-compatible backend passes direct probes but agent runs fail
 
-Use this when:
+Use when:
 
-- `curl ... /v1/models` works
-- tiny direct `/v1/chat/completions` calls work
-- OpenClaw model runs fail only on normal agent turns
+- `curl ... /v1/models` works.
+- Tiny direct `/v1/chat/completions` calls work.
+- OpenClaw model runs fail only on normal agent turns.
 
 ```bash
 curl http://127.0.0.1:1234/v1/models
@@ -256,21 +235,20 @@ openclaw logs --follow
 
 Look for:
 
-- direct tiny calls succeed, but OpenClaw runs fail only on larger prompts
-- `model_not_found` or 404 errors even though direct `/v1/chat/completions`
-  works with the same bare model id
-- backend errors about `messages[].content` expecting a string
-- intermittent `incomplete turn detected ... stopReason=stop payloads=0` warnings with an OpenAI-compatible local backend
-- backend crashes that appear only with larger prompt-token counts or full agent runtime prompts
+- Direct tiny calls succeed, but OpenClaw runs fail only on larger prompts.
+- `model_not_found` or 404 errors even though direct `/v1/chat/completions` works with the same bare model id.
+- Backend errors about `messages[].content` expecting a string.
+- Intermittent `incomplete turn detected ... stopReason=stop payloads=0` warnings with an OpenAI-compatible local backend.
+- Backend crashes that appear only with larger prompt-token counts or full agent runtime prompts.
 
 <AccordionGroup>
   <Accordion title="Common signatures">
-    - `model_not_found` with a local MLX/vLLM-style server → verify `baseUrl` includes `/v1`, `api` is `"openai-completions"` for `/v1/chat/completions` backends, and `models.providers.<provider>.models[].id` is the bare provider-local id. Select it with the provider prefix once, for example `mlx/mlx-community/Qwen3-30B-A3B-6bit`; keep the catalog entry as `mlx-community/Qwen3-30B-A3B-6bit`.
-    - `messages[...].content: invalid type: sequence, expected a string` → backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
-    - `validation.keys` or allowed message keys like `["role","content"]` → backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
-    - `incomplete turn detected ... stopReason=stop payloads=0` → the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
-    - direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds) → OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
-    - failures shrink after disabling tools but do not disappear → tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
+    - `model_not_found` with a local MLX/vLLM-style server: verify `baseUrl` includes `/v1`, `api` is `"openai-completions"` for `/v1/chat/completions` backends, and `models.providers.<provider>.models[].id` is the bare provider-local id. Select it with the provider prefix once, for example `mlx/mlx-community/Qwen3-30B-A3B-6bit`; keep the catalog entry as `mlx-community/Qwen3-30B-A3B-6bit`.
+    - `messages[...].content: invalid type: sequence, expected a string`: backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+    - `validation.keys` or allowed message keys like `["role","content"]`: backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
+    - `incomplete turn detected ... stopReason=stop payloads=0`: the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
+    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
+    - Failures shrink after disabling tools but do not disappear: tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
 
   </Accordion>
   <Accordion title="Fix options">
@@ -320,7 +298,7 @@ Related:
 
 ## Dashboard control UI connectivity
 
-When dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
+When the dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
 
 ```bash
 openclaw gateway status
@@ -336,8 +314,7 @@ Look for:
 - Auth mode/token mismatch between client and gateway.
 - HTTP usage where device identity is required.
 
-If a local browser cannot connect to `127.0.0.1:18789` after an update, first
-recover the local Gateway service and confirm it is serving the dashboard:
+If a local browser cannot connect to `127.0.0.1:18789` after an update, first recover the local Gateway service and confirm it is serving the dashboard:
 
 ```bash
 openclaw gateway restart
@@ -345,11 +322,7 @@ lsof -i :18789
 curl http://127.0.0.1:18789
 ```
 
-If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue
-is likely browser cache, an old deep link, or stale tab state. Open
-`http://127.0.0.1:18789` directly and navigate from the dashboard. If restart
-does not leave the service running, run `openclaw gateway start` and recheck
-`openclaw gateway status`.
+If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue is likely browser cache, an old deep link, or stale tab state. Open `http://127.0.0.1:18789` directly and navigate from the dashboard. If restart does not leave the service running, run `openclaw gateway start` and recheck `openclaw gateway status`.
 
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">
@@ -363,7 +336,7 @@ does not leave the service running, run `openclaw gateway start` and recheck
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
     - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure. Two bad concurrent retries from the same client can therefore surface `retry later` on the second attempt instead of two plain mismatches.
     - `too many failed authentication attempts (retry later)` from a browser-origin loopback client → repeated failures from that same normalized `Origin` are locked out temporarily; another localhost origin uses a separate bucket.
-    - repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
+    - Repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
     - `gateway connect failed:` → wrong host/port/url target.
 
   </Accordion>
@@ -409,8 +382,8 @@ If logs show nonce/signature errors, update the connecting client and verify it:
 
 If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
 
-- paired-device token sessions can manage only **their own** device unless the caller also has `operator.admin`
-- `openclaw devices rotate --scope ...` can only request operator scopes that the caller session already holds
+- Paired-device token sessions can manage only **their own** device unless the caller also has `operator.admin`.
+- `openclaw devices rotate --scope ...` can only request operator scopes that the caller session already holds.
 
 Related:
 
@@ -422,7 +395,7 @@ Related:
 
 ## Gateway service not running
 
-Use this when service is installed but process does not stay up.
+Use when the service is installed but the process does not stay up.
 
 ```bash
 openclaw gateway status
@@ -460,7 +433,7 @@ Related:
 
 ## macOS gateway silently stops responding, then resumes when you touch the dashboard
 
-Use this when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
+Use when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
 
 ```bash
 ls ~/.openclaw/logs/stability/ | tail -5
@@ -484,7 +457,7 @@ Common signatures:
 What to do:
 
 1. **Upgrade the gateway** if you are running a release before `2026.5.26`. After upgrading, future `ENETDOWN` errors are logged as warnings instead of terminating the process.
-2. **Reduce maintenance sleep activity** on Mac mini / desktop hosts that are meant to run as always-on servers:
+2. **Reduce maintenance sleep activity** on Mac mini / desktop hosts meant to run as always-on servers:
 
    ```bash
    sudo pmset -a sleep 0 disksleep 0 standby 0 powernap 0
@@ -510,9 +483,105 @@ Related:
 - [Logging](/logging)
 - [Doctor](/gateway/doctor)
 
+## macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
+
+Use this when a macOS install keeps restarting every few seconds, `openclaw`
+health checks flap between healthy and unavailable, and channel dispatch stalls
+even though the service appears to be running.
+
+This was observed on older installs where both `ai.openclaw.gateway` and
+`ai.openclaw.node` LaunchAgents were active and each injected
+`OPENCLAW_LAUNCHD_LABEL`. In that state OpenClaw can detect launchd
+supervision, try to hand restart back to launchd, and fall into a fast
+`EADDRINUSE`/respawn loop instead of one stable gateway process.
+
+```bash
+for i in 1 2 3 4; do
+  ps aux | grep 'openclaw.*index.js' | grep -v grep | awk '{print $2}'
+  sleep 10
+done
+
+openclaw gateway status --deep
+openclaw node status
+launchctl print gui/$UID/ai.openclaw.gateway | grep -E 'state|last exit|runs'
+tail -n 80 ~/Library/Logs/openclaw/gateway.log
+```
+
+Look for:
+
+- More than one gateway PID across the 30-second sample instead of one stable
+  process.
+- `EADDRINUSE`, `another gateway instance is already listening`, or repeated
+  restart/handoff lines in `gateway.log`.
+- Both `~/Library/LaunchAgents/ai.openclaw.gateway.plist` and
+  `~/Library/LaunchAgents/ai.openclaw.node.plist` loaded at the same time on a
+  host that should only run one managed gateway service.
+
+What to do:
+
+1. If this host should only run the Gateway service, remove the managed node
+   service through OpenClaw. **Skip this step** if you actively rely on the node
+   service for remote node features; uninstalling it stops those features on
+   this host:
+
+   ```bash
+   openclaw node uninstall
+   ```
+
+2. Install a persistent Gateway wrapper that clears the inherited launchd
+   markers before starting OpenClaw. Use the supported `--wrapper` option; do
+   not edit the generated file under `~/.openclaw/service-env/`, because service
+   reinstall, update, and doctor repair regenerate that file:
+
+   ```bash
+   mkdir -p ~/.local/bin
+   cat >~/.local/bin/openclaw-launchd-workaround <<'EOF'
+   #!/bin/sh
+   set -eu
+   unset OPENCLAW_LAUNCHD_LABEL LAUNCH_JOB_LABEL LAUNCH_JOB_NAME XPC_SERVICE_NAME || true
+   exec openclaw "$@"
+   EOF
+   chmod 700 ~/.local/bin/openclaw-launchd-workaround
+
+   openclaw gateway install \
+     --wrapper ~/.local/bin/openclaw-launchd-workaround \
+     --force
+   ```
+
+   `gateway install` persists the wrapper path across forced reinstalls,
+   updates, and doctor repairs.
+
+3. Verify that the Gateway is stable and serving RPC, not merely listening:
+
+   ```bash
+   openclaw gateway status --deep --require-rpc
+
+   for i in 1 2 3 4; do
+     ps aux | grep 'openclaw.*index.js' | grep -v grep | awk '{print $2}'
+     sleep 10
+   done
+   ```
+
+   The PID sample should show one stable process instead of a rotating set of
+   PIDs, and inbound channel dispatch should resume.
+
+4. After upgrading to a release where the underlying dual-LaunchAgent loop is
+   fixed, remove the workaround and reinstall the normal managed service:
+
+   ```bash
+   OPENCLAW_WRAPPER= openclaw gateway install --force
+   rm ~/.local/bin/openclaw-launchd-workaround
+   ```
+
+Related:
+
+- [macOS platform notes](/platforms/mac/bundled-gateway)
+- [Doctor](/gateway/doctor)
+- [Gateway CLI](/cli/gateway)
+
 ## Gateway exits during high memory use
 
-Use this when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
+Use when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
 
 ```bash
 openclaw gateway status --deep
@@ -532,11 +601,11 @@ Look for:
 Common signatures:
 
 - `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
-- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `memory pressure: level=critical` appears in gateway logs → OpenClaw detected critical memory pressure and recorded the available in-process memory facts.
 - `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
-- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
+- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure or reduce concurrent work first. For a managed service, inspect `Gateway heap:` in `openclaw gateway status`; if it says `not set`, regenerate old service metadata with `openclaw gateway install --force`. Ambient shell `NODE_OPTIONS` is intentionally ignored. Use an explicit supervisor-level heap override only after confirming the sustained workload and leaving enough native-memory headroom.
 - `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
-- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+- Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence.
 
 The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
 
@@ -548,8 +617,7 @@ Related:
 
 ## Gateway rejected invalid config
 
-Use this when Gateway startup fails with `Invalid config` or hot reload logs say
-it skipped an invalid edit.
+Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
 
 ```bash
 openclaw logs --follow
@@ -563,9 +631,9 @@ Look for:
 - `Invalid config at ...`
 - `config reload skipped (invalid config): ...`
 - `Config write rejected: ...`
-- A timestamped `openclaw.json.rejected.*` file beside the active config
-- A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit
-- OpenClaw keeps the latest 32 `.clobbered.*` files for each config path and rotates older ones
+- A timestamped `openclaw.json.rejected.*` file beside the active config.
+- A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit.
+- OpenClaw keeps the latest 32 `.clobbered.*` files for each config path and rotates older ones.
 
 <AccordionGroup>
   <Accordion title="What happened">
@@ -613,7 +681,7 @@ Related:
 
 ## Gateway probe warnings
 
-Use this when `openclaw gateway probe` reaches something, but still prints a warning block.
+Use when `openclaw gateway probe` reaches something, but still prints a warning block.
 
 ```bash
 openclaw gateway probe
@@ -633,7 +701,7 @@ Common signatures:
 - `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
 - `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed` → connect worked, but the full diagnostic RPC set timed out or failed. Treat this as a reachable Gateway with degraded diagnostics; compare `connect.ok` and `connect.rpcOk` in `--json` output.
 - `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
-- unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
+- Unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
 
 Related:
 
@@ -688,15 +756,14 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`).
 
 <AccordionGroup>
   <Accordion title="Common signatures">
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
-    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
     - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 
@@ -742,7 +809,7 @@ Related:
 
 ## Browser tool fails
 
-Use this when browser tool actions fail even though the gateway itself is healthy.
+Use when browser tool actions fail even though the gateway itself is healthy.
 
 ```bash
 openclaw browser status
@@ -762,7 +829,7 @@ Look for:
 <AccordionGroup>
   <Accordion title="Plugin / executable signatures">
     - `unknown command "browser"` or `unknown command 'browser'` → the bundled browser plugin is excluded by `plugins.allow`.
-    - browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
+    - Browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
     - `Failed to start Chrome CDP on port` → browser process failed to launch.
     - `browser.executablePath not found` → configured path is invalid.
     - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
@@ -772,7 +839,7 @@ Look for:
   </Accordion>
   <Accordion title="Chrome MCP / existing-session signatures">
     - `Could not find DevToolsActivePort for chrome` → Chrome MCP existing-session could not attach to the selected browser data dir yet. Open the browser inspect page, enable remote debugging, keep the browser open, approve the first attach prompt, then retry. If signed-in state is not required, prefer the managed `openclaw` profile.
-    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
+    - `No browser tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
     - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
     - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
 
@@ -784,9 +851,8 @@ Look for:
     - `existing-session file uploads currently support one file at a time.` → send one upload per call on Chrome MCP profiles.
     - `existing-session dialog handling does not support timeoutMs.` → dialog hooks on Chrome MCP profiles do not support timeout overrides.
     - `existing-session type does not support timeoutMs overrides.` → omit `timeoutMs` for `act:type` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
-    - `existing-session evaluate does not support timeoutMs overrides.` → omit `timeoutMs` for `act:evaluate` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
     - `response body is not supported for existing-session profiles yet.` → `responsebody` still requires a managed browser or raw CDP profile.
-    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release Playwright/CDP emulation state without restarting the whole gateway.
+    - Stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release Playwright/CDP emulation state without restarting the whole gateway.
 
   </Accordion>
 </AccordionGroup>
@@ -872,7 +938,7 @@ Related:
 
 - [Authentication](/gateway/authentication)
 - [Background exec and process tool](/gateway/background-process)
-- [Gateway-owned pairing](/gateway/pairing)
+- [Node pairing](/gateway/pairing)
 
 ## Related
 

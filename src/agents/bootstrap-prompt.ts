@@ -5,10 +5,9 @@ export function buildFullBootstrapPromptLines(params: {
 }): string[] {
   return [
     params.readLine,
-    "If this run can complete the BOOTSTRAP.md workflow, do so.",
-    "If it cannot, explain the blocker briefly, continue with any bootstrap steps that are still possible here, and offer the simplest next step.",
-    "Do not pretend bootstrap is complete when it is not.",
-    "Do not use a generic first greeting or reply normally until after you have handled BOOTSTRAP.md.",
+    "Can finish BOOTSTRAP.md here: do it.",
+    "Cannot: brief blocker, safe possible steps, simplest next step.",
+    "Never claim completion early. No generic greeting/normal reply before BOOTSTRAP.md handling.",
     params.firstReplyLine,
   ];
 }
@@ -20,8 +19,8 @@ export function buildLimitedBootstrapPromptLines(params: {
 }): string[] {
   return [
     params.introLine,
-    "Do not claim bootstrap is complete, and do not use a generic first greeting.",
-    "Briefly explain the limitation, continue only with any bootstrap steps that are still safely possible here, and offer the simplest next step.",
+    "Never claim complete; no generic first greeting.",
+    "Brief limitation; only safe possible steps; simplest next step.",
     params.nextStepLine,
   ];
 }

@@ -16,4 +16,4 @@ Adds agent-callable tools.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`

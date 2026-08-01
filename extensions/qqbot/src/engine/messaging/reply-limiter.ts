@@ -2,7 +2,7 @@
  * Passive reply limiter — enforce per-message reply count and TTL limits.
  *
  * QQ Bot restricts how many passive replies can be sent in response to a
- * single inbound message (4 per hour by default). This module tracks reply
+ * single inbound message (5 per hour by default). This module tracks reply
  * counts and determines whether the next reply should be passive or
  * fall back to proactive mode.
  *
@@ -12,7 +12,7 @@
 
 /** Configuration for the reply limiter. */
 interface ReplyLimiterConfig {
-  /** Maximum passive replies per message. Defaults to 4. */
+  /** Maximum passive replies per message. Defaults to 5. */
   limit?: number;
   /** TTL in milliseconds for the passive reply window. Defaults to 1 hour. */
   ttlMs?: number;
@@ -39,7 +39,7 @@ interface ReplyRecord {
   firstReplyAt: number;
 }
 
-const DEFAULT_LIMIT = 4;
+const DEFAULT_LIMIT = 5;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_TRACKED = 10_000;
 
@@ -48,12 +48,11 @@ const DEFAULT_MAX_TRACKED = 10_000;
  *
  * Usage:
  * ```ts
- * const limiter = new ReplyLimiter({ limit: 4, ttlMs: 3600000 });
- * const check = limiter.checkLimit(messageId);
- * if (check.allowed) {
+ * const limiter = new ReplyLimiter({ limit: 5, ttlMs: 3600000 });
+ * const claim = limiter.claim(messageId);
+ * if (claim.allowed) {
  *   await sendPassiveReply(...);
- *   limiter.record(messageId);
- * } else if (check.shouldFallbackToProactive) {
+ * } else if (claim.shouldFallbackToProactive) {
  *   await sendProactiveMessage(...);
  * }
  * ```
@@ -70,18 +69,27 @@ export class ReplyLimiter {
     this.maxTracked = config?.maxTrackedMessages ?? DEFAULT_MAX_TRACKED;
   }
 
-  /** Check whether a passive reply is allowed for the given message. */
-  checkLimit(messageId: string): ReplyLimitResult {
+  /** Check whether a passive reply is allowed while leaving `reserve` slots unused. */
+  checkLimit(messageId: string, reserve = 0): ReplyLimitResult {
     const now = Date.now();
     this.evictIfNeeded(now);
 
     const record = this.tracker.get(messageId);
 
     if (!record) {
+      if (this.limit > reserve) {
+        return {
+          allowed: true,
+          remaining: this.limit,
+          shouldFallbackToProactive: false,
+        };
+      }
       return {
-        allowed: true,
+        allowed: false,
         remaining: this.limit,
-        shouldFallbackToProactive: false,
+        shouldFallbackToProactive: true,
+        fallbackReason: "limit_exceeded",
+        message: `Passive reply budget reserved (${reserve} of ${this.limit} remaining); sending proactively instead`,
       };
     }
 
@@ -95,14 +103,17 @@ export class ReplyLimiter {
       };
     }
 
-    const remaining = this.limit - record.count;
-    if (remaining <= 0) {
+    const remaining = this.limit - (record?.count ?? 0);
+    if (remaining <= reserve) {
       return {
         allowed: false,
-        remaining: 0,
+        remaining,
         shouldFallbackToProactive: true,
         fallbackReason: "limit_exceeded",
-        message: `Passive reply limit reached (${this.limit} per hour); sending proactively instead`,
+        message:
+          reserve > 0
+            ? `Passive reply budget reserved (${reserve} of ${this.limit} remaining); sending proactively instead`
+            : `Passive reply limit reached (${this.limit} per hour); sending proactively instead`,
       };
     }
 
@@ -111,6 +122,16 @@ export class ReplyLimiter {
       remaining,
       shouldFallbackToProactive: false,
     };
+  }
+
+  /** Atomically reserve one passive-reply slot before starting the request. */
+  claim(messageId: string, reserve = 0): ReplyLimitResult {
+    const check = this.checkLimit(messageId, reserve);
+    if (!check.allowed) {
+      return check;
+    }
+    this.record(messageId);
+    return { ...check, remaining: check.remaining - 1 };
   }
 
   /** Record one passive reply against a message. */

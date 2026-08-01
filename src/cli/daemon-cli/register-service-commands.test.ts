@@ -91,6 +91,14 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "forwards stop force control",
+      argv: ["stop", "--force"],
+      assert: () => {
+        const opts = expectSingleDaemonCall(runDaemonStop);
+        expect(opts.force).toBe(true);
+      },
+    },
+    {
       name: "forwards status auth collisions from parent gateway command",
       argv: ["status", "--token", "tok_status", "--password", "pw_status"],
       assert: () => {

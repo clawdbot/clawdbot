@@ -12,15 +12,7 @@ import {
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../../utils/message-channel.js";
-import {
-  bootstrapOutboundChannelPlugin,
-  resetOutboundChannelBootstrapStateForTests,
-} from "./channel-bootstrap.runtime.js";
-
-/** Resets outbound channel bootstrap/resolution state for isolated tests. */
-export function resetOutboundChannelResolutionStateForTest(): void {
-  resetOutboundChannelBootstrapStateForTests();
-}
+import { bootstrapOutboundChannelPlugin } from "./channel-bootstrap.runtime.js";
 
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(

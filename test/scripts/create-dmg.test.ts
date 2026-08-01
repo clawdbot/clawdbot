@@ -150,6 +150,12 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+function readPngDimensions(imagePath: string): { width: number; height: number } {
+  const data = readFileSync(imagePath);
+  expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
+  return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -193,6 +199,37 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
     expect(script).not.toContain('"/Volumes/$DMG_VOLUME_NAME"');
     expect(script).not.toContain('tell application "Finder" to close every window');
+  });
+
+  it("keeps the larger Finder layout aligned with the packaged backgrounds", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"');
+    expect(script).toContain('DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"');
+    expect(script).toContain('DMG_APP_POS="${DMG_APP_POS:-170 305}"');
+    expect(script).toContain('DMG_APPS_POS="${DMG_APPS_POS:-510 305}"');
+    expect(readPngDimensions("apps/macos/Packaging/dmg-background-small.png")).toEqual({
+      width: 680,
+      height: 430,
+    });
+    expect(readPngDimensions("apps/macos/Packaging/dmg-background.png")).toEqual({
+      width: 1360,
+      height: 860,
+    });
+  });
+
+  it("fails malformed DMG resize slack before creating images", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const validationBlock = script.slice(
+      script.indexOf("require_integer_list()"),
+      script.indexOf("to_applescript_list4()"),
+    );
+
+    expect(validationBlock).toContain("require_nonnegative_integer()");
+    expect(validationBlock).toContain(
+      'require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"',
+    );
+    expect(validationBlock).toContain("must be a finite non-negative integer");
   });
 
   it.runIf(process.platform === "darwin")(

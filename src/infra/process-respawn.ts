@@ -1,10 +1,11 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
-import { detectRespawnSupervisor } from "./supervisor-markers.js";
+import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
@@ -12,6 +13,7 @@ type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
+  handoffSpawned?: Promise<boolean>;
 };
 
 type GatewayUpdateRespawnResult = GatewayRespawnResult & {
@@ -53,8 +55,22 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  // Detached spawn failures can arrive asynchronously after spawn() returns.
+  // Keep this listener before unref() so the parent does not crash during handoff.
+  child.on("error", () => {});
   child.unref();
   return { child, pid: child.pid ?? undefined };
+}
+
+function scheduleLaunchdRestartAfterExit(): GatewayRespawnResult {
+  const handoff = scheduleDetachedLaunchdRestartHandoff({
+    mode: "start-after-exit",
+    waitForPid: process.pid,
+  });
+  if (!handoff.ok) {
+    return { mode: "failed", detail: handoff.error };
+  }
+  return { mode: "supervised", handoffSpawned: handoff.value };
 }
 
 /**
@@ -70,11 +86,11 @@ export function restartGatewayProcessWithFreshPid(
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
-  const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
-    // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
-    // Avoid detached kickstart/start handoffs here so restart timing stays tied
-    // to launchd's native supervision rather than a second helper process.
+    if (supervisor === "launchd") {
+      return scheduleLaunchdRestartAfterExit();
+    }
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -118,13 +134,15 @@ export function restartGatewayProcessWithFreshPid(
 export function respawnGatewayProcessForUpdate(
   opts: GatewayRespawnOptions = {},
 ): GatewayUpdateRespawnResult {
-  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
-    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
-  }
-  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+  const supervisor = detectGatewayRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
   if (supervisor) {
+    // Managed update handoffs require the original PID to exit before the
+    // detached helper can mutate the install, even when respawn is disabled.
+    if (supervisor === "launchd") {
+      return scheduleLaunchdRestartAfterExit();
+    }
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -135,6 +153,9 @@ export function respawnGatewayProcessForUpdate(
       }
     }
     return { mode: "supervised" };
+  }
+  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
+    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {
     const { child, pid } = spawnDetachedGatewayProcess(opts);

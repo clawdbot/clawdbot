@@ -3,10 +3,8 @@ import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-nat
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDiscordCommandArgFallbackButton,
-  type DispatchDiscordCommandInteraction,
-} from "./native-command-ui.js";
+import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
+import { createDiscordCommandArgFallbackButton } from "./native-command-ui.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type CommandArgContext = Parameters<typeof createDiscordCommandArgFallbackButton>[0]["ctx"];

@@ -70,7 +70,6 @@ describe("legacy migrate provider-shaped config", () => {
         brain: "agent-consult",
         model: "gpt-realtime",
         speakerVoice: "alloy",
-        voice: "alloy",
       },
     });
   });
@@ -102,8 +101,8 @@ describe("legacy migrate provider-shaped config", () => {
     });
   });
 
-  it("does not treat an existing realtime voice alias as Talk provider repair", () => {
-    const input: OpenClawConfig = {
+  it("preserves an existing realtime speaker voice without triggering provider repair", () => {
+    const input = {
       talk: {
         provider: "elevenlabs",
         providers: {
@@ -119,22 +118,42 @@ describe("legacy migrate provider-shaped config", () => {
             },
           },
           model: "gpt-realtime",
-          voice: "cedar",
+          speakerVoice: "cedar",
           mode: "realtime",
           transport: "gateway-relay",
           brain: "agent-consult",
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     const changes: string[] = [];
 
     const migrated = normalizeLegacyTalkConfig(input, changes);
 
     expect(changes).toStrictEqual([]);
-    expect(migrated).toEqual(input);
+    expect(migrated.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+        },
+      },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+          },
+        },
+        model: "gpt-realtime",
+        speakerVoice: "cedar",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+    });
   });
 
-  it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
+  it("moves messages.tts to top-level tts before normalizing provider keys", () => {
     const res = migrateLegacyConfig({
       messages: {
         tts: {
@@ -148,10 +167,11 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
-      "Moved messages.tts.providers.elevenlabs.voiceId → messages.tts.providers.elevenlabs.speakerVoiceId.",
+      "Moved messages.tts to top-level tts.",
+      "Moved tts.elevenlabs → tts.providers.elevenlabs.",
+      "Moved tts.providers.elevenlabs.voiceId → tts.providers.elevenlabs.speakerVoiceId.",
     ]);
-    expect(res.config?.messages?.tts).toEqual({
+    expect(res.config?.tts).toEqual({
       provider: "elevenlabs",
       providers: {
         elevenlabs: {
@@ -160,6 +180,75 @@ describe("legacy migrate provider-shaped config", () => {
         },
       },
     });
+  });
+
+  it("routes legacy messages.tts.realtime voice to talk.realtime.speakerVoice", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          provider: "openai",
+          realtime: { voice: "cedar" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved messages.tts.realtime voice → talk.realtime.speakerVoice.",
+      "Moved messages.tts to top-level tts.",
+    ]);
+    expect(res.config?.tts).toEqual({ provider: "openai" });
+    expect(res.config?.talk?.realtime?.speakerVoice).toBe("cedar");
+  });
+
+  it("drops legacy messages.tts.realtime when talk.realtime.speakerVoice is set", () => {
+    const res = migrateLegacyConfig({
+      talk: { realtime: { speakerVoice: "marin" } },
+      messages: {
+        tts: {
+          provider: "openai",
+          realtime: { voice: "cedar" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed messages.tts.realtime (talk.realtime already configured).",
+      "Moved messages.tts to top-level tts.",
+    ]);
+    expect(res.config?.tts).toEqual({ provider: "openai" });
+    expect(res.config?.talk?.realtime?.speakerVoice).toBe("marin");
+  });
+
+  it("keeps canonical top-level tts values while filling missing legacy settings", () => {
+    const res = migrateLegacyConfig({
+      tts: {
+        provider: "openai",
+        providers: { openai: { model: "canonical-model" } },
+      },
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          auto: "always",
+          providers: { openai: { speakerVoice: "coral" } },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual(["Moved messages.tts to top-level tts."]);
+    expect(res.config?.tts).toEqual({
+      provider: "openai",
+      auto: "always",
+      providers: { openai: { model: "canonical-model", speakerVoice: "coral" } },
+    });
+    expect(res.config?.messages).toEqual({});
+  });
+
+  it("removes invalid messages.tts values", () => {
+    const res = migrateLegacyConfig({ messages: { tts: true } });
+
+    expect(res.changes).toStrictEqual(["Removed messages.tts (invalid value)."]);
+    expect(res.config?.messages).toEqual({});
+    expect(res.config?.tts).toBeUndefined();
   });
 
   it("moves legacy edge provider aliases into microsoft tts config", () => {
@@ -182,11 +271,12 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      'Moved messages.tts.provider "edge" → "microsoft".',
-      "Moved messages.tts.providers.edge → messages.tts.providers.microsoft.",
-      "Moved messages.tts.providers.microsoft.voice → messages.tts.providers.microsoft.speakerVoice.",
+      "Moved messages.tts to top-level tts.",
+      'Moved tts.provider "edge" → "microsoft".',
+      "Moved tts.providers.edge → tts.providers.microsoft.",
+      "Moved tts.providers.microsoft.voice → tts.providers.microsoft.speakerVoice.",
     ]);
-    expect(res.config?.messages?.tts).toEqual({
+    expect(res.config?.tts).toEqual({
       provider: "microsoft",
       providers: {
         microsoft: {
@@ -305,16 +395,17 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Moved messages.tts.openai → messages.tts.providers.openai.",
-      "Moved messages.tts.providers.elevenlabs.voiceId → messages.tts.providers.elevenlabs.speakerVoiceId.",
-      "Moved messages.tts.providers.openai.voice → messages.tts.providers.openai.speakerVoice.",
-      "Moved messages.tts.personas.narrator.providers.google.voiceName → messages.tts.personas.narrator.providers.google.speakerVoice.",
+      "Moved messages.tts to top-level tts.",
+      "Moved tts.openai → tts.providers.openai.",
+      "Moved tts.providers.elevenlabs.voiceId → tts.providers.elevenlabs.speakerVoiceId.",
+      "Moved tts.providers.openai.voice → tts.providers.openai.speakerVoice.",
+      "Moved tts.personas.narrator.providers.google.voiceName → tts.personas.narrator.providers.google.speakerVoice.",
       "Moved agents.list[0].tts.providers.openai.voice → agents.list[0].tts.providers.openai.speakerVoice.",
       "Moved channels.discord.voice.tts.providers.openai.voice → channels.discord.voice.tts.providers.openai.speakerVoice.",
       "Moved channels.discord.accounts.primary.voice.tts.providers.openai.voiceId → channels.discord.accounts.primary.voice.tts.providers.openai.speakerVoiceId.",
       "Moved plugins.entries.voice-call.config.tts.providers.xai.voiceId → plugins.entries.voice-call.config.tts.providers.xai.speakerVoiceId.",
     ]);
-    expect(res.config?.messages?.tts).toEqual({
+    expect(res.config?.tts).toEqual({
       provider: "openai",
       providers: {
         elevenlabs: {
@@ -486,7 +577,8 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.changes).toEqual([
-      'Moved messages.tts.enabled → messages.tts.auto "always".',
+      "Moved messages.tts to top-level tts.",
+      'Moved tts.enabled → tts.auto "always".',
       "Removed agents.list[0].tts.enabled because agents.list[0].tts.auto is already set.",
       'Moved channels.discord.voice.tts.enabled → channels.discord.voice.tts.auto "off".',
       'Moved channels.discord.accounts.primary.voice.tts.enabled → channels.discord.accounts.primary.voice.tts.auto "always".',
@@ -496,7 +588,7 @@ describe("legacy migrate provider-shaped config", () => {
     ]);
     const migratedConfig = res.config as
       | {
-          messages?: { tts?: { auto?: unknown } };
+          tts?: { auto?: unknown };
           agents?: {
             defaults?: { tts?: { enabled?: unknown; auto?: unknown } };
             list?: Array<{ id?: string; tts?: { auto?: unknown } }>;
@@ -522,7 +614,7 @@ describe("legacy migrate provider-shaped config", () => {
           };
         }
       | undefined;
-    expect(migratedConfig?.messages?.tts?.auto).toBe("always");
+    expect(migratedConfig?.tts?.auto).toBe("always");
     expect(migratedConfig?.agents?.defaults?.tts).toEqual({ enabled: false });
     expect(migratedConfig?.agents?.list?.[0]).toEqual({
       id: "voice-agent",

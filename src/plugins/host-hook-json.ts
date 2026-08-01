@@ -1,5 +1,5 @@
 /** JSON primitive values accepted across plugin host-hook boundaries. */
-export type PluginJsonPrimitive = string | number | boolean | null;
+type PluginJsonPrimitive = string | number | boolean | null;
 
 /** Bounded JSON value shape accepted from plugin hooks. */
 export type PluginJsonValue =
@@ -8,7 +8,7 @@ export type PluginJsonValue =
   | { [key: string]: PluginJsonValue };
 
 /** Resource limits for untrusted plugin JSON payload validation. */
-export type PluginJsonValueLimits = {
+type PluginJsonValueLimits = {
   maxDepth: number;
   maxNodes: number;
   maxObjectKeys: number;
@@ -17,7 +17,7 @@ export type PluginJsonValueLimits = {
 };
 
 /** Default safety limits for plugin JSON hook payloads. */
-export const PLUGIN_JSON_VALUE_LIMITS: PluginJsonValueLimits = {
+const PLUGIN_JSON_VALUE_LIMITS: PluginJsonValueLimits = {
   maxDepth: 32,
   maxNodes: 4096,
   maxObjectKeys: 512,

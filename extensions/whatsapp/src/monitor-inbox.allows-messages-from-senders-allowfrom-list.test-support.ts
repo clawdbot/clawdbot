@@ -1,6 +1,8 @@
 // Whatsapp plugin module implements monitor inbox.allows messages from senders allowfrom list support behavior.
 import "./monitor-inbox.test-harness.js";
+import { cleanMessage } from "baileys";
 import { describe, expect, it, vi } from "vitest";
+import { isRecentOutboundMessage } from "./inbound/dedupe.js";
 import {
   buildNotifyMessageUpsert,
   expectPairingPromptSent,
@@ -411,6 +413,135 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).not.toHaveBeenCalled();
     expectOnlyOutboundChannelActivity();
+
+    await listener.close();
+  });
+
+  it.each([
+    {
+      name: "device-qualified phone JIDs",
+      outboundJid: "123:7@s.whatsapp.net",
+      echoedJid: "123@s.whatsapp.net",
+    },
+    {
+      name: "legacy c.us phone JIDs",
+      outboundJid: "123@c.us",
+      echoedJid: "123@s.whatsapp.net",
+    },
+    {
+      name: "hosted phone JIDs",
+      outboundJid: "123:7@hosted",
+      echoedJid: "123:7@hosted",
+    },
+    {
+      name: "hosted LID JIDs",
+      outboundJid: "777:2@hosted.lid",
+      echoedJid: "777:2@hosted.lid",
+    },
+    {
+      name: "phone aliases carried alongside direct LID echoes",
+      outboundJid: "123@s.whatsapp.net",
+      echoedJid: "777@lid",
+      echoedAlternateJid: "123:8@s.whatsapp.net",
+    },
+    {
+      name: "LID aliases carried alongside direct phone echoes",
+      outboundJid: "777@lid",
+      echoedJid: "123@s.whatsapp.net",
+      echoedAlternateJid: "777:3@lid",
+    },
+  ])(
+    "filters provider-normalized outbound self echoes for $name",
+    async ({ outboundJid, echoedJid, echoedAlternateJid }) => {
+      mockLoadConfig.mockReturnValue({
+        channels: {
+          whatsapp: {
+            selfChatMode: true,
+            allowFrom: ["+123"],
+          },
+        },
+        messages: DEFAULT_MESSAGES_CFG,
+      });
+
+      const onMessage = vi.fn();
+      const { listener, sock } = await startInboxMonitor(onMessage);
+      sock.signalRepository.lidMapping.getPNForLID.mockImplementation(async (jid: string) =>
+        jid.startsWith("777@") ? "123@s.whatsapp.net" : null,
+      );
+      const messageId = `bot-provider-echo-${outboundJid}`;
+      sock.sendMessage.mockResolvedValueOnce({ key: { id: messageId } });
+      await listener.sendMessage(outboundJid, "gateway self echo");
+
+      const echoedMessage = {
+        key: {
+          id: messageId,
+          fromMe: true,
+          remoteJid: echoedJid,
+          ...(echoedAlternateJid ? { remoteJidAlt: echoedAlternateJid } : {}),
+        },
+        message: { conversation: "gateway self echo" },
+        messageTimestamp: nowSeconds(),
+      };
+      cleanMessage(echoedMessage, "123@s.whatsapp.net", "777@lid");
+
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [echoedMessage],
+      });
+      await settleInboundWork();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expectOnlyOutboundChannelActivity();
+      await listener.close();
+    },
+  );
+
+  it("keeps provider-normalized echo matches scoped to their account and message", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const { listener, sock } = await startInboxMonitor(vi.fn());
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "scoped-hosted-echo" } });
+    await listener.sendMessage("123:7@hosted", "gateway self echo");
+
+    expect(
+      isRecentOutboundMessage({
+        accountId: "other-account",
+        remoteJid: "123@s.whatsapp.net",
+        messageId: "scoped-hosted-echo",
+      }),
+    ).toBe(false);
+    expect(
+      isRecentOutboundMessage({
+        accountId: "default",
+        remoteJid: "123@s.whatsapp.net",
+        messageId: "other-message",
+      }),
+    ).toBe(false);
+
+    await listener.close();
+  });
+
+  it("never treats another group as an alternate direct-chat echo", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn());
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "group-alias-control" } });
+    await listener.sendMessage("12345@g.us", "gateway group message");
+
+    expect(
+      isRecentOutboundMessage({
+        accountId: "default",
+        remoteJid: "67890@g.us",
+        alternateRemoteJid: "12345@g.us",
+        messageId: "group-alias-control",
+      }),
+    ).toBe(false);
 
     await listener.close();
   });

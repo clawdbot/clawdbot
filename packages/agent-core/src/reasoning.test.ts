@@ -1,5 +1,5 @@
+import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { Model } from "../../llm-core/src/index.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 
 function makeModel(
@@ -33,6 +33,21 @@ describe("resolveAgentReasoningOption", () => {
 
   it("preserves enabled thinking levels", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "high")).toBe("high");
+  });
+
+  it("preserves explicit off for Sonnet 5 on Anthropic Messages routes", () => {
+    expect(
+      resolveAgentReasoningOption(makeModel(undefined, { id: "claude-sonnet-5" }), "off"),
+    ).toBe("off");
+  });
+
+  it("uses the route-owned Sonnet 5 off mapping when provided", () => {
+    expect(
+      resolveAgentReasoningOption(
+        makeModel({ off: "low" }, { id: "anthropic.claude-sonnet-5" }),
+        "off",
+      ),
+    ).toBe("low");
   });
 
   it.each(["anthropic-messages", "bedrock-converse-stream"] as const)(

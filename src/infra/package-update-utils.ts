@@ -29,7 +29,7 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const result = readRootJsonObjectSync({
     rootDir: dir,
     relativePath: "package.json",

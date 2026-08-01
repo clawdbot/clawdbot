@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
-import { compareReleaseVersions, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 
 export function parseArgs(argv) {
   const args = new Map();
@@ -109,7 +109,7 @@ function readStableReleases(file, publishedVersions) {
 /**
  * Expands the release-history token into recent stable plus pinned historical baselines.
  */
-export function resolveReleaseHistory(args) {
+function resolveReleaseHistory(args) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include release-history");
@@ -136,7 +136,7 @@ export function resolveReleaseHistory(args) {
 /**
  * Resolves the last N stable release versions from release metadata.
  */
-export function resolveLastStable(args, count) {
+function resolveLastStable(args, count) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include last-stable-*");
@@ -152,7 +152,7 @@ export function resolveLastStable(args, count) {
 /**
  * Resolves all stable release versions at or after the requested minimum.
  */
-export function resolveAllSince(args, minimumVersion) {
+function resolveAllSince(args, minimumVersion) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include all-since-*");

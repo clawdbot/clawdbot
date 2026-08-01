@@ -105,6 +105,14 @@ function assertOpenAiEnvRef() {
   assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
+function assertSessionMemoryHookEnabled() {
+  const cfg = readJson(configPath());
+  assert(
+    cfg.hooks?.internal?.entries?.["session-memory"]?.enabled === true,
+    "session-memory hook was not enabled",
+  );
+}
+
 function assertAgentTurn() {
   const marker = process.argv[3];
   const outputPath = process.argv[4];
@@ -199,6 +207,7 @@ function assertPluginUninstalled() {
 const commands = {
   "configure-mock-openai": configureMockOpenAi,
   "assert-openai-env-ref": assertOpenAiEnvRef,
+  "assert-session-memory-hook-enabled": assertSessionMemoryHookEnabled,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,
   "assert-package-version": assertPackageVersion,

@@ -93,6 +93,12 @@ export function resolveSlackNativeStreaming(
   if (typeof canonical === "boolean") {
     return canonical;
   }
+  // Doctor migration input: the runtime helper no longer reads the legacy flat
+  // key, so raw pre-migration configs must resolve it here or `nativeStreaming:
+  // false` would migrate to `streaming.nativeTransport: true`.
+  if (typeof params.nativeStreaming === "boolean") {
+    return params.nativeStreaming;
+  }
   if (typeof params.streaming === "boolean") {
     return params.streaming;
   }

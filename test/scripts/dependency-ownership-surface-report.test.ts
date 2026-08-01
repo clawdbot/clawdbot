@@ -57,6 +57,15 @@ describe("parseArgs", () => {
     });
     expect(() => parseArgs(["--json", "-h"])).toThrow("Unsupported argument: -h");
   });
+
+  it("rejects duplicate report artifact options", () => {
+    expect(() => parseArgs(["--json", "first.json", "--json", "second.json"])).toThrow(
+      "--json was provided more than once.",
+    );
+    expect(() => parseArgs(["--markdown", "first.md", "--markdown", "second.md"])).toThrow(
+      "--markdown was provided more than once.",
+    );
+  });
 });
 
 describe("collectDependencyOwnershipSurfaceReport", () => {

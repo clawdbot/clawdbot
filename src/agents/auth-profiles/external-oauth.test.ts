@@ -5,16 +5,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
-import { testing, overlayExternalAuthProfiles } from "./external-auth.js";
+import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
+import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
+import { overlayExternalAuthProfiles } from "./external-auth.js";
+import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
-const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
-  vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
-);
+const readCodexCliCredentialsCachedMock = vi.hoisted(() => {
+  vi.resetModules();
+  return vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null);
+});
 
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
@@ -105,6 +109,54 @@ describe("auth external oauth helpers", () => {
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps ambient Codex OAuth from outranking an env key under an api-key pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProviderIds: ["openai"],
+    });
+    const ambientOnly = resolveAgentCredentialMapFromStore(store, { config: cfg });
+    const credentials = addEnvBackedAgentCredentials(ambientOnly, {
+      config: cfg,
+      env: { OPENAI_API_KEY: "env-api-key" },
+    });
+
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(store.profiles["openai:default"]).toBeUndefined();
+    expect(ambientOnly.openai).toBeUndefined();
+    expect(credentials.openai).toEqual({ type: "api_key", key: "env-api-key" });
+  });
+
+  it("keeps explicitly requested external profiles outside the ambient pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProfileIds: ["openai:default"],
+    });
+
+    expect(store.profiles["openai:default"]?.type).toBe("oauth");
+  });
+
   it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(
       createCredential({
@@ -176,6 +228,19 @@ describe("auth external oauth helpers", () => {
       createStore({
         "openai:default": tokenlessCredential,
       }),
+      {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      },
     );
 
     const overlaidProfile = overlaid.profiles["openai:default"];
@@ -187,6 +252,9 @@ describe("auth external oauth helpers", () => {
     expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
     expect(overlaidProfile.accountId).toBe("acct-cli");
     const managedCredential = readExternalCliBootstrapCredential({
+      store: createStore({
+        "openai:default": tokenlessCredential,
+      }),
       profileId: "openai:default",
       credential: tokenlessCredential,
     });

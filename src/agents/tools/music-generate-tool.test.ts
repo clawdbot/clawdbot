@@ -6,9 +6,24 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
-import { createMusicGenerateTool } from "./music-generate-tool.js";
+import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
+
+function createMusicGenerateTool(
+  params: Parameters<typeof createMusicGenerateToolImpl>[0],
+): ReturnType<typeof createMusicGenerateToolImpl> {
+  const options = params ?? {};
+  return createMusicGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "music",
+      "musicGenerationModel",
+    ),
+  });
+}
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -36,6 +51,9 @@ const configMocks = vi.hoisted(() => ({
 const mediaStoreMocks = vi.hoisted(() => ({
   saveMediaBuffer: vi.fn(),
 }));
+const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
+  vi.fn(async (inputs: readonly unknown[]) => inputs.map(() => ({}))),
+);
 
 const musicGenerationRuntimeMocks = vi.hoisted(() => ({
   generateMusic: vi.fn(),
@@ -119,8 +137,14 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../../config/config.js", () => configMocks);
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  ...configMocks,
+}));
 vi.mock("../../media/store.js", () => mediaStoreMocks);
+vi.mock("../../media/media-probe.js", () => ({
+  probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
+}));
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
     "../../media/web-media.js",
@@ -163,6 +187,10 @@ function resetMusicGenerateMocks() {
   vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
   musicGenerationRuntimeMocks.generateMusic.mockReset();
   mediaStoreMocks.saveMediaBuffer.mockReset();
+  probeMediaFilesWithinBudgetMock.mockReset();
+  probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
+    inputs.map(() => ({})),
+  );
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
   taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -177,9 +205,9 @@ function resetMusicGenerateMocks() {
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
-  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue(
-    true,
-  );
+  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
+    status: "delivered",
+  });
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -267,8 +295,8 @@ describe("createMusicGenerateTool", () => {
       }),
     );
 
-    expect(tool.description).toContain("call music_generate");
-    expect(tool.description).toContain("do not just write lyrics");
+    expect(tool.description).toContain("Make/generate music => call");
+    expect(tool.description).toContain("lyrics-only request => text only");
     expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
   });
 
@@ -380,6 +408,7 @@ describe("createMusicGenerateTool", () => {
       size: 11,
       contentType: "audio/mpeg",
     });
+    probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs: 12_000 }]);
 
     const tool = createMusicGenerateTool({
       config: asConfig({
@@ -430,8 +459,14 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
+        durationMs: 12_000,
       },
     ]);
+    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
+      [{ filePath: "/tmp/generated-night-drive.mp3", kind: "audio" }],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
     expect(details.paths).toEqual(["/tmp/generated-night-drive.mp3"]);
     expect(details.metadata).toEqual({ taskId: "music-task-1" });
     expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
@@ -560,7 +595,7 @@ describe("createMusicGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(true);
+      .mockResolvedValue({ status: "delivered" });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",
@@ -657,6 +692,7 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
       },
     ]);
   });
@@ -1158,3 +1194,4 @@ describe("createMusicGenerateTool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

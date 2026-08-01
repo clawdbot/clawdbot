@@ -297,7 +297,7 @@ export default definePluginEntry({
   name: "OpenClaw Kitchen Sink",
   description: "Docker E2E kitchen-sink plugin fixture",
   register(api) {
-    api.on("before_agent_start", async (event, context) => ({
+    api.on("before_prompt_build", async (event, context) => ({
       kitchenSink: true,
       observedEventKeys: Object.keys(event || {}),
       observedContextKeys: Object.keys(context || {}),
@@ -403,6 +403,20 @@ async function main() {
       npmShasum: clawpack.npmShasum,
     },
   };
+  const securityDetail = {
+    package: artifactResolverDetail.package,
+    release: {
+      version: fixture.version,
+    },
+    trust: {
+      scanStatus: "clean",
+      moderationState: null,
+      blockedFromDownload: false,
+      reasons: [],
+      pending: false,
+      stale: false,
+    },
+  };
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -427,6 +441,13 @@ async function main() {
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact`
     ) {
       json(response, artifactResolverDetail);
+      return;
+    }
+    if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
+    ) {
+      json(response, securityDetail);
       return;
     }
     if (

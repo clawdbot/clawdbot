@@ -84,7 +84,7 @@ export async function startGoogleChatGatewayAccount(ctx: {
           statusSink,
         }),
       stop: async (unregister) => {
-        unregister?.();
+        await unregister?.();
       },
       onStop: async () => {
         markStopped();

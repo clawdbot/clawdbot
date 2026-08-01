@@ -1,16 +1,10 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Duckduckgo provider module implements model/runtime integration.
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createDuckDuckGoWebSearchProviderBase } from "./ddg-search-provider.shared.js";
 
-type DuckDuckGoClientModule = typeof import("./ddg-client.js");
-
-let duckDuckGoClientModulePromise: Promise<DuckDuckGoClientModule> | undefined;
-
-function loadDuckDuckGoClientModule(): Promise<DuckDuckGoClientModule> {
-  duckDuckGoClientModulePromise ??= import("./ddg-client.js");
-  return duckDuckGoClientModulePromise;
-}
+const loadDuckDuckGoClientModule = createLazyRuntimeModule(() => import("./ddg-client.js"));
 
 const DuckDuckGoSearchSchema = {
   type: "object",

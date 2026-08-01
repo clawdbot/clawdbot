@@ -20,7 +20,7 @@ type IMessageDmHistoryConfig = {
   dms?: Record<string, { historyLimit?: number }>;
 };
 
-export type IMessageDmHistoryEntry = {
+type IMessageDmHistoryEntry = {
   sender: string;
   body: string;
   timestamp?: number;

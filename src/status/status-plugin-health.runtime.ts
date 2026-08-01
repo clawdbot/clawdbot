@@ -4,7 +4,10 @@ import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read
 // ordinary status tests do not eagerly load plugin registry internals.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  getActiveRuntimePluginRegistry,
+  listLoadedRuntimePluginIdsAcrossSurfaces,
+} from "../plugins/active-runtime-registry.js";
 import {
   dedupeChannelPluginFailures,
   dedupePluginDiagnostics,
@@ -157,6 +160,11 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
+  // Confirmed runtime-loaded ids across all live registry surfaces (so a plugin
+  // still live via a pinned channel/http-route registry counts) let detailed
+  // status separate actually-loaded plugins from disk-scan inventory the merged
+  // snapshot also marks "loaded".
+  const runtimeLoadedPluginIds = listLoadedRuntimePluginIdsAcrossSurfaces();
   return {
     plugins,
     diagnostics,
@@ -168,6 +176,7 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,
     }),
+    runtimeLoadedPluginIds,
   };
 }
 
@@ -199,7 +208,7 @@ export async function collectInstalledPluginHealthSnapshot(params: {
         report: runtimeRegistry,
       }).map(normalizeCompatibilityNotice)
     : [];
-  return mergeStatusPluginHealthSnapshots(
+  const merged = mergeStatusPluginHealthSnapshots(
     {
       plugins: report.plugins.map(normalizeSnapshotPlugin),
       diagnostics: installedDiagnostics,
@@ -213,4 +222,87 @@ export async function collectInstalledPluginHealthSnapshot(params: {
     },
     { ...runtime, compatibilityNotices: runtimeCompatibilityNotices },
   );
+  const shouldRunPluginIds = await resolveEagerShouldRunPluginIds(params);
+  const unregisteredMemoryEmbeddingProviders = await resolveUnregisteredMemoryEmbeddingProviders({
+    config: params.config,
+    registry: runtimeRegistry,
+  });
+  return {
+    ...merged,
+    ...(shouldRunPluginIds ? { shouldRunPluginIds } : {}),
+    ...(unregisteredMemoryEmbeddingProviders ? { unregisteredMemoryEmbeddingProviders } : {}),
+  };
+}
+
+// Configured memory embedding providers that no loaded plugin registers, surfaced on the
+// detailed /status path only. Needs the live runtime registry to know what a loaded plugin
+// actually serves; without config or an active registry we cannot tell "configured but
+// unavailable" from "not yet loaded", so degrade to no signal (no line). Resolved lazily so
+// the compact path never pulls the startup-plan module. Observer-only: any resolution failure
+// degrades to no set rather than breaking /status.
+async function resolveUnregisteredMemoryEmbeddingProviders(params: {
+  config?: OpenClawConfig;
+  registry: ReturnType<typeof getActiveRuntimePluginRegistry>;
+}): Promise<Array<{ configuredId: string; source: "provider" | "fallback" }> | undefined> {
+  if (!params.config || !params.registry) {
+    return undefined;
+  }
+  try {
+    const {
+      collectRegisteredEmbeddingProviderIds,
+      collectUnregisteredConfiguredMemoryEmbeddingProviders,
+    } = await import("../plugins/gateway-startup-plugin-ids.js");
+    const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.config,
+      registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.registry),
+    });
+    return unregistered.length > 0 ? unregistered : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Eager should-run plugin ids from the gateway startup plan, with deferred channel
+// plugins removed: their full load completes only after the gateway starts listening,
+// so they would be benign mid-startup false positives in the runtime-loaded drift
+// comparison. Detailed-status only and resolved lazily so the compact path never pulls
+// the startup-plan module. Observer-only: any resolution failure (or absent config)
+// degrades to no should-run set rather than breaking /status.
+async function resolveEagerShouldRunPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<string[] | undefined> {
+  if (!params.config) {
+    return undefined;
+  }
+  try {
+    const { loadGatewayStartupPluginPlan } =
+      await import("../plugins/gateway-startup-plugin-ids.js");
+    const { resolvePluginActivationSourceConfig } =
+      await import("../plugins/activation-source-config.js");
+    const { resolveGatewayStartupPluginActivationConfig } =
+      await import("../gateway/plugin-activation-runtime-config.js");
+    // Build the should-run plan with the exact assembly gateway boot uses, via the shared
+    // resolveGatewayStartupPluginActivationConfig helper. params.config is the live runtime
+    // snapshot; resolvePluginActivationSourceConfig maps it back to the operator source config
+    // the loader activates against, then the helper auto-enables that source and merges it into
+    // the runtime config (preserving runtime/defaulted fields). Reusing gateway boot's own helper
+    // keeps this set from drifting from prepareGatewayPluginBootstrap's plan.
+    const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
+    const effectiveConfig = resolveGatewayStartupPluginActivationConfig({
+      runtimeConfig: params.config,
+      activationSourceConfig: sourceConfig,
+      env: process.env,
+    });
+    const plan = loadGatewayStartupPluginPlan({
+      config: effectiveConfig,
+      activationSourceConfig: sourceConfig,
+      env: process.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    const deferred = new Set(plan.configuredDeferredChannelPluginIds);
+    return plan.pluginIds.filter((id) => !deferred.has(id));
+  } catch {
+    return undefined;
+  }
 }

@@ -1,159 +1,204 @@
 # OpenClaw iOS Versioning
 
-OpenClaw iOS uses a **pinned CalVer release version** instead of reading the current gateway version automatically on every build.
+OpenClaw iOS releases retain their gateway association while allowing multiple
+public App Store releases for one gateway version. The release planner derives
+the active release identity from the repository and App Store Connect.
 
 ## Goals
 
-- keep TestFlight submissions on one stable app version while iterating
-- change only `CFBundleVersion` during normal TestFlight iteration
-- promote the iOS release version to the current gateway version only when a maintainer chooses to do that
+- keep the associated gateway version recognizable
+- support multiple public iOS releases per gateway version
+- support multiple candidate builds per App Store version
+- make every release identity deterministic and inspectable before upload
 - keep Apple bundle fields valid for App Store Connect
-- generate App Store release notes from an iOS-owned changelog
+- generate version-specific App Store release notes from the iOS changelog
 
 ## Version model
 
-The pinned iOS release version lives in `apps/ios/version.json`.
+An iOS release has three independent identifiers:
 
-Supported pinned format:
+- gateway version `G = YYYY.M.P`, for example `2026.7.2`
+- App Store revision `R`, a single digit from `0` through `9`
+- build number `B`, a positive integer scoped to the exact App Store version
 
-- `YYYY.M.D`
+The App Store version appends the revision directly to the gateway patch with no padding:
 
-Examples:
-
-- `2026.4.6`
-- `2026.4.10`
-
-The root gateway version in `package.json` may still be one of:
-
-- `YYYY.M.D`
-- `YYYY.M.D-beta.N`
-- `YYYY.M.D-N`
-
-When you pin iOS from the gateway version, the iOS tooling strips the gateway suffix and keeps only the base CalVer.
+```text
+AppStoreVersion(G, R) = YYYY.M.concat(P, R)
+```
 
 Examples:
 
-- gateway `2026.4.10` -> iOS `2026.4.10`
-- gateway `2026.4.10-beta.3` -> iOS `2026.4.10`
-- gateway `2026.4.10-2` -> iOS `2026.4.10`
+| Gateway | Revision | App Store version | Candidate builds |
+| --- | ---: | --- | --- |
+| `2026.7.2` | legacy `0` | `2026.7.2` | closed history |
+| `2026.7.2` | `1` | `2026.7.21` | `1`, `2`, `3` |
+| `2026.7.2` | `2` | `2026.7.22` | `1`, `2`, ... |
+| `2026.7.3` | `0` | `2026.7.30` | `1`, `2`, ... |
+
+Historical exact versions through `2026.7.2` are grandfathered as read-only
+release history and consume revision zero for their gateway. That explicit
+cutover keeps later appended versions such as `2026.7.21` from being mistaken
+for a future gateway's exact legacy release. The release tooling does not target
+exact versions again; all future uploads use the appended single-digit format.
+
+## Release commands
+
+Inspect the read-only release plan:
+
+```bash
+pnpm ios:release:plan -- --json
+```
+
+Cut `## Unreleased` notes into the planned encoded version, commit the result,
+then upload:
+
+```bash
+pnpm ios:release:cut
+pnpm ios:release:upload
+```
+
+`--version`, `--revision`, and `--build-number` remain available as checked
+overrides. Upload rejects any override that differs from the live plan. Offline
+archive validation still requires explicit values:
+
+```bash
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
+```
 
 ## Apple bundle mapping
 
-Pinned iOS version `2026.4.10` maps to:
+Gateway `2026.7.2`, revision `1`, build `3` maps to:
 
-- `CFBundleShortVersionString = 2026.4.10`
-- `CFBundleVersion = numeric build number only`
+- `OpenClawCanonicalVersion = 2026.7.2`
+- `CFBundleShortVersionString = 2026.7.21`
+- `CFBundleVersion = 3`
 
-`CFBundleShortVersionString` stays fixed for a TestFlight train until you intentionally pin a newer iOS release version.
+Local development builds continue using the normalized gateway version as the
+marketing version. Release preparation supplies the explicit revision and
+therefore the appended App Store version.
+
+## Revision and build lifecycle
+
+- A revision is reserved once its App Store version record is created and is
+  never reused.
+- Awaiting, processing, failed, and complete uploads stay on the same App Store
+  version and increment only the build number.
+- After an App Store version is distributed, another public release for the
+  same gateway uses the next revision and resets its build number to `1`.
+- Build numbers come from the highest App Store Connect `buildUploads` record
+  for the exact version plus one. Failed local archives do not consume build
+  numbers; every Apple-visible upload reservation or attempt does.
+- App Review submission remains manual.
+
+Before screenshot or archive work, the upload lane checks App Store Connect:
+
+- an absent version may be created during metadata staging
+- the one editable version for the current gateway is reused
+- a locked or in-review version fails the run
+- an unreleased revision present only in build-upload history is retried
+- a distributed version requires the next revision
+- multiple active versions, a different active gateway, and unknown upload
+  states fail closed for human resolution
+
+Only one iOS release uploader may run at a time. The pipeline rechecks the
+exact plan after local archive and Transporter validation, immediately before
+its first App Store mutation. After upload it waits up to one hour for Apple
+processing, then fails the attempt rather than polling indefinitely.
+
+## Release notes
+
+Production release notes require an exact App Store version heading:
+
+```markdown
+## 2026.7.21
+
+- Fixed an iOS issue.
+```
+
+The generated App Store text automatically starts with:
+
+```text
+Gateway version: 2026.7.2
+```
+
+Production revision builds do not fall back to the gateway heading or
+`## Unreleased`. Local version checks without `--revision` retain the existing
+gateway/`Unreleased` fallback for development.
+
+The cutter moves new notes into that exact heading and is idempotent:
+
+```bash
+pnpm ios:release:cut
+```
 
 ## Source of truth and generated files
 
-### Source files
+Source files:
 
-- `apps/ios/version.json`
-  - pinned iOS release version
-- `apps/ios/CHANGELOG.md`
-  - iOS-only changelog and release-note source
-- `apps/ios/VERSIONING.md`
-  - workflow and constraints
+- root `package.json`: default gateway version for local builds and release planning
+- App Store Connect versions and build uploads: revision/build lifecycle state
+- explicit release arguments: checked overrides only
+- `apps/ios/CHANGELOG.md`: exact App Store release notes
+- `apps/ios/VERSIONING.md`: versioning contract
 
-### Generated or derived files
+Generated or derived files:
 
-- `apps/ios/Config/Version.xcconfig`
-  - checked-in defaults derived from `apps/ios/version.json`
-- `apps/ios/fastlane/metadata/en-US/release_notes.txt`
-  - generated from `apps/ios/CHANGELOG.md`
 - `apps/ios/build/Version.xcconfig`
-  - local gitignored build override generated per build or release prep
+- `apps/ios/build/AppStoreRelease.xcconfig`
+- `apps/ios/SwiftSources.input.xcfilelist`
+- temporary Fastlane metadata rendered from `apps/ios/CHANGELOG.md`
 
-## Tooling surfaces
+The canonical implementation is split across:
 
-### Version parsing and sync tooling
+- `scripts/lib/ios-version.ts`: validation, encoding, and release-note rendering
+- `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
+  changelog cutting
+- `scripts/ios-version.ts`: JSON, shell, and single-field queries
+- `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
+- `scripts/ios-release-{plan,cut}.sh`: public planning and cutting entry points
+- `scripts/ios-sync-versioning.ts`: release-note validation
+- `scripts/ios-release-upload.sh`: guarded upload entry point
+- `apps/ios/fastlane/Fastfile`: remote preflight, build allocation, metadata,
+  archive, validation, and upload
 
-- `scripts/lib/ios-version.ts`
-  - validates pinned iOS CalVer
-  - normalizes gateway version -> pinned iOS CalVer
-  - renders checked-in xcconfig and release notes
-- `scripts/ios-version.ts`
-  - CLI for JSON, shell, or single-field version reads
-- `scripts/ios-sync-versioning.ts`
-  - syncs checked-in derived files from the pinned iOS version
-- `scripts/ios-pin-version.ts`
-  - explicitly pins iOS to a chosen release version or the current gateway version
+## Release SHA tracking
 
-### Build and App Store release flow
+Successful uploads record the exact App Store version and build:
 
-- `scripts/ios-write-version-xcconfig.sh`
-  - reads the pinned iOS version
-  - writes the local numeric build override file in `apps/ios/build/Version.xcconfig`
-- `scripts/ios-release-prepare.sh`
-  - prepares App Store distribution signing and bundle settings against the pinned iOS version
-- `scripts/ios-release-signing.mjs`
-  - validates the checked-in App Store signing manifest
-  - renders the temporary release xcconfig profile pins
-- `apps/ios/fastlane/Fastfile`
-  - resolves version metadata from the pinned iOS helper
-  - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
-  - syncs encrypted App Store signing assets with Fastlane `match`
-  - increments App Store Connect build numbers for the pinned short version
-  - uploads screenshots and release notes before archiving a release build
-
-## Release-note resolution order
-
-When generating `apps/ios/fastlane/metadata/en-US/release_notes.txt`, the tooling reads the first available changelog section in this order:
-
-1. exact pinned version, for example `## 2026.4.10`
-2. `## Unreleased`
-
-Recommended workflow:
-
-- while iterating on a TestFlight train, keep pending notes under `## Unreleased`
-- before the production release, move or copy the final notes under `## <pinned version>` and run sync again
-
-## Common commands
-
-```bash
-pnpm ios:version
-pnpm ios:version:check
-pnpm ios:version:sync
-pnpm ios:version:pin -- --from-gateway
-pnpm ios:version:pin -- --version 2026.4.10
+```text
+refs/openclaw/mobile-releases/ios/<CFBundleShortVersionString>-<CFBundleVersion>
 ```
 
-## Normal TestFlight iteration workflow
+For example:
 
-1. keep `apps/ios/version.json` pinned to the current TestFlight train version
-2. update `apps/ios/CHANGELOG.md` under `## Unreleased` while iterating
-3. upload more App Store Connect builds with `pnpm ios:release:upload`
-4. let Fastlane increment only `CFBundleVersion`
-
-This keeps the TestFlight version stable while review is in flight.
-
-## New release promotion workflow
-
-When you want the next production iOS release to align with the current gateway release:
-
-1. pin iOS from the root gateway version:
-
-```bash
-pnpm ios:version:pin -- --from-gateway
+```text
+refs/openclaw/mobile-releases/ios/2026.7.21-3
 ```
 
-2. review the generated changes in:
-   - `apps/ios/version.json`
-   - `apps/ios/Config/Version.xcconfig`
-   - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
-3. update `apps/ios/CHANGELOG.md` for the new release if needed
-4. run `pnpm ios:version:sync` again if the changelog changed
-5. upload the first App Store Connect build for that newly pinned version
-6. keep iterating only by build number until the release candidate is ready
-7. manually submit the reviewed build for App Review in App Store Connect
-8. release the approved build to production
+The ref is checked before archive/upload work and created only after App Store
+Connect accepts the upload. Existing refs are immutable.
 
-## Important invariant
+## Normal workflow
 
-Fastlane and Xcode should consume only the pinned iOS version from `apps/ios/version.json`.
+1. Inspect the plan:
 
-Changing `package.json.version` alone must not change the iOS app version until a maintainer explicitly runs the pin step.
+```bash
+pnpm ios:release:plan -- --json
+```
 
-App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, and upload builds, but it should not submit a build for review.
+2. Cut and commit release notes when the plan reports `needs-cut`.
+3. Upload the planned build:
+
+```bash
+pnpm ios:release:upload
+```
+
+4. If the run fails, stop. After a human repairs App Store Connect, rerun the
+   same pipeline; it keeps the revision and advances the build automatically.
+5. Select one processed build and submit it manually in App Store Connect.
+6. After distribution, the next run allocates the next App Store revision.
+
+Agent-driven uploads must use `pnpm ios:release:upload`. A failed upload is
+terminal for that attempt: report the failing step rather than switching to a
+lower-level archive, upload, staging, or submission command.

@@ -7,7 +7,7 @@ extension CritterStatusLabel {
     }
 
     private var effectiveAnimationsEnabled: Bool {
-        self.animationsEnabled && !self.isSleeping
+        self.animationsEnabled && !self.isSleeping && !self.isPaused
     }
 
     var body: some View {
@@ -24,10 +24,14 @@ extension CritterStatusLabel {
                         return
                     }
 
+                    await MainActor.run { self.rescheduleElapsedAnimationTimers(from: Date()) }
                     while !Task.isCancelled {
                         let now = Date()
-                        await MainActor.run { self.tick(now) }
-                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        let delay = await MainActor.run {
+                            self.tick(now)
+                            return self.nextTickDelay(after: now)
+                        }
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     }
                 }
                 .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
@@ -37,7 +41,13 @@ extension CritterStatusLabel {
                 }
                 .onChange(of: self.sendCelebrationTick) { _, _ in
                     guard self.effectiveAnimationsEnabled, !self.earBoostActive else { return }
-                    self.wiggleLegs()
+                    self.celebrate()
+                }
+                .onChange(of: self.gatewayStatus) { oldStatus, newStatus in
+                    self.handleGatewayStatusChange(from: oldStatus, to: newStatus)
+                }
+                .onChange(of: self.isWorkingNow) { wasWorking, isWorking in
+                    self.handleWorkingChange(from: wasWorking, to: isWorking, at: Date())
                 }
                 .onChange(of: self.animationsEnabled) { _, enabled in
                     if enabled, !self.isSleeping {
@@ -77,7 +87,97 @@ extension CritterStatusLabel {
 
     private var tickTaskID: Int {
         // Ensure SwiftUI restarts (and cancels) the task when these change.
-        (self.effectiveAnimationsEnabled ? 1 : 0) | (self.earBoostActive ? 2 : 0)
+        (self.effectiveAnimationsEnabled ? 1 : 0) |
+            (self.earBoostActive ? 2 : 0) |
+            (self.isWorkingNow ? 4 : 0)
+    }
+
+    private func nextTickDelay(after now: Date) -> TimeInterval {
+        Self.nextAnimationTickDelay(
+            now: now,
+            isWorking: self.isWorkingNow,
+            deadlines: [self.nextBlink, self.nextWiggle, self.nextLegWiggle, self.nextEarWiggle])
+    }
+
+    static func nextAnimationTickDelay(
+        now: Date,
+        isWorking: Bool,
+        deadlines: [Date]) -> TimeInterval
+    {
+        // Working motion needs a steady cadence; idle motion only wakes for its next visible event.
+        if isWorking { return 0.35 }
+        guard let nextDeadline = deadlines.min() else { return 1 }
+        return max(0.05, nextDeadline.timeIntervalSince(now))
+    }
+
+    static func reconnectBeat(
+        lastSettled: GatewayProcessManager.Status?,
+        to new: GatewayProcessManager.Status) -> Bool
+    {
+        // Only a comeback from .failed celebrates: cold starts settle from
+        // nil/.stopped and deliberate stop -> start cycles stay quiet.
+        guard case .failed = lastSettled else { return false }
+        switch new {
+        case .running, .attachedExisting:
+            return true
+        case .failed, .stopped, .starting:
+            return false
+        }
+    }
+
+    static func workCompletionBeat(
+        startedAt: Date?,
+        endedAt: Date,
+        minimumDuration: TimeInterval) -> Bool
+    {
+        guard let startedAt else { return false }
+        return endedAt.timeIntervalSince(startedAt) >= minimumDuration
+    }
+
+    private func handleGatewayStatusChange(
+        from oldStatus: GatewayProcessManager.Status,
+        to newStatus: GatewayProcessManager.Status)
+    {
+        // Seed from the pre-change status on the first observed transition so
+        // a crash that predates this view's appearance still counts as broken.
+        let lastSettled = self.lastSettledGatewayStatus
+            ?? (Self.isSettled(oldStatus) ? oldStatus : nil)
+        let beat = Self.reconnectBeat(lastSettled: lastSettled, to: newStatus)
+        if Self.isSettled(newStatus) {
+            self.lastSettledGatewayStatus = newStatus
+        } else if self.lastSettledGatewayStatus == nil {
+            self.lastSettledGatewayStatus = lastSettled
+        }
+        guard beat, self.effectiveAnimationsEnabled, !self.earBoostActive else { return }
+
+        self.celebrate()
+        self.wiggleEars()
+    }
+
+    /// `.starting` is transitional; every other status is a settled state the
+    /// next recovery judgment can compare against.
+    static func isSettled(_ status: GatewayProcessManager.Status) -> Bool {
+        if case .starting = status { return false }
+        return true
+    }
+
+    private func handleWorkingChange(from wasWorking: Bool, to isWorking: Bool, at date: Date) {
+        if isWorking {
+            // Hand the false -> true timestamp to the eventual completion transition.
+            if !wasWorking { self.workStartedAt = date }
+            return
+        }
+
+        guard wasWorking else { return }
+        let startedAt = self.workStartedAt
+        self.workStartedAt = nil
+        // Require sustained work so short menu-bar blips do not create celebration noise.
+        guard self.effectiveAnimationsEnabled,
+              !self.earBoostActive,
+              Self.workCompletionBeat(startedAt: startedAt, endedAt: date, minimumDuration: 10)
+        else { return }
+
+        self.celebrate()
     }
 
     private func tick(_ now: Date) {
@@ -121,11 +221,17 @@ extension CritterStatusLabel {
         }
 
         if self.isPaused {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil))
+            // Paused reads as "off duty": awake but with drooped antennae, distinct
+            // from idle (perked) and sleeping (drooped + closed eyes).
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, antennaDroop: 1, badge: nil))
         }
 
         if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil))
+            return Image(nsImage: CritterIconRenderer.makeIcon(
+                blink: 1,
+                antennaDroop: 1,
+                eyesClosedLines: true,
+                badge: nil))
         }
 
         return Image(nsImage: CritterIconRenderer.makeIcon(
@@ -133,16 +239,33 @@ extension CritterStatusLabel {
             legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
             earWiggle: self.earWiggle,
             earScale: self.earBoostActive ? 1.9 : 1.0,
-            earHoles: self.earBoostActive,
+            happyEyes: self.celebrating,
             badge: badge))
     }
 
     private func resetMotion() {
         self.blinkAmount = 0
+        self.celebrating = false
         self.wiggleAngle = 0
         self.wiggleOffset = 0
         self.legWiggle = 0
         self.earWiggle = 0
+    }
+
+    /// Message sent: flash happy "∩ ∩" eyes and kick the legs.
+    private func celebrate() {
+        self.celebrating = true
+        self.wiggleLegs()
+        // Generation advances only for celebrations that actually start, so the
+        // newest flash always owns the clear: older expiry tasks bail, and the
+        // eyes can never stick on after a skipped send tick.
+        self.celebrationGeneration += 1
+        let generation = self.celebrationGeneration
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard self.celebrationGeneration == generation else { return }
+            self.celebrating = false
+        }
     }
 
     private func blink() {
@@ -215,6 +338,12 @@ extension CritterStatusLabel {
         self.nextEarWiggle = date.addingTimeInterval(Double.random(in: 7.0...14.0))
     }
 
+    private func rescheduleElapsedAnimationTimers(from date: Date) {
+        let deadlines = [self.nextBlink, self.nextWiggle, self.nextLegWiggle, self.nextEarWiggle]
+        guard deadlines.contains(where: { $0 <= date }) else { return }
+        self.scheduleRandomTimers(from: date)
+    }
+
     private var gatewayNeedsAttention: Bool {
         if self.isSleeping { return false }
         switch self.gatewayStatus {
@@ -253,6 +382,7 @@ extension CritterStatusLabel {
         _ = label.body
         _ = label.iconImage
         _ = label.tickTaskID
+        _ = label.isWorkingNow
         label.tick(Date())
         label.resetMotion()
         label.blink()
@@ -260,7 +390,15 @@ extension CritterStatusLabel {
         label.wiggleLegs()
         label.wiggleEars()
         label.scurry()
+        label.celebrate()
         label.scheduleRandomTimers(from: Date())
+        label.handleGatewayStatusChange(from: .failed("boom"), to: .running(details: nil))
+        let workStartedAt = Date(timeIntervalSinceReferenceDate: 100)
+        label.handleWorkingChange(from: false, to: true, at: workStartedAt)
+        label.handleWorkingChange(from: true, to: false, at: workStartedAt.addingTimeInterval(10))
+        _ = Self.reconnectBeat(lastSettled: .failed("boom"), to: .running(details: nil))
+        _ = Self.isSettled(.starting)
+        _ = Self.workCompletionBeat(startedAt: nil, endedAt: Date(), minimumDuration: 10)
         _ = label.gatewayNeedsAttention
         _ = label.gatewayBadgeColor
 
@@ -308,8 +446,9 @@ extension CritterStatusLabel {
             legWiggle: 0.8,
             earWiggle: 0.4,
             earScale: 1.4,
-            earHoles: true,
+            antennaDroop: 0.5,
             eyesClosedLines: true,
+            happyEyes: true,
             badge: .init(symbolName: "gearshape.fill", prominence: .secondary))
     }
 }

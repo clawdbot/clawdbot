@@ -92,6 +92,24 @@ describe("signalRpcRequest", () => {
     expect(result).toEqual({ version: "0.13.22" });
   });
 
+  it("preserves path-prefixed base URLs for RPC requests", async () => {
+    const serverUrl = await withSignalServer(async (req, res) => {
+      expect(req.method).toBe("POST");
+      expect(req.url).toBe("/signal/api/v1/rpc");
+      expect(JSON.parse(await readRequestBody(req))).toMatchObject({
+        method: "version",
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }));
+    });
+
+    await expect(
+      signalRpcRequest<{ version: string }>("version", undefined, {
+        baseUrl: `${serverUrl}/signal/`,
+      }),
+    ).resolves.toEqual({ version: "0.13.22" });
+  });
+
   it("throws a wrapped error when RPC response JSON is malformed", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(502, { "Content-Type": "text/plain" });
@@ -256,6 +274,21 @@ describe("signalCheck", () => {
     await expect(signalCheck(baseUrl)).resolves.toEqual({ ok: true, status: 204, error: null });
   });
 
+  it("preserves path-prefixed base URLs for health checks", async () => {
+    const serverUrl = await withSignalServer((req, res) => {
+      expect(req.method).toBe("GET");
+      expect(req.url).toBe("/signal/api/v1/check");
+      res.writeHead(204);
+      res.end();
+    });
+
+    await expect(signalCheck(`${serverUrl}/signal`)).resolves.toEqual({
+      ok: true,
+      status: 204,
+      error: null,
+    });
+  });
+
   it("returns an HTTP status failure for unhealthy checks", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(503);
@@ -272,7 +305,8 @@ describe("signalCheck", () => {
 
 describe("streamSignalEvents", () => {
   it("streams events through node http instead of fetch", async () => {
-    const events: Array<import("./client.js").SignalSseEvent> = [];
+    type StreamEvent = Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0];
+    const events: StreamEvent[] = [];
     const baseUrl = await withSignalServer((req, res) => {
       expect(req.url).toBe("/api/v1/events?account=%2B15555550123");
       expect(req.headers.accept).toBe("text/event-stream");
@@ -287,6 +321,42 @@ describe("streamSignalEvents", () => {
     });
 
     expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
+  });
+
+  it("preserves path-prefixed base URLs for event streams", async () => {
+    type StreamEvent = Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0];
+    const events: StreamEvent[] = [];
+    const serverUrl = await withSignalServer((req, res) => {
+      expect(req.url).toBe("/signal/api/v1/events?account=%2B15555550123");
+      expect(req.headers.accept).toBe("text/event-stream");
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('id: 42\nevent: message\ndata: {"group":true}\n\n');
+    });
+
+    await streamSignalEvents({
+      baseUrl: `${serverUrl}/signal`,
+      account: "+15555550123",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
+  });
+
+  it("propagates receive-handler failures to the stream", async () => {
+    const appendError = new Error("durable append failed");
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: receive\ndata: {"envelope":{}}\n\n');
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        onEvent: async () => {
+          throw appendError;
+        },
+      }),
+    ).rejects.toBe(appendError);
   });
 
   it("reports HTTP status failures from the event stream", async () => {

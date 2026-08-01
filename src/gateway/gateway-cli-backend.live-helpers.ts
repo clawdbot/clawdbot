@@ -23,6 +23,7 @@ import {
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { sleep } from "../utils/sleep.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 
@@ -70,6 +71,15 @@ export const CLI_BACKEND_LIVE_ADVISORY_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY
 export type CliBackendLiveProviderSkipDecision = {
   action: "fail" | "skip";
   message: string;
+};
+
+export type ClaudeCliResumeContinuityProbe = {
+  firstTurnMarker: string;
+  firstTurnPrompt: string;
+  injectedContext: string;
+  resumePrompt: string;
+  expectedFirstReply: string;
+  expectedResumeMarker: string;
 };
 
 function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
@@ -271,6 +281,44 @@ export function matchesCliBackendReply(text: string, expected: string): boolean 
   );
 }
 
+export function buildClaudeCliResumeContinuityProbe(params: {
+  firstTurnNonce: string;
+  resumeNonce: string;
+  memoryToken: string;
+}): ClaudeCliResumeContinuityProbe {
+  const firstTurnMarker = `CLI-BACKEND-${params.firstTurnNonce}`;
+  return {
+    firstTurnMarker,
+    firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
+    injectedContext:
+      `Remember this exact opaque session token for a later turn: ${params.memoryToken}. ` +
+      "Do not include the token in this turn's reply.",
+    resumePrompt:
+      "Do not inspect files or run tools. " +
+      `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
+      "the exact opaque session token from the earlier turn. Do not add prose.",
+    expectedFirstReply: `${firstTurnMarker}.`,
+    expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
+  };
+}
+
+export function resolveImportedClaudeCliSessionId(messages: unknown[]): string | undefined {
+  for (const message of messages) {
+    const metadata =
+      typeof message === "object" && message !== null
+        ? (message as Record<string, unknown>)["__openclaw"]
+        : undefined;
+    if (typeof metadata !== "object" || metadata === null) {
+      continue;
+    }
+    const imported = metadata as { cliSessionId?: unknown; importedFrom?: unknown };
+    if (imported.importedFrom === "claude-cli" && typeof imported.cliSessionId === "string") {
+      return imported.cliSessionId;
+    }
+  }
+  return undefined;
+}
+
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {
@@ -309,12 +357,6 @@ export async function createBootstrapWorkspace(
   await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), `IDENTITY-${randomUUID()}\n`);
   await fs.writeFile(path.join(workspaceDir, "USER.md"), `USER-${randomUUID()}\n`);
   return { expectedInjectedFiles, workspaceDir, workspaceRootDir };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {

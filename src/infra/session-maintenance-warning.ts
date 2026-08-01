@@ -3,8 +3,11 @@ import type { SessionMaintenanceWarning } from "../config/sessions/store-mainten
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { formatSingleUnitDuration } from "./format-time/format-duration-internal.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -17,23 +20,27 @@ type WarningParams = {
   warning: SessionMaintenanceWarning;
 };
 
+// Bound process-lifetime dedupe while keeping several agents' default 500-session
+// windows resident. Eviction can re-emit one warning for an old session.
+const MAX_WARNED_CONTEXTS = 4096;
 const warnedContexts = new Map<string, string>();
+
+function shouldSuppressWarning(sessionKey: string, contextKey: string): boolean {
+  const duplicate = warnedContexts.get(sessionKey) === contextKey;
+  // Refresh insertion order even for suppressed duplicates; otherwise active sessions
+  // become eviction candidates and can receive repeated warnings under key churn.
+  warnedContexts.delete(sessionKey);
+  warnedContexts.set(sessionKey, contextKey);
+  pruneMapToMaxSize(warnedContexts, MAX_WARNED_CONTEXTS);
+  return duplicate;
+}
+
 const log = createSubsystemLogger("session-maintenance-warning");
-let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
-
-function resetSessionMaintenanceWarningForTests() {
-  warnedContexts.clear();
-  messageRuntimePromise = null;
-}
-
-export const testing = {
-  resetSessionMaintenanceWarningForTests,
-} as const;
-
-function loadDeliverRuntime() {
-  messageRuntimePromise ??= import("../channels/message/runtime.js");
-  return messageRuntimePromise;
-}
+const messageRuntimeLoader = createLazyPromiseLoader(
+  () => import("../channels/message/runtime.js"),
+  { cacheRejections: true },
+);
+const loadDeliverRuntime = messageRuntimeLoader.load;
 
 function shouldSendWarning(): boolean {
   return process.env.NODE_ENV !== "test";
@@ -52,27 +59,10 @@ function buildWarningContext(params: WarningParams): string {
     .join("|");
 }
 
-function formatDuration(ms: number): string {
-  if (ms >= 86_400_000) {
-    const days = Math.round(ms / 86_400_000);
-    return `${days} day${days === 1 ? "" : "s"}`;
-  }
-  if (ms >= 3_600_000) {
-    const hours = Math.round(ms / 3_600_000);
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
-  }
-  if (ms >= 60_000) {
-    const mins = Math.round(ms / 60_000);
-    return `${mins} minute${mins === 1 ? "" : "s"}`;
-  }
-  const secs = Math.round(ms / 1000);
-  return `${secs} second${secs === 1 ? "" : "s"}`;
-}
-
 function buildWarningText(warning: SessionMaintenanceWarning): string {
   const reasons: string[] = [];
   if (warning.wouldPrune) {
-    reasons.push(`older than ${formatDuration(warning.pruneAfterMs)}`);
+    reasons.push(`older than ${formatSingleUnitDuration(warning.pruneAfterMs, true)}`);
   }
   if (warning.wouldCap) {
     reasons.push(`not in the most recent ${warning.maxEntries} sessions`);
@@ -110,12 +100,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   const contextKey = buildWarningContext(params);
-  if (warnedContexts.get(params.sessionKey) === contextKey) {
-    return;
-  }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  warnedContexts.set(params.sessionKey, contextKey);
+  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+    return;
+  }
 
   const text = buildWarningText(params.warning);
   const target = resolveWarningDeliveryTarget(params.entry);
@@ -154,4 +143,3 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }
-export { testing as __testing };

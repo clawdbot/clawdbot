@@ -2,9 +2,15 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  isPairingSetupBootstrapProfile,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  isMobilePairingSetupBootstrapProfile,
+  isNodePairingSetupBootstrapProfile,
+  isVoiceNodePairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
+  normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "./device-bootstrap-profile.js";
@@ -36,6 +42,7 @@ describe("device bootstrap profile", () => {
           "node.exec",
           "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
@@ -61,36 +68,107 @@ describe("device bootstrap profile", () => {
           "operator.talk.secrets",
           "operator.write",
         ],
+        purpose: "control-ui",
       }),
     ).toEqual({
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      purpose: "control-ui",
     });
   });
 
-  test("default setup profile carries node plus bounded operator handoff", () => {
+  test("allows admin only for the closed full-mobile purpose", () => {
+    expect(
+      normalizeDeviceBootstrapHandoffProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.admin", "operator.pairing", "operator.read"],
+        purpose: "mobile-full",
+      }),
+    ).toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      purpose: "mobile-full",
+    });
+  });
+
+  test("drops unknown bootstrap purpose codes", () => {
+    expect(
+      normalizeDeviceBootstrapProfile(
+        JSON.parse('{"roles":["operator"],"scopes":["operator.read"],"purpose":"status"}'),
+      ),
+    ).toEqual({
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    });
+  });
+
+  test("full setup profile carries node plus full native operator access", () => {
+    expect(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node", "operator"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
+      purpose: "mobile-full",
+    });
+  });
+
+  test("existing setup profile preserves the bounded operator handoff", () => {
     expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: [
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
     });
   });
 
-  test("recognizes only the current setup profile", () => {
-    expect(isPairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+  test("node setup profile carries no operator access", () => {
+    expect(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({ roles: ["node"], scopes: [] });
+    expect(isNodePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(isMobilePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
+  });
+
+  test("voice-node setup profile carries only node, read, and Talk access", () => {
+    expect(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.read", "operator.talk"],
+      purpose: "voice-node",
+    });
+    expect(isMobilePairingSetupBootstrapProfile(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
+      false,
+    );
     expect(
-      isPairingSetupBootstrapProfile({
+      isVoiceNodePairingSetupBootstrapProfile(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE),
+    ).toBe(true);
+  });
+
+  test("recognizes only the supported mobile setup profiles", () => {
+    expect(isMobilePairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(isMobilePairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
+      true,
+    );
+    expect(
+      isMobilePairingSetupBootstrapProfile({
         roles: ["node", "operator"],
         scopes: ["operator.approvals", "operator.read", "operator.write"],
       }),
     ).toBe(false);
     expect(
-      isPairingSetupBootstrapProfile({
+      isMobilePairingSetupBootstrapProfile({
         roles: ["node", "operator"],
         scopes: ["operator.approvals", "operator.pairing", "operator.read", "operator.write"],
       }),
     ).toBe(false);
     expect(
-      isPairingSetupBootstrapProfile({
+      isMobilePairingSetupBootstrapProfile({
         roles: ["node", "operator"],
         scopes: ["operator.admin", "operator.approvals", "operator.read", "operator.write"],
       }),
@@ -100,6 +178,7 @@ describe("device bootstrap profile", () => {
   test("bootstrap handoff operator allowlist stays bounded", () => {
     expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
       "operator.approvals",
+      "operator.questions",
       "operator.read",
       "operator.talk.secrets",
       "operator.write",

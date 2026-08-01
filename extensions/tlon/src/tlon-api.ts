@@ -2,7 +2,9 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
@@ -45,7 +47,35 @@ type UploadResult = {
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
 
+/** Max bytes to read from the Memex upload JSON response. */
+const MEMEX_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
+
+/** Total deadline for the Memex upload URL lookup, including DNS and response reading. */
+const TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS = 30_000;
+
+/** Total deadline for Memex and custom S3 PUTs, including DNS and the full upload. */
+const TLON_UPLOAD_TIMEOUT_MS = 300_000;
+
 let currentClientConfig: ClientConfig | null = null;
+
+async function releaseUploadResponse(
+  guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined,
+): Promise<void> {
+  if (!guarded) {
+    return;
+  }
+  try {
+    // Guard release closes the dispatcher, not an unread response stream. Settle terminal
+    // upload bodies first so a streaming response cannot delay dispatcher cleanup.
+    if (!guarded.response.bodyUsed) {
+      await guarded.response.body?.cancel();
+    }
+  } catch {
+    // Response cancellation is best-effort; dispatcher release must still run.
+  } finally {
+    await guarded.release();
+  }
+}
 
 export function configureClient(params: ClientConfig): void {
   currentClientConfig = {
@@ -229,9 +259,9 @@ async function getMemexUploadUrl(params: {
   }
 
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: endpoint,
       init: {
         method: "PUT",
@@ -246,20 +276,24 @@ async function getMemexUploadUrl(params: {
       auditContext: "tlon-memex-upload-url",
       capture: false,
       maxRedirects: 0,
+      timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
 
-    const data = (await guarded.response.json()) as { url?: string; filePath?: string } | null;
+    const data = await readProviderJsonResponse<{ url?: string; filePath?: string } | null>(
+      guarded.response,
+      "Memex upload",
+      { maxBytes: MEMEX_UPLOAD_RESPONSE_MAX_BYTES },
+    );
     if (!data?.url || !data.filePath) {
       throw new Error("Invalid response from Memex");
     }
 
     return { hostedUrl: data.filePath, uploadUrl: data.url };
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 }
 
@@ -294,9 +328,9 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     });
     const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
-    let release: (() => Promise<void>) | undefined;
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
     try {
-      const guarded = await fetchWithSsrFGuard({
+      guarded = await fetchWithSsrFGuard({
         url: trustedUploadUrl,
         init: {
           method: "PUT",
@@ -309,14 +343,14 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         auditContext: "tlon-memex-upload",
         capture: false,
         maxRedirects: 0,
+        timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
       });
-      release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
       if (!guarded.response.ok) {
         throw new Error(`Upload failed: ${guarded.response.status}`);
       }
     } finally {
-      await release?.();
+      await releaseUploadResponse(guarded);
     }
 
     return { url: assertTrustedMemexUploadUrl(hostedUrl, "Memex hosted URL") };
@@ -326,13 +360,8 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     throw new Error("No storage credentials configured");
   }
 
-  const endpoint = new URL(prefixEndpoint(credentials.endpoint));
   const client = new S3Client({
-    endpoint: {
-      protocol: endpoint.protocol.slice(0, -1) as "http" | "https",
-      hostname: endpoint.host,
-      path: endpoint.pathname || "/",
-    },
+    endpoint: prefixEndpoint(credentials.endpoint),
     region: storageConfig.region || "us-east-1",
     credentials: {
       accessKeyId: credentials.accessKeyId,
@@ -357,12 +386,11 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
   const signedUrl = await getSignedUrl(client, command, {
     expiresIn: 3600,
-    signableHeaders: new Set(Object.keys(headers)),
   });
 
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: signedUrl,
       init: {
         method: "PUT",
@@ -373,18 +401,18 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       capture: false,
       maxRedirects: 0,
       policy: privateNetworkPolicy,
+      timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Upload failed: ${guarded.response.status}`);
     }
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 
   const publicUrl = storageConfig.publicUrlBase
     ? new URL(fileKey, storageConfig.publicUrlBase).toString()
-    : signedUrl.split("?")[0];
+    : expectDefined(signedUrl.split("?").at(0), "signed URL base segment");
 
   return { url: assertSafeUploadResultUrl(publicUrl, "Upload result URL") };
 }

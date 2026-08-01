@@ -9,7 +9,7 @@ import type { JsoncValue } from "../jsonc/ast.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsonlAst } from "./ast.js";
 
-export interface JsonlEmitOptions {
+interface JsonlEmitOptions {
   readonly mode?: "roundtrip" | "render";
   readonly fileNameForGuard?: string;
   readonly acceptPreExistingSentinel?: boolean;

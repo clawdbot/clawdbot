@@ -8,14 +8,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
-export type GatewayInjectedAbortMeta = {
+type GatewayInjectedAbortMeta = {
   aborted: true;
   origin: "rpc" | "stop-command";
   runId: string;
 };
 
 /** Result shape returned after appending an assistant row to a session transcript. */
-export type GatewayInjectedTranscriptAppendResult = {
+type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
@@ -55,7 +55,9 @@ function resolveInjectedAssistantContent(params: {
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath: string;
+  transcriptPath?: string;
+  storePath?: string;
+  sessionId?: string;
   sessionKey?: string;
   agentId?: string;
   message: string;
@@ -118,18 +120,25 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
+    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
+      return { ok: false, error: "transcript identity not resolved" };
+    }
     const turn = await persistSessionTranscriptTurn(
       {
-        sessionFile: params.transcriptPath,
         sessionKey: params.sessionKey ?? "",
+        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       {
         updateMode: "inline",
+        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
         ...(params.config ? { config: params.config } : {}),
         messages: [
           {
             message: messageBody,
+            idempotencyLookup: "scan-assistant",
             now,
             useRawWhenLinear: true,
           },

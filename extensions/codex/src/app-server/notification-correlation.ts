@@ -2,28 +2,7 @@
  * Correlates Codex app-server notifications with the active thread/turn so
  * projectors can ignore global or stale events without losing diagnostics.
  */
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
-
-/** Debug-friendly correlation summary for a Codex app-server notification. */
-export type CodexNotificationCorrelation = {
-  method: string;
-  paramsKeys?: string[];
-  activeThreadId: string;
-  activeTurnId?: string;
-  threadId?: string;
-  turnId?: string;
-  nestedTurnThreadId?: string;
-  nestedTurnId?: string;
-  turnStatus?: string;
-  turnItemCount?: number;
-  matchesActiveThread: boolean;
-  matchesActiveTurn?: boolean;
-};
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Returns true when a notification payload belongs to the exact active thread and turn. */
 export function isCodexNotificationForTurn(
@@ -40,9 +19,15 @@ export function isCodexNotificationForTurn(
   );
 }
 
-/** Reads a thread id from either top-level notification params or nested turn payloads. */
+/**
+ * Reads a thread id from canonical top-level or nested thread payloads.
+ * The generated v2 schemas require top-level `threadId` on turn/item-scoped
+ * notifications and define `Turn` without one, so `turn.threadId` is not a
+ * wire shape and is deliberately not read here.
+ */
 export function readCodexNotificationThreadId(record: JsonObject): string | undefined {
-  return readNestedTurnThreadId(record) ?? readString(record, "threadId");
+  const thread = isJsonObject(record.thread) ? record.thread : undefined;
+  return readString(record, "threadId") ?? (thread ? readString(thread, "id") : undefined);
 }
 
 /** Reads a turn id from either top-level notification params or nested turn payloads. */
@@ -50,48 +35,9 @@ export function readCodexNotificationTurnId(record: JsonObject): string | undefi
   return readNestedTurnId(record) ?? readString(record, "turnId");
 }
 
-/** Builds structured correlation details for logs when notification routing is ambiguous. */
-export function describeCodexNotificationCorrelation(
-  notification: CodexServerNotification,
-  active: { threadId: string; turnId?: string },
-): CodexNotificationCorrelation {
-  const params = isJsonObject(notification.params) ? notification.params : undefined;
-  const turn = params && isJsonObject(params.turn) ? params.turn : undefined;
-  const threadId = params ? readString(params, "threadId") : undefined;
-  const turnId = params ? readString(params, "turnId") : undefined;
-  const nestedTurnThreadId = turn ? readString(turn, "threadId") : undefined;
-  const nestedTurnId = turn ? readString(turn, "id") : undefined;
-  const resolvedThreadId = params ? readCodexNotificationThreadId(params) : undefined;
-  const resolvedTurnId = params ? readCodexNotificationTurnId(params) : undefined;
-  const matchesActiveThread = resolvedThreadId === active.threadId;
-  const matchesActiveTurn = active.turnId
-    ? matchesActiveThread && resolvedTurnId === active.turnId
-    : undefined;
-  const items = turn?.items;
-  return {
-    method: notification.method,
-    ...(params ? { paramsKeys: Object.keys(params).toSorted() } : {}),
-    activeThreadId: active.threadId,
-    ...(active.turnId ? { activeTurnId: active.turnId } : {}),
-    ...(threadId ? { threadId } : {}),
-    ...(turnId ? { turnId } : {}),
-    ...(nestedTurnThreadId ? { nestedTurnThreadId } : {}),
-    ...(nestedTurnId ? { nestedTurnId } : {}),
-    ...(turn ? { turnStatus: readString(turn, "status") } : {}),
-    ...(Array.isArray(items) ? { turnItemCount: items.length } : {}),
-    matchesActiveThread,
-    ...(matchesActiveTurn === undefined ? {} : { matchesActiveTurn }),
-  };
-}
-
 function readNestedTurnId(record: JsonObject): string | undefined {
   const turn = record.turn;
   return isJsonObject(turn) ? readString(turn, "id") : undefined;
-}
-
-function readNestedTurnThreadId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "threadId") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

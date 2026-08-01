@@ -1,6 +1,12 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CodexAppServerRpcError } from "./client.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -10,13 +16,28 @@ import {
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+} from "./session-binding.test-helpers.js";
 import {
-  shouldRotateCodexAppServerBindingForRuntime,
-  startOrResumeThread,
+  buildThreadResumeParams,
+  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({
+    ...params,
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -34,6 +55,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -65,7 +87,7 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
     ...createThreadLifecycleAppServerOptions(),
     networkProxy: {
       profileName: "openclaw-network",
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: "test-network-proxy",
       configPatch,
     },
   };
@@ -74,10 +96,12 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
 function createParams(sessionFile: string, workspaceDir: string) {
   const params = createRunAttemptParams(sessionFile, workspaceDir);
   params.disableTools = false;
+  params.config = undefined;
   return params;
 }
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.goals": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
@@ -91,15 +115,12 @@ const DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 });
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
-  const [sessionFile, binding, lookup] = args;
-  return writeRawCodexAppServerBinding(
-    sessionFile,
-    {
-      webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-      ...binding,
-    },
-    lookup,
-  );
+  const [sessionFile, binding] = args;
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+  return writeRawCodexAppServerBinding(sessionFile, {
+    webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    ...binding,
+  });
 }
 
 function createMessageDynamicTool(
@@ -148,7 +169,7 @@ function createDeferredNamedDynamicTool(
   };
 }
 
-function createPluginAppConfigPatch() {
+function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
   return {
     apps: {
       _default: {
@@ -161,6 +182,7 @@ function createPluginAppConfigPatch() {
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
+        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -174,7 +196,7 @@ function createPluginAppPolicyContext() {
         configKey: "google-calendar",
         marketplaceName: "openai-curated" as const,
         pluginName: "google-calendar",
-        allowDestructiveActions: false,
+        allowDestructiveActions: true,
         mcpServerNames: ["google-calendar"],
       },
     },
@@ -254,33 +276,1180 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
-  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
+  it("persists the native rollout path across thread start and resume", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const threadId = "thread-native-rollout";
+    const rolloutPath = path.join(
+      tempDir,
+      "agent",
+      "codex-home",
+      "sessions",
+      `rollout-${threadId}.jsonl`,
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method !== "thread/start" && method !== "thread/resume") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      const response = threadStartResult(threadId);
+      return {
+        ...response,
+        thread: { ...response.thread, path: rolloutPath },
+      };
+    });
+    const common = {
+      client: { getInstanceId: () => "native-rollout-client", request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const started = await startOrResumeThread(common);
+    expect(started).toMatchObject({
+      threadId,
+      rolloutPath,
+      lifecycle: { action: "started" },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId,
+      rolloutPath,
+    });
+
+    const resumed = await startOrResumeThread(common);
+    expect(resumed).toMatchObject({
+      threadId,
+      rolloutPath,
+      lifecycle: { action: "resumed" },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId,
+      rolloutPath,
+    });
+  });
+
+  it("reuses only an explicitly retained subscription on the original client", async () => {
+    const sessionFile = path.join(tempDir, "warm-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-warm");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const buildFinalConfigPatch = vi
+      .fn()
+      .mockReturnValueOnce({ nativeHookRelayGeneration: "generation-warm" })
+      .mockReturnValueOnce({ nativeHookRelayGeneration: "generation-warm-next" });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      buildFinalConfigPatch,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toEqual({});
+    const reused = await startOrResumeThread(common);
+
+    expect(started).toMatchObject({
+      clientId: "client-warm",
+      threadId: "thread-warm",
+      nativeHookRelayGeneration: "generation-warm",
+      lifecycle: { action: "started" },
+    });
+    expect(reused).toMatchObject({
+      clientId: "client-warm",
+      threadId: "thread-warm",
+      nativeHookRelayGeneration: "generation-warm-next",
+      lifecycle: { action: "resumed" },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      nativeHookRelayGeneration: "generation-warm-next",
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(1, { action: "start" });
+    expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(2, {
+      action: "resume",
+      binding: expect.objectContaining({ threadId: "thread-warm" }),
+    });
+  });
+
+  it("reuses an isolated retained thread without dropping native skill isolation", async () => {
+    vi.stubEnv("HOME", tempDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
+    const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-isolated-workspace");
+    const personalSkill = path.join(tempDir, ".claude", "skills", "personal", "SKILL.md");
+    await fs.mkdir(path.dirname(personalSkill), { recursive: true });
+    await fs.writeFile(personalSkill, "personal");
+    const personalSkillRealPath = await fs.realpath(personalSkill);
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: workspaceDir,
+              errors: [],
+              skills: [
+                {
+                  name: "personal",
+                  description: "Personal skill",
+                  path: personalSkillRealPath,
+                  scope: "user",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-warm-isolated");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-isolated",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toEqual({});
+    await expect(startOrResumeThread(common)).resolves.toMatchObject({
+      threadId: "thread-warm-isolated",
+      lifecycle: { action: "resumed" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["skills/list", "thread/start"]);
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startRequest).toMatchObject({
+      config: {
+        "skills.include_instructions": false,
+        "skills.config": [{ path: personalSkillRealPath, enabled: false }],
+      },
+    });
+  });
+
+  it("releases a retained subscription when its unchanged binding loses ownership", async () => {
+    const sessionFile = path.join(tempDir, "warm-conflict-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-conflict-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-warm-conflict");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-conflict",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+    const conflictBindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        if (args[1].kind === "patch") {
+          return false;
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
       }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v0",
+    };
+
+    await expect(
+      startOrResumeThreadImpl({ ...common, bindingStore: conflictBindingStore }),
+    ).rejects.toMatchObject({ name: "CodexThreadBindingConflictError" });
+
+    expect(conflictBindingStore.mutate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: "patch", threadId: "thread-warm-conflict" }),
+    );
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("releases a retained subscription before changing context-engine mode", async () => {
+    const sessionFile = path.join(tempDir, "warm-context-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-context-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    let startCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        startCount += 1;
+        return threadStartResult(`thread-warm-context-${startCount}`);
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-context",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toEqual({});
+
+    params.contextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+    params.contextTokenBudget = 400_000;
+    const rotated = await startOrResumeThread(common);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/start",
+    ]);
+    expect(rotated).toMatchObject({
+      threadId: "thread-warm-context-2",
+      contextEngine: { engineId: "lossless-claw" },
+      lifecycle: { action: "started", rotatedContextEngineBinding: true },
+    });
+  });
+
+  it("releases and resumes a retained thread when its effective config changes", async () => {
+    const sessionFile = path.join(tempDir, "warm-config-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-config-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-config");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-config",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread({
+      ...common,
+      config: { test_setting: "before" },
+    });
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    const resumed = await startOrResumeThread({
+      ...common,
+      config: { test_setting: "after" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-config",
+      lifecycle: { action: "resumed" },
+    });
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+  });
+
+  it("releases and resumes a retained thread when its auth profile changes", async () => {
+    const sessionFile = path.join(tempDir, "warm-auth-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-auth-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.authProfileId = "openai:before";
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-auth");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-auth",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    params.authProfileId = "openai:after";
+    const resumed = await startOrResumeThread(common);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(resumed).toMatchObject({
+      authProfileId: "openai:after",
+      threadId: "thread-warm-auth",
+      lifecycle: { action: "resumed" },
+    });
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+  });
+
+  it("releases and resumes a retained thread when its model provider changes", async () => {
+    const sessionFile = path.join(tempDir, "warm-provider-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-provider-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-provider");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-provider",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    params.provider = "custom-provider";
+    const resumed = await startOrResumeThread(common);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "thread/resume",
+      expect.objectContaining({ modelProvider: "custom-provider" }),
+      expect.anything(),
+    );
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+  });
+
+  it("releases and resumes a retained thread when its approval policy changes", async () => {
+    const sessionFile = path.join(tempDir, "warm-policy-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-policy-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-policy");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-policy",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const appServer = createThreadLifecycleAppServerOptions();
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    appServer.approvalPolicy = "on-request";
+    const resumed = await startOrResumeThread(common);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "thread/resume",
+      expect.objectContaining({ approvalPolicy: "on-request" }),
+      expect.anything(),
+    );
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+  });
+
+  it("fails closed when a retained mode-transition subscription cannot be released", async () => {
+    const sessionFile = path.join(tempDir, "unsafe-warm-session.jsonl");
+    const workspaceDir = path.join(tempDir, "unsafe-warm-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-unsafe-warm");
+      }
+      if (method === "thread/unsubscribe") {
+        throw new Error("unsubscribe unavailable");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-unsafe-warm",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const abandonClient = vi.fn(async () => undefined);
+    const common = {
+      client,
+      abandonClient,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toEqual({});
+
+    params.contextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+    await expect(startOrResumeThread(common)).rejects.toMatchObject({
+      name: "CodexAppServerUnsafeSubscriptionError",
+      message: "Codex retained thread subscription could not be released: thread-unsafe-warm",
+    });
+
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("reuses one live ephemeral thread across two incognito turns", async () => {
+    const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:dashboard:incognito-two-turns";
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-incognito");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-incognito",
+      request,
+    } as never;
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const first = await startOrResumeThread(common);
+    const second = await startOrResumeThread(common);
+
+    expect(first).toMatchObject({
+      clientId: "client-incognito",
+      threadId: "thread-incognito",
+      lifecycle: { action: "started" },
+    });
+    expect(second).toMatchObject({
+      clientId: "client-incognito",
+      threadId: "thread-incognito",
+      lifecycle: { action: "resumed" },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ ephemeral: true }));
+  });
+
+  it("resumes the same restricted OpenClaw thread so turn two retains native memory", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return {
+          layers: [],
+          config: {
+            mcp_servers: {
+              "arbitrary.server": { command: "ignored" },
+              "local helper": { url: "https://mcp.example.test" },
+            },
+          },
+        };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-ring-zero-${nextThread++}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-ring-zero-1");
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("openclaw")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: true,
+    };
+
+    const first = await startOrResumeThread(common);
+    const second = await startOrResumeThread(common);
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("resumed");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/resume",
+      "mcpServerStatus/list",
+    ]);
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({
+        config: expect.objectContaining({
+          mcp_servers: {
+            "arbitrary.server": { enabled: false },
+            "local helper": { enabled: false },
+          },
+        }),
       }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v1",
+    ]);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-ring-zero-1");
+    expect(binding?.ringZeroConfigFingerprint).toEqual(expect.any(String));
+    expect(binding?.ringZeroClientInstanceId).toEqual(expect.any(String));
+  });
+
+  it("isolates transient message-only completion threads without replacing the parent binding", async () => {
+    const sessionFile = path.join(tempDir, "message-only-session.jsonl");
+    const workspaceDir = path.join(tempDir, "message-only-workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-parent",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["message"];
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.delegationCapability = "report_only";
+    params.inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    };
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return {
+          layers: [],
+          config: {
+            mcp_servers: {
+              "arbitrary.server": { command: "inherited-mcp" },
+              "local helper": { url: "https://mcp.example.test" },
+            },
+          },
+        };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-message-only-${nextThread++}`);
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const messageTool = createMessageDynamicTool("Send the source conversation reply");
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [messageTool],
+      config: {
+        "features.apps": true,
+        "features.current_time_reminder": true,
+        "features.deferred_executor": true,
+        "features.hooks": true,
+        "features.image_generation": true,
+        "features.multi_agent": true,
+        "features.multi_agent_v2": true,
+        "features.plugins": true,
+        "features.standalone_web_search": true,
+        "features.token_budget": true,
+        "orchestrator.mcp.enabled": true,
+        "tools.experimental_request_user_input.enabled": true,
+        "tools.update_plan.enabled": true,
+        mcp_servers: {
+          "request-only": { command: "request-mcp" },
+        },
+        web_search: "live",
+      },
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: false,
+    };
+
+    const first = await startOrResumeThread(common);
+    const second = await startOrResumeThread(common);
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("started");
+    expect(first.threadId).toBe("thread-message-only-1");
+    expect(second.threadId).toBe("thread-message-only-2");
+    expect(first).not.toHaveProperty("liveThreadConfigFingerprint");
+    expect(second).not.toHaveProperty("liveThreadConfigFingerprint");
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-parent");
+    const threadRequests = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(threadRequests).toHaveLength(2);
+    const resumeRequest = buildThreadResumeParams(params, {
+      threadId: first.threadId,
+      appServer: common.appServer,
+      dynamicTools: common.dynamicTools,
+      config: common.config,
+      nativeCodeModeEnabled: false,
+      hostSystemAgentActive: false,
+      ringZeroInheritedMcpServerNames: ["arbitrary.server", "local helper"],
+    });
+    const threadPayloads = [
+      ...threadRequests.map(([, threadRequest]) => threadRequest),
+      resumeRequest,
+    ];
+    for (const threadRequest of threadPayloads) {
+      expect(threadRequest).toEqual(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            mcp_servers: {
+              "arbitrary.server": { enabled: false },
+              "local helper": { enabled: false },
+              "request-only": { enabled: false },
+            },
+            web_search: "disabled",
+          }),
+          developerInstructions: expect.stringContaining("`message(action=send)`"),
+        }),
+      );
+      const typedThreadRequest = threadRequest as {
+        config?: Record<string, unknown>;
+        developerInstructions?: string;
+      };
+      const threadConfig = typedThreadRequest.config;
+      for (const disabledFeature of [
+        "features.apps",
+        "features.current_time_reminder",
+        "features.deferred_executor",
+        "features.hooks",
+        "features.image_generation",
+        "features.multi_agent",
+        "features.multi_agent_v2",
+        "features.plugins",
+        "features.standalone_web_search",
+        "features.token_budget",
+        "orchestrator.mcp.enabled",
+        "tools.experimental_request_user_input.enabled",
+        "tools.update_plan.enabled",
+      ]) {
+        expect(threadConfig?.[disabledFeature]).toBe(false);
+      }
+      expect(typedThreadRequest.developerInstructions).not.toContain("`spawn_agent`");
+      expect(typedThreadRequest.developerInstructions).not.toContain("`tool_search`");
+    }
+    for (const [, startRequest] of threadRequests) {
+      expect(startRequest).toEqual(
+        expect.objectContaining({ dynamicTools: [messageTool], environments: [] }),
+      );
+    }
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+    for (const threadId of ["thread-message-only-1", "thread-message-only-2"]) {
+      expect(request).toHaveBeenCalledWith(
+        "mcpServerStatus/list",
+        { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+        expect.anything(),
+      );
+    }
+  });
+
+  it("starts a fresh restricted OpenClaw thread for a new app-server client", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-ring-zero-${nextThread++}`);
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const common = {
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("openclaw")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: true,
+    };
+
+    const first = await startOrResumeThread({ ...common, client: { request } as never });
+    const second = await startOrResumeThread({ ...common, client: { request } as never });
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("started");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/resume");
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startCalls).toHaveLength(2);
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({ environments: [] }),
+      expect.objectContaining({ environments: [] }),
+    ]);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-ring-zero-2");
+  });
+
+  it("retires a warm OpenClaw binding when resume MCP attestation fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    let attestationCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-ring-zero");
+      }
+      if (method === "mcpServerStatus/list") {
+        attestationCount += 1;
+        return attestationCount === 1
+          ? { data: [], nextCursor: null }
+          : { data: [{ name: "late-server" }], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = { request } as never;
+    const abandonClient = vi.fn(async () => {});
+    const common = {
+      client,
+      abandonClient,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("openclaw")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: true,
+    };
+
+    await startOrResumeThread(common);
+    await expect(startOrResumeThread(common)).rejects.toThrow(
+      "Codex ring-zero MCP attestation failed",
+    );
+
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/resume",
+      "mcpServerStatus/list",
+    ]);
+    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
+  it("fails closed before starting OpenClaw when inherited MCP enumeration fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        throw new Error("config unavailable");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
       }),
-    ).toBe(false);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "local-loopback",
-        current: "local-runtime-v1",
+    ).rejects.toThrow("config unavailable");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-normal");
+  });
+
+  it.each([
+    { name: "legacy managed file", layer: { name: { type: "legacyManagedConfigTomlFromFile" } } },
+    { name: "legacy managed MDM", layer: { name: { type: "legacyManagedConfigTomlFromMdm" } } },
+    { name: "unknown future", layer: { name: { type: "futureManaged" } } },
+    { name: "malformed", layer: { name: {} } },
+  ])("fails closed on $name config layers before OpenClaw thread/start", async ({ layer }) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [layer] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
       }),
-    ).toBe(false);
+    ).rejects.toThrow(/config layer|config layers/u);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+  });
+
+  it.each(["hooks", "managed_hooks"] as const)(
+    "fails closed on non-empty %s requirements before OpenClaw thread/start",
+    async (requirementsKey) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["openclaw"];
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return {
+            requirements: {
+              [requirementsKey]: {
+                PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
+              },
+            },
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      await expect(
+        startOrResumeThread({
+          client: { request } as never,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [createNamedDynamicTool("openclaw")],
+          appServer: createThreadLifecycleAppServerOptions(),
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+          hostSystemAgentActive: true,
+        }),
+      ).rejects.toThrow("cannot override managed hooks");
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+      ]);
+    },
+  );
+
+  it("fails closed when requirements pin a restricted Codex feature on", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { hooks: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      }),
+    ).rejects.toThrow("cannot override required feature hooks");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+    ]);
+  });
+
+  it.each([
+    { name: "a newly raced server", attestation: { data: [{ name: "raced" }] } },
+    { name: "a malformed inventory", attestation: { data: "invalid" } },
+    { name: "an inventory RPC failure", attestation: new Error("inventory failed") },
+  ])("retires the cold OpenClaw thread when attestation finds $name", async ({ attestation }) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const abandonClient = vi.fn(async () => {});
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-ring-zero");
+      }
+      if (method === "mcpServerStatus/list") {
+        if (attestation instanceof Error) {
+          throw attestation;
+        }
+        return attestation;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      }),
+    ).rejects.toThrow();
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
   });
 
   it("does not write a binding when thread start resolves after abort", async () => {
@@ -319,17 +1488,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
+  it("starts a fresh Codex thread when dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-existing");
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
+        return threadStartResult(
+          request.mock.calls.length === 1 ? "thread-existing" : "thread-refreshed",
+        );
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -353,18 +1521,109 @@ describe("Codex app-server thread lifecycle bindings", () => {
       appServer,
     });
 
-    expect(binding.threadId).toBe("thread-existing");
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(binding.threadId).toBe("thread-refreshed");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send and manage messages for the current Discord channel.",
+        },
+      ],
+    });
   });
 
-  it("sends legacy flat dynamic tools on thread start", async () => {
+  it.each([
+    ["gpt-5.6-luna", "gpt-5.6-sol"],
+    ["gpt-5.6-luna", "gpt-5.6-terra"],
+    ["gpt-5.6-sol", "gpt-5.6-luna"],
+    ["gpt-5.6-terra", "gpt-5.6-luna"],
+  ])("starts a fresh thread when switching from %s to %s", async (bindingModel, requestedModel) => {
+    const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: bindingModel,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = requestedModel;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        const response = threadStartResult("thread-rebound");
+        response.model = (requestParams as { model: string }).model;
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ model: requestedModel });
+    expect(binding).toMatchObject({
+      threadId: "thread-rebound",
+      model: requestedModel,
+      lifecycle: { action: "started" },
+    });
+  });
+
+  it.each([
+    ["gpt-5.6-sol", "gpt-5.6-terra"],
+    ["gpt-5.6-terra", "gpt-5.6-sol"],
+  ])("resumes the thread when switching from %s to %s", async (bindingModel, requestedModel) => {
+    const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: bindingModel,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = requestedModel;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/resume") {
+        const response = threadStartResult("thread-existing");
+        response.model = (requestParams as { model: string }).model;
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      threadId: "thread-existing",
+      model: requestedModel,
+    });
+    expect(binding).toMatchObject({
+      threadId: "thread-existing",
+      model: requestedModel,
+      lifecycle: { action: "resumed" },
+    });
+  });
+
+  it("sends canonical typed dynamic tools on thread start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-flat-tools");
+        return threadStartResult("thread-typed-tools");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -385,17 +1644,22 @@ describe("Codex app-server thread lifecycle bindings", () => {
       | undefined;
     expect(startParams?.dynamicTools).toEqual([
       expect.objectContaining({
+        type: "function",
         name: "message",
         description: "Send a message.",
       }),
       expect.objectContaining({
-        name: "web_search",
-        namespace: "openclaw",
-        deferLoading: true,
+        type: "namespace",
+        name: "openclaw",
+        tools: [
+          expect.objectContaining({
+            type: "function",
+            name: "web_search",
+            deferLoading: true,
+          }),
+        ],
       }),
     ]);
-    expect(startParams?.dynamicTools?.[0]).not.toHaveProperty("type");
-    expect(startParams?.dynamicTools?.[1]).not.toHaveProperty("type");
   });
 
   it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
@@ -415,7 +1679,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/resume") {
-        throw new Error("stale thread");
+        // Only a structured RPC rejection proves Codex holds no resume
+        // subscription; anything else retires the client instead.
+        throw new CodexAppServerRpcError({ code: -32_000, message: "stale thread" }, method);
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "not_subscribed" };
       }
       if (method === "thread/start") {
         const response = threadStartResult("thread-new");
@@ -438,11 +1707,56 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
       | Record<string, unknown>
       | undefined;
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume", "thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/resume",
+      "thread/unsubscribe",
+      "thread/start",
+    ]);
     expect(startParams?.model).toBe("local-model-2");
     expect(startParams?.modelProvider).toBe("lmstudio");
     expect(binding.threadId).toBe("thread-new");
     expect(binding.modelProvider).toBe("lmstudio");
+  });
+
+  it("falls back to a fresh thread when a rejected resume also fails unsubscribe", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        throw new CodexAppServerRpcError({ code: -32_000, message: "thread not found" }, method);
+      }
+      if (method === "thread/unsubscribe") {
+        throw new Error("unsubscribe rejected");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    // The RPC rejection already proves no resume subscription exists, so a
+    // failing cosmetic unsubscribe must not block stale-binding recovery.
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(binding.threadId).toBe("thread-recovered");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/resume",
+      "thread/unsubscribe",
+      "thread/start",
+    ]);
   });
 
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
@@ -539,13 +1853,15 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.disableTools = false;
     const appServer = createThreadLifecycleAppServerOptions();
     let starts = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
       if (method === "thread/start") {
         starts += 1;
         return threadStartResult(`thread-${starts}`);
       }
       if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
+        // Resume must echo the requested thread; anything else is rejected as
+        // an unsafe subscription.
+        return threadStartResult((requestParams as { threadId: string }).threadId);
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -629,6 +1945,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(restrictedBinding.threadId).toBe("thread-2");
+    expect(restrictedBinding).not.toHaveProperty("liveThreadConfigFingerprint");
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
     expect(resumedBinding.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -641,6 +1958,65 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     expect(request.mock.calls[1]?.[1]).toMatchObject({
       config: { web_search: "disabled" },
+    });
+  });
+
+  it("uses a transient Codex thread for report-only fallback completion", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let starts = 0;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-${starts}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult((requestParams as { threadId: string }).threadId);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+    params.delegationCapability = "report_only";
+    const restrictedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+    const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
+    params.delegationCapability = "full";
+    const resumedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    expect(restrictedBinding.threadId).toBe("thread-2");
+    expect(restrictedBinding).not.toHaveProperty("liveThreadConfigFingerprint");
+    expect(savedAfterRestriction?.threadId).toBe("thread-1");
+    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      config: {
+        "features.multi_agent": false,
+        "features.multi_agent_v2": false,
+      },
     });
   });
 
@@ -691,6 +2067,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(transientBinding.threadId).toBe("thread-2");
+    expect(transientBinding).not.toHaveProperty("liveThreadConfigFingerprint");
     expect(savedAfterUnknownSupport?.threadId).toBe("thread-1");
     expect(resumedBinding.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -1017,13 +2394,15 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.disableTools = false;
     const appServer = createThreadLifecycleAppServerOptions();
     let starts = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
       if (method === "thread/start") {
         starts += 1;
         return threadStartResult(`thread-${starts}`);
       }
       if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
+        // Resume must echo the requested thread; anything else is rejected as
+        // an unsafe subscription.
+        return threadStartResult((requestParams as { threadId: string }).threadId);
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1055,7 +2434,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(restrictedBinding.threadId).toBe("thread-2");
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
-    expect(resumedBinding.threadId).toBe("thread-existing");
+    expect(resumedBinding.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/start",
@@ -1376,6 +2755,54 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "thread/resume",
     ]);
+  });
+
+  it("stores large dynamic tool fingerprints as bounded hashes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-large-tools");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const largeDynamicTools = [
+      {
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: Array.from({ length: 200 }, (_, index) => ({
+          ...createNamedDynamicTool(`tool_${index}`),
+          inputSchema: {
+            type: "object",
+            properties: Object.fromEntries(
+              Array.from({ length: 20 }, (__, propertyIndex) => [
+                `property_${propertyIndex}`,
+                {
+                  type: "string",
+                  description: "x".repeat(200),
+                },
+              ]),
+            ),
+            additionalProperties: false,
+          },
+        })),
+      },
+    ] satisfies Parameters<typeof startOrResumeThread>[0]["dynamicTools"];
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: largeDynamicTools,
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.dynamicToolsFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(binding?.dynamicToolsFingerprint).toHaveLength(71);
+    expect(binding?.dynamicToolsFingerprint).not.toContain("tool_199");
   });
 
   it("keeps plugin app bindings across transient native-tool-disabled turns", async () => {
@@ -1725,21 +3152,35 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it("revalidates compatible plugin app bindings without resending app config", async () => {
+  it("replays compatible plugin app bindings on thread resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-plugins");
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const basePolicyContext = createPluginAppPolicyContext();
+    const pluginAppPolicyContext = {
+      ...basePolicyContext,
+      apps: {
+        ...basePolicyContext.apps,
+        "google-calendar-app": {
+          ...basePolicyContext.apps["google-calendar-app"],
+          destructiveApprovalMode: "ask" as const,
+        },
+      },
+    };
+    const askApprovalConfigPatch = createPluginAppConfigPatch({ approvalsReviewer: "user" });
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
-      configPatch: createPluginAppConfigPatch(),
+      configPatch: askApprovalConfigPatch,
       fingerprint: "plugin-apps-config-1",
       inputFingerprint: "plugin-apps-input-1",
       policyContext: pluginAppPolicyContext,
@@ -1776,16 +3217,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    const requestCalls = request.mock.calls as unknown as Array<
+      [string, { approvalsReviewer?: string; config?: unknown }]
+    >;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
+      "auto_review",
+      "auto_review",
+    ]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      ...createPluginAppConfigPatch(),
+      ...askApprovalConfigPatch,
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      ...askApprovalConfigPatch,
     });
   });
 
@@ -1904,6 +3352,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      ...createPluginAppConfigPatch(),
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -2026,6 +3475,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
     });
   });
 
@@ -2247,6 +3703,18 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     delete params.authProfileId;
     params.agentDir = path.join(tempDir, "agent");
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:bound": {
+          type: "oauth",
+          provider: "openai",
+          access: "scoped-access",
+          refresh: "scoped-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
 
     const binding = await startOrResumeThread({
       client: {
@@ -2268,6 +3736,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           headers: {},
         },
         codeModeOnly: false,
+        loopDetectionPreToolUseRelay: true,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",
@@ -2279,5 +3748,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(binding.authProfileId).toBe("openai:bound");
+    expect(binding.modelProvider).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

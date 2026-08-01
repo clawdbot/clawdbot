@@ -3,10 +3,7 @@
  *
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
-import {
-  sanitizeInlineImageBase64,
-  sanitizeInlineImageDataUrlForStorage,
-} from "@openclaw/media-core/inline-image-data-url";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
@@ -14,7 +11,15 @@ import {
   redactSensitiveFieldValue,
   redactSensitiveText,
 } from "../logging/redact.js";
+import type { ProviderEndpointClass } from "./provider-attribution.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  sanitizeTranscriptImageDataUrlField,
+  sanitizeTranscriptImageRecord,
+  shouldPreserveNestedTranscriptImageDataUrlFields,
+  shouldPreserveTranscriptImagePayload,
+} from "./transcript-redact-images.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
@@ -22,27 +27,24 @@ function resolveTranscriptRedactPatterns(patterns?: string[]) {
 
 function redactTranscriptOptions(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const mode = cfg?.logging?.redactSensitive ?? configuredLogging?.redactSensitive;
   const patterns = resolveTranscriptRedactPatterns(
     cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
   );
-  if (mode === undefined && patterns === undefined) {
+  if (patterns === undefined) {
     return undefined;
   }
   return {
-    ...(mode !== undefined ? { mode } : {}),
+    mode: "tools" as const,
     ...(patterns !== undefined ? { patterns } : {}),
   };
 }
 
 function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
-  return (cfg?.logging?.redactSensitive ?? readLoggingConfig()?.redactSensitive) === "off";
+  void cfg;
+  return false;
 }
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
   return redactSensitiveText(value, redactTranscriptOptions(cfg));
 }
 
@@ -51,137 +53,15 @@ function redactTranscriptStructuredFieldValue(
   value: string,
   cfg?: OpenClawConfig,
 ): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
-  return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
+  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
+    ? redactTranscriptText(value, cfg)
+    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function isImageMimeType(value: unknown): value is string {
-  return typeof value === "string" && /^image\//iu.test(value.trim());
-}
-
-function normalizeImageMimeType(value: unknown): string | undefined {
-  return isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
-}
-
-function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefined {
-  return (
-    normalizeImageMimeType(value.mimeType) ??
-    normalizeImageMimeType(value.mediaType) ??
-    normalizeImageMimeType(value.media_type)
-  );
-}
-
-function imageMimeTypeFieldsForRecord(value: Record<string, unknown>): string[] {
-  return ["mimeType", "mediaType", "media_type"].filter((key) => isImageMimeType(value[key]));
-}
-
-function sanitizeOpaqueImageBase64(
-  base64: string,
-  mimeType: string | undefined,
-): { mimeType: string; base64: string } | undefined {
-  return mimeType ? sanitizeInlineImageBase64({ mimeType, base64 }) : undefined;
-}
-
-function isValidOpaqueImageBase64(base64: string, mimeType: string | undefined): boolean {
-  return sanitizeOpaqueImageBase64(base64, mimeType) !== undefined;
-}
-
-function isTranscriptImageContentBlock(value: Record<string, unknown>): boolean {
-  return (
-    value.type === "image" &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
-function isImageBase64SourceBlock(value: Record<string, unknown>): boolean {
-  return (
-    value.type === "base64" &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
-function sanitizeImageRecord(source: Record<string, unknown>): Record<string, unknown> | undefined {
-  const isImageBlock = source.type === "image";
-  const isBase64SourceBlock = source.type === "base64";
-  if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
-    return undefined;
-  }
-  const mimeTypeFields = imageMimeTypeFieldsForRecord(source);
-  if (mimeTypeFields.length === 0) {
-    return undefined;
-  }
-  const sanitized = sanitizeOpaqueImageBase64(source.data, imageMimeTypeForRecord(source));
-  if (!sanitized) {
-    return undefined;
-  }
-  const hasCanonicalMimeTypes = mimeTypeFields.every((key) => source[key] === sanitized.mimeType);
-  if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
-    return source;
-  }
-  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
-  for (const field of mimeTypeFields) {
-    next[field] = sanitized.mimeType;
-  }
-  return next;
-}
-
-function startsWithDataUrl(value: string): boolean {
-  return value.slice(0, "data:".length).toLowerCase() === "data:";
-}
-
-function sanitizeImageDataUrlField(
-  source: Record<string, unknown>,
-  key: string,
-  value: string,
-): string | undefined {
-  if (!startsWithDataUrl(value)) {
-    return undefined;
-  }
-  const isImageDataUrlField =
-    (source.type === "input_image" && key === "image_url") ||
-    ((source.type === "image" || source.type === "image_url") && key === "url") ||
-    (source.type === "image" && (key === "source" || key === "data"));
-  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
-}
-
-function shouldPreserveOpaqueImagePayload(
-  source: Record<string, unknown>,
-  key: string,
-  item: unknown,
-  preserveImageDataUrlFields: boolean,
-): boolean {
-  if (typeof item !== "string") {
-    return false;
-  }
-  if (
-    key === "data" &&
-    (isTranscriptImageContentBlock(source) || isImageBase64SourceBlock(source))
-  ) {
-    return true;
-  }
-  if (preserveImageDataUrlFields && key === "url") {
-    return startsWithDataUrl(item) && sanitizeInlineImageDataUrlForStorage(item) !== undefined;
-  }
-  return sanitizeImageDataUrlField(source, key, item) !== undefined;
-}
-
-function shouldPreserveNestedImageDataUrlFields(
-  source: Record<string, unknown>,
-  key: string,
-): boolean {
-  return (
-    key === "image_url" &&
-    (source.type === "image_url" || source.type === "input_image" || source.type === "image")
-  );
 }
 
 type TranscriptValueLocation =
@@ -192,6 +72,7 @@ type TranscriptValueLocation =
 
 type TranscriptAssistantRoute = {
   api?: string;
+  endpointClass?: ProviderEndpointClass;
   model?: string;
   provider?: string;
 };
@@ -201,6 +82,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 const GOOGLE_REASONING_APIS = new Set([
@@ -219,6 +101,8 @@ const OPENAI_COMPLETIONS_APIS = new Set([
   "openclaw-openai-completions-transport",
 ]);
 const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
+const GOOGLE_THOUGHT_SIGNATURE_RE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
 
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
@@ -233,8 +117,16 @@ function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined):
   return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
 }
 
-function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
+const isOpenAICompletionsRoute = (route?: TranscriptAssistantRoute) =>
+  OPENAI_COMPLETIONS_APIS.has(route?.api ?? "");
+
+function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return (
+    isOpenAICompletionsRoute(route) &&
+    (route?.provider === "google" ||
+      route?.endpointClass === "google-generative-ai" ||
+      route?.endpointClass === "google-vertex")
+  );
 }
 
 function isCustomProviderRoute(route: TranscriptAssistantRoute | undefined): boolean {
@@ -255,19 +147,56 @@ function isGitHubCopilotResponsesRoute(route: TranscriptAssistantRoute | undefin
   );
 }
 
-function isOpaqueReplayToken(value: string): boolean {
-  if (
-    value.length === 0 ||
-    value !== value.trim() ||
-    !OPAQUE_REPLAY_TOKEN_RE.test(value) ||
-    value.includes("\u2026")
-  ) {
+function isStructurallyValidOpaqueReplayToken(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value === value.trim() &&
+    OPAQUE_REPLAY_TOKEN_RE.test(value) &&
+    !value.includes("\u2026")
+  );
+}
+
+function isCredentialSafeOpaqueReplayToken(value: string): boolean {
+  if (!isStructurallyValidOpaqueReplayToken(value)) {
     return false;
   }
   // OpenAI encrypted reasoning is commonly Fernet-shaped and intentionally
-  // matches the generic gAAAA secret detector. Other known credential forms
-  // must never gain a transcript-redaction bypass.
+  // matches the generic gAAAA secret detector. Custom routes retain the
+  // credential-sensitive gate because their opaque fields are not attributable
+  // to a known provider contract.
   return value.startsWith("gAAAA") || redactSensitiveText(value, { mode: "tools" }) === value;
+}
+
+function isGoogleThoughtSignature(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value === value.trim() &&
+    !value.includes("\u2026") &&
+    GOOGLE_THOUGHT_SIGNATURE_RE.test(value)
+  );
+}
+
+function resolveTranscriptAssistantRoute(
+  source: Record<string, unknown>,
+  cfg: OpenClawConfig | undefined,
+): TranscriptAssistantRoute {
+  const api = typeof source.api === "string" ? source.api : undefined;
+  const model = typeof source.model === "string" ? source.model : undefined;
+  const provider = typeof source.provider === "string" ? source.provider : undefined;
+  const providerConfig = provider
+    ? findNormalizedProviderValue(cfg?.models?.providers, provider)
+    : undefined;
+  const modelConfig = model
+    ? providerConfig?.models?.find((candidate) => candidate.id === model)
+    : undefined;
+  const baseUrl = modelConfig?.baseUrl ?? providerConfig?.baseUrl;
+  const endpointClass = baseUrl ? resolveProviderEndpoint(baseUrl).endpointClass : undefined;
+  return {
+    ...(api ? { api } : {}),
+    ...(endpointClass ? { endpointClass } : {}),
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+  };
 }
 
 function isSafeReplayIdentifier(value: string, maxLength = 512): boolean {
@@ -383,30 +312,39 @@ function shouldPreserveOpaqueProviderPayload(
   location: TranscriptValueLocation,
   route: TranscriptAssistantRoute | undefined,
 ): boolean {
-  if (
-    location !== "assistant-content-block" ||
-    typeof item !== "string" ||
-    !isOpaqueReplayToken(item)
-  ) {
+  if (location !== "assistant-content-block" || typeof item !== "string") {
     return false;
   }
   const type = source.type;
-  const customRoute = isCustomProviderRoute(route);
-  return (
-    (type === "text" &&
-      key === "textSignature" &&
-      (isGoogleReasoningRoute(route) || customRoute)) ||
-    (type === "thinking" &&
-      ((key === "thinkingSignature" &&
-        (isAnthropicReasoningRoute(route) || isGoogleReasoningRoute(route) || customRoute)) ||
-        (key === "signature" && (isAnthropicReasoningRoute(route) || customRoute)) ||
-        (key === "thought_signature" && (isGoogleReasoningRoute(route) || customRoute)))) ||
+  const isAnthropicSlot =
+    (type === "thinking" && (key === "thinkingSignature" || key === "signature")) ||
     (type === "redacted_thinking" &&
-      (isAnthropicReasoningRoute(route) || customRoute) &&
+      (key === "data" || key === "signature" || key === "thinkingSignature"));
+  if (isAnthropicReasoningRoute(route) && isAnthropicSlot) {
+    return isStructurallyValidOpaqueReplayToken(item);
+  }
+  const isGoogleSlot =
+    (type === "text" && key === "textSignature") ||
+    (type === "thinking" && (key === "thinkingSignature" || key === "thought_signature")) ||
+    (type === "toolCall" && key === "thoughtSignature");
+  if (isGoogleReasoningRoute(route) && isGoogleSlot) {
+    return isGoogleThoughtSignature(item);
+  }
+  if (isGoogleOpenAICompletionsRoute(route) && type === "toolCall" && key === "thoughtSignature") {
+    // The OpenAI-compatible transport captures provider-owned opaque signatures
+    // such as SIG-OPAQUE-ABC==; native Google routes require standard base64.
+    return isStructurallyValidOpaqueReplayToken(item);
+  }
+  if (!isCustomProviderRoute(route) || !isCredentialSafeOpaqueReplayToken(item)) {
+    return false;
+  }
+  return (
+    (type === "text" && key === "textSignature") ||
+    (type === "thinking" &&
+      (key === "thinkingSignature" || key === "signature" || key === "thought_signature")) ||
+    (type === "redacted_thinking" &&
       (key === "data" || key === "signature" || key === "thinkingSignature")) ||
-    (type === "toolCall" &&
-      key === "thoughtSignature" &&
-      (isGoogleReasoningRoute(route) || isOpenAICompletionsRoute(route) || customRoute))
+    (type === "toolCall" && key === "thoughtSignature")
   );
 }
 
@@ -431,10 +369,13 @@ function sanitizeOpenAIReasoningSignature(
   }
   const encryptedContent = parsed.encrypted_content;
   const hasEncryptedContent = Object.hasOwn(parsed, "encrypted_content");
+  const isValidEncryptedContent = isOpenAIResponsesRoute(route)
+    ? isStructurallyValidOpaqueReplayToken
+    : isCredentialSafeOpaqueReplayToken;
   if (
     encryptedContent !== undefined &&
     encryptedContent !== null &&
-    (typeof encryptedContent !== "string" || !isOpaqueReplayToken(encryptedContent))
+    (typeof encryptedContent !== "string" || !isValidEncryptedContent(encryptedContent))
   ) {
     return undefined;
   }
@@ -469,20 +410,26 @@ function sanitizeOpenAIReasoningSignature(
   });
 }
 
-function sanitizeOpenAICompletionsToolSignature(value: string): string | undefined {
+function sanitizeOpenAICompletionsToolSignature(
+  value: string,
+  route: TranscriptAssistantRoute | undefined,
+): string | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
     return undefined;
   }
+  const isValidEncryptedData = isOpenAICompletionsRoute(route)
+    ? isStructurallyValidOpaqueReplayToken
+    : isCredentialSafeOpaqueReplayToken;
   if (
     !parsed ||
     typeof parsed !== "object" ||
     !isPlainTranscriptObject(parsed) ||
     parsed.type !== "reasoning.encrypted" ||
     typeof parsed.data !== "string" ||
-    !isOpaqueReplayToken(parsed.data) ||
+    !isValidEncryptedData(parsed.data) ||
     (parsed.id !== undefined &&
       parsed.id !== null &&
       (typeof parsed.id !== "string" || !isSafeReplayIdentifier(parsed.id))) ||
@@ -557,15 +504,11 @@ function redactTranscriptStructuredValue(
   }
 
   seen.add(value);
-  const sanitizedImageRecord = sanitizeImageRecord(value);
+  const sanitizedImageRecord = sanitizeTranscriptImageRecord(value);
   const source = sanitizedImageRecord ?? value;
   const currentAssistantRoute =
     location === "root" && source.role === "assistant"
-      ? {
-          ...(typeof source.api === "string" ? { api: source.api } : {}),
-          ...(typeof source.model === "string" ? { model: source.model } : {}),
-          ...(typeof source.provider === "string" ? { provider: source.provider } : {}),
-        }
+      ? resolveTranscriptAssistantRoute(source, cfg)
       : assistantRoute;
   let next: Record<string, unknown> | null = null;
   if (source !== value) {
@@ -607,7 +550,11 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      // These transports use the same validated v1 phase signature for pre-tool commentary;
+      // stripping it would resurface narration after reload or session resume.
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isAnthropicReasoningRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "text" &&
       key === "textSignature" &&
@@ -624,7 +571,10 @@ function redactTranscriptStructuredValue(
       key === "thoughtSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAICompletionsToolSignature(item);
+      const sanitizedSignature = sanitizeOpenAICompletionsToolSignature(
+        item,
+        currentAssistantRoute,
+      );
       if (sanitizedSignature !== undefined) {
         if (sanitizedSignature !== item) {
           next ??= { ...source };
@@ -638,12 +588,12 @@ function redactTranscriptStructuredValue(
       continue;
     }
     if (typeof item === "string") {
-      const sanitizedDataUrl =
-        preserveImageDataUrlFields && key === "url"
-          ? startsWithDataUrl(item)
-            ? sanitizeInlineImageDataUrlForStorage(item)
-            : undefined
-          : sanitizeImageDataUrlField(source, key, item);
+      const sanitizedDataUrl = sanitizeTranscriptImageDataUrlField({
+        source,
+        key,
+        value: item,
+        preserveImageDataUrlFields,
+      });
       if (sanitizedDataUrl !== undefined) {
         if (sanitizedDataUrl !== item) {
           next ??= { ...source };
@@ -652,7 +602,7 @@ function redactTranscriptStructuredValue(
         continue;
       }
     }
-    if (shouldPreserveOpaqueImagePayload(source, key, item, preserveImageDataUrlFields)) {
+    if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
       continue;
     }
     const redacted = redactTranscriptStructuredValue(
@@ -660,7 +610,7 @@ function redactTranscriptStructuredValue(
       cfg,
       key,
       seen,
-      preserveImageDataUrlFields || shouldPreserveNestedImageDataUrlFields(source, key),
+      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
       location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
         ? "assistant-content-array"
         : "nested",

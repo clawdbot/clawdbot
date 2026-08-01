@@ -1,8 +1,77 @@
-// Doctor startup maintenance tests cover channel startup maintenance checks.
-import { describe, expect, it } from "vitest";
-import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
+// Doctor startup maintenance tests cover channel preview warnings and startup repair flow.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  collectChannelPreviewWarningHealthFindings,
+  maybeRunDoctorStartupChannelMaintenance,
+} from "./doctor-startup-channel-maintenance.js";
+
+const mocks = vi.hoisted(() => ({
+  resolveDoctorChannelPreviewConfig: vi.fn(async (params: { cfg: unknown }) => ({
+    cfg: params.cfg,
+    diagnostics: [],
+  })),
+  collectChannelDoctorPreviewWarnings: vi.fn(async (): Promise<string[]> => []),
+}));
+
+vi.mock("../commands/doctor/shared/preview-warnings.js", () => ({
+  resolveDoctorChannelPreviewConfig: mocks.resolveDoctorChannelPreviewConfig,
+}));
+
+vi.mock("../commands/doctor/shared/channel-doctor.js", () => ({
+  collectChannelDoctorPreviewWarnings: mocks.collectChannelDoctorPreviewWarnings,
+}));
 
 describe("doctor startup channel maintenance", () => {
+  beforeEach(() => {
+    mocks.resolveDoctorChannelPreviewConfig.mockReset().mockImplementation(async (params) => ({
+      cfg: params.cfg,
+      diagnostics: [],
+    }));
+    mocks.collectChannelDoctorPreviewWarnings.mockReset().mockResolvedValue([]);
+  });
+
+  it("maps channel doctor preview warnings to structured findings", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+    mocks.collectChannelDoctorPreviewWarnings.mockResolvedValue([
+      "- channels.matrix: stale config needs startup maintenance.",
+    ]);
+
+    await expect(
+      collectChannelPreviewWarningHealthFindings({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix --dry-run",
+        env: { OPENCLAW_TEST: "1" },
+        allowExec: true,
+      }),
+    ).resolves.toEqual([
+      {
+        checkId: "core/doctor/channel-preview-warnings",
+        severity: "warning",
+        message: "channels.matrix: stale config needs startup maintenance.",
+        path: "channels.matrix",
+        requirement: "Configured channels should not emit doctor preview warnings.",
+        fixHint:
+          "Run `openclaw doctor --fix --dry-run` if the channel warning recommends repair, or update the affected channel config manually.",
+      },
+    ]);
+    expect(mocks.resolveDoctorChannelPreviewConfig).toHaveBeenCalledWith({
+      cfg,
+      env: { OPENCLAW_TEST: "1" },
+      allowExec: true,
+    });
+    expect(mocks.collectChannelDoctorPreviewWarnings).toHaveBeenCalledWith({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix --dry-run",
+      env: { OPENCLAW_TEST: "1" },
+    });
+  });
+
   it("runs Matrix startup migration during repair flows", async () => {
     const cfg = {
       channels: {

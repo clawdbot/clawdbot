@@ -32,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -58,6 +59,7 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -262,7 +264,7 @@ function resolveResponsesLimits(
   const images = config?.images;
   const fileLimits = resolveInputFileLimits(files);
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    maxBodyBytes: DEFAULT_BODY_BYTES,
     maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
@@ -422,6 +424,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -437,6 +440,7 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      senderIsOwner: params.senderIsOwner,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
@@ -454,9 +458,7 @@ export async function handleOpenResponsesHttpRequest(
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
-    (opts.config?.maxBodyBytes
-      ? limits.maxBodyBytes
-      : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
+    Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
@@ -480,6 +482,7 @@ export async function handleOpenResponsesHttpRequest(
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -753,6 +756,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -828,7 +832,7 @@ export async function handleOpenResponsesHttpRequest(
         const response = createResponseResource({
           id: responseId,
           model,
-          status: "incomplete",
+          status: "completed",
           output,
           usage,
         });
@@ -916,17 +920,21 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+  let streamedAssistantText = "";
   let bufferedReplaceableAssistantContent = "";
   let sawAssistantDelta = false;
+  let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalizeScheduled = false;
+  let finalizeErrorMessage: string | undefined;
 
   const maybeFinalize = () => {
-    if (closed) {
+    if (closed || finalizeScheduled) {
       return;
     }
     if (!finalizeRequested) {
@@ -935,62 +943,126 @@ export async function handleOpenResponsesHttpRequest(
     if (!finalUsage) {
       return;
     }
-    const usage = finalUsage;
+    // Lifecycle listeners can queue assistant flushes after this listener runs;
+    // the next turn preserves all same-turn deltas before the terminal snapshot.
+    finalizeScheduled = true;
+    setImmediate(() => {
+      if (closed || !finalizeRequested || !finalUsage) {
+        return;
+      }
+      if (unrepresentableAssistantReplacement) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
+      const usage = finalUsage;
+      const finalText =
+        accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;
 
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
 
-    writeSseEvent(res, {
-      type: "response.output_text.done",
-      item_id: outputItemId,
-      output_index: 0,
-      content_index: 0,
-      text: finalizeRequested.text,
+      writeSseEvent(res, {
+        type: "response.output_text.done",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        text: finalText,
+      });
+
+      writeSseEvent(res, {
+        type: "response.content_part.done",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: finalText },
+      });
+
+      const completedItem = createAssistantOutputItem({
+        id: outputItemId,
+        text: finalText,
+        phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
+        status: "completed",
+      });
+
+      writeSseEvent(res, {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: completedItem,
+      });
+
+      const finalResponse = createResponseResource({
+        id: responseId,
+        model,
+        status: finalizeRequested.status,
+        output: [completedItem],
+        usage,
+        ...(finalizeRequested.status === "failed"
+          ? {
+              error: {
+                code: "server_error",
+                message: finalizeErrorMessage || "Agent run failed",
+              },
+            }
+          : {}),
+      });
+
+      rememberResponseSession();
+      writeSseEvent(res, {
+        type: finalizeRequested.status === "failed" ? "response.failed" : "response.completed",
+        response: finalResponse,
+      });
+      writeDone(res);
+      res.end();
     });
-
-    writeSseEvent(res, {
-      type: "response.content_part.done",
-      item_id: outputItemId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: finalizeRequested.text },
-    });
-
-    const completedItem = createAssistantOutputItem({
-      id: outputItemId,
-      text: finalizeRequested.text,
-      phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
-      status: "completed",
-    });
-
-    writeSseEvent(res, {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: completedItem,
-    });
-
-    const finalResponse = createResponseResource({
-      id: responseId,
-      model,
-      status: finalizeRequested.status,
-      output: [completedItem],
-      usage,
-    });
-
-    rememberResponseSession();
-    writeSseEvent(res, { type: "response.completed", response: finalResponse });
-    writeDone(res);
-    res.end();
   };
 
-  const requestFinalize = (status: ResponseResource["status"], text: string) => {
+  const requestFinalize = (
+    status: ResponseResource["status"],
+    text: string,
+    errorMessage?: string,
+  ) => {
     if (finalizeRequested) {
       return;
     }
     finalizeStatus = status;
+    finalizeErrorMessage = errorMessage;
     finalizeRequested = { status, text };
     maybeFinalize();
+  };
+
+  const finalizeFailedResponse = (response: ResponseResource) => {
+    if (closed) {
+      return;
+    }
+    // Failure is terminal even when an earlier lifecycle event is waiting for usage.
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    writeSseEvent(res, { type: "response.failed", response });
+    writeDone(res);
+    res.end();
+  };
+
+  const finalizeUnrepresentableAssistantReplacement = () => {
+    const usage = finalUsage;
+    if (!usage) {
+      return;
+    }
+    rememberResponseSession();
+    finalizeFailedResponse(
+      createResponseResource({
+        id: responseId,
+        model,
+        status: "failed",
+        output: [],
+        error: {
+          code: "server_error",
+          message: "Assistant output cannot be represented as an append-only response stream.",
+        },
+        usage,
+      }),
+    );
   };
 
   // Send initial events
@@ -1045,29 +1117,35 @@ export async function handleOpenResponsesHttpRequest(
 
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
-      const hadAssistantDelta = sawAssistantDelta;
       if (replace && typeof text === "string") {
         accumulatedText = text;
-      }
-
-      const content = resolveAssistantStreamDeltaText(evt);
-      if (!content) {
-        if (
-          replace &&
-          typeof text === "string" &&
-          text &&
-          !toolChoiceConstraint &&
-          !hadAssistantDelta
-        ) {
+        if (toolChoiceConstraint) {
+          return;
+        }
+        // Responses deltas can only append. A conflicting replacement must
+        // fail after usage resolves instead of claiming inconsistent success.
+        if (!text.startsWith(streamedAssistantText)) {
+          unrepresentableAssistantReplacement = true;
+          return;
+        }
+        unrepresentableAssistantReplacement = false;
+        const replacementDelta = text.slice(streamedAssistantText.length);
+        if (replacementDelta) {
           sawAssistantDelta = true;
+          streamedAssistantText = text;
           writeSseEvent(res, {
             type: "response.output_text.delta",
             item_id: outputItemId,
             output_index: 0,
             content_index: 0,
-            delta: text,
+            delta: replacementDelta,
           });
         }
+        return;
+      }
+
+      const content = resolveAssistantStreamDeltaText(evt);
+      if (!content) {
         return;
       }
 
@@ -1083,6 +1161,7 @@ export async function handleOpenResponsesHttpRequest(
 
       sawAssistantDelta = true;
       accumulatedText += content;
+      streamedAssistantText += content;
 
       writeSseEvent(res, {
         type: "response.output_text.delta",
@@ -1100,7 +1179,11 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
-        requestFinalize(finalStatus, finalText);
+        const errorMessage =
+          phase === "error" && typeof evt.data?.error === "string"
+            ? evt.data.error.trim()
+            : undefined;
+        requestFinalize(finalStatus, finalText, errorMessage);
       }
     }
   });
@@ -1110,6 +1193,10 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  // The streamed run outlives this handler, whose root-work admission is
+  // released on return. Without retaining it, subordinate session/lane
+  // admissions inherit a released lease and fail as GatewayDrainingError.
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1122,11 +1209,17 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
+
+      if (unrepresentableAssistantReplacement) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
 
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
@@ -1254,10 +1347,10 @@ export async function handleOpenResponsesHttpRequest(
           nextStreamOutputIndex += 1;
         }
 
-        const incompleteResponse = createResponseResource({
+        const completedResponse = createResponseResource({
           id: responseId,
           model,
-          status: "incomplete",
+          status: "completed",
           output: [completedItem, ...functionCallItems],
           usage,
         });
@@ -1265,7 +1358,7 @@ export async function handleOpenResponsesHttpRequest(
         stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+        writeSseEvent(res, { type: "response.completed", response: completedResponse });
         writeDone(res);
         res.end();
         return;
@@ -1309,7 +1402,7 @@ export async function handleOpenResponsesHttpRequest(
           usage: finalUsage,
         });
 
-        writeSseEvent(res, { type: "response.failed", response: errorResponse });
+        finalizeFailedResponse(errorResponse);
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
@@ -1340,7 +1433,7 @@ export async function handleOpenResponsesHttpRequest(
           usage: finalUsage,
         });
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
+        finalizeFailedResponse(mappedResponse);
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
@@ -1349,13 +1442,14 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       rememberResponseSession();
-      writeSseEvent(res, { type: "response.failed", response: errorResponse });
+      finalizeFailedResponse(errorResponse);
       emitAgentEvent({
         runId: responseId,
         stream: "lifecycle",
         data: { phase: "error" },
       });
     } finally {
+      releaseRootWork?.();
       if (!closed) {
         // Emit lifecycle end to trigger completion
         emitAgentEvent({
@@ -1370,3 +1464,4 @@ export async function handleOpenResponsesHttpRequest(
   return true;
 }
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

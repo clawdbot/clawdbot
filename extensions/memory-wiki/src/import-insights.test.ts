@@ -8,6 +8,24 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("listMemoryWikiImportInsights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
@@ -138,5 +156,58 @@ describe("listMemoryWikiImportInsights", () => {
     expect(healthItem?.firstUserLine).toBeUndefined();
     expect(healthItem?.lastUserLine).toBeUndefined();
     expect(healthItem?.assistantOpener).toBeUndefined();
+  });
+
+  it("truncates import insight summaries without leaving lone surrogates", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-import-insights-surrogate-",
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const assistantOpener = `${"a".repeat(178)}😀${"b".repeat(20)}`;
+    await fs.writeFile(
+      path.join(rootDir, "sources", "chatgpt-emoji.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.chatgpt.emoji",
+          title: "ChatGPT Export: Emoji truncation",
+          sourceType: "chatgpt-export",
+          riskLevel: "low",
+          riskReasons: [],
+          labels: ["domain/work", "area/memory", "topic/memory"],
+          updatedAt: "2026-02-01T12:00:00.000Z",
+        },
+        body: [
+          "# ChatGPT Export: Emoji truncation",
+          "",
+          "## Auto Digest",
+          "- User messages: 1",
+          "- Assistant messages: 1",
+          "- First user line: summarize this",
+          "- Last user line: summarize this",
+          "- Preference signals:",
+          "  - prefers emoji-safe summaries",
+          "",
+          "## Active Branch Transcript",
+          "### User",
+          "",
+          "summarize this",
+          "",
+          "### Assistant",
+          "",
+          assistantOpener,
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await listMemoryWikiImportInsights(config);
+
+    const item = result.clusters[0]?.items[0];
+    expect(item?.summary).toBe(`${"a".repeat(178)}…`);
+    expect(hasLoneSurrogate(item?.summary ?? "")).toBe(false);
+    expect(item?.summary).not.toContain("�");
   });
 });

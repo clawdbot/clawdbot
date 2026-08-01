@@ -61,6 +61,9 @@ export function resolveNodeService(): GatewayService {
     uninstall: async (args) => {
       return base.uninstall({ ...args, env: withNodeServiceEnv(args.env) });
     },
+    start: async (args) => {
+      return base.start({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
+    },
     stop: async (args) => {
       return base.stop({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
     },
@@ -68,9 +71,11 @@ export function resolveNodeService(): GatewayService {
       return base.restart({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
     },
     isLoaded: async (args) => {
-      return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}) });
+      // Preserve the status read deadline so node probes fail soft under a
+      // wedged service manager instead of hanging the whole status command.
+      return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}), timeoutMs: args.timeoutMs });
     },
     readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
-    readRuntime: (env) => base.readRuntime(withNodeServiceEnv(env)),
+    readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };
 }

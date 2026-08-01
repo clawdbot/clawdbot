@@ -17,6 +17,7 @@ export {
   buildGroupHistoryKey,
   isCronSessionKey,
   isAcpSessionKey,
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,

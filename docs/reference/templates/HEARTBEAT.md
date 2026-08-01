@@ -1,24 +1,28 @@
 ---
-summary: "Workspace template for HEARTBEAT.md"
-title: "HEARTBEAT.md template"
+summary: "Migration guide for the retired HEARTBEAT.md workspace file"
+title: "Retired HEARTBEAT.md workspace file"
 read_when:
-  - Bootstrapping a workspace manually
+  - Migrating an older workspace that still has HEARTBEAT.md
 ---
 
-# HEARTBEAT.md template
+# HEARTBEAT.md is retired
 
-`HEARTBEAT.md` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.
+OpenClaw no longer creates `HEARTBEAT.md` in new workspaces or reads it at runtime. Heartbeat instructions now live in the system-owned monitor's cron scratch in the shared state database.
 
-The default runtime template is:
+Manage the current scratch with the monitor job id from `openclaw cron list --all`:
 
-```markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
+```bash
+openclaw cron scratch <jobId>
+openclaw cron scratch <jobId> --set "..."
+openclaw cron scratch <jobId> --file notes.md
+openclaw cron scratch <jobId> --unset
 ```
 
-Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.
+If an older workspace still contains `HEARTBEAT.md`, run `openclaw doctor --fix`. Doctor imports its instructions into monitor scratch, converts valid legacy `tasks:` entries into cron jobs, archives the original under the state directory, and removes the workspace file.
 
 ## Related
 
+- [Heartbeat](/gateway/heartbeat)
+- [Cron CLI](/cli/cron)
+- [Doctor](/cli/doctor)
 - [Heartbeat config](/gateway/config-agents)

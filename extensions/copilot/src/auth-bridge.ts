@@ -47,19 +47,19 @@ import { join, resolve } from "node:path";
  *   5. `useLoggedInUser` (default)
  */
 
-export const COPILOT_TOKEN_PROFILE_ERROR =
+const COPILOT_TOKEN_PROFILE_ERROR =
   "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
 
-export const COPILOT_DEFAULT_AGENT_ID = "copilot";
+const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
-export interface ResolvedCopilotAuth {
-  authMode: "useLoggedInUser" | "gitHubToken";
+interface ResolvedCopilotAuth {
+  authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   /** Present only when authMode is "gitHubToken". */
   gitHubToken?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileId?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileVersion?: string;
   /** Absolute, normalized path. */
   copilotHome: string;
@@ -67,7 +67,34 @@ export interface ResolvedCopilotAuth {
   agentId: string;
 }
 
-export interface ResolveCopilotAuthInput {
+export function createCopilotByokAuth(input: {
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  copilotHome?: string;
+  authProfileId?: string;
+  authProfileVersion?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: () => string;
+}): ResolvedCopilotAuth {
+  const base = resolveCopilotAuth({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+    copilotHome: input.copilotHome,
+    env: input.env,
+    homeDir: input.homeDir,
+    auth: { useLoggedInUser: true },
+  });
+  return {
+    ...base,
+    authMode: "byok",
+    authProfileId: input.authProfileId?.trim() || "byok:resolved",
+    authProfileVersion: input.authProfileVersion?.trim() || "byok:unfingerprinted",
+  };
+}
+
+interface ResolveCopilotAuthInput {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -209,7 +236,7 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
  * (`COPILOT_DEFAULT_AGENT_ID`) rather than throwing - the harness's
  * job is to keep running with a safe default, not to validate config.
  */
-export function sanitizeAgentId(value: string | undefined | null): string {
+function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim().toLowerCase();
   if (!trimmed) {
     return COPILOT_DEFAULT_AGENT_ID;

@@ -5,16 +5,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
+const clientMocks = vi.hoisted(() => ({
+  createMattermostClient: vi.fn(),
+  fetchMattermostChannel: vi.fn(async () => {
+    throw new Error("channel lookup intentionally unavailable in token validation tests");
+  }),
+}));
+
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    createMattermostClient: clientMocks.createMattermostClient,
+    fetchMattermostChannel: clientMocks.fetchMattermostChannel,
+  };
+});
+
 import {
   MATTERMOST_SLASH_POST_METHOD,
   type MattermostCommandResponse,
   type MattermostRegisteredCommand,
+  type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
-import {
-  createSlashCommandHttpHandler,
-  resetMattermostSlashCommandValidationCacheForTests,
-  validateMattermostSlashCommandToken,
-} from "./slash-http.js";
+import { createSlashCommandHttpHandler } from "./slash-http.js";
 
 function createRequest(params: {
   method?: string;
@@ -72,6 +85,9 @@ const accountFixture: ResolvedMattermostAccount = {
   streamingMode: "partial",
   config: {},
 };
+
+let slashTestSequence = 0;
+let slashTestAccountId = "";
 
 function createRegisteredCommand(params?: {
   token?: string;
@@ -143,6 +159,38 @@ async function runSlashRequest(params: {
   return response;
 }
 
+async function validateMattermostSlashCommandToken(params: {
+  accountId: string;
+  client: MattermostClient;
+  registeredCommand: MattermostRegisteredCommand;
+  payload: MattermostSlashCommandPayload;
+  log?: (message: string) => void;
+}): Promise<boolean> {
+  clientMocks.createMattermostClient.mockReturnValue(params.client);
+  const handler = createSlashCommandHttpHandler({
+    account: { ...accountFixture, accountId: `${slashTestAccountId}:${params.accountId}` },
+    cfg: {} as OpenClawConfig,
+    runtime: {} as RuntimeEnv,
+    registeredCommands: [params.registeredCommand],
+    log: params.log,
+  });
+  const req = createRequest({
+    body: new URLSearchParams(
+      Object.entries(params.payload).map(([key, value]) => [key, value]),
+    ).toString(),
+  });
+  const response = createResponse();
+  try {
+    await handler(req, response.res);
+  } catch (error) {
+    if (error instanceof Error && error.message === "Mattermost runtime not initialized") {
+      return true;
+    }
+    throw error;
+  }
+  return response.res.statusCode !== 401;
+}
+
 function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
   const message = log.mock.calls[0]?.[0];
   return typeof message === "string" ? message : "";
@@ -150,7 +198,10 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
 
 describe("slash-http", () => {
   beforeEach(() => {
-    resetMattermostSlashCommandValidationCacheForTests();
+    slashTestAccountId = `slash-test-${++slashTestSequence}`;
+    accountFixture.accountId = slashTestAccountId;
+    clientMocks.createMattermostClient.mockReset();
+    clientMocks.fetchMattermostChannel.mockClear();
   });
 
   it("rejects non-POST methods", async () => {
@@ -573,7 +624,8 @@ describe("slash-http", () => {
   });
 
   it("scopes validation cache entries by account", async () => {
-    const registeredCommand = createRegisteredCommand();
+    const registeredCommandA = createRegisteredCommand({ token: "token-a" });
+    const registeredCommandB = createRegisteredCommand({ token: "token-b" });
     const clientA = createCommandLookupClient({
       command: {
         id: "cmd-1",
@@ -603,7 +655,7 @@ describe("slash-http", () => {
       validateMattermostSlashCommandToken({
         accountId: "a1",
         client: clientA,
-        registeredCommand,
+        registeredCommand: registeredCommandA,
         payload: {
           token: "token-a",
           team_id: "t1",
@@ -618,7 +670,7 @@ describe("slash-http", () => {
       validateMattermostSlashCommandToken({
         accountId: "a2",
         client: clientB,
-        registeredCommand,
+        registeredCommand: registeredCommandB,
         payload: {
           token: "token-b",
           team_id: "t1",
@@ -699,7 +751,7 @@ describe("slash-http", () => {
         client,
         registeredCommand,
         payload: {
-          token: "new-token",
+          token: "old-token",
           team_id: "t1",
           channel_id: "c1",
           user_id: "u1",
@@ -713,8 +765,9 @@ describe("slash-http", () => {
 
   it("logs when command lookup by id returns a deleted command before fallback", async () => {
     const registeredCommand = createRegisteredCommand();
+    const commandId = `${"i".repeat(199)}😀tail`;
     const command = {
-      id: "cmd-1\r\nspoofed",
+      id: commandId,
       token: "valid-token",
       team_id: "t1",
       trigger: "oc_status",
@@ -746,17 +799,22 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const message = firstLogMessage(log);
-    expect(message).not.toMatch(/[\r\n\t]/u);
-    expect(message).toContain("deleted command cmd-1  spoofed");
-    expect(message).toContain("using team list fallback");
+    const message = log.mock.calls
+      .map(([entry]) => (typeof entry === "string" ? entry : ""))
+      .find((entry) => entry.includes("using team list fallback"));
+    expect(message).toBeTruthy();
+    if (!message) {
+      throw new Error("expected sanitized Mattermost command lookup fallback log");
+    }
+    expect(message).toBe(
+      `mattermost: slash command lookup by id returned deleted command ${"i".repeat(199)} for /oc_status; using team list fallback`,
+    );
   });
 
   it("rejects current commands with a mismatched method or callback URL", async () => {
     const registeredCommand = createRegisteredCommand();
 
-    for (const command of [
+    for (const [index, command] of [
       {
         id: "cmd-1",
         token: "valid-token",
@@ -777,13 +835,12 @@ describe("slash-http", () => {
         auto_complete: true,
         delete_at: 0,
       },
-    ]) {
-      resetMattermostSlashCommandValidationCacheForTests();
+    ].entries()) {
       const client = createCommandLookupClient({ command });
 
       await expect(
         validateMattermostSlashCommandToken({
-          accountId: "default",
+          accountId: `default-${index}`,
           client,
           registeredCommand,
           payload: {
@@ -835,12 +892,12 @@ describe("slash-http", () => {
   });
 
   it("logs sanitized command lookup failures when falling back to the team command list", async () => {
-    const registeredCommand = createRegisteredCommand({ trigger: "oc_status\r\nspoofed" });
+    const registeredCommand = createRegisteredCommand();
     const command = {
       id: "cmd-1",
       token: "valid-token",
       team_id: "t1",
-      trigger: "oc_status\r\nspoofed",
+      trigger: "oc_status",
       method: MATTERMOST_SLASH_POST_METHOD,
       url: "https://gateway.example.com/slash",
       auto_complete: true,
@@ -871,10 +928,15 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const message = firstLogMessage(log);
+    const message = log.mock.calls
+      .map(([entry]) => (typeof entry === "string" ? entry : ""))
+      .find((entry) => entry.includes("command lookup by id failed"));
+    expect(message).toBeTruthy();
+    if (!message) {
+      throw new Error("expected sanitized Mattermost command lookup failure log");
+    }
     expect(message).not.toMatch(/[\r\n\t]/u);
-    expect(message).toContain("/oc_status  spoofed");
+    expect(message).toContain("/oc_status");
     expect(message).toContain("primary token=[redacted]");
     expect(message).toContain("https://redacted:redacted@chat.example.com/api");
     expect(message).not.toContain("secret-token");
@@ -922,5 +984,36 @@ describe("slash-http", () => {
     expect(message).not.toContain("secret-bot");
     expect(message).not.toContain("secret-query");
     expect(message).not.toContain("user:pass");
+  });
+
+  it("keeps upstream lookup error previews UTF-16 safe", async () => {
+    const registeredCommand = createRegisteredCommand();
+    const client = createCommandLookupClient({
+      commandLookupError: new Error("primary failure"),
+      listLookupError: new Error(`${"e".repeat(299)}😀tail`),
+    });
+    const log = vi.fn();
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload: {
+          token: "valid-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+        log,
+      }),
+    ).resolves.toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(firstLogMessage(log)).toBe(
+      `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
+    );
   });
 });

@@ -10,12 +10,7 @@ type MessageLike = {
   role?: unknown;
   content?: unknown;
   timestamp?: unknown;
-};
-
-type EntryLike = {
-  id?: unknown;
-  type?: unknown;
-  message?: unknown;
+  __openclaw?: unknown;
 };
 
 type DuplicateUserMessageOptions = {
@@ -52,8 +47,13 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS) {
     return undefined;
   }
+  // Persisted sender identity keeps distinct participants separate while senderless legacy
+  // turns retain the old retry behavior. A JSON tuple avoids sender/text delimiter collisions.
+  const metadata = message["__openclaw"];
+  const senderId =
+    isRecord(metadata) && typeof metadata.senderId === "string" ? metadata.senderId : "";
   return {
-    key: text.normalize("NFC").toLowerCase(),
+    key: JSON.stringify([senderId, text.normalize("NFC").toLowerCase()]),
     timestamp: message.timestamp,
   };
 }
@@ -84,31 +84,4 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     result.push(message);
   }
   return removed > 0 ? result : [...messages];
-}
-
-/** Collects session entry ids that should be skipped when building a compaction branch summary. */
-export function collectDuplicateUserMessageEntryIdsForCompaction(
-  entries: readonly EntryLike[],
-  options: DuplicateUserMessageOptions = {},
-): Set<string> {
-  const windowMs = options.windowMs ?? DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS;
-  const lastSeenAtByKey = new Map<string, number>();
-  const duplicateIds = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type !== "message" || typeof entry.id !== "string") {
-      continue;
-    }
-    const signature = duplicateSignature(
-      isRecord(entry.message) ? (entry.message as MessageLike) : undefined,
-    );
-    if (!signature) {
-      continue;
-    }
-    const lastSeenAt = lastSeenAtByKey.get(signature.key);
-    lastSeenAtByKey.set(signature.key, signature.timestamp);
-    if (typeof lastSeenAt === "number" && signature.timestamp - lastSeenAt <= windowMs) {
-      duplicateIds.add(entry.id);
-    }
-  }
-  return duplicateIds;
 }

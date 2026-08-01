@@ -1,8 +1,10 @@
 // Low-level CLI argv helpers for root options, help/version detection, and command paths.
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
+  getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -12,7 +14,12 @@ import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const ROOT_COMMAND_DESCRIPTORS = [
+  ...CORE_CLI_COMMAND_DESCRIPTORS.filter(
+    (descriptor) => descriptor.name !== "claws" || isExperimentalClawsEnabled(),
+  ),
+  ...SUB_CLI_DESCRIPTORS,
+];
 const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
   ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
 );
@@ -22,14 +29,8 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
   ),
 );
 
-export function hasHelpOrVersion(argv: string[]): boolean {
-  return (
-    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
-  );
-}
-
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
-  if (hasRootVersionAlias(argv)) {
+  if (isRootVersionInvocation(argv)) {
     return true;
   }
 
@@ -46,7 +47,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
       i += rootConsumed - 1;
       continue;
     }
-    if (HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) {
+    if (HELP_FLAGS.has(arg)) {
       return true;
     }
     if (arg.startsWith("-")) {
@@ -163,6 +164,42 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
+/** Match fast-path command help only when no command option can own the help token as a value. */
+export function isSimpleCommandHelpInvocation(
+  argv: string[],
+  commandNames: ReadonlySet<string>,
+): boolean {
+  const args = argv.slice(2);
+  let commandSeen = false;
+  let helpSeen = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    const rootConsumed = commandSeen ? 0 : consumeRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      if (!commandSeen) {
+        return false;
+      }
+      helpSeen = true;
+      continue;
+    }
+    if (arg.startsWith("-") || commandSeen) {
+      return false;
+    }
+    if (!commandNames.has(arg)) {
+      return false;
+    }
+    commandSeen = true;
+  }
+  return commandSeen && helpSeen;
+}
+
 type HelpNormalizationPositional = { value: string; index: number };
 
 type HelpNormalizationScanResult =
@@ -229,8 +266,12 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   ) {
     return argv;
   }
+  const [runtimePath, entryPath] = argv;
+  if (runtimePath === undefined || entryPath === undefined) {
+    return argv;
+  }
 
-  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
+  return [runtimePath, entryPath, ...rootOptions, primary.value, target.value, "--help"];
 }
 
 export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
@@ -241,26 +282,34 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   const { positionals, rootOptions, helpFlagIndex } = scan;
 
   const [help, target] = positionals;
+  // The --help flag must trail the LAST positional so nested targets like
+  // `help plugins list --help` still normalize (target is only the first one).
+  const lastPositional = positionals.at(-1);
   if (
     help?.value !== "help" ||
     !target ||
-    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
+    !lastPositional ||
+    (helpFlagIndex !== null && helpFlagIndex !== lastPositional.index + 1)
   ) {
+    return argv;
+  }
+  const [runtimePath, entryPath] = argv;
+  if (runtimePath === undefined || entryPath === undefined) {
     return argv;
   }
 
   const targetPath = positionals.slice(1).map((positional) => positional.value);
-  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
+  return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
 
-export type NormalizeRootNoColorArgvOptions = {
+type NormalizeRootNoColorArgvOptions = {
   shouldPreserveNoColor?: (params: {
     remainingArgs: readonly string[];
     noColorIndex: number;
   }) => boolean;
 };
 
-export type NormalizeRootLogLevelArgvOptions = {
+type NormalizeRootLogLevelArgvOptions = {
   shouldPreserveLogLevel?: (params: {
     remainingArgs: readonly string[];
     logLevelIndex: number;
@@ -328,7 +377,10 @@ export function normalizeRootNoColorArgv(
   const movedNoColorArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
-    const arg = remainingArgs[index];
+    const arg = remainingArgs.at(index);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       nextArgs.push(...remainingArgs.slice(index));
       break;
@@ -363,7 +415,10 @@ export function normalizeRootLogLevelArgv(
   const movedLogLevelArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
-    const arg = remainingArgs[index];
+    const arg = remainingArgs.at(index);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       nextArgs.push(...remainingArgs.slice(index));
       break;
@@ -398,7 +453,10 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   const args = argv.slice(2);
   let value: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = args.at(i);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       break;
     }
@@ -443,40 +501,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
-}
-
-function getCommandPathInternal(
-  argv: string[],
-  depth: number,
-  opts: { skipRootOptions: boolean },
-): string[] {
-  const args = argv.slice(2);
-  const path: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg) {
-      continue;
-    }
-    if (arg === "--") {
-      break;
-    }
-    if (opts.skipRootOptions) {
-      const consumed = consumeRootOptionToken(args, i);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    path.push(arg);
-    if (path.length >= depth) {
-      break;
-    }
-  }
-  return path;
+  return getRootOptionAwareCommandPath(argv, depth);
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {
@@ -569,31 +594,20 @@ export function getCommandPositionalsWithRootOptions(
   return positionals;
 }
 
-export function buildParseArgv(params: {
-  programName?: string;
-  rawArgs?: string[];
-  fallbackArgv?: string[];
-}): string[] {
-  const baseArgv =
-    params.rawArgs && params.rawArgs.length > 0
-      ? params.rawArgs
-      : params.fallbackArgv && params.fallbackArgv.length > 0
-        ? params.fallbackArgv
-        : process.argv;
-  const programName = params.programName ?? "";
+export function buildParseArgv(rawArgs: string[], programName = "openclaw"): string[] {
   const normalizedArgv =
-    programName && baseArgv[0] === programName
-      ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("openclaw")
-        ? baseArgv.slice(1)
-        : baseArgv;
+    rawArgs[0] === programName
+      ? rawArgs.slice(1)
+      : rawArgs[0]?.endsWith("openclaw")
+        ? rawArgs.slice(1)
+        : rawArgs;
   const looksLikeNode =
     normalizedArgv.length >= 2 &&
     (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
-  return ["node", programName || "openclaw", ...normalizedArgv];
+  return ["node", programName, ...normalizedArgv];
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {
@@ -601,7 +615,11 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
     return true;
   }
   const [primary, secondary] = path;
-  if (primary === "health" || primary === "sessions") {
+  if (primary === "health" || primary === "logs" || primary === "sessions") {
+    return false;
+  }
+  // Remote RPC clients must not migrate state owned by the running gateway.
+  if (primary === "gateway" && secondary === "call") {
     return false;
   }
   if (primary === "update" && secondary === "status") {

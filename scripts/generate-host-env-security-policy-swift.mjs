@@ -29,7 +29,7 @@ const outputPath = path.join(
 const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
 const policy = loadHostEnvSecurityPolicy(rawPolicy);
 
-const renderSwiftStringArray = (items) => items.map((item) => `        "${item}"`).join(",\n");
+const renderSwiftStringArray = (items) => items.map((item) => `        "${item}",`).join("\n");
 
 const generated = `// Generated file. Do not edit directly.
 // Source: src/infra/host-env-security-policy.json

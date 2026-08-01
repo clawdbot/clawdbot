@@ -1,8 +1,8 @@
 // Qqbot tests cover group plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
   DEFAULT_GROUP_PROMPT,
+  resolveGroupCommandLevelFromAccountConfig,
   resolveGroupConfig,
   resolveGroupSettings,
   resolveMentionPatterns,
@@ -15,9 +15,10 @@ describe("engine/config/group", () => {
       expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
+        commandLevel: "all",
         name: "",
         prompt: undefined,
-        historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
+        historyLimit: 50,
       });
     });
 
@@ -29,6 +30,7 @@ describe("engine/config/group", () => {
             groups: {
               "*": {
                 requireMention: false,
+                commandLevel: "strict",
                 historyLimit: 20,
                 name: "wild",
               },
@@ -38,6 +40,7 @@ describe("engine/config/group", () => {
       };
       const resolved = resolveGroupConfig(cfg, "G1");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("strict");
       expect(resolved.historyLimit).toBe(20);
       expect(resolved.name).toBe("wild");
     });
@@ -48,14 +51,15 @@ describe("engine/config/group", () => {
           qqbot: {
             appId: "1",
             groups: {
-              "*": { requireMention: true, historyLimit: 20 },
-              GROUPA: { requireMention: false, historyLimit: 5, name: "A" },
+              "*": { requireMention: true, commandLevel: "strict", historyLimit: 20 },
+              GROUPA: { requireMention: false, commandLevel: "all", historyLimit: 5, name: "A" },
             },
           },
         },
       };
       const resolved = resolveGroupConfig(cfg, "GROUPA");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("all");
       expect(resolved.historyLimit).toBe(5);
       expect(resolved.name).toBe("A");
     });
@@ -75,7 +79,7 @@ describe("engine/config/group", () => {
           qqbot: { appId: "1", groups: { "*": { historyLimit: "not a number" } } },
         },
       };
-      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
+      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(50);
     });
 
     describe("account-level defaultRequireMention layer", () => {
@@ -155,7 +159,27 @@ describe("engine/config/group", () => {
     });
   });
 
-  describe("resolveGroupSettings name", () => {
+  describe("resolveGroupCommandLevelFromAccountConfig", () => {
+    it("defaults to all when unset", () => {
+      expect(resolveGroupCommandLevelFromAccountConfig({}, "G")).toBe("all");
+    });
+
+    it("uses specific group before wildcard", () => {
+      expect(
+        resolveGroupCommandLevelFromAccountConfig(
+          {
+            groups: {
+              "*": { commandLevel: "strict" },
+              G1: { commandLevel: "all" },
+            },
+          },
+          "G1",
+        ),
+      ).toBe("all");
+    });
+  });
+
+  describe("group display name", () => {
     it("uses the first 8 chars of openid when name is unset", () => {
       expect(resolveGroupSettings({ cfg: {}, groupOpenid: "ABCDEFGH1234" }).name).toBe("ABCDEFGH");
     });
@@ -168,7 +192,7 @@ describe("engine/config/group", () => {
     });
   });
 
-  describe("resolveGroupConfig prompt", () => {
+  describe("group prompt", () => {
     it("returns the default prompt when nothing configured", () => {
       expect(resolveGroupConfig({}, "G").prompt ?? DEFAULT_GROUP_PROMPT).toContain("bot");
     });
@@ -187,7 +211,7 @@ describe("engine/config/group", () => {
     });
   });
 
-  describe("resolveGroupConfig ignoreOtherMentions", () => {
+  describe("ignoreOtherMentions", () => {
     it("defaults to false", () => {
       expect(resolveGroupConfig({}, "G").ignoreOtherMentions).toBe(false);
     });

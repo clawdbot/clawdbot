@@ -107,7 +107,7 @@ describe("vitest process group helpers", () => {
     expectListenerCount(listeners, "SIGTERM", 1);
     expectListenerCount(listeners, "exit", 1);
 
-    getListenerSet(listeners, "SIGTERM").values().next().value();
+    getListenerSet(listeners, "SIGTERM").values().next().value!();
     expect(onSignal).toHaveBeenCalledWith("SIGTERM");
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
@@ -138,7 +138,7 @@ describe("vitest process group helpers", () => {
       kill,
     });
 
-    getListenerSet(listeners, "SIGTERM").values().next().value();
+    getListenerSet(listeners, "SIGTERM").values().next().value!();
     await Promise.resolve();
 
     expect(kill).toHaveBeenNthCalledWith(1, -4200, "SIGTERM");

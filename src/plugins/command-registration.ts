@@ -9,10 +9,8 @@ import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
   clearPluginCommands,
-  clearPluginCommandsForPlugin,
   isPluginCommandRegistryLocked,
   pluginCommands,
-  type RegisteredPluginCommand,
 } from "./command-registry-state.js";
 import {
   AGENT_PROMPT_SURFACE_KINDS,
@@ -53,6 +51,8 @@ function getReservedCommands(): Set<string> {
     "allowlist",
     "activation",
     "skill",
+    "learn",
+    "loop",
     "subagents",
     "kill",
     "steer",
@@ -78,7 +78,7 @@ function getAgentPromptSurfaces(): Set<string> {
 }
 
 /** Result returned when a plugin command registration succeeds or fails validation. */
-export type CommandRegistrationResult = {
+type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
@@ -90,7 +90,7 @@ export function isReservedCommandName(name: string): boolean {
 }
 
 /** Validates user-visible command names before plugin registration accepts them. */
-export function validateCommandName(
+function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -386,5 +386,4 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin };
-export type { RegisteredPluginCommand };
+export { clearPluginCommands };

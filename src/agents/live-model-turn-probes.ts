@@ -23,10 +23,7 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
   "google/gemini-3.1-pro-preview-customtools",
   "opencode-go/glm-5",
   "opencode-go/glm-5.1",
-  "opencode-go/mimo-v2-omni",
-  "opencode-go/mimo-v2-pro",
   "opencode-go/minimax-m2.5",
-  "openrouter/arcee-ai/trinity-mini",
   "openrouter/deepseek/deepseek-chat-v3.1",
   "openrouter/minimax/minimax-m2.5",
   "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -43,10 +40,9 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
 const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-pro-preview-customtools",
   "opencode/kimi-k2.6",
-  "opencode-go/mimo-v2-omni",
   "opencode-go/kimi-k2.5",
   "opencode-go/kimi-k2.6",
   "openrouter/amazon/nova-pro-v1",
@@ -157,4 +153,35 @@ export function fileProbeTextMatches(text: string): boolean {
 /** Returns whether image probe output contains an OK acknowledgement. */
 export function imageProbeTextMatches(text: string): boolean {
   return /\bok\b/i.test(text);
+}
+
+function formatImageProbeText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "<empty>";
+  }
+  return `<non-matching response: ${normalized.length} chars>`;
+}
+
+/** Retries one ambiguous image reply without weakening the strict OK matcher. */
+export async function runLiveModelImageProbeWithRetry(params: {
+  run: (attempt: 1 | 2) => Promise<string>;
+  onRetry: (firstText: string) => void;
+}): Promise<string> {
+  const firstText = await params.run(1);
+  if (imageProbeTextMatches(firstText)) {
+    return firstText;
+  }
+
+  params.onRetry(firstText);
+  const retryText = await params.run(2);
+  if (imageProbeTextMatches(retryText)) {
+    return retryText;
+  }
+
+  throw new Error(
+    "image probe did not return ok after retry " +
+      `(attempt 1: ${formatImageProbeText(firstText)}; ` +
+      `attempt 2: ${formatImageProbeText(retryText)})`,
+  );
 }

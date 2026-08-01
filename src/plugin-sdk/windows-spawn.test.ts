@@ -79,4 +79,54 @@ describe("resolveWindowsSpawnProgram", () => {
       windowsHide: undefined,
     });
   });
+
+  it("preserves custom batch-wrapper behavior instead of bypassing its target", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const targetPath = path.join(dir, "tool.exe");
+    const wrapperPath = path.join(dir, "wrapper.cmd");
+    await writeFile(targetPath, "", "utf8");
+    await writeFile(
+      wrapperPath,
+      '@ECHO off\r\nSET WRAPPER_FLAG=1\r\n"%~dp0\\tool.exe" %*\r\n',
+      "utf8",
+    );
+
+    const resolved = resolveWindowsSpawnProgram({
+      command: wrapperPath,
+      platform: "win32",
+      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+      execPath: "C:\\node\\node.exe",
+      allowShellFallback: true,
+    });
+
+    expect(resolved).toEqual({
+      command: wrapperPath,
+      leadingArgv: [],
+      resolution: "shell-fallback",
+      shell: true,
+    });
+  });
+
+  it("does not reinterpret a forwarded batch wrapper as a Node script", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const targetPath = path.join(dir, "inner.cmd");
+    const wrapperPath = path.join(dir, "wrapper.cmd");
+    await writeFile(targetPath, "@ECHO off\r\necho inner\r\n", "utf8");
+    await writeFile(wrapperPath, '@ECHO off\r\n"%~dp0\\inner.cmd" %*\r\n', "utf8");
+
+    const resolved = resolveWindowsSpawnProgram({
+      command: wrapperPath,
+      platform: "win32",
+      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+      execPath: "C:\\node\\node.exe",
+      allowShellFallback: true,
+    });
+
+    expect(resolved).toEqual({
+      command: wrapperPath,
+      leadingArgv: [],
+      resolution: "shell-fallback",
+      shell: true,
+    });
+  });
 });

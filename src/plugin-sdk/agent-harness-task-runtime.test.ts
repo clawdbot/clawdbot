@@ -84,6 +84,7 @@ describe("agent-harness-task-runtime", () => {
   it("rejects task run ids outside the configured harness scope", () => {
     const runtime = createAgentHarnessTaskRuntime({
       runtime: "subagent",
+      taskKind: "example-harness",
       scope: createScope(),
       runIdPrefix: "example:",
     });
@@ -104,6 +105,7 @@ describe("agent-harness-task-runtime", () => {
     expect(() =>
       createAgentHarnessTaskRuntime({
         runtime: "subagent",
+        taskKind: "example-harness",
         scope: forgedScope,
       }),
     ).toThrow(/host-issued scope/);

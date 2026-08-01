@@ -2,9 +2,7 @@
 const DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS = 30_000;
 
 /** Result from waiting for pending tool tasks before final delivery. */
-type PendingToolTaskDrainResult =
-  | { kind: "settled" }
-  | { kind: "timeout"; remaining: number };
+type PendingToolTaskDrainResult = { kind: "settled" } | { kind: "timeout"; remaining: number };
 
 type DrainOptions = {
   tasks: Set<Promise<void>>;

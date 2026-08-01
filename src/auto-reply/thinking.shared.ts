@@ -18,10 +18,10 @@ export type ThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
-export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 type UsageDisplayLevel = "off" | "tokens" | "full";
@@ -38,6 +38,19 @@ export type ThinkingCatalogEntry = {
   } | null;
 };
 
+/** Complete canonical level set accepted by user-facing thinking controls. */
+const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+];
+export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   off: 0,
@@ -48,6 +61,7 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   adaptive: 30,
   xhigh: 60,
   max: 70,
+  ultra: 80,
 };
 
 /** Normalizes user-provided thinking level strings to the canonical enum. */
@@ -62,6 +76,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   }
   if (collapsed === "max") {
     return "max";
+  }
+  if (collapsed === "ultra") {
+    return "ultra";
   }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
@@ -81,7 +98,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -180,6 +197,37 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
 /** Resolves response usage display mode with the persisted default. */
 export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
+}
+
+type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+function resolveMessagesResponseUsageDefault(
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): ResponseUsageInput | undefined {
+  if (typeof configured === "string") {
+    return configured;
+  }
+  if (configured && typeof configured === "object") {
+    return (channel ? configured[channel] : undefined) ?? configured.default;
+  }
+  return undefined;
+}
+
+export function resolveEffectiveResponseUsage(
+  sessionRaw: string | undefined | null,
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): UsageDisplayLevel {
+  const sessionNormalized = normalizeUsageDisplay(sessionRaw);
+  if (sessionNormalized !== undefined) {
+    return sessionNormalized;
+  }
+  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  return resolveResponseUsageMode(configDefault);
 }
 
 /** Normalizes elevated execution policy values. */

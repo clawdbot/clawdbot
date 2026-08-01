@@ -47,8 +47,6 @@ const listChannelPluginCatalogEntries = vi.fn((..._args: unknown[]) => []);
 vi.mock("../../channels/plugins/catalog.js", () => {
   return {
     getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
-    listChannelPluginCatalogEntries: (...args: unknown[]) =>
-      listChannelPluginCatalogEntries(...args),
     listRawChannelPluginCatalogEntries: (...args: unknown[]) =>
       listChannelPluginCatalogEntries(...args),
   };
@@ -88,7 +86,10 @@ vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
 }));
 
-const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
+const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({
+  candidates: [] as PluginCandidate[],
+  diagnostics: [],
+}));
 vi.mock("../../plugins/discovery.js", () => ({
   discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
 }));
@@ -96,13 +97,12 @@ vi.mock("../../plugins/discovery.js", () => ({
 import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginCandidate } from "../../plugins/discovery.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
 import {
@@ -887,6 +887,17 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     let sawTrustedCandidate = false;
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "custom-external-chat-plugin",
+          source: "/tmp/openclaw-test/custom-external-chat-plugin/index.ts",
+          rootDir: "/tmp/openclaw-test/custom-external-chat-plugin",
+          origin: "bundled",
+        },
+      ],
+      diagnostics: [],
+    });
     loadPluginManifestRegistry.mockImplementation((args: unknown) => {
       if (
         isRecord(args) &&

@@ -1,5 +1,6 @@
 // Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
@@ -7,8 +8,7 @@ import {
   ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
   findMissingRequiredAndroidNodeCommands,
 } from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
@@ -22,7 +22,13 @@ import { resolveNodeCommandAllowlist } from "./node-command-policy.js";
 const LIVE = isLiveTestEnabled();
 const LIVE_ANDROID_NODE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ANDROID_NODE);
 const describeLive = LIVE && LIVE_ANDROID_NODE ? describe : describe.skip;
-const SKIPPED_INTERACTIVE_COMMANDS = new Set<string>();
+const SKIPPED_INTERACTIVE_COMMANDS = new Set([
+  "screen.record",
+  "talk.ptt.start",
+  "talk.ptt.stop",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+]);
 
 type CommandOutcome = "success" | "error";
 
@@ -104,6 +110,36 @@ function assertObjectPayload(command: string, payload: unknown): Record<string, 
   return obj;
 }
 
+const VALID_A2UI_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Column: { children: { explicitList: ["text"] } } },
+        },
+        {
+          id: "text",
+          component: {
+            Text: {
+              text: { literalString: "Android Canvas live test" },
+              usageHint: "body",
+            },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
+function assertA2uiPushPayload(command: string, payload: unknown) {
+  const obj = assertObjectPayload(command, payload);
+  expect(obj.ok).toBe(true);
+  expect(readStringArray(obj.surfaces)).toContain("main");
+}
+
 const COMMAND_PROFILES: Record<string, CommandProfile> = {
   "canvas.present": {
     buildParams: () => ({ url: "about:blank" }),
@@ -140,14 +176,20 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "canvas.a2ui.push": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.push", payload);
+    },
   },
   "canvas.a2ui.pushJSONL": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.pushJSONL", payload);
+    },
   },
   "canvas.a2ui.reset": {
     buildParams: () => ({}),
@@ -260,10 +302,42 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     buildParams: () => ({}),
     timeoutMs: 20_000,
     outcome: "success",
+    allowedErrorCodes: ["SMS_PERMISSION_REQUIRED"],
     onSuccess: (payload) => {
       const obj = assertObjectPayload("sms.search", payload);
       expect(["number", "string"]).toContain(typeof obj.count);
       expect(Array.isArray(obj.messages)).toBe(true);
+    },
+  },
+  "system.notify": {
+    buildParams: () => ({
+      title: "OpenClaw Android E2E",
+      body: "Live node integration check",
+      sound: "none",
+      priority: "passive",
+    }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    allowedErrorCodes: ["NOT_AUTHORIZED"],
+  },
+  "contacts.search": {
+    buildParams: () => ({ query: "__openclaw_live_no_match__", limit: 1 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    allowedErrorCodes: ["CONTACTS_PERMISSION_REQUIRED"],
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("contacts.search", payload);
+      expect(Array.isArray(obj.contacts)).toBe(true);
+    },
+  },
+  "calendar.events": {
+    buildParams: () => ({ limit: 1 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    allowedErrorCodes: ["CALENDAR_PERMISSION_REQUIRED"],
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("calendar.events", payload);
+      expect(Array.isArray(obj.events)).toBe(true);
     },
   },
   "debug.logs": {
@@ -286,8 +360,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
   },
 };
 
-function resolveGatewayConnection() {
-  const cfg = getRuntimeConfig();
+async function resolveGatewayConnection() {
+  const cfg = await readLiveTestConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -313,15 +387,15 @@ function resolveGatewayConnection() {
 async function resolvePolicyConfigForRun(params: {
   client: GatewayClient;
   connectionDetails: ReturnType<typeof buildGatewayConnectionDetails>;
-  loadLocalConfig?: () => OpenClawConfig;
+  loadLocalConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
 }): Promise<OpenClawConfig> {
   if (shouldFetchRemotePolicyConfig(params.connectionDetails)) {
     const raw = await params.client.request("config.get", {});
     return unwrapRemoteConfigSnapshot(raw);
   }
 
-  const loadLocalConfig = params.loadLocalConfig ?? getRuntimeConfig;
-  return loadLocalConfig();
+  const loadLocalConfig = params.loadLocalConfig ?? readLiveTestConfig;
+  return await loadLocalConfig();
 }
 
 describe("resolvePolicyConfigForRun", () => {
@@ -442,11 +516,14 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
     throw new Error("no Android node found in node.list");
   }
 
-  return androidNodes.slice().toSorted((a, b) => {
-    const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
-    const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
-    return bMs - aMs;
-  })[0];
+  return expectDefined(
+    androidNodes.slice().toSorted((a, b) => {
+      const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
+      const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
+      return bMs - aMs;
+    })[0],
+    "androidNodes.slice().toSorted((a, b) => { const aMs = typeof a.connec... test invariant",
+  );
 }
 
 async function invokeNodeCommand(params: {
@@ -507,15 +584,59 @@ function evaluateCommandResult(params: {
   }
 
   const code = result.errorCode ?? "UNKNOWN";
-  if (profile.outcome === "success") {
-    return `expected success, got ${code}: ${result.errorMessage ?? "unknown error"}`;
-  }
   const allowed = new Set(profile.allowedErrorCodes ?? []);
   if (allowed.has(code)) {
     return null;
   }
+  if (profile.outcome === "success") {
+    return `expected success, got ${code}: ${result.errorMessage ?? "unknown error"}`;
+  }
   return `unexpected error ${code}: ${result.errorMessage ?? "unknown error"}`;
 }
+
+describe("android node command profiles", () => {
+  it("accepts declared environment errors for success profiles", () => {
+    const profile = expectDefined(COMMAND_PROFILES["contacts.search"], "contacts.search profile");
+    expect(
+      evaluateCommandResult({
+        result: {
+          command: "contacts.search",
+          ok: false,
+          errorCode: "CONTACTS_PERMISSION_REQUIRED",
+          errorMessage: "grant Contacts permission",
+          durationMs: 1,
+        },
+        profile,
+        ctx: { notifications: [] },
+      }),
+    ).toBeNull();
+  });
+
+  it("still rejects undeclared errors for success profiles", () => {
+    const profile = expectDefined(COMMAND_PROFILES["contacts.search"], "contacts.search profile");
+    expect(
+      evaluateCommandResult({
+        result: {
+          command: "contacts.search",
+          ok: false,
+          errorCode: "INVALID_REQUEST",
+          errorMessage: "invalid request",
+          durationMs: 1,
+        },
+        profile,
+        ctx: { notifications: [] },
+      }),
+    ).toContain("expected success");
+  });
+
+  it("keeps microphone capture commands out of the non-interactive matrix", () => {
+    expect(
+      ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"].every((command) =>
+        SKIPPED_INTERACTIVE_COMMANDS.has(command),
+      ),
+    ).toBe(true);
+  });
+});
 
 describeLive("android node capability integration (preconditioned)", () => {
   let client: GatewayClient | null = null;
@@ -525,7 +646,7 @@ describeLive("android node capability integration (preconditioned)", () => {
   const results = new Map<string, CommandResult>();
 
   beforeAll(async () => {
-    const { details, url, token, password } = resolveGatewayConnection();
+    const { details, url, token, password } = await resolveGatewayConnection();
     client = await connectGatewayClient({ url, token, password });
 
     const listRaw = await client.request("node.list", {});
@@ -572,7 +693,7 @@ describeLive("android node capability integration (preconditioned)", () => {
     );
     expect(
       commandsToRun.length,
-      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes allowCommands/denyCommands)",
+      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes.commands allow/deny)",
     ).toBeGreaterThan(0);
 
     const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);
@@ -592,7 +713,7 @@ describeLive("android node capability integration (preconditioned)", () => {
           `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
           `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
           `advertised by node.describe: ${commands.join(", ")}`,
-          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+          "precondition: update the Android node, or fix gateway.nodes.commands allow/deny before running this suite",
         ].join("\n"),
       );
     }
@@ -605,7 +726,10 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   const profiledCommands = Object.keys(COMMAND_PROFILES).toSorted();
   for (const command of profiledCommands) {
-    const profile = COMMAND_PROFILES[command];
+    const profile = expectDefined(
+      COMMAND_PROFILES[command],
+      "COMMAND_PROFILES[command] test invariant",
+    );
     const timeout = Math.max(20_000, profile.timeoutMs ?? 20_000) + 15_000;
     it(`command: ${command}`, { timeout }, async () => {
       if (!client) {

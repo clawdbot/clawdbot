@@ -5,7 +5,10 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
-import { resolveInboundMentionDecision } from "../mention-gating.js";
+import {
+  allowedImplicitMentionKindsFromConfig,
+  resolveInboundMentionDecision,
+} from "../mention-gating.js";
 import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
 import {
   applyEventAuthModeToSenderGate,
@@ -185,13 +188,12 @@ function activationMetadata(params: {
   shouldBypassMention?: boolean;
 }) {
   const mentionFacts = params.mentionFacts;
+  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(params.activation);
   return {
     hasMentionFacts: mentionFacts != null,
     requireMention: params.activation?.requireMention ?? false,
     allowTextCommands: params.activation?.allowTextCommands ?? false,
-    ...(params.activation?.allowedImplicitMentionKinds !== undefined
-      ? { allowedImplicitMentionKinds: params.activation.allowedImplicitMentionKinds }
-      : {}),
+    ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
     ...(params.activation?.order ? { order: params.activation.order } : {}),
     shouldSkip: params.shouldSkip,
     ...(mentionFacts?.canDetectMention !== undefined
@@ -215,6 +217,15 @@ function activationMetadata(params: {
   };
 }
 
+function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInput["activation"]) {
+  return (
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined)
+  );
+}
+
 function activationGate(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -222,6 +233,7 @@ function activationGate(params: {
 }): AccessGraphGate {
   const activation = params.policy.activation;
   const mentionFacts = params.state.mentionFacts;
+  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(activation);
   const activationResult = (input: {
     shouldSkip: boolean;
     effectiveWasMentioned?: boolean;
@@ -255,7 +267,7 @@ function activationGate(params: {
     policy: {
       isGroup: params.state.conversationKind !== "direct",
       requireMention: activation.requireMention,
-      allowedImplicitMentionKinds: activation.allowedImplicitMentionKinds,
+      allowedImplicitMentionKinds,
       allowTextCommands: activation.allowTextCommands,
       hasControlCommand: params.policy.command?.hasControlCommand ?? false,
       commandAuthorized: params.commandGate.allowed,

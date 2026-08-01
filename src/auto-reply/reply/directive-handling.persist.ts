@@ -4,78 +4,45 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import {
-  modelKey,
-  normalizeProviderId,
-  type ModelAliasIndex,
-} from "../../agents/model-selection.js";
+import { modelKey, type ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thinking.js";
+import { applySessionModelSelectionToEntry } from "../../model-picker/apply-session-model-selection.js";
+import {
+  formatThinkingLevels,
+  isThinkingLevelSupported,
+  resolveSupportedThinkingLevel,
+} from "../thinking.js";
+import {
+  applyModelRuntimeDirective,
+  resolveModelRuntimeDirective,
+} from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
+  applySessionDirectiveFields,
   canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
+  persistSessionDirectiveSnapshot,
+  resolveDirectiveTouchedSessionFields,
 } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ThinkLevel } from "./directives.js";
 import { resolveContextTokens } from "./model-selection.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 
-export type PersistedThinkingLevelRemap = {
+type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
   to: ThinkLevel;
   provider: string;
   model: string;
 };
-
-const MODEL_RUNTIME_CLEAR_VALUES = new Set(["auto", "default"]);
-
-function resolveModelRuntimeOverride(params: {
-  rawRuntime?: string;
-  provider: string;
-  cfg: OpenClawConfig;
-}):
-  | { kind: "clear" }
-  | { kind: "set"; runtime: string }
-  | { kind: "invalid"; runtime: string }
-  | undefined {
-  const rawRuntime = params.rawRuntime?.trim();
-  if (!rawRuntime) {
-    return undefined;
-  }
-
-  const runtime = normalizeProviderId(rawRuntime);
-  if (MODEL_RUNTIME_CLEAR_VALUES.has(runtime)) {
-    return { kind: "clear" };
-  }
-  if (runtime === "openclaw") {
-    return { kind: "set", runtime: "openclaw" };
-  }
-  if (normalizeProviderId(params.provider) === "openai" && runtime === "codex") {
-    return { kind: "set", runtime: "codex" };
-  }
-
-  const provider = normalizeProviderId(params.provider);
-  const backend = resolveCliRuntimeModelBackendBinding({
-    config: params.cfg,
-    provider,
-    runtime,
-  });
-  if (backend) {
-    return { kind: "set", runtime: backend.runtime };
-  }
-
-  return { kind: "invalid", runtime: rawRuntime };
-}
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
@@ -96,6 +63,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
   messageProvider?: string;
   surface?: string;
@@ -109,7 +77,10 @@ export async function persistInlineDirectives(params: {
   provider: string;
   model: string;
   contextTokens: number;
+  sessionChangesApplied: boolean;
   thinkingRemap?: PersistedThinkingLevelRemap;
+  errorText?: string;
+  runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
 }> {
   const {
     directives,
@@ -130,19 +101,17 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
-  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
+  let sessionChangesApplied = true;
+  const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
     commandAuthorized: params.commandAuthorized,
     senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
-    messageProvider: params.messageProvider,
-    surface: params.surface,
-    gatewayClientScopes: params.gatewayClientScopes,
-    commandAuthorized: params.commandAuthorized,
-    senderIsOwner: params.senderIsOwner,
+  const touchedSessionFields = resolveDirectiveTouchedSessionFields({
+    directives,
+    allowPrivilegedPersistence,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
@@ -153,105 +122,12 @@ export async function persistInlineDirectives(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, activeAgentId) ?? params.agentDir;
-
-  if (sessionEntry && sessionStore && sessionKey) {
-    const prevElevatedLevel =
-      (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
-      (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
-    const prevReasoningLevel = (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-    let elevatedChanged =
-      directives.hasElevatedDirective &&
-      directives.elevatedLevel !== undefined &&
-      elevatedEnabled &&
-      elevatedAllowed;
-    let reasoningChanged =
-      directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
-    let updated = false;
-
-    if (directives.clearThinkLevel) {
-      if (sessionEntry.thinkingLevel) {
-        delete sessionEntry.thinkingLevel;
-        updated = true;
-      }
-    } else if (directives.hasThinkDirective && directives.thinkLevel) {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-      updated = true;
-    }
-    if (directives.clearFastMode) {
-      if (sessionEntry.fastMode !== undefined) {
-        delete sessionEntry.fastMode;
-        updated = true;
-      }
-    }
-    if (
-      directives.hasVerboseDirective &&
-      directives.verboseLevel &&
-      allowInternalVerbosePersistence
-    ) {
-      applyVerboseOverride(sessionEntry, directives.verboseLevel);
-      updated = true;
-    }
-    if (
-      directives.hasTraceDirective &&
-      directives.traceLevel &&
-      (params.senderIsOwner || delegatedTraceAllowed)
-    ) {
-      applyTraceOverride(sessionEntry, directives.traceLevel);
-      updated = true;
-    }
-    if (directives.hasReasoningDirective && directives.reasoningLevel) {
-      if (directives.reasoningLevel === "off") {
-        // Persist explicit off so it overrides model-capability defaults.
-        sessionEntry.reasoningLevel = "off";
-      } else {
-        sessionEntry.reasoningLevel = directives.reasoningLevel;
-      }
-      reasoningChanged =
-        reasoningChanged ||
-        (directives.reasoningLevel !== prevReasoningLevel &&
-          directives.reasoningLevel !== undefined);
-      updated = true;
-    }
-    if (
-      directives.hasElevatedDirective &&
-      directives.elevatedLevel &&
-      elevatedEnabled &&
-      elevatedAllowed
-    ) {
-      // Persist "off" explicitly so inline `/elevated off` overrides defaults.
-      sessionEntry.elevatedLevel = directives.elevatedLevel;
-      elevatedChanged =
-        elevatedChanged ||
-        (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
-      updated = true;
-    }
-    if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
-      if (directives.execHost) {
-        sessionEntry.execHost = directives.execHost;
-        updated = true;
-      }
-      if (directives.execSecurity) {
-        sessionEntry.execSecurity = directives.execSecurity;
-        updated = true;
-      }
-      if (directives.execAsk) {
-        sessionEntry.execAsk = directives.execAsk;
-        updated = true;
-      }
-      if (directives.execNode) {
-        sessionEntry.execNode = directives.execNode;
-        updated = true;
-      }
-    }
-
-    const modelDirective =
-      directives.hasModelDirective && params.effectiveModelDirective
-        ? params.effectiveModelDirective
-        : undefined;
-    let modelUpdated = false;
-    if (modelDirective) {
-      const modelResolution = resolveModelSelectionFromDirective({
+  const modelDirective =
+    directives.hasModelDirective && params.effectiveModelDirective
+      ? params.effectiveModelDirective
+      : undefined;
+  const modelResolution = modelDirective
+    ? resolveModelSelectionFromDirective({
         directives: {
           ...directives,
           hasModelDirective: true,
@@ -265,121 +141,223 @@ export async function persistInlineDirectives(params: {
         allowedModelKeys,
         allowedModelCatalog: params.modelCatalog ?? [],
         provider,
-      });
-      if (modelResolution.modelSelection) {
-        const appliedModelOverride = applyModelOverrideToSessionEntry({
-          entry: sessionEntry,
-          selection: modelResolution.modelSelection,
-          profileOverride: modelResolution.profileOverride,
-          markLiveSwitchPending: params.markLiveSwitchPending,
-        });
-        const runtimeOverride = resolveModelRuntimeOverride({
-          rawRuntime: directives.rawModelRuntime,
-          provider: modelResolution.modelSelection.provider,
-          cfg,
-        });
-        if (runtimeOverride?.kind === "clear") {
-          if (sessionEntry.agentRuntimeOverride) {
-            delete sessionEntry.agentRuntimeOverride;
-            updated = true;
-          }
-        } else if (runtimeOverride?.kind === "set") {
-          if (sessionEntry.agentRuntimeOverride) {
-            delete sessionEntry.agentRuntimeOverride;
-            updated = true;
-          }
-          enqueueSystemEvent(
-            `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
-            {
-              sessionKey,
-              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}:ignored-session-runtime`,
-            },
-          );
-        } else if (runtimeOverride?.kind === "invalid") {
-          if (sessionEntry.agentRuntimeOverride) {
-            delete sessionEntry.agentRuntimeOverride;
-            updated = true;
-          }
-          enqueueSystemEvent(
-            `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
-            {
-              sessionKey,
-              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}`,
-            },
-          );
-        }
-        modelUpdated = appliedModelOverride.updated;
-        provider = modelResolution.modelSelection.provider;
-        model = modelResolution.modelSelection.model;
-        const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
-        if (
-          currentThinkingLevel &&
-          !directives.hasThinkDirective &&
-          !isThinkingLevelSupported({
-            provider,
-            model,
-            level: currentThinkingLevel,
-            catalog: thinkingCatalog,
-          })
-        ) {
-          const remappedThinkingLevel = resolveSupportedThinkingLevel({
-            provider,
-            model,
-            level: currentThinkingLevel,
-            catalog: thinkingCatalog,
-          });
-          if (remappedThinkingLevel !== currentThinkingLevel) {
-            sessionEntry.thinkingLevel = remappedThinkingLevel;
-            thinkingRemap = {
-              from: currentThinkingLevel,
-              to: remappedThinkingLevel,
-              provider,
-              model,
-            };
-            updated = true;
-          }
-        }
-        const nextLabel = `${provider}/${model}`;
-        if (nextLabel !== initialModelLabel) {
-          enqueueSystemEvent(
-            formatModelSwitchEvent(nextLabel, modelResolution.modelSelection.alias),
-            {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
-            },
-          );
-        }
-        updated = updated || modelUpdated;
-      }
+        agentId: activeAgentId,
+      })
+    : undefined;
+  const modelRuntimeResolution = modelResolution?.modelSelection
+    ? resolveModelRuntimeDirective({
+        rawRuntime: directives.rawModelRuntime,
+        provider: modelResolution.modelSelection.provider,
+        cfg,
+        sessionEntry,
+      })
+    : ({ kind: "unchanged" } as const);
+  let thinkingErrorText: string | undefined;
+  if (directives.hasThinkDirective && directives.thinkLevel) {
+    const resolvedProvider = modelResolution?.modelSelection?.provider ?? provider;
+    const resolvedModel = modelResolution?.modelSelection?.model ?? model;
+    const prospectiveSessionEntry = { ...sessionEntry };
+    applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
+    const prospectiveThinkingRuntime = resolveEffectiveAgentRuntime({
+      cfg,
+      provider: resolvedProvider,
+      modelId: resolvedModel,
+      agentId: activeAgentId,
+      sessionKey,
+      sessionEntry: prospectiveSessionEntry,
+    });
+    if (
+      !isThinkingLevelSupported({
+        provider: resolvedProvider,
+        model: resolvedModel,
+        level: directives.thinkLevel,
+        catalog: thinkingCatalog,
+        agentRuntime: prospectiveThinkingRuntime,
+      })
+    ) {
+      thinkingErrorText = `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, prospectiveThinkingRuntime)}.`;
     }
-    if (directives.hasQueueDirective && directives.queueReset) {
-      delete sessionEntry.queueMode;
-      delete sessionEntry.queueDebounceMs;
-      delete sessionEntry.queueCap;
-      delete sessionEntry.queueDrop;
+  }
+  const errorText =
+    modelResolution?.errorText ??
+    (modelRuntimeResolution.kind === "invalid" ? modelRuntimeResolution.errorText : undefined) ??
+    thinkingErrorText;
+  let modelRuntimeApplied = false;
+
+  if (!errorText && sessionEntry && sessionStore && sessionKey) {
+    const initialSessionEntry = { ...sessionEntry };
+    const appliedSessionEntry = sessionEntry;
+    const elevatedChanged =
+      directives.hasElevatedDirective &&
+      directives.elevatedLevel !== undefined &&
+      elevatedEnabled &&
+      elevatedAllowed;
+    const reasoningChanged =
+      directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+    let updated = applySessionDirectiveFields({
+      directives,
+      sessionEntry,
+      allowPrivilegedPersistence,
+      allowTracePersistence: params.senderIsOwner === true || delegatedTraceAllowed,
+      allowElevatedPersistence: elevatedEnabled && elevatedAllowed,
+      persistDirectiveOnlyFields: false,
+    });
+
+    let modelUpdated = false;
+    let modelApplied = true;
+    let modelSwitchEvent: { alias?: string; label: string } | undefined;
+    if (modelDirective && modelResolution?.modelSelection) {
+      if (modelRuntimeResolution.kind === "invalid") {
+        throw new Error("invalid model runtime reached persistence");
+      }
+      const appliedSelection = applySessionModelSelectionToEntry({
+        entry: sessionEntry,
+        request: {
+          ...modelResolution.modelSelection,
+          profileOverride: modelResolution.profileOverride,
+          runtime: modelRuntimeResolution,
+        },
+        runtime: modelRuntimeResolution,
+        markLiveSwitchPending: params.markLiveSwitchPending,
+      });
+      modelUpdated = appliedSelection.changed;
+      provider = modelResolution.modelSelection.provider;
+      model = modelResolution.modelSelection.model;
+      const thinkingRuntime = resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: activeAgentId,
+        sessionKey,
+        sessionEntry,
+      });
+      const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
+      if (
+        currentThinkingLevel &&
+        !directives.hasThinkDirective &&
+        !isThinkingLevelSupported({
+          provider,
+          model,
+          level: currentThinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        })
+      ) {
+        const remappedThinkingLevel = resolveSupportedThinkingLevel({
+          provider,
+          model,
+          level: currentThinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        });
+        if (remappedThinkingLevel !== currentThinkingLevel) {
+          sessionEntry.thinkingLevel = remappedThinkingLevel;
+          thinkingRemap = {
+            from: currentThinkingLevel,
+            to: remappedThinkingLevel,
+            provider,
+            model,
+          };
+        }
+      }
+      const nextLabel = `${provider}/${model}`;
+      if (nextLabel !== initialModelLabel) {
+        modelSwitchEvent = {
+          label: nextLabel,
+          ...(modelResolution.modelSelection.alias
+            ? { alias: modelResolution.modelSelection.alias }
+            : {}),
+        };
+      }
+      // Explicit model selections must still perform the atomic persisted
+      // winner check when their value matches the local snapshot.
       updated = true;
     }
-
     if (updated) {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+        const persistence = await persistSessionDirectiveSnapshot({
+          storePath,
+          sessionKey,
+          initialEntry: initialSessionEntry,
+          sessionEntry,
+          sessionStore,
+          hasModelSelection: Boolean(modelDirective),
+          reassertLiveModelSwitchPending:
+            modelUpdated &&
+            params.markLiveSwitchPending === true &&
+            sessionEntry.liveModelSwitchPending === true,
+          touchedFields: touchedSessionFields,
+        });
+        sessionChangesApplied = persistence.sessionChangesApplied;
+        modelApplied = persistence.modelSelectionApplied;
       }
-      if (modelDirective && modelUpdated) {
+      if (modelDirective && !modelApplied) {
+        sessionChangesApplied = false;
+        const persistedEntry = sessionStore[sessionKey];
+        provider = persistedEntry?.providerOverride?.trim() || defaultProvider;
+        model = persistedEntry?.modelOverride?.trim() || defaultModel;
+        thinkingRemap = undefined;
+      }
+      if (
+        modelDirective &&
+        modelResolution?.modelSelection &&
+        modelApplied &&
+        !modelResolution.modelSelection.isDefault &&
+        params.canPersistStickyModelSelection === true
+      ) {
+        persistStickyModelSelectionBestEffort({
+          agentId: activeAgentId,
+          model: `${provider}/${model}`,
+        });
+      }
+      if (modelDirective && modelUpdated && modelApplied) {
         triggerSessionPatchHook({
           cfg,
-          sessionEntry,
+          sessionEntry: appliedSessionEntry,
           sessionKey,
           patch: { key: sessionKey, model: modelDirective },
         });
+        refreshQueuedFollowupSession({
+          key: sessionKey,
+          nextProvider: provider,
+          nextModel: model,
+          nextRouteResolution: "resolved",
+          nextModelOverrideSource: "user",
+          nextAuthProfileId: appliedSessionEntry.authProfileOverride,
+          nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,
+          nextThinking: {
+            level: appliedSessionEntry.thinkingLevel,
+            catalog: thinkingCatalog,
+            agentRuntime: resolveEffectiveAgentRuntime({
+              cfg,
+              provider,
+              modelId: model,
+              agentId: activeAgentId,
+              sessionKey,
+              sessionEntry: appliedSessionEntry,
+            }),
+          },
+        });
       }
-      enqueueModeSwitchEvents({
-        enqueueSystemEvent,
-        sessionEntry,
+      if (sessionChangesApplied) {
+        enqueueModeSwitchEvents({
+          enqueueSystemEvent,
+          sessionEntry: appliedSessionEntry,
+          sessionKey,
+          elevatedChanged,
+          reasoningChanged,
+        });
+      }
+    }
+    modelRuntimeApplied =
+      modelApplied &&
+      (modelRuntimeResolution.kind === "clear" || modelRuntimeResolution.kind === "set");
+    if (modelSwitchEvent && modelApplied) {
+      enqueueSystemEvent(formatModelSwitchEvent(modelSwitchEvent.label, modelSwitchEvent.alias), {
         sessionKey,
-        elevatedChanged,
-        reasoningChanged,
+        contextKey: `model:${modelSwitchEvent.label}`,
       });
     }
   }
@@ -391,6 +369,13 @@ export async function persistInlineDirectives(params: {
     provider,
     model,
     thinkingRemap,
+    errorText,
+    runtimeChange:
+      modelRuntimeApplied &&
+      (modelRuntimeResolution.kind === "clear" || modelRuntimeResolution.kind === "set")
+        ? modelRuntimeResolution
+        : undefined,
+    sessionChangesApplied,
     contextTokens: resolveContextTokens({
       cfg,
       agentCfg,

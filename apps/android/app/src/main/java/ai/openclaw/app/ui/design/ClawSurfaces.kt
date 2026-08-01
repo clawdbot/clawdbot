@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.design
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -78,26 +77,6 @@ internal fun ClawLoadingState(
     ) {
       CircularProgressIndicator(color = ClawTheme.colors.primary, strokeWidth = 2.dp)
       Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
-  }
-}
-
-/**
- * Shared recoverable error block with the app's attention styling.
- */
-@Composable
-internal fun ClawErrorState(
-  title: String,
-  body: String,
-  modifier: Modifier = Modifier,
-  action: (@Composable () -> Unit)? = null,
-) {
-  ClawPanel(modifier = modifier) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawStatusPill(text = "Needs attention", status = ClawStatus.Danger)
-      Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      action?.invoke()
     }
   }
 }

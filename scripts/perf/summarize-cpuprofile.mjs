@@ -8,7 +8,7 @@ import { parsePositiveInt } from "../lib/numeric-options.mjs";
 
 const DEFAULT_LIMIT = 30;
 
-export function usage() {
+function usage() {
   return "Usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>";
 }
 
@@ -120,7 +120,7 @@ function validateProfile(profile, file) {
   }
 }
 
-export function summarizeProfile(file, limit) {
+function summarizeProfile(file, limit) {
   const profile = JSON.parse(fs.readFileSync(file, "utf8"));
   validateProfile(profile, file);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));

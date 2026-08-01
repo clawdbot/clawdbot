@@ -1,4 +1,5 @@
 // Resolves plugin install paths for local and package sources.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   resolveSafeInstallDir,
@@ -6,7 +7,8 @@ import {
   safePathSegmentHashed,
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 
 /** Encodes arbitrary input as a safe plugin install filename. */
 export function safePluginInstallFileName(input: string): string {
@@ -83,7 +85,7 @@ export function resolveDefaultPluginExtensionsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return path.join(resolveConfigDir(env, homedir), "extensions");
+  return resolveActivePluginInstallRoots(env, homedir).extensionsDir;
 }
 
 /** Resolves the default directory for managed npm plugin installs. */
@@ -91,11 +93,11 @@ export function resolveDefaultPluginNpmDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return path.join(resolveConfigDir(env, homedir), "npm");
+  return resolveActivePluginInstallRoots(env, homedir).npmDir;
 }
 
 /** Encodes an npm package name into a managed npm project directory name. */
-export function encodePluginNpmProjectDirName(packageName: string): string {
+function encodePluginNpmProjectDirName(packageName: string): string {
   const trimmed = packageName.trim();
   if (!trimmed) {
     throw new Error("invalid npm package name: missing");
@@ -120,6 +122,34 @@ export function resolvePluginNpmProjectDir(params: {
   );
 }
 
+const PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR = "__openclaw-generation__";
+const PLUGIN_NPM_GENERATION_KEY_HASH_CHARS = 16;
+
+/** Resolves the managed npm artifact-generation project directory prefix for a package. */
+export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
+  return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
+}
+
+/** Encodes a package generation fingerprint into a compact project directory suffix. */
+function encodePluginNpmGenerationKeyDirName(generationKey: string): string {
+  const digest = createHash("sha256").update(generationKey).digest("hex");
+  return `g-${digest.slice(0, PLUGIN_NPM_GENERATION_KEY_HASH_CHARS)}`;
+}
+
+/** Resolves an artifact-generation-specific managed npm project directory. */
+export function resolvePluginNpmGenerationProjectDir(params: {
+  packageName: string;
+  generationKey: string;
+  npmDir?: string;
+}): string {
+  return path.join(
+    resolvePluginNpmProjectsDir(params.npmDir),
+    `${resolvePluginNpmGenerationProjectDirPrefix(params.packageName)}${encodePluginNpmGenerationKeyDirName(
+      params.generationKey,
+    )}`,
+  );
+}
+
 /** Resolves the installed node_modules package directory for a managed npm plugin. */
 export function resolvePluginNpmPackageDir(params: {
   packageName: string;
@@ -137,7 +167,7 @@ export function resolveDefaultPluginGitDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,
 ): string {
-  return path.join(resolveConfigDir(env, homedir), "git");
+  return resolveActivePluginInstallRoots(env, homedir).gitDir;
 }
 
 /** Resolves the safe install directory for one plugin id. */

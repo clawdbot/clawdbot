@@ -1,13 +1,20 @@
-// Discord plugin module implements message handlerraft preview behavior.
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  type AgentPlanStep,
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressNarration,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements message handlerraft preview behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   convertMarkdownTables,
   stripInlineDirectiveTagsForDelivery,
@@ -40,12 +47,22 @@ export function createDiscordDraftPreviewController(params: {
   log: (message: string) => void;
 }) {
   const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
+  // can rewrite or cancel so the original payload cannot flash before durable delivery.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    allowProviderPreview &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -72,11 +89,24 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
-  // Final delivery cancels the compositor gate before Discord decides whether
-  // to edit the progress preview, so keep the pre-final eligibility bit.
+  // Final delivery can cancel the gate before Discord consumes collapse
+  // eligibility, so keep the pre-final state until that transition occurs.
   let progressDraftStartedBeforeFinal = false;
+  let progressDraftCollapsed = false;
+  let progressNarratorLifecycle: { beginTurn: () => void; stopTurn: () => void } | undefined;
   const previewToolProgressEnabled =
-    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+    Boolean(draftStream) &&
+    resolveChannelStreamingPreviewToolProgress(params.discordConfig, true, discordStreamMode);
+  const narrationProgressEnabled =
+    Boolean(draftStream) &&
+    discordStreamMode === "progress" &&
+    resolveChannelStreamingProgressNarration(params.discordConfig);
+  // Narration model input follows the channel's command-text display policy:
+  // "status" hides raw exec/bash text from viewers, so it must not reach the
+  // utility model either.
+  const narrationHideCommandText =
+    narrationProgressEnabled &&
+    resolveChannelStreamingPreviewCommandText(params.discordConfig) === "status";
   const suppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
@@ -89,6 +119,14 @@ export function createDiscordDraftPreviewController(params: {
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    reasoningGate: previewToolProgressEnabled,
+    commentaryItalics: false,
+    buildProgressEventLine: (input, options) =>
+      input.event === "tool" || input.event === "item"
+        ? buildChannelProgressDraftLineForEntry(params.discordConfig, input, options)
+        : buildChannelProgressDraftLine(input, options),
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -126,23 +164,66 @@ export function createDiscordDraftPreviewController(params: {
     resetProgressState();
   };
 
+  const pushPreambleHeadline = async (text?: string, options?: { itemId?: string }) => {
+    if (discordStreamMode === "progress") {
+      await progressDraft.pushPreambleHeadline(text, options);
+    }
+  };
+
+  const beginNewProgressTurn = (options?: { force?: boolean }) => {
+    const beganNewTurn = progressDraft.beginNewTurn(options);
+    if (beganNewTurn) {
+      progressDraftCollapsed = false;
+      progressDraftStartedBeforeFinal = false;
+      finalReplyDelivered = false;
+      finalizedViaPreviewMessage = false;
+      progressNarratorLifecycle?.beginTurn();
+    }
+    if (discordStreamMode === "progress") {
+      if (beganNewTurn) {
+        draftStream?.forceNewMessage("discard");
+      }
+    } else {
+      forceNewMessageIfNeeded();
+    }
+    return beganNewTurn;
+  };
+
   return {
     draftStream,
     previewToolProgressEnabled,
+    narrationProgressEnabled,
+    narrationHideCommandText,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
-      return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
+      return progressDraft.hasStarted;
+    },
+    get isProgressDraftVisible() {
+      return progressDraft.isVisible;
+    },
+    get hasProgressDraftToCollapse() {
+      return (
+        !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
+      );
+    },
+    markProgressDraftCollapsed() {
+      progressDraftCollapsed = true;
+      progressDraftStartedBeforeFinal = false;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
+    setProgressNarratorLifecycle(lifecycle: { beginTurn: () => void; stopTurn: () => void }) {
+      progressNarratorLifecycle = lifecycle;
+    },
     markFinalReplyStarted() {
       progressDraftStartedBeforeFinal ||= progressDraft.hasStarted;
       progressDraft.markFinalReplyStarted();
+      progressNarratorLifecycle?.stopTurn();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
@@ -151,15 +232,68 @@ export function createDiscordDraftPreviewController(params: {
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
     },
+    async retarget(channelId: string) {
+      await draftStream?.retarget(channelId);
+    },
+    async finalizeProgressReceipt(receiptLine: string) {
+      if (!draftStream || discordStreamMode !== "progress") {
+        return false;
+      }
+      const receipt = receiptLine.trim();
+      if (!receipt) {
+        return false;
+      }
+      const progressText = lastPartialText.trimEnd();
+      const maxProgressChars = Math.max(0, draftMaxChars - receipt.length - 1);
+      const fittedProgressText =
+        progressText.length > maxProgressChars
+          ? progressText.slice(progressText.length - maxProgressChars).trimStart()
+          : progressText;
+      draftStream.update(fittedProgressText ? `${fittedProgressText}\n${receipt}` : receipt);
+      await draftStream.stop();
+      if (!draftStream.messageId()) {
+        return false;
+      }
+      finalizedViaPreviewMessage = true;
+      return true;
+    },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
+    pushToolEvent: progressDraft.pushToolEvent,
+    pushItemEvent: progressDraft.pushItemEvent,
+    pushApprovalEvent: progressDraft.pushApprovalEvent,
+    pushCommandOutputEvent: progressDraft.pushCommandOutputEvent,
+    pushPatchEvent: progressDraft.pushPatchEvent,
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },
     ) {
       await progressDraft.pushToolProgress(line, options);
     },
+    async pushPlanProgress(steps?: AgentPlanStep[], options?: { explanation?: string }) {
+      await progressDraft.pushPlanProgress(steps, options);
+    },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       await progressDraft.pushReasoningProgress(text, options);
+    },
+    async pushNarrationProgress(text?: string) {
+      await progressDraft.pushNarrationProgress(text);
+    },
+    pushPreambleHeadline,
+    async pushPreambleItemEvent(
+      payload: { itemId?: string; progressText?: string },
+      noteCommentary: (itemId?: string, text?: string) => void,
+    ) {
+      await pushPreambleHeadline(payload.progressText, { itemId: payload.itemId });
+      if (!progressDraft.commentaryProgressEnabled) {
+        return;
+      }
+      const accepted = await progressDraft.pushCommentaryProgress(payload.progressText, {
+        itemId: payload.itemId,
+      });
+      // Count only sanitized commentary that actually streamed to the window.
+      if (accepted) {
+        noteCommentary(payload.itemId, payload.progressText);
+      }
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       await progressDraft.pushCommentaryProgress(text, options);
@@ -183,7 +317,7 @@ export function createDiscordDraftPreviewController(params: {
       if (chunks.length !== 1) {
         return undefined;
       }
-      const trimmed = chunks[0].trim();
+      const trimmed = expectDefined(chunks.at(0), "single Discord preview chunk").trim();
       if (!trimmed) {
         return undefined;
       }
@@ -254,10 +388,11 @@ export function createDiscordDraftPreviewController(params: {
       });
     },
     handleAssistantMessageBoundary() {
-      if (discordStreamMode === "progress") {
-        return;
-      }
-      forceNewMessageIfNeeded();
+      // Queued/followup turns need a fresh progress draft after the primary final.
+      return beginNewProgressTurn();
+    },
+    handleQueuedFollowupAdmitted() {
+      return beginNewProgressTurn({ force: true });
     },
     async flush() {
       if (!draftStream) {
@@ -283,9 +418,10 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalReplyDelivered) {
           await draftStream?.discardPending();
         }
-        if (!finalReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+        if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
+        await draftStream?.cleanupRetargeted();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

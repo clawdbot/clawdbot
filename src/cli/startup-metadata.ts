@@ -36,10 +36,14 @@ export function readCliStartupMetadata(moduleUrl: string): Record<string, unknow
   return null;
 }
 
-export const testing = {
+const testing = {
   resolveStartupMetadataPathCandidates,
   clearStartupMetadataCache(): void {
     startupMetadataByPath.clear();
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliStartupMetadataTestApi")] =
+    testing;
+}

@@ -43,8 +43,3 @@ export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env):
   );
   warned = true;
 }
-
-/** Resets the one-shot legacy env warning latch for tests. */
-export function resetLegacyOpenClawEnvWarningForTest(): void {
-  warned = false;
-}

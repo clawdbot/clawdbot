@@ -1,9 +1,17 @@
 // Regression coverage for pruning duplicate user turns before compaction.
 import { describe, expect, it } from "vitest";
-import {
-  collectDuplicateUserMessageEntryIdsForCompaction,
-  dedupeDuplicateUserMessagesForCompaction,
-} from "./compaction-duplicate-user-messages.js";
+import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
+
+const LONG_PROMPT = "please run the deployment status check for production";
+
+function userMessage(params: { timestamp: number; senderId?: string; content?: string }) {
+  return {
+    role: "user" as const,
+    content: params.content ?? LONG_PROMPT,
+    timestamp: params.timestamp,
+    ...(params.senderId ? { __openclaw: { senderId: params.senderId } } : {}),
+  };
+}
 
 describe("compaction duplicate user message pruning", () => {
   it("drops identical long user messages inside the duplicate window", () => {
@@ -54,28 +62,29 @@ describe("compaction duplicate user message pruning", () => {
     expect(dedupeDuplicateUserMessagesForCompaction([long, longLater])).toEqual([long, longLater]);
   });
 
-  it("collects duplicate transcript entry ids from active branch entries", () => {
-    const duplicateIds = collectDuplicateUserMessageEntryIdsForCompaction([
-      {
-        id: "entry-1",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 1_000,
-        },
-      },
-      {
-        id: "entry-2",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 2_000,
-        },
-      },
-    ]);
+  it("keys duplicate retries by sender identity (#98310)", () => {
+    const alice = userMessage({ timestamp: 1_000, senderId: "user-alice" });
+    const bob = userMessage({ timestamp: 2_000, senderId: "user-bob" });
+    const aliceRetry = userMessage({ timestamp: 3_000, senderId: "user-alice" });
 
-    expect(duplicateIds).toEqual(new Set(["entry-2"]));
+    expect(dedupeDuplicateUserMessagesForCompaction([alice, bob, aliceRetry])).toEqual([
+      alice,
+      bob,
+    ]);
+  });
+
+  it("does not collide when sender ids and text contain the old delimiter", () => {
+    const first = userMessage({
+      content: "b|please run deployment status now",
+      timestamp: 1_000,
+      senderId: "a",
+    });
+    const second = userMessage({
+      content: "please run deployment status now",
+      timestamp: 2_000,
+      senderId: "a|b",
+    });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
   });
 });

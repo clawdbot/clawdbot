@@ -1,14 +1,14 @@
 // Channel status patch factories centralize timestamp fields that multiple
 // runtime paths send into the gateway status store.
 /** Patch emitted when a channel connection is established. */
-export type ConnectedChannelStatusPatch = {
+type ConnectedChannelStatusPatch = {
   connected: true;
   lastConnectedAt: number;
   lastEventAt: number;
 };
 
 /** Patch emitted when a channel transport reports activity without reconnecting. */
-export type TransportActivityChannelStatusPatch = {
+type TransportActivityChannelStatusPatch = {
   lastTransportActivityAt: number;
 };
 

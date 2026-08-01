@@ -1,4 +1,6 @@
 // Covers delayed flushing of pending tool results after agent idle.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -99,7 +101,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const entries = getMessages(sm);
 
     expect(entries.length).toBe(2);
-    expect(entries[1].role).toBe("toolResult");
+    expect(expectDefined(entries[1], "entries[1] test invariant").role).toBe("toolResult");
     expect((entries[1] as { isError?: boolean }).isError).toBe(true);
     expect((entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
       "missing tool result",

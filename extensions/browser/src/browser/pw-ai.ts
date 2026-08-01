@@ -1,17 +1,92 @@
-/**
- * Playwright-backed browser helper barrel.
- *
- * Re-exports session and action helpers used by browser routes when Playwright
- * is available for managed or CDP-backed profiles.
- */
-import { markPwAiLoaded } from "./pw-ai-state.js";
-
-markPwAiLoaded();
-
-export {
-  type BrowserConsoleMessage,
+/** Playwright-backed browser helpers loaded as one optional runtime object. */
+import {
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
+  createObservedDialogAbortSignalForPage,
+  createPageViaPlaywright,
+  ensurePageState,
+  focusPageByTargetIdViaPlaywright,
+  forceDisconnectPlaywrightForTarget,
+  getObservedBrowserStateForPage,
+  getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
+  getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  listPagesViaPlaywright,
+  markObservedDialogsHandledRemotelyForPage,
+  refLocator,
+  respondToObservedDialogOnPage,
+  retirePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnectionExact,
+} from "./pw-session.js";
+import {
+  getConsoleMessagesViaPlaywright,
+  getNetworkRequestsViaPlaywright,
+  getPageErrorsViaPlaywright,
+} from "./pw-tools-core.activity.js";
+import {
+  armDialogViaPlaywright,
+  armFileUploadViaPlaywright,
+  downloadViaPlaywright,
+  uploadViaPlaywright,
+  waitForDownloadViaPlaywright,
+} from "./pw-tools-core.downloads.js";
+import { pageContentViaPlaywright } from "./pw-tools-core.extract.js";
+import {
+  batchViaPlaywright,
+  clickViaPlaywright,
+  dragViaPlaywright,
+  evaluateViaPlaywright,
+  executeActViaPlaywright,
+  fillFormViaPlaywright,
+  highlightViaPlaywright,
+  hoverViaPlaywright,
+  pressKeyViaPlaywright,
+  screenshotWithLabelsViaPlaywright,
+  scrollIntoViewViaPlaywright,
+  selectOptionViaPlaywright,
+  setInputFilesViaPlaywright,
+  takeScreenshotViaPlaywright,
+  typeViaPlaywright,
+  waitForViaPlaywright,
+} from "./pw-tools-core.interactions.js";
+import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
+import {
+  closePageViaPlaywright,
+  navigateViaPlaywright,
+  pdfViaPlaywright,
+  resizeViewportViaPlaywright,
+  snapshotAiViaPlaywright,
+  snapshotAriaViaPlaywright,
+  snapshotRoleViaPlaywright,
+  storeAriaSnapshotRefsViaPlaywright,
+} from "./pw-tools-core.snapshot.js";
+import {
+  emulateMediaViaPlaywright,
+  setDeviceViaPlaywright,
+  setExtraHTTPHeadersViaPlaywright,
+  setGeolocationViaPlaywright,
+  setHttpCredentialsViaPlaywright,
+  setLocaleViaPlaywright,
+  setOfflineViaPlaywright,
+  setTimezoneViaPlaywright,
+} from "./pw-tools-core.state.js";
+import {
+  cookiesClearViaPlaywright,
+  cookiesGetViaPlaywright,
+  cookiesSetManyViaPlaywright,
+  cookiesSetViaPlaywright,
+  storageClearViaPlaywright,
+  storageGetViaPlaywright,
+  storageSetViaPlaywright,
+} from "./pw-tools-core.storage.js";
+import { traceStartViaPlaywright, traceStopViaPlaywright } from "./pw-tools-core.trace.js";
+
+export const pwAi = {
+  closePageByTargetIdViaPlaywright,
+  closePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -19,16 +94,13 @@ export {
   createObservedDialogAbortSignalForPage,
   getObservedBrowserStateForPage,
   getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   respondToObservedDialogOnPage,
-  respondToObservedDialogViaPlaywright,
-} from "./pw-session.js";
-
-export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   batchViaPlaywright,
@@ -36,6 +108,7 @@ export {
   closePageViaPlaywright,
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,
+  cookiesSetManyViaPlaywright,
   cookiesSetViaPlaywright,
   downloadViaPlaywright,
   dragViaPlaywright,
@@ -49,6 +122,7 @@ export {
   highlightViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
+  pageContentViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
@@ -75,6 +149,7 @@ export {
   traceStartViaPlaywright,
   traceStopViaPlaywright,
   typeViaPlaywright,
+  uploadViaPlaywright,
   waitForDownloadViaPlaywright,
   waitForViaPlaywright,
-} from "./pw-tools-core.js";
+};

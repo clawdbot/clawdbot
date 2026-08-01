@@ -1,14 +1,16 @@
 /** Types and normalization helpers for configured channel-to-ACP persistent bindings. */
-import { createHash } from "node:crypto";
-import { normalizeText } from "@openclaw/acp-core/normalize-text";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as normalizeText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 
-export { normalizeText } from "@openclaw/acp-core/normalize-text";
+export { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 
 export type ConfiguredAcpBindingChannel = ChannelId;
 
@@ -66,10 +68,7 @@ function buildBindingHash(params: {
   accountId: string;
   conversationId: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.channel}:${params.accountId}:${params.conversationId}`)
-    .digest("hex")
-    .slice(0, 16);
+  return sha256HexPrefix(`${params.channel}:${params.accountId}:${params.conversationId}`, 16);
 }
 
 /** Builds the stable generated ACP session key for a configured binding. */

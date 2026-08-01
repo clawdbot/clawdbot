@@ -1,8 +1,11 @@
 // Doctor checks for context engine host requirements against configured agent runtimes.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
-import { resolveDefaultAgentDir } from "../../../agents/agent-scope-config.js";
+import {
+  listAgentEntriesWithSource,
+  resolveDefaultAgentDir,
+} from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
@@ -16,7 +19,10 @@ import {
   type ContextEngineHostSupport,
 } from "../../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
-import { getContextEngineFactory, resolveContextEngine } from "../../../context-engine/registry.js";
+import {
+  getContextEngineRegistration,
+  resolveContextEngine,
+} from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
@@ -50,18 +56,7 @@ function normalizeRuntimeId(value: unknown): string | undefined {
 }
 
 function parseModelRef(value: unknown): { provider: string; modelId: string } | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
-  }
-  return {
-    provider: normalizeProviderId(trimmed.slice(0, slash)),
-    modelId: trimmed.slice(slash + 1).trim(),
-  };
+  return typeof value === "string" ? (parseModelCatalogRef(value) ?? undefined) : undefined;
 }
 
 function listModelRefs(value: unknown): string[] {
@@ -110,15 +105,13 @@ function collectExplicitRuntimeRefs(
     push(modelConfig?.agentRuntime?.id, `agents.defaults.models.${modelRef}.agentRuntime.id`);
   }
 
-  cfg.agents?.list?.forEach((agent, index) => {
-    const agentId = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : `${index}`;
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const path =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     for (const [modelRef, modelConfig] of Object.entries(agent.models ?? {})) {
-      push(
-        modelConfig?.agentRuntime?.id,
-        `agents.list.${agentId}.models.${modelRef}.agentRuntime.id`,
-      );
+      push(modelConfig?.agentRuntime?.id, `${path}.models.${modelRef}.agentRuntime.id`);
     }
-  });
+  }
 
   return refs;
 }
@@ -151,12 +144,13 @@ function collectSelectedModelRefs(
   }
   pushModelMap(cfg.agents?.defaults?.models, "agents.defaults.models");
 
-  cfg.agents?.list?.forEach((agent, index) => {
-    const agentId = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : undefined;
-    const label = agentId ?? `${index}`;
-    pushModel(agent.model ?? cfg.agents?.defaults?.model, `agents.list.${label}.model`, agentId);
-    pushModelMap(agent.models, `agents.list.${label}.models`, agentId);
-  });
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentId = agent.id;
+    const path =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    pushModel(agent.model ?? cfg.agents?.defaults?.model, `${path}.model`, agentId);
+    pushModelMap(agent.models, `${path}.models`, agentId);
+  }
 
   return refs;
 }
@@ -199,7 +193,7 @@ function runtimeHostCandidate(params: {
 }
 
 /** Collect effective agent-run host candidates from provider/model runtime policy. */
-export function collectConfiguredContextEngineAgentRunHosts(params: {
+function collectConfiguredContextEngineAgentRunHosts(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): HostCandidate[] {
@@ -254,7 +248,7 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   ensureContextEnginesInitialized();
-  if (!getContextEngineFactory(engineId)) {
+  if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
     try {
       ensurePluginRegistryLoaded({
         scope: "all",
@@ -263,7 +257,7 @@ async function resolveSelectedContextEngineInfo(params: {
         onlyPluginIds: [engineId],
       });
     } catch (error) {
-      if (!getContextEngineFactory(engineId)) {
+      if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
         const message = error instanceof Error ? error.message : String(error);
         return {
           warnings: [
@@ -272,7 +266,7 @@ async function resolveSelectedContextEngineInfo(params: {
         };
       }
     }
-    if (!getContextEngineFactory(engineId)) {
+    if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
       return {
         warnings: [
           `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,

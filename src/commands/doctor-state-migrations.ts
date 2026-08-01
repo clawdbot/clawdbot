@@ -2,10 +2,12 @@
 export type { LegacyStateDetection } from "../infra/state-migrations.js";
 export {
   autoMigrateLegacyStateDir,
+  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
   migrateLegacyAgentDir,
+  migrateLegacyMediaPersistence,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
   resetAutoMigrateLegacyStateForTest,

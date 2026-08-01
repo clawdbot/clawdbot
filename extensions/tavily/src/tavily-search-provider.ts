@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Tavily provider module implements model/runtime integration.
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
@@ -7,14 +8,7 @@ import {
   TAVILY_GENERIC_SEARCH_SCHEMA,
 } from "../web-search-shared.js";
 
-type TavilyClientModule = typeof import("./tavily-client.js");
-
-let tavilyClientModulePromise: Promise<TavilyClientModule> | undefined;
-
-function loadTavilyClientModule(): Promise<TavilyClientModule> {
-  tavilyClientModulePromise ??= import("./tavily-client.js");
-  return tavilyClientModulePromise;
-}
+const loadTavilyClientModule = createLazyRuntimeModule(() => import("./tavily-client.js"));
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {

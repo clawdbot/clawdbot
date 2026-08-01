@@ -292,7 +292,7 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
-export async function generateDependencyReleaseEvidence({
+async function generateDependencyReleaseEvidence({
   rootDir = process.cwd(),
   outputDir,
   releaseRef,
@@ -414,6 +414,14 @@ export function parseArgs(argv) {
     githubOutput: process.env.GITHUB_OUTPUT,
     githubStepSummary: process.env.GITHUB_STEP_SUMMARY,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
@@ -423,37 +431,37 @@ export function parseArgs(argv) {
       return { ...options, help: true };
     }
     if (arg === "--root") {
-      options.rootDir = readOptionValue(argv, index, arg);
+      setOnce(arg, "rootDir", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--output-dir") {
-      options.outputDir = readOptionValue(argv, index, arg);
+      setOnce(arg, "outputDir", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--release-ref") {
-      options.releaseRef = readOptionValue(argv, index, arg);
+      setOnce(arg, "releaseRef", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--npm-dist-tag") {
-      options.npmDistTag = readOptionValue(argv, index, arg);
+      setOnce(arg, "npmDistTag", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      options.baseRef = readOptionValue(argv, index, arg);
+      setOnce(arg, "baseRef", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--github-output") {
-      options.githubOutput = readOptionValue(argv, index, arg, { allowEmpty: true });
+      setOnce(arg, "githubOutput", readOptionValue(argv, index, arg, { allowEmpty: true }));
       index += 1;
       continue;
     }
     if (arg === "--github-step-summary") {
-      options.githubStepSummary = readOptionValue(argv, index, arg, { allowEmpty: true });
+      setOnce(arg, "githubStepSummary", readOptionValue(argv, index, arg, { allowEmpty: true }));
       index += 1;
       continue;
     }

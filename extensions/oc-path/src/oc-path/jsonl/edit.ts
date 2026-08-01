@@ -18,7 +18,7 @@ import {
 import type { JsonlAst, JsonlLine } from "./ast.js";
 import { emitJsonl } from "./emit.js";
 
-export type JsonlEditResult =
+type JsonlEditResult =
   | { readonly ok: true; readonly ast: JsonlAst }
   | { readonly ok: false; readonly reason: "unresolved" | "not-a-value-line" };
 

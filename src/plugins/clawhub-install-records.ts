@@ -9,6 +9,14 @@ export type ClawHubPluginInstallRecordFields = {
   clawhubPackage: string;
   clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
   clawhubChannel?: ClawHubPackageChannel;
+  clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
+  clawhubTrustScanStatus?: string;
+  clawhubTrustModerationState?: string;
+  clawhubTrustReasons?: string[];
+  clawhubTrustPending?: boolean;
+  clawhubTrustStale?: boolean;
+  clawhubTrustCheckedAt?: string;
+  clawhubTrustAcknowledgedAt?: string;
   version?: string;
   integrity?: string;
   resolvedAt?: string;
@@ -34,6 +42,14 @@ export function buildClawHubPluginInstallRecordFields(
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "clawhubTrustDisposition"
+  | "clawhubTrustScanStatus"
+  | "clawhubTrustModerationState"
+  | "clawhubTrustReasons"
+  | "clawhubTrustPending"
+  | "clawhubTrustStale"
+  | "clawhubTrustCheckedAt"
+  | "clawhubTrustAcknowledgedAt"
   | "version"
   | "integrity"
   | "resolvedAt"
@@ -54,6 +70,28 @@ export function buildClawHubPluginInstallRecordFields(
     clawhubPackage: fields.clawhubPackage,
     clawhubFamily: fields.clawhubFamily,
     ...(fields.clawhubChannel ? { clawhubChannel: fields.clawhubChannel } : {}),
+    ...(fields.clawhubTrustDisposition
+      ? { clawhubTrustDisposition: fields.clawhubTrustDisposition }
+      : {}),
+    ...(fields.clawhubTrustScanStatus
+      ? { clawhubTrustScanStatus: fields.clawhubTrustScanStatus }
+      : {}),
+    ...(fields.clawhubTrustModerationState
+      ? { clawhubTrustModerationState: fields.clawhubTrustModerationState }
+      : {}),
+    ...(fields.clawhubTrustReasons ? { clawhubTrustReasons: fields.clawhubTrustReasons } : {}),
+    ...(fields.clawhubTrustPending !== undefined
+      ? { clawhubTrustPending: fields.clawhubTrustPending }
+      : {}),
+    ...(fields.clawhubTrustStale !== undefined
+      ? { clawhubTrustStale: fields.clawhubTrustStale }
+      : {}),
+    ...(fields.clawhubTrustCheckedAt
+      ? { clawhubTrustCheckedAt: fields.clawhubTrustCheckedAt }
+      : {}),
+    ...(fields.clawhubTrustAcknowledgedAt
+      ? { clawhubTrustAcknowledgedAt: fields.clawhubTrustAcknowledgedAt }
+      : {}),
     ...(fields.version ? { version: fields.version } : {}),
     ...(fields.integrity ? { integrity: fields.integrity } : {}),
     ...(fields.resolvedAt ? { resolvedAt: fields.resolvedAt } : {}),

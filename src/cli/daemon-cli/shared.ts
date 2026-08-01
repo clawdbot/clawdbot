@@ -12,7 +12,7 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { parseInlineOptionToken } from "../../infra/inline-option-token.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -70,27 +70,7 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
 
 /** Extract `--port` from service ProgramArguments. */
 export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (arg === "--port") {
-      const next = programArguments[i + 1];
-      const parsed = parsePort(next);
-      if (parsed) {
-        return parsed;
-      }
-    }
-    if (arg?.startsWith("--port=")) {
-      const option = parseInlineOptionToken(arg);
-      const parsed = parsePort(option.hasInlineValue ? option.inlineValue : undefined);
-      if (parsed) {
-        return parsed;
-      }
-    }
-  }
-  return null;
+  return parseTcpPortFromArgs(programArguments);
 }
 
 /** Pick the best local probe host for a configured Gateway bind mode. */

@@ -47,6 +47,15 @@ describe("inbound-path-policy", () => {
     expectInboundPathAllowedCase(filePath, expected);
   });
 
+  it("matches Windows drive roots case-insensitively", () => {
+    expect(
+      isInboundPathAllowed({
+        filePath: "C:\\Users\\Alice\\Library\\Messages\\Attachments\\12\\34\\ABCDEF\\IMG_0001.jpeg",
+        roots: ["c:/users/*/library/messages/attachments"],
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     {
       name: "normalizes and de-duplicates merged roots",

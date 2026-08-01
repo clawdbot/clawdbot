@@ -14,27 +14,29 @@ through the generic `openai-completions` provider family.
 ds4 is not a bundled OpenClaw provider plugin. Configure it under
 `models.providers.ds4`, then select `ds4/deepseek-v4-flash`.
 
-- Provider id: `ds4`
-- Plugin: none
-- API: OpenAI-compatible Chat Completions (`openai-completions`)
-- Suggested base URL: `http://127.0.0.1:18000/v1`
-- Model id: `deepseek-v4-flash`
-- Tool calls: supported through OpenAI-style `tools` and `tool_calls`
-- Reasoning: DeepSeek-style `thinking` and `reasoning_effort`
+| Property    | Value                                                     |
+| ----------- | --------------------------------------------------------- |
+| Provider id | `ds4`                                                     |
+| Plugin      | none (config-only)                                        |
+| API         | OpenAI-compatible Chat Completions (`openai-completions`) |
+| Base URL    | `http://127.0.0.1:18000/v1` (suggested)                   |
+| Model id    | `deepseek-v4-flash`                                       |
+| Tool calls  | OpenAI-style `tools` / `tool_calls`                       |
+| Reasoning   | DeepSeek-style `thinking` and `reasoning_effort`          |
 
 ## Requirements
 
 - macOS with Metal support.
 - A working ds4 checkout with `ds4-server` and the DeepSeek V4 Flash GGUF file.
-- Enough memory for the context you choose. Larger `--ctx` values allocate more
-  KV memory when the server starts.
+- Enough memory for the context you choose; larger `--ctx` values allocate more
+  KV memory at server startup.
 
 <Warning>
 OpenClaw agent turns include tool schemas and workspace context. A tiny context
 such as `--ctx 4096` can pass direct curl tests but fail full agent runs with
 `500 prompt exceeds context`. Use at least `--ctx 32768` for agent and tool
-smoke tests. Use `--ctx 393216` only when you have enough memory and want ds4
-Think Max behavior.
+smoke tests. Use `--ctx 393216` only with enough memory and to enable ds4
+Think Max.
 </Warning>
 
 ## Quickstart
@@ -126,9 +128,9 @@ Use this config when ds4 is already running on `127.0.0.1:18000`.
 }
 ```
 
-Keep `contextWindow` aligned with the `ds4-server --ctx` value. Keep `maxTokens`
-aligned with `--tokens` unless you intentionally want OpenClaw to request less
-output than the server default.
+Keep `contextWindow` aligned with `ds4-server --ctx`. Keep `maxTokens` aligned
+with `--tokens` unless you intentionally want OpenClaw to request less output
+than the server default.
 
 ## On-demand startup
 
@@ -188,16 +190,16 @@ OpenClaw can start ds4 only when a `ds4/...` model is selected. Add
 }
 ```
 
-`command` must be an absolute executable path. Shell lookup and `~` expansion are
-not used. See [Local model services](/gateway/local-model-services) for every
-`localService` field.
+`command` must be an absolute executable path. Shell lookup and `~` expansion
+are not used. See [Local model services](/gateway/local-model-services) for
+every `localService` field.
 
 ## Think Max
 
-ds4 applies Think Max only when both conditions are true:
+ds4 applies Think Max only when both are true:
 
 - `ds4-server` starts with `--ctx 393216` or higher.
-- The request uses `reasoning_effort: "max"` or the equivalent ds4 effort field.
+- The request uses `reasoning_effort: "max"` (or the equivalent ds4 effort field).
 
 If you run that large context, update both the server flags and OpenClaw model
 metadata:
@@ -219,7 +221,7 @@ metadata:
 
 ## Test
 
-Start with a direct HTTP check:
+Direct HTTP check, bypassing OpenClaw:
 
 ```bash
 curl http://127.0.0.1:18000/v1/chat/completions \
@@ -227,7 +229,7 @@ curl http://127.0.0.1:18000/v1/chat/completions \
   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"Reply with exactly: ds4-ok"}],"max_tokens":16,"stream":false,"thinking":{"type":"disabled"}}'
 ```
 
-Then test OpenClaw model routing:
+OpenClaw model routing (same as the Quickstart check):
 
 ```bash
 openclaw infer model run \
@@ -238,7 +240,7 @@ openclaw infer model run \
   --json
 ```
 
-For a full agent and tool-call smoke, use a context of at least 32768:
+Full agent and tool-call smoke test, with context of at least 32768:
 
 ```bash
 openclaw agent \
@@ -262,7 +264,7 @@ Expected result:
 
 <AccordionGroup>
   <Accordion title="curl /v1/models cannot connect">
-    ds4 is not running or not bound to the host and port in `baseUrl`. Start
+    ds4 is not running or not bound to the host/port in `baseUrl`. Start
     `ds4-server`, then retry:
 
     ```bash
@@ -285,7 +287,7 @@ Expected result:
   </Accordion>
 
   <Accordion title="The first request is slow">
-    ds4 has a cold Metal residency and model warmup phase. Use
+    ds4 has a cold Metal residency and model warmup phase. Set
     `localService.readyTimeoutMs: 300000` when OpenClaw starts the server on
     demand.
   </Accordion>

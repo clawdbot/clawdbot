@@ -1,4 +1,4 @@
-import type { SkillEligibilityContext } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 /**
  * Sandbox runtime configuration and context types.
  *
@@ -19,7 +19,7 @@ export type SandboxToolPolicySource = {
   source: "agent" | "global" | "default";
   /**
    * Config key path hint for humans.
-   * (Arrays use `agents.list[].…` form.)
+   * (Keyed agent entries use `agents.entries.*.…` form.)
    */
   key: string;
 };
@@ -45,7 +45,7 @@ export type SandboxBrowserConfig = {
   vncPort: number;
   noVncPort: number;
   headless: boolean;
-  enableNoVnc: boolean;
+  noVncEnabled: boolean;
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
@@ -79,6 +79,8 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  // Podman must omit only the inherited bare /run tmpfs default; explicit /run is rejected.
+  dockerTmpfsSource: "default" | "configured";
   docker: SandboxDockerConfig;
   ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;
@@ -100,6 +102,7 @@ export type SandboxContext = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -118,5 +121,6 @@ export type SandboxWorkspaceInfo = {
   containerWorkdir?: string;
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   workspaceAccess?: SandboxWorkspaceAccess;
 };

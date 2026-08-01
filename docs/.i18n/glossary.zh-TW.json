@@ -158,5 +158,13 @@
   {
     "source": "Zalo personal",
     "target": "Zalo Personal"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "PR 審查流程"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水線"
   }
 ]

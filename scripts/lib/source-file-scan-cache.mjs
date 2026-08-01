@@ -1,9 +1,10 @@
 // Caches source file discovery and bounded-concurrency reads for guard scripts.
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import pMap from "p-map";
 
 const DEFAULT_SOURCE_FILE_READ_CONCURRENCY = 32;
-export const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const scanCache = new Map();
 
 function normalizeRepoPath(repoRoot, filePath) {
@@ -74,29 +75,6 @@ async function readBoundedSourceFile(params, filePath, readFile, statFile, maxFi
 }
 
 /**
- * Maps items with bounded worker concurrency while preserving input order.
- */
-export async function mapWithConcurrency(items, concurrency, mapper) {
-  const out = Array.from({ length: items.length });
-  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) {
-        return;
-      }
-      out[index] = await mapper(items[index], index);
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return out;
-}
-
-/**
  * Collects sorted source files and cached contents for configured scan roots.
  */
 export async function collectSourceFileContents(params) {
@@ -133,8 +111,13 @@ export async function collectSourceFileContents(params) {
     const readFile = params.readFile ?? fs.readFile;
     const statFile = params.statFile ?? fs.stat;
     const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
-    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) =>
-      readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes),
+    return await pMap(
+      files,
+      async (filePath) => readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes),
+      {
+        concurrency: normalizeConcurrency(params.maxConcurrentReads),
+        stopOnError: true,
+      },
     );
   })();
 

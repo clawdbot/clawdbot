@@ -87,7 +87,8 @@ async function waitRegistry() {
 
 function registryHealthy() {
   return new Promise((resolve) => {
-    const req = http.get("http://127.0.0.1:4873/@example%2flossless-claw", (res) => {
+    const registry = process.env.NPM_CONFIG_REGISTRY ?? "http://127.0.0.1:4873";
+    const req = http.get(`${registry.replace(/\/$/u, "")}/@example%2flossless-claw`, (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });
@@ -285,6 +286,17 @@ function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
   }
 }
 
+function assertDisabledPluginPolicyPreserved(configPath, pluginId) {
+  const config = readJson(configPath);
+  const allow = config.plugins?.allow;
+  if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
+    throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
+  }
+  if (config.plugins?.entries?.[pluginId]?.enabled !== false) {
+    throw new Error(`expected ${pluginId} to be disabled after update failure`);
+  }
+}
+
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
@@ -296,6 +308,7 @@ const commands = {
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
   "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
+  "assert-disabled-policy-preserved": () => assertDisabledPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];
 await (

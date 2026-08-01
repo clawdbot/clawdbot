@@ -1,18 +1,14 @@
 // Zalouser plugin module implements group policy behavior.
+import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;
 
-function toGroupCandidate(value?: string | null): string {
-  return value?.trim() ?? "";
-}
+const toGroupCandidate = (value?: string | null) => value?.trim() ?? "";
 
-export function normalizeZalouserGroupSlug(raw?: string | null): string {
+function normalizeZalouserGroupSlug(raw?: string | null): string {
   const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
   return trimmed
     .replace(/^#/, "")
     .replace(/[^a-z0-9]+/g, "-")
@@ -47,11 +43,7 @@ export function buildZalouserGroupCandidates(params: {
     push(`group:${groupId}`);
   }
   if (params.allowNameMatching !== false) {
-    push(groupChannel);
-    push(groupName);
-    if (groupName) {
-      push(normalizeZalouserGroupSlug(groupName));
-    }
+    [groupChannel, groupName, normalizeZalouserGroupSlug(groupName)].forEach(push);
   }
   if (params.includeWildcard !== false) {
     push("*");
@@ -63,16 +55,23 @@ export function findZalouserGroupEntry(
   groups: ZalouserGroups | undefined,
   candidates: string[],
 ): ZalouserGroupConfig | undefined {
-  if (!groups) {
-    return undefined;
-  }
-  for (const candidate of candidates) {
-    const entry = groups[candidate];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
+  const { tree, path } = resolveZalouserGroupScope(groups, candidates);
+  const key = path[0];
+  return key ? (tree.scopes[key] as ZalouserGroupConfig | undefined) : undefined;
+}
+
+export function resolveZalouserGroupScope(
+  groups: ZalouserGroups | undefined,
+  candidates: string[],
+) {
+  // Whole-entry selection: an exact candidate hides every wildcard field.
+  // Candidate construction owns aliases, names, and wildcard opt-in; the monitor
+  // requests group:<id>, groupName, and "*" through buildZalouserGroupCandidates.
+  const tree: ScopeTree = { scopes: groups ?? {} };
+  const key =
+    candidates.find((candidate) => candidate !== "*" && Object.hasOwn(tree.scopes, candidate)) ??
+    (candidates.includes("*") && Object.hasOwn(tree.scopes, "*") ? "*" : undefined);
+  return { tree, path: key ? [key] : [] };
 }
 
 export function isZalouserGroupEntryAllowed(entry: ZalouserGroupConfig | undefined): boolean {

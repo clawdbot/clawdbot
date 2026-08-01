@@ -8,7 +8,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+} from "./lib/tsdown-config-groups.mjs";
+import {
+  TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  tsdownPackageOutputRoot,
+} from "./lib/tsdown-output-roots.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -34,9 +43,10 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
   "/sys/fs/cgroup/memory/memory.limit_in_bytes",
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
-const TERMINATION_GRACE_MS = 5_000;
+// Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
+const TERMINATION_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
+const POST_FORCE_KILL_WAIT_MS = 250;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
@@ -66,13 +76,18 @@ function removeDistPluginNodeModulesSymlinks(rootDir) {
   }
 }
 
-function pruneStaleRuntimeSymlinks() {
-  const cwd = process.cwd();
+export function pruneStaleRuntimeSymlinks(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const distRoot = path.join(cwd, "dist");
+  const distRuntimeRoot = path.join(cwd, "dist-runtime");
+  assertRealOutputRoot(distRoot, { fs: fsImpl });
+  assertRealOutputRoot(distRuntimeRoot, { fs: fsImpl });
   // runtime-postbuild stages plugin-owned node_modules into dist/ and links the
   // dist-runtime overlay back to that tree. Remove only those symlinks up front
   // so tsdown's clean step cannot traverse stale runtime overlays on rebuilds.
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist"));
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
+  removeDistPluginNodeModulesSymlinks(distRoot);
+  removeDistPluginNodeModulesSymlinks(distRuntimeRoot);
 }
 
 /**
@@ -82,7 +97,13 @@ export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const env = params.env ?? process.env;
-  const roots = listTsdownOutputRoots();
+  const roots = params.roots ?? listTsdownOutputRoots();
+  const rootPaths = roots.map((root) => path.join(cwd, root));
+  // Validate the complete mutation set before traversing protected children or
+  // cleaning any earlier root; otherwise a later symlink can leave a partial build.
+  for (const rootPath of rootPaths) {
+    assertRealOutputRoot(rootPath, { fs: fsImpl });
+  }
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
       ? listExistingDeclarationOutputPaths({
@@ -95,8 +116,7 @@ export function cleanTsdownOutputRoots(params = {}) {
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
   ]);
-  for (const root of roots) {
-    const rootPath = path.join(cwd, root);
+  for (const rootPath of rootPaths) {
     try {
       if (hasProtectedChild({ rootPath, protectedPaths })) {
         cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
@@ -195,6 +215,9 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
+    assertRealOutputRoot(root, { fs: fsImpl });
+  }
+  for (const root of roots) {
     let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });
@@ -220,6 +243,58 @@ export function pruneStaleRootChunkFiles(params = {}) {
 
 export function listTsdownOutputRoots() {
   return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
+}
+
+function readForwardedOption(args, names) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    for (const name of names) {
+      if (arg === name) {
+        return args[index + 1];
+      }
+      if (arg.startsWith(`${name}=`)) {
+        return arg.slice(name.length + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Limits cleanup to the output roots owned by an explicitly filtered build. */
+export function resolveTsdownCleanOutputRoots(args = []) {
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  const filter = readForwardedOption(args, ["--filter", "-F"]);
+  const configPath = config ? path.resolve(config) : undefined;
+  const aiConfigPath = path.resolve("tsdown.ai.config.ts");
+  const mainConfigPath = path.resolve("tsdown.config.ts");
+  const aiRoot = tsdownPackageOutputRoot("ai");
+  const packageRoots = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter((root) => root !== aiRoot);
+
+  if (configPath === aiConfigPath) {
+    return [aiRoot];
+  }
+  if (configPath === mainConfigPath) {
+    if (filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
+      return packageRoots;
+    }
+    if (
+      filter === TSDOWN_UNIFIED_CONFIG_GROUP ||
+      TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.includes(filter)
+    ) {
+      return [...ROOT_TSDOWN_OUTPUT_ROOTS];
+    }
+    return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...packageRoots];
+  }
+  if (!config && filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
+    return [aiRoot, ...packageRoots];
+  }
+  if (
+    !config &&
+    (filter === TSDOWN_UNIFIED_CONFIG_GROUP || TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.includes(filter))
+  ) {
+    return [aiRoot, ...ROOT_TSDOWN_OUTPUT_ROOTS];
+  }
+  return listTsdownOutputRoots();
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
@@ -485,7 +560,7 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
-export function tsdownBuildUsage() {
+function tsdownBuildUsage() {
   return [
     "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
     "",
@@ -594,6 +669,107 @@ export function resolveTsdownBuildInvocation(params = {}) {
       env,
     },
   };
+}
+
+/** Builds declarations in dependency order without overlapping the largest graphs. */
+export function resolveTsdownBuildInvocations(params = {}) {
+  const forwardedArgs = params.args ?? [];
+  const env = params.env ?? process.env;
+  let declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  let hasForwardedFilter = false;
+  let hasForwardedConfig = false;
+  const aiArgs = [];
+  for (let index = 0; index < forwardedArgs.length; index += 1) {
+    const arg = forwardedArgs[index];
+    if (arg === "--filter" || arg === "-F") {
+      hasForwardedFilter = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--filter=") || arg.startsWith("-F=")) {
+      hasForwardedFilter = true;
+      continue;
+    }
+    if (arg === "--dts") {
+      declarationsEnabled = true;
+    } else if (arg === "--no-dts") {
+      declarationsEnabled = false;
+    }
+    hasForwardedConfig ||=
+      arg === "--config" ||
+      arg.startsWith("--config=") ||
+      arg === "-c" ||
+      arg.startsWith("-c=") ||
+      arg === "--no-config";
+    aiArgs.push(arg);
+  }
+
+  const forwardedConfig = readForwardedOption(forwardedArgs, ["--config", "-c"]);
+  const forwardedFilter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
+  const mainConfigPath = path.resolve("tsdown.config.ts");
+  const selectsMainUnifiedBuild =
+    forwardedConfig !== undefined &&
+    path.resolve(forwardedConfig) === mainConfigPath &&
+    forwardedFilter === TSDOWN_UNIFIED_CONFIG_GROUP;
+  const declarationEnv =
+    declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "0" }
+      : env;
+
+  if (hasForwardedConfig) {
+    if (declarationsEnabled && selectsMainUnifiedBuild) {
+      const argsWithoutFilter = forwardedArgs.filter((arg, index) => {
+        const previous = forwardedArgs[index - 1];
+        return (
+          arg !== "--filter" &&
+          arg !== "-F" &&
+          previous !== "--filter" &&
+          previous !== "-F" &&
+          !arg.startsWith("--filter=") &&
+          !arg.startsWith("-F=")
+        );
+      });
+      return [TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS].map((group) =>
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--filter", group, ...argsWithoutFilter],
+          env: declarationEnv,
+        }),
+      );
+    }
+    return [resolveTsdownBuildInvocation(params)];
+  }
+
+  const invocations = [
+    resolveTsdownBuildInvocation({
+      ...params,
+      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+    }),
+  ];
+
+  if (!declarationsEnabled || hasForwardedFilter) {
+    const mainEnv =
+      !declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1"
+        ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "1" }
+        : env;
+    invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
+    return invocations;
+  }
+
+  for (const group of [
+    TSDOWN_PACKAGE_CONFIG_GROUP,
+    TSDOWN_UNIFIED_CONFIG_GROUP,
+    ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  ]) {
+    invocations.push(
+      resolveTsdownBuildInvocation({
+        ...params,
+        args: ["--filter", group, ...forwardedArgs],
+        env: declarationEnv,
+      }),
+    );
+  }
+  return invocations;
 }
 
 function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
@@ -843,9 +1019,21 @@ if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
-  const result = await runTsdownBuildInvocation(invocation);
+  cleanTsdownOutputRoots({ roots: resolveTsdownCleanOutputRoots(args.forwardedArgs) });
+  const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
+  let result;
+  for (const [index, invocation] of invocations.entries()) {
+    const startedAt = performance.now();
+    result = await runTsdownBuildInvocation(invocation);
+    // Per-invocation timing separates the AI-declarations pass from the main
+    // graph in CI logs; the combined step is otherwise a single opaque cost.
+    console.log(
+      `[tsdown-build] invocation ${index + 1}/${invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
+    if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
+      break;
+    }
+  }
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(

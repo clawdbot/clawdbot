@@ -13,7 +13,12 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
-import { noteSessionLockHealth } from "./doctor-session-locks.js";
+import {
+  detectStaleSessionLocks,
+  noteSessionLockHealth,
+  sessionLockToHealthFinding,
+  sessionLockToRepairEffect,
+} from "./doctor-session-locks.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -105,7 +110,155 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 
-  it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
+  it("detects stale locks without removing them for structured lint", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const staleLock = path.join(sessionsDir, "stale.jsonl.lock");
+    const freshLock = path.join(sessionsDir, "fresh.jsonl.lock");
+
+    await fs.writeFile(
+      staleLock,
+      JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+      "utf8",
+    );
+    await fs.writeFile(
+      freshLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      "utf8",
+    );
+
+    const locks = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+
+    expect(locks).toHaveLength(1);
+    expect(locks[0]?.lockPath).toBe(staleLock);
+    await expect(fs.access(staleLock)).resolves.toBeUndefined();
+    await expect(fs.access(freshLock)).resolves.toBeUndefined();
+  });
+
+  it("maps stale locks to structured findings and dry-run effects", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "stale.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+      "utf8",
+    );
+
+    const [lock] = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
+
+    expect(sessionLockToHealthFinding(lock)).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/session-locks",
+        severity: "warning",
+        path: lockPath,
+      }),
+    );
+    expect(sessionLockToRepairEffect(lock)).toEqual({
+      kind: "state",
+      action: "would-remove-stale-session-lock",
+      target: lockPath,
+      dryRunSafe: false,
+    });
+  });
+
+  it("preserves fresh malformed stale locks in dry-run repair effects", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const malformedLock = path.join(sessionsDir, "malformed.jsonl.lock");
+    await fs.writeFile(malformedLock, "{}", "utf8");
+
+    const [lock] = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
+
+    expect(lock.staleReasons).toEqual(["missing-pid", "invalid-createdAt"]);
+    expect(lock.removable).toBe(false);
+    expect(sessionLockToHealthFinding(lock).fixHint).toContain("after the cleanup grace period");
+    expect(sessionLockToRepairEffect(lock)).toEqual({
+      kind: "state",
+      action: "would-preserve-mtime-gated-stale-session-lock",
+      target: malformedLock,
+      dryRunSafe: false,
+    });
+    await expect(fs.access(malformedLock)).resolves.toBeUndefined();
+  });
+
+  it("uses the supplied env to choose the structured lint state dir", async () => {
+    const other = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-doctor-locks-other-",
+      applyEnv: false,
+    });
+    try {
+      await fs.mkdir(other.sessionsDir(), { recursive: true });
+      const lockPath = path.join(other.sessionsDir(), "other-stale.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+        "utf8",
+      );
+
+      const locks = await detectStaleSessionLocks({
+        env: other.env,
+        staleMs: 30_000,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+      });
+
+      expect(locks.map((lock) => lock.lockPath)).toEqual([lockPath]);
+    } finally {
+      await other.cleanup();
+    }
+  });
+
+  it("preserves report-only live OpenClaw locks in dry-run repair effects", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const reportOnlyLock = path.join(sessionsDir, "report-only.jsonl.lock");
+    await fs.writeFile(
+      reportOnlyLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 45_000).toISOString() }),
+      "utf8",
+    );
+
+    const [lock] = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
+
+    expect(lock.staleReasons).toEqual(["too-old"]);
+    expect(sessionLockToHealthFinding(lock).fixHint).toBe(
+      "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck.",
+    );
+    expect(sessionLockToRepairEffect(lock)).toEqual({
+      kind: "state",
+      action: "would-preserve-report-only-stale-session-lock",
+      target: reportOnlyLock,
+      dryRunSafe: false,
+    });
+    await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
+  });
+
+  it("uses the emergency stale-threshold environment override without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -118,7 +271,7 @@ describe("noteSessionLockHealth", () => {
 
     await noteSessionLockHealth({
       shouldRepair: true,
-      config: { session: { writeLock: { staleMs: 30_000 } } },
+      env: { OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "30000" },
       readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
     });
 

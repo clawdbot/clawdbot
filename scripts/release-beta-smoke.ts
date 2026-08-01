@@ -20,14 +20,14 @@ export type RunOptions = {
   timeoutMs?: number;
 };
 
-export type WorkflowRunInfo = {
+type WorkflowRunInfo = {
   conclusion: string | null;
   html_url: string;
   status: string;
   updated_at: string;
 };
 
-export type PollRunOptions = {
+type PollRunOptions = {
   pollIntervalMs?: number;
   readRun?: (repo: string, runId: string) => WorkflowRunInfo;
   sleep?: (ms: number) => Promise<void>;
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
   if (telegramRunId) {
     await pollRun(options.repo, telegramRunId);
     const artifactDir = downloadTelegramArtifact(options.repo, telegramRunId);
-    const report = findFile(artifactDir, "telegram-qa-report.md");
+    const report = findFile(artifactDir, "qa-suite-report.md");
     if (report && existsSync(report)) {
       console.log(`\nTelegram report: ${report}\n`);
       console.log(readFileSync(report, "utf8"));

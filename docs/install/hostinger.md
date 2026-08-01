@@ -7,7 +7,7 @@ read_when:
 title: "Hostinger"
 ---
 
-Run a persistent OpenClaw Gateway on [Hostinger](https://www.hostinger.com/openclaw) via a **1-Click** managed deployment or a **VPS** install.
+Run a persistent OpenClaw Gateway on [Hostinger](https://www.hostinger.com/openclaw), either as a **1-Click** managed deployment or as a **VPS** install you administer yourself.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ Run a persistent OpenClaw Gateway on [Hostinger](https://www.hostinger.com/openc
 
 ## Option A: 1-Click OpenClaw
 
-The fastest way to get started. Hostinger handles infrastructure, Docker, and automatic updates.
+Hostinger handles infrastructure, Docker, and automatic updates. Fastest path to a running instance.
 
 <Steps>
   <Step title="Purchase and launch">
@@ -44,7 +44,7 @@ The fastest way to get started. Hostinger handles infrastructure, Docker, and au
 
 ## Option B: OpenClaw on VPS
 
-More control over your server. Hostinger deploys OpenClaw via Docker on your VPS and you manage it through the **Docker Manager** in hPanel.
+More control over the server. Hostinger deploys OpenClaw via Docker on your VPS; you manage it through the **Docker Manager** in hPanel.
 
 <Steps>
   <Step title="Purchase a VPS">
@@ -72,19 +72,19 @@ More control over your server. Hostinger deploys OpenClaw via Docker on your VPS
 
 </Steps>
 
-Logs, restarts, and updates are managed directly from the Docker Manager interface in hPanel. To update, press on **Update** in Docker Manager and that will pull the latest image.
+Logs, restarts, and updates run from the Docker Manager interface in hPanel. To update, press **Update** in Docker Manager to pull the latest image.
 
 ## Verify your setup
 
-Send "Hi" to your assistant on the channel you connected. OpenClaw will reply and walk you through initial preferences.
+Send "Hi" to your assistant on the channel you connected. OpenClaw replies and walks you through initial preferences.
 
 ## Troubleshooting
 
-**Dashboard not loading** -- Wait a few minutes for the container to finish provisioning. Check the Docker Manager logs in hPanel.
+**Dashboard not loading** -- Wait a few minutes for the container to finish provisioning, then check the Docker Manager logs in hPanel.
 
 **Docker container keeps restarting** -- Open Docker Manager logs and look for configuration errors (missing tokens, invalid API keys).
 
-**Telegram bot not responding** -- Send your pairing code message from Telegram directly as a message inside your OpenClaw chat to complete the connection.
+**Telegram bot not responding** -- If DM pairing is required, an unknown sender gets a short pairing code instead of a reply. Approve it from the OpenClaw dashboard chat, or with `openclaw pairing approve telegram <CODE>` if you have shell access to the container. See [Pairing](/channels/pairing).
 
 ## Next steps
 

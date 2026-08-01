@@ -134,6 +134,56 @@ describe("scripts/test-live", () => {
     }
   });
 
+  posixIt("kills the live pnpm process group after the no-output timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-timeout-"));
+    const fakePnpmPath = join(root, "pnpm");
+    const childPidPath = join(root, "child.pid");
+    const descendantPidPath = join(root, "descendant.pid");
+    const stderr: Buffer[] = [];
+
+    writeFakePnpm(fakePnpmPath);
+    const runner = spawn(process.execPath, ["scripts/test-live.mjs", "--", "fake.live.test.ts"], {
+      env: {
+        ...process.env,
+        OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+        OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+        OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
+        npm_execpath: fakePnpmPath,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    runner.stderr.on("data", (chunk) => stderr.push(chunk));
+    let childPid = 0;
+    let descendantPid = 0;
+
+    try {
+      await waitFor(() => fileExists(childPidPath), 5_000);
+      await waitFor(() => fileExists(descendantPidPath), 5_000);
+      childPid = Number(readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+
+      expect(await waitForClose(runner)).toEqual({ code: 1, signal: null });
+      expect(Buffer.concat(stderr).toString("utf8")).toContain(
+        "no output for 100ms; terminating stalled Vitest process group",
+      );
+      expect(Buffer.concat(stderr).toString("utf8")).toContain("[test:live] still running");
+      await waitFor(() => !isProcessAlive(childPid), 5_000);
+      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+    } finally {
+      if (runner.pid && isProcessAlive(runner.pid)) {
+        process.kill(runner.pid, "SIGKILL");
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects loose heartbeat intervals instead of parsing prefixes", () => {
     expect(resolveTestLiveHeartbeatMs({})).toBe(20_000);
     expect(resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "2500" })).toBe(2500);
@@ -199,7 +249,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -208,7 +258,7 @@ async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) 
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

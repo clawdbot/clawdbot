@@ -172,9 +172,11 @@ function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
   const result: AgentMessage[] = [];
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") {
+  for (const [i, msg] of messages.entries()) {
+    if (!msg) {
+      continue;
+    }
+    if (typeof msg !== "object") {
       result.push(msg);
       continue;
     }
@@ -346,7 +348,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 /** Merge adjacent user turns into a single provider-compatible user message. */
-export function mergeConsecutiveUserTurns(
+function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {

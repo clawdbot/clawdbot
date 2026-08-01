@@ -1,10 +1,10 @@
 // Qa Lab tests cover QA evidence summary behavior.
+import { execFileSync } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-  buildLiveTransportEvidenceSummary,
   buildPlaywrightEvidenceSummary,
   buildQaSuiteEvidenceSummary,
   buildVitestEvidenceSummary,
@@ -28,7 +28,7 @@ describe("evidence summary", () => {
             primary: ["channels.dm"],
             secondary: ["channels.qa-channel"],
           },
-          runtimeParityTier: "standard",
+          runtimePairLane: "core",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
@@ -39,7 +39,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
@@ -79,15 +79,15 @@ describe("evidence summary", () => {
           path: "extensions/qa-channel/src/gateway.ts",
         },
       ],
-      runtimeParityTier: "standard",
+      runtimePairLane: "core",
       execution: {
         runner: "host",
         provider: {
           id: "openai",
           live: false,
           model: {
-            name: "gpt-5.5",
-            ref: "mock-openai/gpt-5.5",
+            name: "gpt-5.6-luna",
+            ref: "mock-openai/gpt-5.6-luna",
           },
           fixture: "mock-openai",
         },
@@ -123,129 +123,114 @@ describe("evidence summary", () => {
     });
   });
 
-  it("builds Telegram live transport evidence entries", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [
-        { kind: "summary", path: QA_EVIDENCE_FILENAME },
-        { kind: "report", path: "telegram-qa-report.md" },
-      ],
+  it.each([
+    ["live Discord transport", "discord", "live", undefined, "live", true],
+    ["live Matrix transport", "matrix", "live", undefined, "live", true],
+    ["live Slack transport", "slack", "live", undefined, "live", true],
+    ["live Telegram transport", "telegram", "live", undefined, "live", true],
+    ["live WhatsApp transport", "whatsapp", "live", undefined, "live", true],
+    [
+      "live transport without a bundled channel identity",
+      "custom-live-transport",
+      "live",
+      undefined,
+      "live",
+      true,
+    ],
+    [
+      "synthetic driver for a real channel identity",
+      "telegram",
+      "qa-channel",
+      undefined,
+      "qa-channel",
+      false,
+    ],
+    [
+      "Crabline driver for a real channel identity",
+      "telegram",
+      "crabline",
+      undefined,
+      "crabline",
+      false,
+    ],
+    [
+      "live driver selected through the QA environment",
+      "custom-live-transport",
+      undefined,
+      { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
+      "live",
+      true,
+    ],
+    [
+      "live driver selected through the E2E environment",
+      "custom-live-transport",
+      undefined,
+      { OPENCLAW_E2E_CHANNEL_DRIVER: "live" },
+      "live",
+      true,
+    ],
+    [
+      "explicit synthetic driver overriding live environment",
+      "telegram",
+      "qa-channel",
+      { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
+      "qa-channel",
+      false,
+    ],
+    [
+      "transport without a resolved driver",
+      "custom-live-transport",
+      undefined,
+      undefined,
+      undefined,
+      false,
+    ],
+  ] as const)(
+    "records actual channel liveness for %s independently of model liveness",
+    (_label, channelId, channelDriver, env, expectedDriver, expectedLive) => {
+      const evidence = buildQaSuiteEvidenceSummary({
+        artifactPaths: [],
+        channelId,
+        channelDriver,
+        env,
+        generatedAt: "2026-07-25T00:00:00.000Z",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        scenarioDefinitions: [{ id: "channel-liveness", title: "Channel liveness" }],
+        scenarioResults: [{ name: "Channel liveness", status: "pass" }],
+      });
+
+      expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+      expect(evidence.entries[0]?.execution?.channel).toEqual({
+        id: channelId,
+        live: expectedLive,
+        driver: expectedDriver,
+      });
+      expect(evidence.entries[0]?.execution?.provider.live).toBe(false);
+    },
+  );
+
+  it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
+    const repoRoot = process.cwd();
+    const checkedOutRef = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "qa-channel",
       env: {
-        OPENCLAW_QA_RUNNER: "crabbox",
+        GITHUB_SHA: "bd479958c04a1eadbda8b6105e0722588d71e9ad",
       } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-07T12:05:00.000Z",
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          id: "telegram-canary",
-          coverageIds: ["channels.telegram.canary"],
-          title: "Telegram canary",
-          status: "fail",
-          details: "timed out waiting for SUT reply",
-          rttMs: 4321,
-        },
-      ],
-      transportId: "telegram",
+      generatedAt: "2026-06-24T12:00:00.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot,
+      scenarioDefinitions: [{ id: "ref-probe", title: "Ref probe" }],
+      scenarioResults: [{ name: "Ref probe", status: "pass" }],
     });
 
-    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
-    expect(evidence.profile).toBeUndefined();
-    expect(evidence.entries).toEqual([
-      expect.objectContaining({
-        test: {
-          kind: "live-transport-check",
-          id: "telegram-canary",
-          title: "Telegram canary",
-        },
-        coverage: [
-          {
-            id: "channels.telegram.live",
-            role: "live-transport",
-          },
-          {
-            id: "channels.telegram.canary",
-            role: "live-transport-coverage",
-          },
-        ],
-        execution: expect.objectContaining({
-          runner: "crabbox",
-          provider: {
-            id: "openai",
-            live: true,
-            model: {
-              name: "gpt-5.5",
-              ref: "openai/gpt-5.5",
-            },
-            auth: "live-frontier",
-          },
-          channel: {
-            id: "telegram",
-            live: true,
-            driver: "native",
-          },
-          artifacts: [
-            {
-              kind: "summary",
-              path: QA_EVIDENCE_FILENAME,
-              source: "telegram-live-transport",
-            },
-            {
-              kind: "report",
-              path: "telegram-qa-report.md",
-              source: "telegram-live-transport",
-            },
-          ],
-        }),
-        result: {
-          status: "fail",
-          failure: {
-            reason: "timed out waiting for SUT reply",
-          },
-          timing: {
-            rttMs: 4321,
-          },
-        },
-      }),
-    ]);
-  });
-
-  it("preserves aggregate live transport timing", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
-      generatedAt: "2026-06-07T12:05:00.000Z",
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          id: "telegram-mentioned-message-reply",
-          coverageIds: ["channels.telegram.mention-gating"],
-          title: "Telegram mentioned message gets a reply",
-          status: "pass",
-          details: "5 samples collected.",
-          rttMs: 2000,
-          timing: {
-            rttMs: 1200,
-            avgMs: 1300,
-            p50Ms: 1200,
-            p95Ms: 1800,
-            maxMs: 2200,
-            samples: 5,
-            failedSamples: 1,
-          },
-        },
-      ],
-      transportId: "telegram",
-    });
-
-    expect(evidence.entries[0]?.result.timing).toEqual({
-      rttMs: 1200,
-      avgMs: 1300,
-      p50Ms: 1200,
-      p95Ms: 1800,
-      maxMs: 2200,
-      samples: 5,
-      failedSamples: 1,
-    });
+    expect(evidence.entries[0]?.execution?.environment.ref).toBe(checkedOutRef);
   });
 
   it("builds Vitest runner evidence entries", () => {
@@ -257,7 +242,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:06:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -339,7 +324,7 @@ describe("evidence summary", () => {
         GITHUB_SHA: "def456",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:07:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -433,7 +418,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_PROFILE: "experimental-profile",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:09:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
@@ -462,14 +447,16 @@ describe("evidence summary", () => {
         ],
         channelId: "qa-channel",
         generatedAt: "2026-06-07T12:09:00.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
       });
 
       expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
       expect(evidence.evidenceMode).toBe(expectedMode);
-      expect("execution" in evidence.entries[0]).toBe(hasExecution);
+      expect("execution" in expectDefined(evidence.entries[0], "QA evidence entry")).toBe(
+        hasExecution,
+      );
     },
   );
 
@@ -510,133 +497,5 @@ describe("evidence summary", () => {
         },
       },
     });
-  });
-
-  it("uses explicit package provenance from package runners", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
-      generatedAt: "2026-06-07T12:15:00.000Z",
-      packageSource: {
-        kind: "packed-tarball",
-        spec: "/tmp/openclaw.tgz",
-        sha: "abc123",
-      },
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          id: "telegram-canary",
-          title: "Telegram canary",
-          details: "Canary passed.",
-          coverageIds: ["channels.telegram.canary"],
-          status: "pass",
-        },
-      ],
-      transportId: "telegram",
-    });
-
-    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
-      kind: "packed-tarball",
-      spec: "/tmp/openclaw.tgz",
-      sha: "abc123",
-    });
-  });
-
-  it("derives package provenance from generic QA evidence env", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
-      env: {
-        OPENCLAW_QA_PACKAGE_SOURCE: "openclaw@beta",
-        OPENCLAW_QA_PACKAGE_SOURCE_KIND: "npm-package",
-        OPENCLAW_QA_PACKAGE_SOURCE_SHA: "def456",
-      } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-07T12:15:00.000Z",
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          id: "telegram-canary",
-          title: "Telegram canary",
-          details: "Canary passed.",
-          coverageIds: ["channels.telegram.canary"],
-          status: "pass",
-        },
-      ],
-      transportId: "telegram",
-    });
-
-    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
-      kind: "npm-package",
-      spec: "openclaw@beta",
-      sha: "def456",
-    });
-  });
-
-  it("does not infer package provenance from runner-specific env", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
-      env: {
-        OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
-      } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-07T12:16:00.000Z",
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          id: "telegram-canary",
-          title: "Telegram canary",
-          details: "Canary passed.",
-          coverageIds: ["channels.telegram.canary"],
-          status: "pass",
-        },
-      ],
-      transportId: "telegram",
-    });
-
-    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
-      kind: "source-checkout",
-      spec: undefined,
-      sha: undefined,
-    });
-  });
-
-  it("keeps live transport check artifacts on the owning entry", () => {
-    const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [
-        { kind: "summary", path: QA_EVIDENCE_FILENAME },
-        { kind: "report", path: "discord-qa-report.md" },
-      ],
-      generatedAt: "2026-06-07T12:20:00.000Z",
-      primaryModel: "openai/gpt-5.5",
-      providerMode: "live-frontier",
-      checks: [
-        {
-          artifactPaths: {
-            screenshot: ".artifacts/discord/status.png",
-            video: ".artifacts/discord/status.mp4",
-          },
-          id: "discord-status-reactions-tool-only",
-          title: "Discord status reactions",
-          details: "Status reaction observed.",
-          status: "pass",
-        },
-      ],
-      transportId: "discord",
-    });
-
-    expect(evidence.entries[0]?.execution?.artifacts).toEqual(
-      expect.arrayContaining([
-        {
-          kind: "screenshot",
-          path: ".artifacts/discord/status.png",
-          source: "discord-live-transport:discord-status-reactions-tool-only",
-        },
-        {
-          kind: "video",
-          path: ".artifacts/discord/status.mp4",
-          source: "discord-live-transport:discord-status-reactions-tool-only",
-        },
-      ]),
-    );
   });
 });

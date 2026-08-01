@@ -6,7 +6,7 @@ export type BindingTargetKind = "subagent" | "session";
 /**
  * Lifecycle state for a registered session binding.
  */
-export type BindingStatus = "active" | "ending" | "ended";
+type BindingStatus = "active" | "ending" | "ended";
 
 /**
  * Placement requested when binding a child/current session to a conversation.

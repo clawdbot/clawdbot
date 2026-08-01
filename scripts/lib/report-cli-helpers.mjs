@@ -19,23 +19,31 @@ export function parseReportCliArgs(argv) {
     jsonPath: null,
     markdownPath: null,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
       continue;
     }
     if (arg === "--root") {
-      options.rootDir = readReportOptionValue(argv, index, arg);
+      setOnce(arg, "rootDir", readReportOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--json") {
-      options.jsonPath = readReportOptionValue(argv, index, arg);
+      setOnce(arg, "jsonPath", readReportOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = readReportOptionValue(argv, index, arg);
+      setOnce(arg, "markdownPath", readReportOptionValue(argv, index, arg));
       index += 1;
       continue;
     }

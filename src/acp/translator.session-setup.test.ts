@@ -98,7 +98,8 @@ describe("acp session UX bridge behavior", () => {
     });
     expectConfigOption(result.configOptions, "verbose_level", { currentValue: "off" });
     expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "off" });
-    expectConfigOption(result.configOptions, "response_usage", { currentValue: "off" });
+    // Unset session inherits the configured default → control reads "inherit", not "off".
+    expectConfigOption(result.configOptions, "response_usage", { currentValue: "inherit" });
     expectConfigOption(result.configOptions, "elevated_level", { currentValue: "off" });
 
     sessionStore.clearAllSessionsForTest();

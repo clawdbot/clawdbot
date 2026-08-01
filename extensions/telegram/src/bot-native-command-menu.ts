@@ -12,7 +12,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 const TELEGRAM_MAX_COMMANDS = 100;
-export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
+const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
 const TELEGRAM_MAX_COMMAND_DESCRIPTION_LENGTH = 256;
@@ -47,7 +47,7 @@ const cappedTelegramMenuCache = new Map<
 
 function countTelegramCommandText(value: string): number {
   let count = 0;
-  for (let index = 0; index < value.length; ) {
+  for (let index = 0; index < value.length;) {
     const codePoint = value.codePointAt(index);
     index += codePoint && codePoint > 0xffff ? 2 : 1;
     count += 1;
@@ -333,7 +333,7 @@ function rememberCappedTelegramMenuResult(
   }
 }
 
-export function hashCommandList(commands: TelegramMenuCommand[]): string {
+function hashCommandList(commands: TelegramMenuCommand[]): string {
   const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }

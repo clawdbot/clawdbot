@@ -7,6 +7,7 @@ import {
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
@@ -31,10 +32,7 @@ function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 }
 
-/**
- * Rewrites package extension entries for bundled metadata output.
- */
-export function rewritePackageExtensions(entries) {
+function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
     return undefined;
   }
@@ -249,6 +247,9 @@ export function copyBundledPluginMetadata(params = {}) {
   if (!fs.existsSync(extensionsRoot)) {
     return;
   }
+  // Fail closed before any dist/extensions removal: a symlinked dist root
+  // would redirect recursive deletes into the link target.
+  assertRealOutputRoot(path.join(repoRoot, "dist"));
 
   const buildablePluginDirs = new Set(
     collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),

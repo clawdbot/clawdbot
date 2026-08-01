@@ -25,6 +25,7 @@ export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ACTIVE_CHILD_KILLERS = new Set();
@@ -58,11 +59,11 @@ for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
         killChild("SIGKILL");
       }
       process.exit(forwardedSignalExitCode);
-    }, COMMAND_TIMEOUT_KILL_AFTER_MS);
+    }, FORWARDED_SIGNAL_KILL_AFTER_MS);
   });
 }
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
@@ -96,6 +97,14 @@ export function parseArgs(argv) {
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const readValue = (name, readOptions = {}) => {
@@ -110,29 +119,29 @@ export function parseArgs(argv) {
       return value;
     };
     if (arg === "--artifact-dir") {
-      options.artifactDir = readValue(arg);
+      setOnce(arg, "artifactDir", readValue(arg));
     } else if (arg === "--github-output") {
-      options.githubOutput = readValue(arg);
+      setOnce(arg, "githubOutput", readValue(arg));
     } else if (arg === "--metadata") {
-      options.metadata = readValue(arg);
+      setOnce(arg, "metadata", readValue(arg));
     } else if (arg === "--output-dir") {
-      options.outputDir = readValue(arg);
+      setOnce(arg, "outputDir", readValue(arg));
     } else if (arg === "--output-name") {
-      options.outputName = readValue(arg);
+      setOnce(arg, "outputName", readValue(arg));
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg, { allowEmpty: true }).toLowerCase();
+      setOnce(arg, "packageSha256", readValue(arg, { allowEmpty: true }).toLowerCase());
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageRef", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageSpec", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageUrl", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--source") {
-      options.source = readValue(arg);
+      setOnce(arg, "source", readValue(arg));
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "trustedSourceId", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--trusted-source-policy") {
-      options.trustedSourcePolicy = readValue(arg);
+      setOnce(arg, "trustedSourcePolicy", readValue(arg));
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
@@ -167,7 +176,7 @@ function resolvePackedOpenClawTarballFilename(value) {
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -449,7 +458,7 @@ async function assertExpectedSha256(file, expected) {
 
 export const assertExpectedSha256ForTest = assertExpectedSha256;
 
-async function findSingleTarball(dir) {
+async function findSingleTarball(dir, maxEntries = ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
   const root = path.resolve(ROOT_DIR, dir);
   const pending = [root];
   const tarballs = [];
@@ -463,9 +472,9 @@ async function findSingleTarball(dir) {
     const handle = await fs.opendir(currentDir);
     for await (const entry of handle) {
       scannedEntries += 1;
-      if (scannedEntries > ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
+      if (scannedEntries > maxEntries) {
         throw new Error(
-          `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
+          `source=artifact scan exceeded ${maxEntries} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
         );
       }
 
@@ -1111,12 +1120,17 @@ function createPinnedLookup(hostname, addresses) {
       ? records.filter((record) => record.family === opts.family)
       : records;
     const usable = filtered.length > 0 ? filtered : records;
+    // Keep custom lookup delivery asynchronous so HTTPS owns immediate socket errors.
     if (opts.all) {
-      cb(null, usable);
+      process.nextTick(() => {
+        cb(null, usable);
+      });
       return;
     }
     const chosen = usable[0];
-    cb(null, chosen.address, chosen.family);
+    process.nextTick(() => {
+      cb(null, chosen.address, chosen.family);
+    });
   };
 }
 
@@ -1273,10 +1287,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolveTimerTimeoutMs(
-    options.timeoutMs,
-    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);
@@ -1470,6 +1481,7 @@ async function resolveCandidate(options) {
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
         "--source-dir",
         packageSource.sourceDir,
         "--output-dir",

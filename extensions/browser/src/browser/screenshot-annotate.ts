@@ -11,8 +11,8 @@
 //
 // chrome-mcp path keeps its own inline overlay (renderChromeMcpLabels) for now.
 
-export const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
-export const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
+const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
+const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
 export const ANNOTATION_MAX_LABELS_DEFAULT = 150;
 
 export type CoordinateSpace = "viewport" | "fullpage" | "element";
@@ -25,7 +25,7 @@ export interface RawAnnotationInput {
   doc: { x: number; y: number; width: number; height: number };
 }
 
-export interface AnnotationBox {
+interface AnnotationBox {
   x: number;
   y: number;
   width: number;
@@ -40,7 +40,7 @@ export interface AnnotationItem {
   box: AnnotationBox;
 }
 
-export interface OverlayItem {
+interface OverlayItem {
   ref: string;
   x: number;
   y: number;
@@ -48,7 +48,7 @@ export interface OverlayItem {
   h: number;
 }
 
-export interface AnnotationPlan {
+interface AnnotationPlan {
   /** Always document-space items, fed to buildOverlayInjectionScript. */
   overlayItems: OverlayItem[];
   /** Items projected into the capture mode's image-space coordinates. */
@@ -57,7 +57,7 @@ export interface AnnotationPlan {
   skipped: number;
 }
 
-export interface PlanAnnotationsParams {
+interface PlanAnnotationsParams {
   inputs: RawAnnotationInput[];
   space: CoordinateSpace;
   /** Required when space === "viewport". */
@@ -74,7 +74,7 @@ export interface PlanAnnotationsParams {
   maxLabels?: number;
 }
 
-export function refToNumber(ref: string): number {
+function refToNumber(ref: string): number {
   const match = ref.match(/(\d+)/);
   if (!match) {
     return 0;

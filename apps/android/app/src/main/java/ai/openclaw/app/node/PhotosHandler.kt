@@ -1,17 +1,15 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
-import android.Manifest
+import ai.openclaw.app.hasPhotoReadPermission
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -56,16 +54,7 @@ internal interface PhotosDataSource {
 }
 
 private object SystemPhotosDataSource : PhotosDataSource {
-  /** Checks the API-specific image read permission used by MediaStore image access. */
-  override fun hasPermission(context: Context): Boolean {
-    val permission =
-      if (Build.VERSION.SDK_INT >= 33) {
-        Manifest.permission.READ_MEDIA_IMAGES
-      } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-      }
-    return ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
-  }
+  override fun hasPermission(context: Context): Boolean = hasPhotoReadPermission(context)
 
   override fun latest(
     context: Context,

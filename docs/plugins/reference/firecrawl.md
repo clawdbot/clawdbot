@@ -16,7 +16,7 @@ Adds agent-callable tools. Adds web fetch provider support. Adds web search prov
 
 ## Surface
 
-contracts: tools, webFetchProviders, webSearchProviders
+contracts: `tools`, `webFetchProviders`, `webSearchProviders`
 
 ## Related docs
 

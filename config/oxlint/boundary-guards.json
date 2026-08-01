@@ -1,0 +1,10 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "jsPlugins": ["../../scripts/oxlint-boundary-guards.mjs"],
+  "categories": { "correctness": "off" },
+  "rules": {
+    "openclaw-boundaries/no-raw-window-open-call": "error",
+    "openclaw-boundaries/no-register-http-handler-call": "error"
+  }
+}

@@ -7,7 +7,7 @@ read_when:
 title: "Permission modes"
 ---
 
-Permission modes decide how much authority an agent has before it can run host commands, write files, or ask a backend harness for extra access. Start with `tools.exec.mode: "auto"` when you want OpenClaw to use allowlists first, then Codex native auto-review or a human approval route for misses.
+Permission modes decide how much authority an agent has before it runs host commands, writes files, or asks a backend harness for extra access.
 
 <Note>
   Permission mode is separate from `tools.exec.host=auto`. `tools.exec.host`
@@ -31,25 +31,25 @@ Then verify the effective policy:
 openclaw exec-policy show
 ```
 
-In `auto` mode, OpenClaw runs deterministic allowlist matches directly. Approval misses go through OpenClaw's native auto reviewer first, then fall back to the configured human approval route when needed.
-
 ## OpenClaw host exec modes
 
-`tools.exec.mode` is the normalized policy surface for host `exec`.
+`tools.exec.mode` is the normalized policy surface for host `exec`. Each mode resolves to an underlying `security` (allowlist strictness) and `ask` (prompt-on-miss) pair:
 
-| Mode        | Behavior                                     | Use when                                              |
-| ----------- | -------------------------------------------- | ----------------------------------------------------- |
-| `deny`      | Block host exec.                             | No host commands are allowed.                         |
-| `allowlist` | Run only allowlisted commands.               | You have a known-safe command set.                    |
-| `ask`       | Run allowlist matches and ask on misses.     | A human should review new commands.                   |
-| `auto`      | Run allowlist matches, then use auto-review. | Coding sessions need practical guarded access.        |
-| `full`      | Run host exec without prompts.               | This trusted host/session should skip approval gates. |
+| Mode        | security / ask          | Behavior                                                                                      | Use when                                              |
+| ----------- | ----------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `deny`      | `deny` / `off`          | Block host exec entirely.                                                                     | No host commands are allowed.                         |
+| `allowlist` | `allowlist` / `off`     | Run only allowlisted commands; silently deny misses.                                          | You have a known-safe command set.                    |
+| `ask`       | `allowlist` / `on-miss` | Run allowlist matches; ask a human on misses.                                                 | A human should review every new command.              |
+| `auto`      | `allowlist` / `on-miss` | Run allowlist matches; send misses through auto-review before falling back to human approval. | Coding sessions need practical guarded access.        |
+| `full`      | `full` / `off`          | Run host exec without prompts.                                                                | This trusted host/session should skip approval gates. |
+
+`ask` and `auto` share the same allowlist/ask settings; `auto` additionally enables the native auto-reviewer, which decides misses itself and only defers to the configured human approval route when it cannot safely approve.
 
 For the full host exec policy, local approvals file, allowlist schema, safe bins, and forwarding behavior, see [Exec approvals](/tools/exec-approvals).
 
 ## Codex Guardian mapping
 
-For native Codex app-server sessions, `tools.exec.mode: "auto"` maps to Codex Guardian-reviewed approvals when the local Codex requirements allow it. OpenClaw usually sends:
+For native Codex app-server sessions, `tools.exec.mode: "auto"` drives Codex toward Guardian-reviewed approvals when the local Codex requirements allow it. Typical resulting values:
 
 | Codex field         | Typical value     |
 | ------------------- | ----------------- |
@@ -57,7 +57,7 @@ For native Codex app-server sessions, `tools.exec.mode: "auto"` maps to Codex Gu
 | `approvalsReviewer` | `auto_review`     |
 | `sandbox`           | `workspace-write` |
 
-In `auto` mode, OpenClaw does not preserve legacy unsafe Codex overrides such as `approvalPolicy: "never"` or `sandbox: "danger-full-access"`. Use `tools.exec.mode: "full"` only when you intentionally want the no-approval posture.
+`auto` mode forces this policy over any configured Codex sandbox/approval overrides, so it does not preserve legacy unsafe combinations such as `approvalPolicy: "never"` with `sandbox: "danger-full-access"`. `tools.exec.mode: "deny"` and `"allowlist"` block Codex app-server local execution entirely. Use `tools.exec.mode: "full"` only when you intentionally want the no-approval posture.
 
 For app-server setup, auth order, and native Codex runtime details, see [Codex harness](/plugins/codex-harness).
 
@@ -65,7 +65,7 @@ For app-server setup, auth order, and native Codex runtime details, see [Codex h
 
 ACPX sessions are non-interactive, so they cannot click a TTY permission prompt. ACPX uses separate harness-level settings under `plugins.entries.acpx.config`:
 
-| Setting                     | Common value    | Meaning                                     |
+| Setting                     | Values          | Meaning                                     |
 | --------------------------- | --------------- | ------------------------------------------- |
 | `permissionMode`            | `approve-reads` | Auto-approve reads only.                    |
 | `permissionMode`            | `approve-all`   | Auto-approve writes and shell commands.     |

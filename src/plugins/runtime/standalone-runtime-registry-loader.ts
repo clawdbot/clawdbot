@@ -27,7 +27,7 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
-function installStandaloneRegistry(
+function installStandaloneRuntimePluginRegistry(
   registry: PluginRegistry,
   params: {
     loadOptions: PluginLoadOptions;
@@ -99,7 +99,7 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     return registry;
   }
 
-  installStandaloneRegistry(registry, {
+  installStandaloneRuntimePluginRegistry(registry, {
     loadOptions: params.loadOptions,
     surface,
   });

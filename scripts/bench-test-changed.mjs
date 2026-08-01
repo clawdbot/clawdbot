@@ -31,7 +31,9 @@ function positiveIntegerFlag(flag, key) {
         throw new Error(`${flag} requires a value`);
       }
       return {
+        flag,
         nextIndex: index + 1,
+        repeatable: false,
         apply(target) {
           target[key] = parsePositiveInteger(rawValue, flag);
         },

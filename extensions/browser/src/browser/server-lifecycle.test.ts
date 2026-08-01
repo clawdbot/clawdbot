@@ -1,106 +1,60 @@
 // Browser tests cover server lifecycle plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { stopOpenClawChromeMock } = vi.hoisted(() => ({
-  stopOpenClawChromeMock: vi.fn(async () => {}),
-}));
+const beginProfileTransitionMock = vi.hoisted(() => vi.fn());
 
-const { createBrowserRouteContextMock, listKnownProfileNamesMock } = vi.hoisted(() => ({
-  createBrowserRouteContextMock: vi.fn(),
-  listKnownProfileNamesMock: vi.fn(),
-}));
-
-vi.mock("./chrome.js", () => ({
-  stopOpenClawChrome: stopOpenClawChromeMock,
-}));
-
-vi.mock("./server-context.js", () => ({
-  createBrowserRouteContext: createBrowserRouteContextMock,
-  listKnownProfileNames: listKnownProfileNamesMock,
+vi.mock("./server-context.lifecycle.js", () => ({
+  beginProfileTransition: beginProfileTransitionMock,
 }));
 
 const { stopKnownBrowserProfiles } = await import("./server-lifecycle.js");
 
 beforeEach(() => {
-  createBrowserRouteContextMock.mockClear();
-  listKnownProfileNamesMock.mockClear();
-  stopOpenClawChromeMock.mockClear();
+  beginProfileTransitionMock.mockReset();
 });
 
 describe("stopKnownBrowserProfiles", () => {
-  it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "user"]);
-    const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
-      openclaw: vi.fn(async () => {}),
-      user: vi.fn(async () => {
-        throw new Error("profile stop failed");
-      }),
-    };
-    createBrowserRouteContextMock.mockReturnValue({
-      forProfile: (name: string) => ({
-        stopRunningBrowser: stopMap[name],
-      }),
-    });
-    const onWarn = vi.fn();
-    const state = { resolved: { profiles: {} }, profiles: new Map() };
+  it("invalidates every profile before awaiting either drain", async () => {
+    const releases: Array<() => void> = [];
+    beginProfileTransitionMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ stopped: true }));
+        }),
+    );
+    const runtimes = [{ profile: { name: "openclaw" } }, { profile: { name: "user" } }];
+    const state = { profiles: new Map(runtimes.map((runtime) => [runtime.profile.name, runtime])) };
 
-    await stopKnownBrowserProfiles({
-      getState: () => state as never,
-      onWarn,
-    });
-
-    expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
-    expect(stopMap.user).toHaveBeenCalledTimes(1);
-    expect(onWarn).not.toHaveBeenCalled();
-  });
-
-  it("stops tracked runtime browsers even when the profile no longer resolves", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["deleted-local"]);
-    createBrowserRouteContextMock.mockReturnValue({
-      forProfile: vi.fn(() => {
-        throw new Error("profile not found");
-      }),
-    });
-    const localRuntime = {
-      profile: {
-        name: "deleted-local",
-        driver: "openclaw",
-      },
-      running: {
-        pid: 42,
-        cdpPort: 18888,
-      },
-    };
-    const launchedBrowser = localRuntime.running;
-    const profiles = new Map<string, unknown>([["deleted-local", localRuntime]]);
-    const state = {
-      resolved: { profiles: {} },
-      profiles,
-    };
-
-    await stopKnownBrowserProfiles({
-      getState: () => state as never,
+    const stopping = stopKnownBrowserProfiles({
+      current: state as never,
+      closeSharedAdapters: true,
       onWarn: vi.fn(),
     });
 
-    expect(stopOpenClawChromeMock).toHaveBeenCalledWith(launchedBrowser);
-    expect(localRuntime.running).toBeNull();
+    expect(beginProfileTransitionMock).toHaveBeenCalledTimes(2);
+    expect(releases).toHaveLength(2);
+    for (const release of releases) {
+      release();
+    }
+    await stopping;
   });
 
-  it("warns when profile enumeration fails", async () => {
-    listKnownProfileNamesMock.mockImplementation(() => {
-      throw new Error("oops");
-    });
-    createBrowserRouteContextMock.mockReturnValue({
-      forProfile: vi.fn(),
-    });
+  it("warns after parallel drains when one profile cleanup fails", async () => {
+    beginProfileTransitionMock
+      .mockResolvedValueOnce({ stopped: true })
+      .mockRejectedValueOnce(new Error("profile stop failed"));
+    const runtimes = [{ profile: { name: "openclaw" } }, { profile: { name: "user" } }];
+    const state = { profiles: new Map(runtimes.map((runtime) => [runtime.profile.name, runtime])) };
     const onWarn = vi.fn();
 
-    await stopKnownBrowserProfiles({
-      getState: () => ({ resolved: { profiles: {} }, profiles: new Map() }) as never,
-      onWarn,
-    });
+    await expect(
+      stopKnownBrowserProfiles({
+        current: state as never,
+        closeSharedAdapters: true,
+        onWarn,
+      }),
+    ).rejects.toThrow("profile stop failed");
 
-    expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
+    expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: profile stop failed");
   });
 });

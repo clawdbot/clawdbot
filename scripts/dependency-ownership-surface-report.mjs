@@ -412,6 +412,14 @@ export function parseArgs(argv) {
     jsonPath: null,
     markdownPath: null,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
@@ -422,6 +430,10 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--json") {
+      if (seen.has(arg)) {
+        throw new Error(`${arg} was provided more than once.`);
+      }
+      seen.add(arg);
       options.asJson = true;
       if (argv[index + 1] && !argv[index + 1].startsWith("-")) {
         options.jsonPath = argv[++index];
@@ -429,7 +441,7 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = readArtifactPath(argv, index, arg);
+      setOnce(arg, "markdownPath", readArtifactPath(argv, index, arg));
       index += 1;
       continue;
     }

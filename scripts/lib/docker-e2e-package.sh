@@ -7,6 +7,10 @@
 DOCKER_E2E_PACKAGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DOCKER_E2E_PACKAGE_LIB_DIR/../.." && pwd)}"
 
+if ! declare -F docker_e2e_docker_run_with_resource_diagnostics >/dev/null 2>&1; then
+  source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-resource-diagnostics.sh"
+fi
+
 if ! declare -F run_logged >/dev/null 2>&1; then
   source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-logs.sh"
 fi
@@ -108,30 +112,10 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     fi
   }
 fi
-if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
-  docker_e2e_docker_run_cmd() {
-    if [ "${1:-}" = "run" ]; then
-      shift
-      docker_e2e_docker_run_resource_args "$@" || return $?
-      if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-        if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-        else
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "$@"
-        fi
-        return
-      fi
-      if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-        set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-      else
-        set -- run "$@"
-      fi
-    fi
-    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
-      return
-    fi
-    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+if ! declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+  docker_e2e_timeout_cmd() {
+    local timeout_value="$1"
+    shift
     local timeout_bin=""
     if command -v timeout >/dev/null 2>&1; then
       timeout_bin="timeout"
@@ -140,9 +124,9 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
     fi
     if [ -n "$timeout_bin" ]; then
       if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
+        "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
       else
-        "$timeout_bin" "$timeout_value" docker "$@"
+        "$timeout_bin" "$timeout_value" "$@"
       fi
       return
     fi
@@ -150,11 +134,165 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
     return 127
   }
 fi
+if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
+  docker_e2e_docker_run_cmd() {
+    if [ "${1:-}" = "run" ]; then
+      shift
+      docker_e2e_docker_run_resource_args "$@" || return $?
+      docker_e2e_docker_run_with_resource_diagnostics \
+        "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" \
+        "$@"
+      return
+    fi
+    docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
+  }
+fi
 
 docker_e2e_abs_path() {
   local file="$1"
   (cd "$(dirname "$file")" && printf '%s/%s\n' "$(pwd)" "$(basename "$file")")
 }
+
+docker_e2e_restore_package_dist_from_image() (
+  local image="$1"
+  local ai_backup_dir=""
+  local ai_dist_dir=""
+  local ai_dist_installed=0
+  local ai_package_dir=""
+  local backup_dir=""
+  local container_id=""
+  local dist_installed=0
+  local requires_ai_dist=0
+  local restore_root=""
+  local restore_complete=0
+  local temp_dir=""
+
+  cleanup_restore_package_dist() {
+    if [ -n "$container_id" ]; then
+      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
+    fi
+    # Root and AI artifacts come from one image. Restore both on partial failure
+    # so the package step cannot combine outputs from different builds.
+    if [ "$restore_complete" != "1" ]; then
+      if [ "$dist_installed" = "1" ]; then
+        rm -rf "$restore_root/dist" >/dev/null 2>&1 || true
+      fi
+      if [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
+        if [ ! -e "$restore_root/dist" ] && \
+          mv "$backup_dir" "$restore_root/dist" >/dev/null 2>&1; then
+          backup_dir=""
+        fi
+      fi
+      if [ "$ai_dist_installed" = "1" ]; then
+        rm -rf "$ai_dist_dir" >/dev/null 2>&1 || true
+      fi
+      if [ -n "$ai_backup_dir" ] && [ -d "$ai_backup_dir" ]; then
+        if [ ! -e "$ai_dist_dir" ] && \
+          mv "$ai_backup_dir" "$ai_dist_dir" >/dev/null 2>&1; then
+          ai_backup_dir=""
+        fi
+      fi
+    fi
+    if [ -n "$temp_dir" ]; then
+      rm -rf "$temp_dir"
+    fi
+    if [ "$restore_complete" = "1" ] && [ -n "$backup_dir" ]; then
+      rm -rf "$backup_dir"
+    fi
+    if [ "$restore_complete" = "1" ] && [ -n "$ai_backup_dir" ]; then
+      rm -rf "$ai_backup_dir"
+    fi
+  }
+
+  if ! restore_root="$(cd "$ROOT_DIR" && pwd -P)"; then
+    echo "unable to resolve package restore root: $ROOT_DIR" >&2
+    return 1
+  fi
+  # The trusted workflow owns this static checkout and runs no candidate process
+  # concurrently. Resolve owner paths once and reuse them through every swap.
+  if [ -L "$restore_root/packages" ] || [ -L "$restore_root/packages/ai" ]; then
+    echo "refusing package artifact restore through a symlinked packages path" >&2
+    return 1
+  fi
+  if [ -f "$restore_root/packages/ai/package.json" ]; then
+    if ! ai_package_dir="$(cd "$restore_root/packages/ai" && pwd -P)"; then
+      echo "unable to resolve bundled AI package path" >&2
+      return 1
+    fi
+    case "$ai_package_dir/" in
+      "$restore_root"/*) ;;
+      *)
+        echo "refusing bundled AI artifact restore outside the package root" >&2
+        return 1
+        ;;
+    esac
+    ai_dist_dir="$ai_package_dir/dist"
+    requires_ai_dist=1
+  fi
+
+  echo "==> Reuse package build artifacts from Docker image: $image"
+  if ! container_id="$(docker_e2e_docker_cmd create "$image")"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if ! temp_dir="$(mktemp -d "$restore_root/.package-dist.XXXXXX")"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if [ "$requires_ai_dist" = "1" ] && \
+    ! docker_e2e_docker_cmd cp \
+      "${container_id}:/app/node_modules/@openclaw/ai/dist" \
+      "$temp_dir/ai-dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if [ -e "$restore_root/dist" ]; then
+    if ! backup_dir="$(mktemp -d "$restore_root/.dist-backup.XXXXXX")"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    if ! rmdir "$backup_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    if ! mv "$restore_root/dist" "$backup_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+  fi
+  if ! mv "$temp_dir/dist" "$restore_root/dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  dist_installed=1
+  if [ "$requires_ai_dist" = "1" ]; then
+    if [ -e "$ai_dist_dir" ]; then
+      if ! ai_backup_dir="$(mktemp -d "$ai_package_dir/.dist-backup.XXXXXX")"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+      if ! rmdir "$ai_backup_dir"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+      if ! mv "$ai_dist_dir" "$ai_backup_dir"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+    fi
+    if ! mv "$temp_dir/ai-dist" "$ai_dist_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    ai_dist_installed=1
+  fi
+  restore_complete=1
+  cleanup_restore_package_dist
+)
 
 docker_e2e_prepare_package_tgz() {
   local label="$1"
@@ -174,6 +312,7 @@ docker_e2e_prepare_package_tgz() {
   local pack_status=0
   package_tgz="$(
     node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
+      --allow-unreleased-changelog \
       --output-dir "$pack_dir" \
       --output-name openclaw-current.tgz
   )" || pack_status="$?"
@@ -261,6 +400,7 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
+    -v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"

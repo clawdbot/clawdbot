@@ -5,11 +5,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getHomeDir,
-  getQQBotDataPath,
+  getQQBotDataDir,
   getQQBotMediaPath,
-  resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
 } from "./platform.js";
+
+function getQQBotDataPath(...subPaths: string[]): string {
+  return getQQBotDataDir(...subPaths);
+}
+
+function resolveQQBotLocalMediaPath(p: string): string | null {
+  return resolveQQBotPayloadLocalFilePath(p);
+}
 
 describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];
@@ -287,7 +294,7 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     // Track for cleanup; we only created the unique baseName subdir indirectly
     // through resolveQQBotLocalMediaPath, which does NOT actually create the
     // HOME-side path, so nothing to clean up there beyond the OPENCLAW_HOME tree.
-    expect(resolveQQBotLocalMediaPath(homeWorkspacePath)).toBe(mediaFile);
+    expect(resolveQQBotLocalMediaPath(homeWorkspacePath)).toBe(fs.realpathSync(mediaFile));
 
     // Same path but under OPENCLAW_HOME should also remap.
     const openclawWorkspacePath = path.join(
@@ -299,6 +306,6 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
       baseName,
       "remap.png",
     );
-    expect(resolveQQBotLocalMediaPath(openclawWorkspacePath)).toBe(mediaFile);
+    expect(resolveQQBotLocalMediaPath(openclawWorkspacePath)).toBe(fs.realpathSync(mediaFile));
   });
 });

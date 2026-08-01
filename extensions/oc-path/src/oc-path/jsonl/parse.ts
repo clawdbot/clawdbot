@@ -11,7 +11,7 @@ import type { Diagnostic } from "../ast.js";
 import { parseJsonc } from "../jsonc/parse.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
 
-export interface JsonlParseResult {
+interface JsonlParseResult {
   readonly ast: JsonlAst;
   readonly diagnostics: readonly Diagnostic[];
 }

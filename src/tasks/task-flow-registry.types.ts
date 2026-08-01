@@ -1,15 +1,8 @@
 // Defines managed task-flow registry records and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { TaskNotifyPolicy } from "./task-registry.types.js";
+import type { JsonValue, TaskNotifyPolicy } from "./task-registry.types.js";
 
-/** JSON value shape persisted with task-flow state and wait metadata. */
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+export type { JsonValue } from "./task-registry.types.js";
 
 export type TaskFlowSyncMode = "task_mirrored" | "managed";
 

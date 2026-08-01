@@ -65,13 +65,8 @@ export {
 export {
   type CodeBlock,
   convertCodeBlockToFlexBubble,
-  convertLinksToFlexBubble,
   convertTableToFlexBubble,
-  extractCodeBlocks,
-  extractLinks,
-  extractMarkdownTables,
   hasMarkdownToConvert,
-  type MarkdownLink,
   type MarkdownTable,
   type ProcessedLineMessage,
   processLineMessage,
@@ -165,11 +160,7 @@ export {
   getRichMenu,
   getRichMenuIdOfUser,
   getRichMenuList,
-  linkRichMenuToUser,
-  linkRichMenuToUsers,
   setDefaultRichMenu,
-  unlinkRichMenuFromUser,
-  unlinkRichMenuFromUsers,
   uploadRichMenuImage,
 } from "./src/rich-menu.js";
 export type {

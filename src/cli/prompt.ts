@@ -57,3 +57,10 @@ export async function promptYesNo(question: string, defaultYes = false): Promise
   }
   return answer.startsWith("y");
 }
+
+export async function promptText(question: string): Promise<string> {
+  const rl = readline.createInterface({ input, output });
+  return await questionUntilClose(rl, question).finally(() => {
+    rl.close();
+  });
+}

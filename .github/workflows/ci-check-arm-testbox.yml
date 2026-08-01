@@ -105,6 +105,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
       - name: Prepare Testbox shell
         shell: bash
         run: |
@@ -116,10 +117,19 @@ jobs:
             "+refs/heads/main:refs/remotes/origin/main"
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
-          sudo ln -sf "$node_bin/node" /usr/local/bin/node
-          sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
-          sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
-          sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
+          link_node_tool() {
+            local tool="$1"
+            local source="$node_bin/$tool"
+            local target="/usr/local/bin/$tool"
+            if [ -e "$target" ] && [ "$(readlink -f "$source")" = "$(readlink -f "$target")" ]; then
+              return
+            fi
+            sudo ln -sf "$source" "$target"
+          }
+          link_node_tool node
+          link_node_tool npm
+          link_node_tool npx
+          link_node_tool corepack
           sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
           #!/usr/bin/env bash
           exec /usr/local/bin/corepack pnpm "$@"

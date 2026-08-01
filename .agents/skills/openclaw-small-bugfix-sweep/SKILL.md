@@ -13,6 +13,7 @@ Triage reviews, proves, and patches local fixes first; publishing waits for Pete
 
 Peter always wants to review code before commits.
 Default flow:
+
 1. Review each issue deeply enough to prove current behavior and root cause.
 2. Fix only easy, high-confidence bugs with narrow ownership and focused proof.
 3. Stop with the dirty diff summary, touched files, and test/gate output for Peter's manual review.

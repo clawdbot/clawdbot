@@ -1,7 +1,7 @@
 // Covers plugin hooks that run before agent finalization.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 
 const EVENT = {
   runId: "run-1",
@@ -15,6 +15,7 @@ const EVENT = {
   stopHookActive: false,
   lastAssistantMessage: "done",
 };
+const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
 
 describe("before_agent_finalize hook runner", () => {
   it("returns undefined when no hooks are registered", async () => {
@@ -200,6 +201,28 @@ describe("before_agent_finalize hook runner", () => {
       action: "finalize",
       reason: "enough",
     });
+  });
+
+  it("times out hung handlers and continues with the original final answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise(() => {}));
+      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([{ hookName: "before_agent_finalize", handler }]),
+        { logger },
+      );
+
+      const run = runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hasHooks reports correctly", () => {

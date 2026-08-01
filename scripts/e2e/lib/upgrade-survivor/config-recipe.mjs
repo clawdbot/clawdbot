@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -109,6 +109,17 @@ const representativeConfigSteps = [
 
 const scenarioConfigSteps = new Map([
   [
+    "acpx-openclaw-tools-bridge",
+    [
+      configSetJsonFile(
+        "plugins-acpx-openclaw-tools-bridge",
+        "acpx-openclaw-tools-bridge",
+        "plugins",
+        "plugins-acpx-openclaw-tools-bridge.json",
+      ),
+    ],
+  ],
+  [
     "feishu-channel",
     [
       configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
@@ -152,7 +163,27 @@ const scenarioConfigSteps = new Map([
       ),
     ],
   ],
+  [
+    "codex-allowlist-survival",
+    [
+      {
+        id: "plugins-codex-allowlist",
+        intent: "codex-allowlist-survival",
+        argv: [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          "--strict-json",
+        ],
+      },
+    ],
+  ],
 ]);
+
+export function resolveScenarioConfigSteps(scenario) {
+  return scenarioConfigSteps.get(scenario) ?? [];
+}
 
 const recipe = [
   {
@@ -174,6 +205,15 @@ function selectedScenario() {
 }
 
 function adaptStepForBaseline(step, baselineVersion, summary) {
+  if (
+    step.intent === "acpx-openclaw-tools-bridge" &&
+    isReleaseBefore(baselineVersion, "2026.4.22")
+  ) {
+    if (!summary.skippedIntents.includes("acpx-openclaw-tools-bridge")) {
+      summary.skippedIntents.push("acpx-openclaw-tools-bridge");
+    }
+    return null;
+  }
   if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
     return step;
   }
@@ -269,7 +309,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const scenarioSteps = scenarioConfigSteps.get(scenario) ?? [];
+  const scenarioSteps = resolveScenarioConfigSteps(scenario);
   const summary = {
     source: "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",

@@ -33,6 +33,11 @@ internal data class MobileColors(
   val codeText: Color,
   val codeBorder: Color,
   val codeAccent: Color,
+  // Syntax token colors; every value must keep >= 4.5:1 contrast against codeBg in its theme.
+  val codeKeyword: Color,
+  val codeString: Color,
+  val codeComment: Color,
+  val codeNumber: Color,
   val chipBorderConnected: Color,
   val chipBorderConnecting: Color,
   val chipBorderWarning: Color,
@@ -62,6 +67,10 @@ internal fun lightMobileColors() =
     codeText = Color(0xFF172033),
     codeBorder = Color(0xFFD7DDE7),
     codeAccent = Color(0xFF287F52),
+    codeKeyword = Color(0xFF1B5ACB),
+    codeString = Color(0xFF1F6B45),
+    codeComment = Color(0xFF505B6A),
+    codeNumber = Color(0xFF8F5D10),
     chipBorderConnected = Color(0xFFCFEBD8),
     chipBorderConnecting = Color(0xFFD5E2FA),
     chipBorderWarning = Color(0xFFEED8B8),
@@ -91,6 +100,10 @@ internal fun darkMobileColors() =
     codeText = Color(0xFFE8EAEE),
     codeBorder = Color(0xFF2B2E35),
     codeAccent = Color(0xFF3FC97A),
+    codeKeyword = Color(0xFF6EA8FF),
+    codeString = Color(0xFF3FC97A),
+    codeComment = Color(0xFFA0A6B4),
+    codeNumber = Color(0xFFE8A844),
     chipBorderConnected = Color(0xFF1E4A30),
     chipBorderConnecting = Color(0xFF1E3358),
     chipBorderWarning = Color(0xFF3E3018),
@@ -109,7 +122,6 @@ internal object MobileColorsAccessor {
 // Keep these accessors while screens migrate to `MobileColorsAccessor.current`.
 // Each getter must stay composable so callers always read the active theme.
 internal val mobileSurface: Color @Composable get() = LocalMobileColors.current.surface
-internal val mobileSurfaceStrong: Color @Composable get() = LocalMobileColors.current.surfaceStrong
 internal val mobileCardSurface: Color @Composable get() = LocalMobileColors.current.cardSurface
 internal val mobileBorder: Color @Composable get() = LocalMobileColors.current.border
 internal val mobileBorderStrong: Color @Composable get() = LocalMobileColors.current.borderStrong
@@ -119,8 +131,6 @@ internal val mobileTextTertiary: Color @Composable get() = LocalMobileColors.cur
 internal val mobileAccent: Color @Composable get() = LocalMobileColors.current.accent
 internal val mobileAccentSoft: Color @Composable get() = LocalMobileColors.current.accentSoft
 internal val mobileAccentBorderStrong: Color @Composable get() = LocalMobileColors.current.accentBorderStrong
-internal val mobileSuccess: Color @Composable get() = LocalMobileColors.current.success
-internal val mobileSuccessSoft: Color @Composable get() = LocalMobileColors.current.successSoft
 internal val mobileWarning: Color @Composable get() = LocalMobileColors.current.warning
 internal val mobileWarningSoft: Color @Composable get() = LocalMobileColors.current.warningSoft
 internal val mobileDanger: Color @Composable get() = LocalMobileColors.current.danger
@@ -128,7 +138,6 @@ internal val mobileDangerSoft: Color @Composable get() = LocalMobileColors.curre
 internal val mobileCodeBg: Color @Composable get() = LocalMobileColors.current.codeBg
 internal val mobileCodeText: Color @Composable get() = LocalMobileColors.current.codeText
 internal val mobileCodeBorder: Color @Composable get() = LocalMobileColors.current.codeBorder
-internal val mobileCodeAccent: Color @Composable get() = LocalMobileColors.current.codeAccent
 
 // Build the page backdrop from semantic surfaces so light/dark palettes keep
 // their contrast relationship without duplicating raw color stops.
@@ -150,33 +159,6 @@ internal val mobileFontFamily =
     Font(resId = R.font.manrope_500_medium, weight = FontWeight.Medium),
     Font(resId = R.font.manrope_600_semibold, weight = FontWeight.SemiBold),
     Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
-  )
-
-internal val mobileDisplay =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.Bold,
-    fontSize = 34.sp,
-    lineHeight = 40.sp,
-    letterSpacing = (-0.8).sp,
-  )
-
-internal val mobileTitle1 =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.SemiBold,
-    fontSize = 24.sp,
-    lineHeight = 30.sp,
-    letterSpacing = (-0.5).sp,
-  )
-
-internal val mobileTitle2 =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.SemiBold,
-    fontSize = 20.sp,
-    lineHeight = 26.sp,
-    letterSpacing = (-0.3).sp,
   )
 
 internal val mobileHeadline =

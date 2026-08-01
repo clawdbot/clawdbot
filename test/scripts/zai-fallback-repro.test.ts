@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedReproOutput,
@@ -79,12 +80,14 @@ describe("zai fallback repro command resolution", () => {
       },
       error: () => {},
       log: () => {},
-      mkdtemp: async () => {
+      mkdtemp: (async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-fallback-test-"));
         tempRoots.push(root);
         return root;
-      },
-      randomUUID: () => "uuid-test",
+      }) as unknown as typeof fs.mkdtemp,
+      randomUUID: (() => "uuid-test") as unknown as NonNullable<
+        NonNullable<Parameters<typeof runZaiFallbackRepro>[0]>["randomUUID"]
+      >,
       runCommand: async (label, _args, env) => {
         calls.push(label);
         if (label === "run1") {
@@ -110,7 +113,11 @@ describe("zai fallback repro command resolution", () => {
     expect(exitCode).toBe(0);
     expect(calls).toEqual(["run1", "run2"]);
     expect(tempRoots).toHaveLength(1);
-    await expect(fs.stat(tempRoots[0])).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(expectDefined(tempRoots[0], "Z.AI fallback temp root")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("fails when run 1 does not leave tool result evidence", async () => {

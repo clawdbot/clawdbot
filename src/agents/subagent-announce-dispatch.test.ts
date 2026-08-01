@@ -1,26 +1,7 @@
 // Subagent announce dispatch tests lock down direct-vs-steer ordering for
 // progress updates and completion messages.
 import { describe, expect, it, vi } from "vitest";
-import {
-  mapSteerOutcomeToDeliveryResult,
-  runSubagentAnnounceDispatch,
-} from "./subagent-announce-dispatch.js";
-
-describe("mapSteerOutcomeToDeliveryResult", () => {
-  it("maps steered to delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult({ status: "steered" })).toEqual({
-      delivered: true,
-      path: "steered",
-    });
-  });
-
-  it("maps none to not-delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult({ status: "none" })).toEqual({
-      delivered: false,
-      path: "none",
-    });
-  });
-});
+import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 
 describe("runSubagentAnnounceDispatch", () => {
   async function runNonCompletionDispatch(params: {
@@ -63,6 +44,39 @@ describe("runSubagentAnnounceDispatch", () => {
       { phase: "steer-primary", delivered: true, path: "steered", error: undefined },
     ]);
   });
+
+  it.each([true, false])(
+    "never steers when direct delivery is required and direct delivery succeeds: %s",
+    async (delivered) => {
+      const steer = vi.fn(async () => ({ status: "steered" }) as const);
+      const direct = vi.fn(async () => ({
+        delivered,
+        path: "direct" as const,
+        ...(delivered ? {} : { error: "direct delivery failed" }),
+      }));
+
+      const result = await runSubagentAnnounceDispatch({
+        expectsCompletionMessage: false,
+        requireDirectDelivery: true,
+        steer,
+        direct,
+      });
+
+      expect(direct).toHaveBeenCalledOnce();
+      expect(steer).not.toHaveBeenCalled();
+      expect(result.delivered).toBe(delivered);
+      expect(result.path).toBe("direct");
+      expect(result.error).toBe(delivered ? undefined : "direct delivery failed");
+      expect(result.phases).toEqual([
+        {
+          phase: "direct-primary",
+          delivered,
+          path: "direct",
+          error: delivered ? undefined : "direct delivery failed",
+        },
+      ]);
+    },
+  );
 
   it("uses direct-first ordering for completion mode", async () => {
     const steer = vi.fn(async () => ({ status: "steered" }) as const);

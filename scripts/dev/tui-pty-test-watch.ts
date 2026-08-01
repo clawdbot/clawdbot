@@ -4,6 +4,7 @@ import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sleep as delay } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 type Options = {
@@ -117,12 +118,6 @@ function parseOptions(args = process.argv.slice(2)): Options {
     mode: readMode(ownArgs),
     vitestArgs,
   };
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function shouldUseAltScreen(options: Options) {
@@ -329,8 +324,8 @@ async function main(): Promise<void> {
     },
   );
 
-  let childStdout = Buffer.alloc(0);
-  let childStderr = Buffer.alloc(0);
+  let childStdout: Buffer = Buffer.alloc(0);
+  let childStderr: Buffer = Buffer.alloc(0);
   let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";

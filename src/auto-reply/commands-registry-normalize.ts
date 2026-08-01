@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes slash-command text aliases and builds command detection caches. */
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,36 +15,41 @@ import type {
 } from "./commands-registry.types.js";
 
 type TextAliasSpec = {
-  key: string;
+  command: ChatCommandDefinition;
   canonical: string;
   acceptsArgs: boolean;
 };
 
-let cachedTextAliasMap: Map<string, TextAliasSpec> | null = null;
-let cachedTextAliasCommands: ChatCommandDefinition[] | null = null;
-let cachedDetection: CommandDetection | undefined;
-let cachedDetectionCommands: ChatCommandDefinition[] | null = null;
+type CommandRegistryLookup = {
+  commands: ChatCommandDefinition[];
+  aliases: Map<string, TextAliasSpec>;
+  detection: CommandDetection;
+};
+
+let cachedRegistryLookup: CommandRegistryLookup | undefined;
 
 function appendMultilineTail(head: string, tail: string | undefined, spec?: TextAliasSpec): string {
   if (!tail) {
     return head;
   }
-  if (!spec || spec.key === "skill") {
+  if (!spec || spec.command.key === "skill" || spec.command.key === "learn") {
     return `${head}\n${tail}`;
   }
-  if (spec.key === "reset") {
+  if (spec.command.key === "reset") {
     const flattened = tail.replace(/\s+/g, " ").trim();
     return flattened ? `${head} ${flattened}` : head;
   }
   return head;
 }
 
-function getTextAliasMap(): Map<string, TextAliasSpec> {
+function getCommandRegistryLookup(): CommandRegistryLookup {
   const commands = getChatCommands();
-  if (cachedTextAliasMap && cachedTextAliasCommands === commands) {
-    return cachedTextAliasMap;
+  if (cachedRegistryLookup?.commands === commands) {
+    return cachedRegistryLookup;
   }
-  const map = new Map<string, TextAliasSpec>();
+  const aliases = new Map<string, TextAliasSpec>();
+  const exact = new Set<string>();
+  const patterns: string[] = [];
   for (const command of commands) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
@@ -54,14 +60,27 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
       if (!normalized) {
         continue;
       }
-      if (!map.has(normalized)) {
-        map.set(normalized, { key: command.key, canonical, acceptsArgs });
+      if (!aliases.has(normalized)) {
+        aliases.set(normalized, { command, canonical, acceptsArgs });
       }
+      exact.add(normalized);
+      const escaped = escapeRegExp(normalized);
+      patterns.push(
+        acceptsArgs
+          ? `${escaped}(?:\\s+[\\s\\S]+|\\s*:\\s*[\\s\\S]*)?`
+          : `${escaped}(?:\\s*:\\s*)?`,
+      );
     }
   }
-  cachedTextAliasMap = map;
-  cachedTextAliasCommands = commands;
-  return map;
+  cachedRegistryLookup = {
+    commands,
+    aliases,
+    detection: {
+      exact,
+      regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
+    },
+  };
+  return cachedRegistryLookup;
 }
 
 /** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
@@ -80,7 +99,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const normalized = colonMatch
     ? (() => {
         const [, command, rest] = colonMatch;
-        const normalizedRest = rest.trimStart();
+        const normalizedRest = expectDefined(rest, "commands registry normalize rest").trimStart();
         return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
       })()
     : singleLine;
@@ -95,7 +114,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
       : normalized;
 
   const lowered = normalizeLowercaseStringOrEmpty(commandBody);
-  const textAliasMap = getTextAliasMap();
+  const textAliasMap = getCommandRegistryLookup().aliases;
   const exact = textAliasMap.get(lowered);
   if (exact) {
     return appendMultilineTail(exact.canonical, multilineTail, exact);
@@ -123,36 +142,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
 
 /** Returns cached exact and regex detectors for the current command registry instance. */
 export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
-  const commands = getChatCommands();
-  if (cachedDetection && cachedDetectionCommands === commands) {
-    return cachedDetection;
-  }
-  const exact = new Set<string>();
-  const patterns: string[] = [];
-  for (const cmd of commands) {
-    for (const alias of cmd.textAliases) {
-      const normalized = normalizeOptionalLowercaseString(alias);
-      if (!normalized) {
-        continue;
-      }
-      exact.add(normalized);
-      const escaped = escapeRegExp(normalized);
-      if (!escaped) {
-        continue;
-      }
-      if (cmd.acceptsArgs) {
-        patterns.push(`${escaped}(?:\\s+[\\s\\S]+|\\s*:\\s*[\\s\\S]*)?`);
-      } else {
-        patterns.push(`${escaped}(?:\\s*:\\s*)?`);
-      }
-    }
-  }
-  cachedDetection = {
-    exact,
-    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
-  };
-  cachedDetectionCommands = commands;
-  return cachedDetection;
+  return getCommandRegistryLookup().detection;
 }
 
 /** Resolves a raw text command to the matching normalized alias when known. */
@@ -174,7 +164,7 @@ export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
     return null;
   }
   const tokenKey = `/${tokenMatch[1]}`;
-  return getTextAliasMap().has(tokenKey) ? tokenKey : null;
+  return getCommandRegistryLookup().aliases.has(tokenKey) ? tokenKey : null;
 }
 
 /** Resolves a raw text command into its command definition and raw argument tail. */
@@ -190,17 +180,13 @@ export function resolveTextCommand(
   if (!alias) {
     return null;
   }
-  const spec = getTextAliasMap().get(alias);
+  const spec = getCommandRegistryLookup().aliases.get(alias);
   if (!spec) {
     return null;
   }
-  const command = getChatCommands().find((entry) => entry.key === spec.key);
-  if (!command) {
-    return null;
-  }
   if (!spec.acceptsArgs) {
-    return { command };
+    return { command: spec.command };
   }
   const args = trimmed.slice(alias.length).trim();
-  return { command, args: args || undefined };
+  return { command: spec.command, args: args || undefined };
 }

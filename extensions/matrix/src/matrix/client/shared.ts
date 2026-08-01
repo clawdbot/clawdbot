@@ -1,5 +1,6 @@
 // Matrix plugin module implements shared behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
@@ -7,18 +8,11 @@ import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
-type MatrixCreateClientDeps = {
-  createMatrixClient: typeof import("./create-client.js").createMatrixClient;
-};
-
-let matrixCreateClientDepsPromise: Promise<MatrixCreateClientDeps> | undefined;
-
-async function loadMatrixCreateClientDeps(): Promise<MatrixCreateClientDeps> {
-  matrixCreateClientDepsPromise ??= import("./create-client.js").then((runtime) => ({
+const loadMatrixCreateClientDeps = createLazyRuntimeModule(() =>
+  import("./create-client.js").then((runtime) => ({
     createMatrixClient: runtime.createMatrixClient,
-  }));
-  return await matrixCreateClientDepsPromise;
-}
+  })),
+);
 
 type SharedMatrixClientState = {
   client: MatrixClient;

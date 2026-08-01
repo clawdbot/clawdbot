@@ -469,7 +469,8 @@ async function handleDiscordReactionEvent(
         return reactionBase;
       }
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      const actorLabel = formatDiscordUserTag(user);
+      // Reaction removals do not include member/user details in Discord's gateway payload.
+      const actorLabel = formatDiscordUserTag(user) || user.id;
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name

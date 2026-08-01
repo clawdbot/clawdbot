@@ -1,4 +1,5 @@
 // Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
+import { execFileSync } from "node:child_process";
 import {
   accessSync,
   chmodSync,
@@ -12,14 +13,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
+  LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
-  isChangedLaneTestPath,
+  hasDeadcodeScannedSource,
   listChangedPathsFromGit,
   listStagedChangedPaths,
-  normalizeChangedPath,
 } from "./changed-lanes.mjs";
-import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -27,32 +28,43 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
-const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
-  "scripts/lib/live-docker-auth.sh",
-  "scripts/test-live-acp-bind-docker.sh",
-  "scripts/test-live-cli-backend-docker.sh",
-  "scripts/test-live-codex-harness-docker.sh",
-  "scripts/test-live-gateway-models-docker.sh",
-  "scripts/test-live-models-docker.sh",
-  "scripts/test-live-subagent-announce-docker.sh",
-];
-const SHRINKWRAP_POLICY_PATH_RE =
-  /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const NPM_LOCK_POLICY_PATH_RE =
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mjs|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
+  /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
+const PLUGIN_SDK_API_BASELINE_PATH_RE =
+  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
+const PLUGIN_SDK_SURFACE_PATH_RE =
+  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+const DEPRECATION_HYGIENE_PATH_RE =
+  /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mjs$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
+const CONTROL_UI_I18N_VERIFY_PATH_RE =
+  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
-const TARGETED_CORE_LINT_PATH_LIMIT = 8;
+const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
+const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
+const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
+const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
+const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/CHANGELOG.md",
   "apps/android/Config/Version.properties",
@@ -60,9 +72,24 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
+let cachedGeneratedExtensionAssetPaths;
+let npmLockPackageDirsForChangedPaths;
+
+async function ensureChangedCheckRuntimeDependencies(paths) {
+  if (!shouldRunNpmLockGuard(paths) || npmLockPackageDirsForChangedPaths) {
+    return;
+  }
+  ({ npmLockPackageDirsForChangedPaths } = await import("./generate-npm-package-lock.mjs"));
+}
+
+// Imported consumers expect the synchronous planning API. Direct CLI execution
+// delays package-backed imports until after lane and remote-routing selection.
+if (!isDirectRun()) {
+  await ensureChangedCheckRuntimeDependencies(["package.json"]);
+}
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -111,14 +138,41 @@ function executableExistsOnPath(command, env = process.env) {
   return false;
 }
 
-export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
   return platform !== "darwin" && !swiftlintAvailable;
 }
 
-export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
+export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
+  const nodeModules = path.join(cwd, "node_modules");
+  return (
+    existsSync(path.join(nodeModules, ".modules.yaml")) &&
+    existsSync(path.join(nodeModules, ".bin", "oxfmt")) &&
+    existsSync(path.join(nodeModules, "typescript", "package.json"))
+  );
+}
+
+export function changedCheckRequiresRemote(result) {
+  if (!result || result.paths.length === 0) {
+    return false;
+  }
+  if (
+    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
+    shouldRunPluginSdkApiBaselineCheck(result.paths)
+  ) {
+    return true;
+  }
+  if (result.docsOnly) {
+    return false;
+  }
+  return Object.entries(result.lanes).some(
+    ([lane, enabled]) => enabled && lane !== "docs" && lane !== "releaseMetadata",
+  );
+}
+
+export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env, options = {}) {
   if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
@@ -128,24 +182,50 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (argv.includes("--dry-run")) {
     return false;
   }
+  const result = options.result;
+  if (!result) {
+    return true;
+  }
+  if (result.paths.length === 0) {
+    return false;
+  }
+  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+    return true;
+  }
+  // Release metadata plans diff the supplied commits after classification. A missing
+  // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
+  if (result.lanes.releaseMetadata && options.diffRefsReady === false) {
+    return true;
+  }
+  return (
+    changedCheckRequiresRemote(result) ||
+    !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
+  );
+}
+
+function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
+  for (const ref of [base, head]) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+        cwd,
+        stdio: "ignore",
+      });
+    } catch {
+      return false;
+    }
+  }
   return true;
 }
 
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
-    "crabbox:run",
-    "--",
-    "--provider",
-    "blacksmith-testbox",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    "scripts/crabbox-wrapper.mjs",
+    "run",
+    "--workload",
+    "ci-fast",
+    // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
+    // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
     "90m",
     "--ttl",
@@ -170,21 +250,15 @@ function buildDelegatedChangedCheckArgv(argv, options = {}) {
     return argv;
   }
   const stagedPaths = listStagedChangedPaths(options.cwd);
-  const next = [];
-  if (args.timed) {
-    next.push("--timed");
-  }
+  const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
-    next.push("--no-changes");
-    return next;
+    return [...timedArgs, "--no-changes"];
   }
-  next.push("--base", "HEAD", "--head", "HEAD");
-  next.push("--", ...stagedPaths);
-  return next;
+  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
 }
 
-export function shouldRunShrinkwrapGuard(paths) {
-  return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+export function shouldRunNpmLockGuard(paths) {
+  return paths.some((changedPath) => NPM_LOCK_POLICY_PATH_RE.test(changedPath));
 }
 
 export function shouldRunPromptSnapshotCheck(paths) {
@@ -195,8 +269,46 @@ export function shouldRunPromptSnapshotOwnerTest(paths) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
+export function shouldRunControlUiI18nVerify(paths) {
+  return paths.some((changedPath) =>
+    CONTROL_UI_I18N_VERIFY_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
+}
+
+/** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
+export function shouldRunSqliteSessionSchemaBaselineCheck(paths) {
+  return paths.some((changedPath) =>
+    SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+/** Returns whether changed files can alter the published Plugin SDK API contract. */
+export function shouldRunPluginSdkApiBaselineCheck(paths) {
+  return paths.some((changedPath) => {
+    const normalizedPath = normalizeChangedPath(changedPath);
+    return (
+      !getChangedPathFacts(normalizedPath).isTestOnly &&
+      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
+    );
+  });
+}
+
+/** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
+export function shouldRunPluginSdkSurfaceChecks(paths) {
+  return paths.some((changedPath) =>
+    PLUGIN_SDK_SURFACE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+/** Returns whether changed files can alter deprecated API or plugin-boundary results. */
+export function shouldRunDeprecationHygieneChecks(paths) {
+  return paths.some((changedPath) =>
+    DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
 }
 
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
@@ -210,43 +322,106 @@ export function shouldRunAppcastOwnerTest(paths) {
 }
 
 export function shouldRunTestTempCreationReport(paths) {
-  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
+  return paths.some(
+    (changedPath) => getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest,
+  );
 }
 
-export function createShrinkwrapGuardCommand(paths) {
-  if (!shouldRunShrinkwrapGuard(paths)) {
+export function createNpmLockGuardCommand(paths) {
+  if (!shouldRunNpmLockGuard(paths)) {
     return null;
   }
-  const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
+  if (!npmLockPackageDirsForChangedPaths) {
+    throw new Error("changed-check npm-lock runtime dependencies were not loaded");
+  }
+  const packageDirs = npmLockPackageDirsForChangedPaths(paths);
   if (packageDirs.length === 0) {
     return null;
   }
   return {
     name:
       packageDirs.length === 1
-        ? "npm shrinkwrap guard"
-        : `npm shrinkwrap guard (${packageDirs.length} packages)`,
+        ? "npm package-lock guard"
+        : `npm package-lock guard (${packageDirs.length} packages)`,
     bin: "node",
     args: [
-      "scripts/generate-npm-shrinkwrap.mjs",
-      "--check",
+      "scripts/generate-npm-package-lock.mjs",
       ...packageDirs.flatMap((packageDir) => ["--package-dir", packageDir]),
     ],
   };
 }
 
-export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
-  return await runManagedCommand({
-    bin: "pnpm",
+// Enough of the wrapper tail to hold its run summary; the rest is streamed, not kept.
+const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
+
+/**
+ * Signatures of a failure that happened before the remote command was dispatched:
+ * the broker or its API was unreachable, or no lease was ever obtained.
+ */
+const BACKEND_UNAVAILABLE_SIGNATURES = [
+  /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
+  /context deadline exceeded/iu,
+  /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
+  /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+];
+
+/**
+ * Whether a failed delegation provably never ran our command.
+ *
+ * Fails closed on purpose. A missing final summary alone cannot prove the remote
+ * never started — a wrapper that crashes or loses its output transport after
+ * dispatch looks identical — so this requires a positive pre-dispatch signature
+ * and treats everything else as a real failure. Getting this backwards is the
+ * dangerous direction: some lanes (prompt snapshots) are Linux-only truth, so a
+ * local rerun on macOS could turn an unknown or failing gate green.
+ *
+ * `command-exit` vetoes regardless: it only appears once the command reached the
+ * box, so it is proof a verdict exists and must be propagated as-is.
+ */
+export function delegationFailedBeforeRunning(output) {
+  if (/"errorKind"\s*:\s*"command-exit"/u.test(output)) {
+    return false;
+  }
+  return BACKEND_UNAVAILABLE_SIGNATURES.some((signature) => signature.test(output));
+}
+
+async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
+  console.error("[check:changed] delegating through Crabbox workload routing.");
+  let tail = "";
+  const exitCode = await runManagedCommand({
+    bin: "node",
     args: buildChangedCheckCrabboxArgs(argv),
     env,
+    stdio: ["inherit", "pipe", "pipe"],
+    onReady: (child) => {
+      for (const stream of [child.stdout, child.stderr]) {
+        stream?.on("data", (chunk) => {
+          tail = (tail + chunk).slice(-DELEGATION_OUTPUT_TAIL_LIMIT);
+          // Inherited stdio used to get OS backpressure for free. Piping means we
+          // have to reapply it, or a verbose delegated run buffers its whole
+          // output in this process when stderr is an async pipe (typical in CI).
+          if (!process.stderr.write(chunk)) {
+            stream.pause();
+            process.stderr.once("drain", () => stream.resume());
+          }
+        });
+      }
+    },
   });
+  return {
+    exitCode,
+    backendUnavailable: exitCode !== 0 && delegationFailedBeforeRunning(tail),
+  };
 }
 
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const baseEnv = createChangedCheckChildEnv(options.env ?? process.env);
+  const generatedExtensionAssetPaths = result.paths.some((changedPath) =>
+    LINTABLE_EXTENSION_PATH_RE.test(changedPath),
+  )
+    ? (cachedGeneratedExtensionAssetPaths ??= new Set(listGeneratedExtensionAssetSources()))
+    : new Set();
   const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
       commands.push({ name, args, ...(env ? { env } : {}) });
@@ -263,6 +438,41 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
+  const addTargetedLint = (
+    createCommand,
+    lintablePathRe,
+    fallbackName,
+    fallbackArgs,
+    ignoredPaths,
+  ) => {
+    const candidatePaths = ignoredPaths
+      ? result.paths.filter((changedPath) => !ignoredPaths.has(changedPath))
+      : result.paths;
+    const targets = candidatePaths.filter((changedPath) => lintablePathRe.test(changedPath));
+    const otherPaths = candidatePaths.filter((changedPath) => !lintablePathRe.test(changedPath));
+    const targetedCommands = [];
+
+    for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const command = createCommand(
+        [...otherPaths, ...targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT)],
+        baseEnv,
+      );
+      if (!command) {
+        addLint(fallbackName, fallbackArgs);
+        return false;
+      }
+      targetedCommands.push(command);
+    }
+
+    if (targetedCommands.length === 0) {
+      addLint(fallbackName, fallbackArgs);
+      return false;
+    }
+    for (const command of targetedCommands) {
+      addCommand(command.name, command.bin, command.args, command.env);
+    }
+    return true;
+  };
   const addTestTempCreationReport = () => {
     if (!shouldRunTestTempCreationReport(result.paths)) {
       return;
@@ -281,17 +491,53 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("environment variable count ratchet", [
+      "check:env-var-count",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("max-lines suppression ratchet", [
+      "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
   add("changelog attributions", ["check:changelog-attributions"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
-  const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
-  if (shrinkwrapGuardCommand) {
+  if (result.paths.length > 0) {
+    add("format changed files", [
+      "format:check",
+      "--no-error-on-unmatched-pattern",
+      "--",
+      ...result.paths,
+    ]);
+  }
+  const npmLockGuardCommand = createNpmLockGuardCommand(result.paths);
+  if (npmLockGuardCommand) {
     addCommand(
-      shrinkwrapGuardCommand.name,
-      shrinkwrapGuardCommand.bin,
-      shrinkwrapGuardCommand.args,
+      npmLockGuardCommand.name,
+      npmLockGuardCommand.bin,
+      npmLockGuardCommand.args,
       baseEnv,
     );
   }
@@ -313,6 +559,25 @@ export function createChangedCheckPlan(result, options = {}) {
       baseEnv,
     );
   }
+  if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
+    add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
+  }
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
+    add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
+  }
+  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
+    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
+  }
+  if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
+    add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
+    add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
+  }
+  if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
+    add("deprecated API usage", ["check:deprecated-api-usage"]);
+    // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
+    // until their scheduled deletion PRs land.
+    add("plugin boundaries", ["plugins:boundary-report:ci"]);
+  }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
       "Canvas A2UI native resource sync",
@@ -329,6 +594,17 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   }
   add("package patch guard", ["deps:patches:check"]);
+  if (
+    hasDeadcodeScannedSource(result.paths) &&
+    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+  ) {
+    addCommand(
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      "node",
+      ["scripts/check-deadcode-exports.mjs"],
+      baseEnv,
+    );
+  }
 
   if (result.docsOnly) {
     return {
@@ -342,11 +618,13 @@ export function createChangedCheckPlan(result, options = {}) {
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+  if (lanes.scripts || lanes.tooling || lanes.testRoot) {
+    add("script declaration contracts", ["check:script-declarations"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
       "release-metadata:check",
-      "--",
       ...(options.staged
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
@@ -379,11 +657,17 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  if (shouldRunControlUiI18nVerify(result.paths)) {
+    addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
+  }
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
   }
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+  }
+  if (lanes.ui) {
+    addTypecheck("typecheck UI", ["tsgo:ui"]);
   }
   if (lanes.extensions) {
     addTypecheck("typecheck extensions", ["tsgo:extensions"]);
@@ -391,32 +675,54 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.extensionTests) {
     addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
   }
+  if (lanes.scripts) {
+    addTypecheck("typecheck scripts", ["tsgo:scripts"]);
+  }
+  if (lanes.testRoot) {
+    addTypecheck("typecheck test root", ["tsgo:test:root"]);
+  }
 
-  if (lanes.core || lanes.coreTests) {
-    const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
-    if (coreLintCommand) {
-      addCommand(
-        coreLintCommand.name,
-        coreLintCommand.bin,
-        coreLintCommand.args,
-        coreLintCommand.env,
-      );
-    } else {
-      addLint("lint core", ["lint:core"]);
-    }
+  if (lanes.core || lanes.coreTests || lanes.ui) {
+    addTargetedLint(createTargetedCoreLintCommand, LINTABLE_CORE_PATH_RE, "lint core", [
+      "lint:core",
+    ]);
   }
   if (
     lanes.liveDockerTooling &&
-    result.paths.some((changedPath) => changedPath.startsWith("src/"))
+    result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    addLint("lint extensions", ["lint:extensions"]);
+    // Generated plugin outputs have their own asset-integrity gate and are
+    // intentionally ignored by oxlint; manifests still need full-lane fallback.
+    if (
+      !result.paths.some((changedPath) => generatedExtensionAssetPaths.has(changedPath)) ||
+      result.paths.some(
+        (changedPath) =>
+          getChangedPathFacts(changedPath).surface === "extension" &&
+          !generatedExtensionAssetPaths.has(changedPath),
+      )
+    ) {
+      addTargetedLint(
+        createTargetedExtensionLintCommand,
+        LINTABLE_EXTENSION_PATH_RE,
+        "lint extensions",
+        ["lint:extensions"],
+        generatedExtensionAssetPaths,
+      );
+    }
   }
   if (lanes.tooling || lanes.liveDockerTooling) {
-    addLint("lint scripts", ["lint:scripts"]);
+    if (
+      addTargetedLint(createTargetedScriptLintCommand, LINTABLE_SCRIPT_PATH_RE, "lint scripts", [
+        "lint:scripts",
+      ])
+    ) {
+      addLint("lint docker-e2e", ["lint:docker-e2e"]);
+      addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
+    }
   }
   if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
     addCommand(
@@ -433,6 +739,14 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
   }
 
   if (lanes.core || lanes.extensions) {
@@ -466,34 +780,86 @@ export function createChangedCheckPlan(result, options = {}) {
 }
 
 export function createTargetedCoreLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "core",
+    lintablePathRe: LINTABLE_CORE_PATH_RE,
+    neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: CORE_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+export function createTargetedExtensionLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "extension",
+    lintablePathRe: LINTABLE_EXTENSION_PATH_RE,
+    neutralPathRe: EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+export function createTargetedScriptLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "script",
+    lintablePathRe: LINTABLE_SCRIPT_PATH_RE,
+    neutralPathRe: SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+function createTargetedOxlintCommand({
+  env = process.env,
+  fileExists = existsSync,
+  label,
+  lintablePathRe,
+  neutralPathRe,
+  paths,
+  tsconfig,
+}) {
   if (
     paths.some(
       (changedPath) =>
+        !lintablePathRe.test(changedPath) &&
         !LINTABLE_CORE_PATH_RE.test(changedPath) &&
-        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+        !LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
+        !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
+        !neutralPathRe.test(changedPath) &&
+        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )
   ) {
     return null;
   }
   const targets = paths
-    .filter((changedPath) => LINTABLE_CORE_PATH_RE.test(changedPath))
+    .filter((changedPath) => lintablePathRe.test(changedPath))
     .toSorted((left, right) => left.localeCompare(right));
-  if (targets.length === 0 || targets.length > TARGETED_CORE_LINT_PATH_LIMIT) {
+  if (targets.length === 0 || targets.length > TARGETED_LINT_PATH_LIMIT) {
     return null;
   }
-  const fileExists = options.fileExists ?? existsSync;
   if (!targets.every((target) => fileExists(target))) {
     return null;
   }
   return {
-    name: targets.length === 1 ? "lint core changed file" : "lint core changed files",
+    name: targets.length === 1 ? `lint ${label} changed file` : `lint ${label} changed files`,
     bin: "node",
-    args: ["scripts/run-oxlint.mjs", "--tsconfig", CORE_OXLINT_TS_CONFIG, ...targets],
+    args: ["scripts/run-oxlint.mjs", "--tsconfig", tsconfig, ...targets],
     env,
   };
 }
 
-export async function runChangedCheck(result, options = {}) {
+async function runChangedCheck(result, options = {}) {
+  if (result.paths.length === 0) {
+    console.error("[check:changed] no changed paths; nothing to run");
+    return 0;
+  }
+  await ensureChangedCheckRuntimeDependencies(result.paths);
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {
@@ -544,6 +910,11 @@ function printPlan(result, plan, options) {
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
   }
+  if (options.dryRun) {
+    for (const command of plan.commands) {
+      console.error(`${prefix} would run: ${formatPlanCommand(command)}`);
+    }
+  }
 }
 
 async function runPnpm(command, timings) {
@@ -555,6 +926,15 @@ async function runPlanCommand(command, timings) {
     return await runCommand(command, timings);
   }
   return await runPnpm(command, timings);
+}
+
+function formatPlanCommand(command) {
+  const argv = command.bin ? [command.bin, ...command.args] : ["pnpm", ...command.args];
+  return argv.map(formatShellToken).join(" ");
+}
+
+function formatShellToken(token) {
+  return /^[A-Za-z0-9_./:@=-]+$/u.test(token) ? token : `'${token.replaceAll("'", "'\\''")}'`;
 }
 
 export function createPnpmManagedCommand(command, env = process.env) {
@@ -712,25 +1092,70 @@ if (isDirectRun()) {
   if (args.help) {
     printUsage();
     process.exitCode = 0;
-  } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
-    process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const paths = args.noChanges
-      ? []
-      : args.paths.length > 0
-        ? args.paths
-        : args.staged
-          ? listStagedChangedPaths()
-          : listChangedPathsFromGit({ base: args.base, head: args.head });
-    const result = detectChangedLanesForPaths({
-      paths,
-      base: args.base,
-      head: args.head,
-      staged: args.staged,
-    });
-    process.exitCode = await runChangedCheck(result, {
-      ...args,
-      explicitPaths: args.paths.length > 0,
-    });
+    let paths;
+    try {
+      paths = args.noChanges
+        ? []
+        : args.paths.length > 0
+          ? args.paths
+          : args.staged
+            ? listStagedChangedPaths()
+            : listChangedPathsFromGit({ base: args.base, head: args.head });
+    } catch (error) {
+      // A sparse/fresh checkout may not have the requested base ref yet. The remote
+      // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
+      if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+        throw error;
+      }
+      // No local fallback here: this path exists because the checkout cannot
+      // resolve the diff refs itself, so there is nothing local to run.
+      const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+      if (delegated.backendUnavailable) {
+        throw error;
+      }
+      process.exitCode = delegated.exitCode;
+    }
+    if (paths) {
+      const result = detectChangedLanesForPaths({
+        paths,
+        base: args.base,
+        head: args.head,
+        staged: args.staged,
+      });
+      if (
+        shouldDelegateChangedCheckToCrabbox(argv, process.env, {
+          cwd: process.cwd(),
+          result,
+          diffRefsReady: result.lanes.releaseMetadata
+            ? args.staged ||
+              changedCheckDiffRefsReady({
+                base: args.base,
+                head: args.head,
+              })
+            : undefined,
+        })
+      ) {
+        const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+        if (delegated.backendUnavailable) {
+          // Say this loudly: the proof below is local, so whoever reads the run
+          // knows which machine produced it and that Linux-only lanes are unproven.
+          console.error(
+            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+          );
+        }
+        process.exitCode = delegated.backendUnavailable
+          ? await runChangedCheck(result, {
+              ...args,
+              explicitPaths: args.paths.length > 0,
+            })
+          : delegated.exitCode;
+      } else {
+        process.exitCode = await runChangedCheck(result, {
+          ...args,
+          explicitPaths: args.paths.length > 0,
+        });
+      }
+    }
   }
 }

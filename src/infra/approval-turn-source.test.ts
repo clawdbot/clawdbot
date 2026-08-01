@@ -69,4 +69,13 @@ describe("hasApprovalTurnSourceRoute", () => {
     expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
     expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
   });
+
+  it.each(["webchat", "tui"])(
+    "requires a live approval client for the %s turn source",
+    (turnSourceChannel) => {
+      expect(hasApprovalTurnSourceRoute({ turnSourceChannel })).toBe(false);
+      expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
+      expect(loadConfigMock).not.toHaveBeenCalled();
+    },
+  );
 });

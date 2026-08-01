@@ -1,0 +1,8 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"context.sendActivity","data":{"payload":{"type":"typing"},"result":{"id":"activity-1"},"target":"a:1dm-trace-conversation"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Working on the fix"}}
+{"seq":4,"at":0,"dir":"out","kind":"stream.emit","data":{"payload":{"text":"Working on the fix"}}}
+{"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Working on the fix: patching now."}}
+{"seq":6,"at":300,"dir":"out","kind":"stream.emit","data":{"payload":{"text":": patching now."},"result":{"error":"StreamCancelledError"}}}
+{"seq":7,"at":600,"dir":"in","kind":"cancel"}
+{"seq":8,"at":600,"dir":"in","kind":"idle"}

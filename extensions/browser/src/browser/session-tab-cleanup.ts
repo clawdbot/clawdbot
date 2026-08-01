@@ -17,7 +17,7 @@ function minutesToMs(minutes: number): number {
 }
 
 /** Returns true for user-facing sessions whose tabs should be tracked for cleanup. */
-export function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
+function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
   return (
     !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&
@@ -31,7 +31,7 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
 }
 
 /** Runs one Browser tab cleanup sweep from runtime config or injected test config. */
-export async function runTrackedBrowserTabCleanupOnce(params?: {
+async function runTrackedBrowserTabCleanupOnce(params?: {
   now?: number;
   cleanup?: ResolvedBrowserTabCleanupConfig;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
@@ -54,7 +54,7 @@ export async function runTrackedBrowserTabCleanupOnce(params?: {
 /** Starts the recurring Browser tab cleanup timer and returns its disposer. */
 export function startTrackedBrowserTabCleanupTimer(params: {
   onWarn: (message: string) => void;
-}): () => void {
+}): () => Promise<void> {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<unknown> | null = null;
@@ -78,21 +78,26 @@ export function startTrackedBrowserTabCleanupTimer(params: {
       return;
     }
     if (!running) {
-      running = runTrackedBrowserTabCleanupOnce({ onWarn: params.onWarn }).finally(() => {
-        running = null;
-        schedule();
-      });
+      running = runTrackedBrowserTabCleanupOnce({ onWarn: params.onWarn })
+        .catch((error: unknown) => {
+          params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);
+        })
+        .finally(() => {
+          running = null;
+          schedule();
+        });
       return;
     }
     schedule();
   };
 
   schedule();
-  return () => {
+  return async () => {
     stopped = true;
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
+    await running?.catch(() => {});
   };
 }

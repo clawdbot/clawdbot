@@ -13,8 +13,26 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ContextUsage } from "../usage.js";
+
+export type BlockReplyFlushContext =
+  | {
+      /** Boundary that requested the flush. */
+      reason: "message_end" | "terminal";
+    }
+  | {
+      /** Tool boundary separating pre-tool narration from the eventual answer. */
+      reason: "tool_start";
+      assistantMessageIndex: number;
+    }
+  | {
+      /** Pre-compaction delivery is safe only for a completed assistant attempt. */
+      reason: "pre_compaction";
+      attemptAccepted: boolean;
+    };
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -59,10 +77,32 @@ export type EmbeddedAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
     reasoningTokens?: number;
     total?: number;
   };
   contextBudgetStatus?: SessionContextBudgetStatus;
+  /**
+   * True when code mode owned the model tool surface for this run. Config
+   * alone is not proof: the "auto" tier engages per model capability, raw
+   * model runs and plugin-harness surfaces can decline engagement, and the
+   * shell tool is also named `exec`, so consumers must read this flag
+   * instead of config or tool names.
+   */
+  codeModeEngaged?: boolean;
+  /** Completed assistant/provider round trips accumulated across run attempts. */
+  assistantTurns?: number;
+  /**
+   * Code-mode/tool-search inner bridge calls for the run's catalog. These are
+   * invisible to the provider; `toolSummary.calls` stays the outer count.
+   */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
+  /** Estimated USD cost of the run's accumulated usage. Omitted when the model has no cost data. */
+  costUsd?: number;
 };
 
 export type TraceAttempt = {
@@ -186,6 +226,7 @@ export type EmbeddedAgentRunMeta = {
 };
 
 export type EmbeddedAgentRunResult = {
+  latestMcpAppChannelView?: McpAppChannelView;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;
@@ -193,6 +234,8 @@ export type EmbeddedAgentRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;

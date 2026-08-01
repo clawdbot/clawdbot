@@ -3,6 +3,7 @@ import { detectPolicyInlineEval } from "./command-analysis/policy.js";
 import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlistWithAuthorization,
+  requiresExecApproval,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
 } from "./exec-approvals.js";
@@ -109,6 +110,55 @@ describe("authorization-backed exec allowlist", () => {
     ]);
   });
 
+  it("keeps glued allowlisted inline-eval commands one-shot in strict mode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = makeTempDir();
+    const pythonPath = makeExecutable(dir, "python3");
+    const env = makePathEnv(dir);
+    const command = "python3 -xcprint";
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command,
+      allowlist: [{ pattern: pythonPath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
+    expect(detectPolicyInlineEval(result.segments)).toEqual(
+      expect.objectContaining({
+        executable: "python3",
+        flag: "-c",
+      }),
+    );
+
+    const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+      segments: result.segments,
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      strictInlineEval: true,
+      authorizationPlan: result.authorizationPlan,
+    });
+
+    expect(allowAlwaysPersistence).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
+      "allow-once",
+      "deny",
+    ]);
+  });
+
   it("does not satisfy path-scoped shell wrappers from trusted inner payloads", async () => {
     if (process.platform === "win32") {
       return;
@@ -189,5 +239,57 @@ describe("authorization-backed exec allowlist", () => {
       "allow-once",
       "deny",
     ]);
+  });
+
+  it("does not satisfy allowlist policy for escaped word-boundary newlines", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "tr x\n\\id",
+      allowlist: [],
+      safeBins: new Set(["tr"]),
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.authorizationPlan).toEqual(
+      expect.objectContaining({
+        ok: false,
+        reason: "line-continuation",
+      }),
+    );
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not satisfy pattern allowlists for escaped word-boundary newlines", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "git\n\\id -u",
+      allowlist: [{ pattern: "git" }],
+      safeBins: new Set(),
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.authorizationPlan).toEqual(
+      expect.objectContaining({
+        ok: false,
+        reason: "line-continuation",
+      }),
+    );
   });
 });

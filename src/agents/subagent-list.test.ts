@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
@@ -74,10 +75,8 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active[0]?.line).toContain(
-      "This is a deliberately long task description used to verify that subagent list output keeps the full task text",
-    );
-    expect(list.active[0]?.line).toContain("...");
+    expect(list.active[0]?.task).toHaveLength(110);
+    expect(list.active[0]?.task).toMatch(/\.\.\.$/);
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 
@@ -109,6 +108,64 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.taskName).toBe("review_subagents");
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
+
+  it.each([
+    {
+      name: "a killed run with a provider failure",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a killed run with an earlier successful provider outcome",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a failed run",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      expectedStatus: "failed",
+    },
+    {
+      name: "a timed-out run",
+      outcome: { status: "timeout" } as const,
+      expectedStatus: "timeout",
+    },
+    {
+      name: "a completed run",
+      outcome: { status: "ok" } as const,
+      expectedStatus: "done",
+    },
+  ])(
+    "projects the canonical terminal status for $name",
+    ({ endedReason, outcome, expectedStatus }) => {
+      const now = Date.now();
+      const run = {
+        runId: `run-status-${expectedStatus}`,
+        childSessionKey: `agent:main:subagent:status-${expectedStatus}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "report the actual child outcome",
+        cleanup: "keep",
+        createdAt: now - 2_000,
+        startedAt: now - 2_000,
+        endedAt: now - 1_000,
+        ...(endedReason ? { endedReason } : {}),
+        outcome,
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(run);
+
+      const list = buildSubagentList({
+        cfg: {} as OpenClawConfig,
+        runs: [run],
+        recentMinutes: 30,
+      });
+
+      expect(list.recent[0]?.status).toBe(expectedStatus);
+      expect(list.recent[0]?.line).toContain(` ${expectedStatus}`);
+    },
+  );
 
   it("keeps ended orchestrators active while descendants remain pending", () => {
     // Parent orchestrators can finish their own turn before child workers do;
@@ -154,6 +211,94 @@ describe("buildSubagentList", () => {
     ]);
     expect(list.recent).toStrictEqual([]);
   });
+
+  it.each([
+    {
+      name: "a killed parent with a provider failure",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      pendingChildren: 1,
+      expectedStatus: "killed (waiting on 1 child)",
+    },
+    {
+      name: "a killed parent with an earlier successful provider outcome",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "killed (waiting on 2 children)",
+    },
+    {
+      name: "a failed parent",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      pendingChildren: 1,
+      expectedStatus: "failed (waiting on 1 child)",
+    },
+    {
+      name: "a timed-out parent",
+      outcome: { status: "timeout" } as const,
+      pendingChildren: 2,
+      expectedStatus: "timeout (waiting on 2 children)",
+    },
+    {
+      name: "a successfully completed parent",
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "active (waiting on 2 children)",
+    },
+    {
+      name: "a still-running parent",
+      ended: false,
+      pendingChildren: 1,
+      expectedStatus: "active (waiting on 1 child)",
+    },
+  ])(
+    "preserves the status of $name while descendants remain pending",
+    ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
+      const now = Date.now();
+      const parentRun = {
+        runId: `run-parent-${expectedStatus.replaceAll(" ", "-")}`,
+        childSessionKey: `agent:main:subagent:parent-${expectedStatus.replaceAll(" ", "-")}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "orchestrate child workers",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        startedAt: now - 120_000,
+        ...(ended === false ? {} : { endedAt: now - 60_000 }),
+        ...(endedReason ? { endedReason } : {}),
+        ...(outcome ? { outcome } : {}),
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(parentRun);
+      for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
+        addSubagentRunForTests({
+          runId: `${parentRun.runId}-child-${childIndex}`,
+          childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
+          requesterSessionKey: parentRun.childSessionKey,
+          requesterDisplayKey: "subagent:parent",
+          task: "child worker still running",
+          cleanup: "keep",
+          createdAt: now - 30_000,
+          startedAt: now - 30_000,
+        });
+      }
+
+      const list = buildSubagentList({
+        cfg: {} as OpenClawConfig,
+        runs: [parentRun],
+        recentMinutes: 30,
+      });
+
+      expect(list.active).toHaveLength(1);
+      expect(list.active[0]).toMatchObject({
+        runId: parentRun.runId,
+        status: expectedStatus,
+        pendingDescendants: pendingChildren,
+      });
+      expect(list.active[0]?.line).toContain(` ${expectedStatus}`);
+      expect(list.active[0]?.childSessions).toHaveLength(pendingChildren);
+      expect(list.recent).toStrictEqual([]);
+    },
+  );
 
   it("omits old ended descendants from child session summaries", () => {
     const now = Date.now();
@@ -208,16 +353,20 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:subagent:usage"] = {
+    await replaceSessionEntry(
+      {
+        storePath,
+        sessionKey: "agent:main:subagent:usage",
+      },
+      {
         sessionId: "child-session-usage",
         updatedAt: Date.now(),
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
         model: "opencode/claude-opus-4-6",
-      };
-    });
+      },
+    );
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },

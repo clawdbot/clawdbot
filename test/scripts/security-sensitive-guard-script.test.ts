@@ -205,7 +205,7 @@ describe("security-sensitive guard script", () => {
   });
 
   it("renders deterministic awareness, blocked, trusted, authorized, and cleared comments", () => {
-    const changes = [securitySensitiveFileDefinition(".gitignore")];
+    const changes = [securitySensitiveFileDefinition(".gitignore")!];
     const awarenessBody = renderSecuritySensitiveAwarenessComment(changes);
     const blockedBody = renderBlockedSecuritySensitiveComment({ changes, headSha });
     const trustedBody = renderTrustedSecuritySensitiveComment({

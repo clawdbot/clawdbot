@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -95,6 +96,14 @@ export function parseTestGroupReportArgs(argv) {
     topFiles: 25,
     vitestArgs: [],
   };
+  const seenSingleValueFlags = new Set();
+  const setSingleValueFlag = (flag, apply) => {
+    if (seenSingleValueFlags.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seenSingleValueFlags.add(flag);
+    apply();
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -124,10 +133,11 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--compare") {
-      args.compare = {
-        before: readRequiredValue(argv, index, "--compare"),
-        after: readRequiredValue(argv, index + 1, "--compare"),
-      };
+      const before = readRequiredValue(argv, index, "--compare");
+      const after = readRequiredValue(argv, index + 1, "--compare");
+      setSingleValueFlag(arg, () => {
+        args.compare = { before, after };
+      });
       index += 2;
       continue;
     }
@@ -137,42 +147,66 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--group-by") {
-      args.groupBy = readRequiredValue(argv, index, "--group-by");
+      const value = readRequiredValue(argv, index, "--group-by");
+      setSingleValueFlag(arg, () => {
+        args.groupBy = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--output") {
-      args.output = readRequiredValue(argv, index, "--output");
+      const value = readRequiredValue(argv, index, "--output");
+      setSingleValueFlag(arg, () => {
+        args.output = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--limit") {
-      args.limit = readPositiveIntValue(argv, index, "--limit");
+      const value = readPositiveIntValue(argv, index, "--limit");
+      setSingleValueFlag(arg, () => {
+        args.limit = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = readPositiveIntValue(argv, index, "--max-test-ms");
+      const value = readPositiveIntValue(argv, index, "--max-test-ms");
+      setSingleValueFlag(arg, () => {
+        args.maxTestMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = readPositiveIntValue(argv, index, "--timeout-ms");
+      const value = readPositiveIntValue(argv, index, "--timeout-ms");
+      setSingleValueFlag(arg, () => {
+        args.timeoutMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      const value = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      setSingleValueFlag(arg, () => {
+        args.killGraceMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = readPositiveIntValue(argv, index, "--concurrency");
+      const value = readPositiveIntValue(argv, index, "--concurrency");
+      setSingleValueFlag(arg, () => {
+        args.concurrency = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = readPositiveIntValue(argv, index, "--top-files");
+      const value = readPositiveIntValue(argv, index, "--top-files");
+      setSingleValueFlag(arg, () => {
+        args.topFiles = value;
+      });
       index += 1;
       continue;
     }
@@ -563,6 +597,9 @@ async function runVitestJsonReport(params) {
     env: {
       ...process.env,
       ...params.env,
+      // The JSON reporter can stay silent for the entire config. The profiler
+      // owns the wall-clock timeout and process-group cleanup for this child.
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
       NODE_OPTIONS: [
         (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
         ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
@@ -605,7 +642,7 @@ function readReportInput(entry) {
   };
 }
 
-export function readReportInputs(entries) {
+function readReportInputs(entries) {
   const invalid = [];
   const missing = [];
   const reports = [];
@@ -875,15 +912,35 @@ export function resolveRunPlanConcurrency(args, runPlanCount) {
   return Math.min(2, runPlanCount);
 }
 
+function hasExplicitIsolationArg(args) {
+  return args.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+}
+
+/**
+ * Gives full-suite duration reports one process lifetime per test file.
+ * This prevents unrelated retained module graphs and GC pauses from being
+ * attributed to whichever assertion happens to run next in a shared worker.
+ */
+export function resolveReportVitestArgs(args) {
+  if (!args.fullSuite || hasExplicitIsolationArg(args.vitestArgs)) {
+    return args.vitestArgs;
+  }
+  return [...args.vitestArgs, "--isolate=true"];
+}
+
 /**
  * Builds concrete report run specs from parsed args and config plans.
  */
 export function resolveReportRunSpecs(args, runPlans, params = {}) {
   const concurrency = params.concurrency ?? resolveRunPlanConcurrency(args, runPlans.length);
   const env = params.env ?? process.env;
+  const vitestArgs = resolveReportVitestArgs(args);
   const specs = runPlans.map((plan) => ({
     ...plan,
     env: resolveFullSuiteVitestEnv(args, env, plan.label),
+    vitestArgs,
   }));
   if (concurrency <= 1) {
     return specs;
@@ -900,22 +957,41 @@ function printRunLine(run) {
   );
 }
 
-async function runReportPlans(params) {
+function printSlowTestsForRun(entry, maxTestMs) {
+  if (maxTestMs === null || !fs.existsSync(entry.reportPath)) {
+    return;
+  }
+  const input = readReportInputs([entry]).reports[0];
+  if (!input) {
+    return;
+  }
+  const report = buildGroupedTestReport({
+    groupBy: "area",
+    maxTestMs,
+    reports: [input],
+  });
+  for (const test of report.slowTests) {
+    console.log(
+      `[test-group-report] slow-test config=${test.config} duration=${formatMs(test.durationMs)} file=${test.file} name=${test.fullName}`,
+    );
+  }
+}
+
+export async function runReportPlans(params) {
   const concurrency = resolveRunPlanConcurrency(params.args, params.runPlans.length);
   const runSpecs = resolveReportRunSpecs(params.args, params.runPlans, { concurrency });
-  const results = [];
-  results.length = runSpecs.length;
-  let nextIndex = 0;
+  const runVitest = params.runVitestJsonReport ?? runVitestJsonReport;
   let failed = false;
   let exitCode = 0;
 
-  async function worker() {
-    while (nextIndex < runSpecs.length && exitCode === 0) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const plan = runSpecs[index];
+  const results = await pMap(
+    runSpecs,
+    async (plan) => {
+      if (exitCode !== 0) {
+        return null;
+      }
       const slug = sanitizePathSegment(plan.label);
-      const run = await runVitestJsonReport({
+      const run = await runVitest({
         config: plan.config,
         forwardedArgs: plan.forwardedArgs,
         env: plan.env,
@@ -925,7 +1001,7 @@ async function runReportPlans(params) {
         rss: params.args.rss,
         timeoutMs: params.args.timeoutMs,
         killGraceMs: params.args.killGraceMs,
-        vitestArgs: params.args.vitestArgs,
+        vitestArgs: plan.vitestArgs,
       });
       printRunLine(run);
       let includeEntry = true;
@@ -935,33 +1011,39 @@ async function runReportPlans(params) {
           console.error(
             `[test-group-report] missing JSON report for failed config; see ${run.logPath}`,
           );
-          exitCode = 1;
           includeEntry = false;
         } else {
-          console.error(
-            `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
-          );
+          try {
+            readReportInput({ config: plan.label, reportPath: run.reportPath, run });
+            console.error(
+              `[test-group-report] config failed; keeping partial report from ${run.reportPath}`,
+            );
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            console.error(
+              `[test-group-report] config failed; skipping unusable JSON report from ${run.reportPath} (${reason})`,
+            );
+            includeEntry = false;
+          }
         }
         if (!params.args.allowFailures) {
-          exitCode = run.status;
+          exitCode = run.status || 1;
         }
       }
-      results[index] = includeEntry
-        ? { config: plan.label, reportPath: run.reportPath, run }
-        : null;
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: concurrency }, async () => {
-      await worker();
-    }),
+      const entry = includeEntry ? { config: plan.label, reportPath: run.reportPath, run } : null;
+      if (entry) {
+        printSlowTestsForRun(entry, params.args.maxTestMs);
+      }
+      return { entry, run };
+    },
+    { concurrency, stopOnError: true },
   );
 
   return {
     failed,
     exitCode,
-    runEntries: results.filter(Boolean),
+    runEntries: results.flatMap((result) => (result?.entry ? [result.entry] : [])),
+    runs: results.flatMap((result) => (result ? [result.run] : [])),
   };
 }
 
@@ -997,6 +1079,7 @@ async function main() {
 
   const { reportDir, logDir } = resolveReportArtifactDirs(output);
   const runEntries = [];
+  const runs = [];
   const runPlans = resolveRunPlans(args);
   let failed = false;
   let exitCode = 0;
@@ -1013,6 +1096,7 @@ async function main() {
     failed = result.failed;
     exitCode = result.exitCode;
     runEntries.push(...result.runEntries);
+    runs.push(...result.runs);
   }
 
   if (exitCode !== 0) {
@@ -1050,7 +1134,7 @@ async function main() {
     ...report,
     command: "test-group-report",
     failed,
-    runs: reportInputs.map((entry) => entry.run).filter(Boolean),
+    runs: runs.length > 0 ? runs : reportInputs.map((entry) => entry.run).filter(Boolean),
     system: {
       node: process.version,
       platform: process.platform,

@@ -14,7 +14,7 @@ export type MatrixDirectRoomCandidate = {
   source: "account-data" | "joined";
 };
 
-export type MatrixDirectRoomInspection = {
+type MatrixDirectRoomInspection = {
   selfUserId: string | null;
   remoteUserId: string;
   mappedRoomIds: string[];
@@ -23,14 +23,14 @@ export type MatrixDirectRoomInspection = {
   activeRoomId: string | null;
 };
 
-export type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
+type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
   createdRoomId: string | null;
   changed: boolean;
   directContentBefore: MatrixDirectAccountData;
   directContentAfter: MatrixDirectAccountData;
 };
 
-export type MatrixDirectRoomPromotionResult =
+type MatrixDirectRoomPromotionResult =
   | {
       classifyAsDirect: true;
       repaired: boolean;

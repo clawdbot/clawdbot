@@ -1,4 +1,5 @@
 /** Registry for plugin-contributed embedding providers. */
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type {
   EmbeddingProviderAdapter,
   RegisteredEmbeddingProvider,
@@ -27,14 +28,7 @@ const CORE_EMBEDDING_PROVIDERS: RegisteredEmbeddingProvider[] = [
 
 function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
   // The registry is global so tests and lazy-loaded plugin modules share one provider table.
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[EMBEDDING_PROVIDERS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, RegisteredEmbeddingProvider>;
-  }
-  const created = new Map<string, RegisteredEmbeddingProvider>();
-  globalStore[EMBEDDING_PROVIDERS_KEY] = created;
-  return created;
+  return resolveGlobalMap(EMBEDDING_PROVIDERS_KEY);
 }
 
 function getCoreEmbeddingProvider(id: string): RegisteredEmbeddingProvider | undefined {
@@ -67,12 +61,6 @@ export function getRegisteredEmbeddingProvider(
 ): RegisteredEmbeddingProvider | undefined {
   return getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().get(id);
 }
-
-/** Returns only the embedding provider adapter for callers that do not need ownership metadata. */
-export function getEmbeddingProvider(id: string): EmbeddingProviderAdapter | undefined {
-  return getRegisteredEmbeddingProvider(id)?.adapter;
-}
-
 /** Lists registered embedding providers with core defaults merged first. */
 export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[] {
   const merged = new Map<string, RegisteredEmbeddingProvider>(
@@ -84,22 +72,7 @@ export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[
     }
   }
   return Array.from(merged.values());
-}
-
-/** Lists embedding provider adapters without registration metadata. */
-export function listEmbeddingProviders(): EmbeddingProviderAdapter[] {
-  return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
-}
-
-/** Replaces non-core embedding providers with adapter-only test/runtime state. */
-export function restoreEmbeddingProviders(adapters: EmbeddingProviderAdapter[]): void {
-  getEmbeddingProviders().clear();
-  for (const adapter of adapters) {
-    registerEmbeddingProvider(adapter);
-  }
-}
-
-/** Replaces non-core embedding providers while preserving registration metadata. */
+} /** Replaces non-core embedding providers while preserving registration metadata. */
 export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbeddingProvider[]): void {
   getEmbeddingProviders().clear();
   for (const entry of entries) {

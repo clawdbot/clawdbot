@@ -6,7 +6,6 @@ import type {
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type, type TSchema } from "typebox";
-import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const SLACK_MESSAGE_ID_ACTIONS = ["react", "reactions", "edit", "delete", "pin", "unpin"] as const;
@@ -22,9 +21,20 @@ function createSlackFileActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackReactionEmojiSchema(): Record<string, TSchema> {
+  return {
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Slack emoji shortcode name (for example "white_check_mark" or "+1") or common emoji character (for example "✅"). Colons are optional around shortcodes.',
+      }),
+    ),
+  };
+}
+
 function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   const description =
-    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. Not used by download-file, which requires fileId from event.files[].id.';
+    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. React defaults to the current inbound message when available. Not used by download-file, which requires fileId from event.files[].id.';
   return {
     messageId: Type.Optional(Type.String({ description })),
     message_id: Type.Optional(Type.String({ description: `${description} Alias for messageId.` })),
@@ -71,9 +81,6 @@ export function describeSlackMessageTool({
   if (actions.includes("send")) {
     capabilities.add("presentation");
   }
-  if (isSlackInteractiveRepliesEnabled({ cfg, accountId })) {
-    capabilities.add("presentation");
-  }
   if (actions.includes("download-file")) {
     schema.push({
       properties: createSlackFileActionSchema(),
@@ -90,6 +97,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackTopLevelActionSchema(),
       actions: ["upload-file"],
+    });
+  }
+  if (actions.includes("react")) {
+    schema.push({
+      properties: createSlackReactionEmojiSchema(),
+      actions: ["react", "reactions"],
     });
   }
   const messageIdActions: ChannelMessageActionName[] = [];

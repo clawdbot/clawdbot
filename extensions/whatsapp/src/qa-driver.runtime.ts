@@ -11,6 +11,7 @@ import { resolveInboundMediaMimetype } from "./inbound/media-mimetype.js";
 import { normalizeMessageContent } from "./inbound/runtime-api.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
+import { isWhatsAppGroupJid } from "./normalize-target.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "./session.js";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
@@ -18,7 +19,7 @@ import {
 } from "./socket-timing.js";
 import { jidToE164 } from "./text-runtime.js";
 
-export type WhatsAppQaDriverObservedMessageKind =
+type WhatsAppQaDriverObservedMessageKind =
   | "media"
   | "location"
   | "poll"
@@ -26,20 +27,20 @@ export type WhatsAppQaDriverObservedMessageKind =
   | "text"
   | "unknown";
 
-export type WhatsAppQaDriverQuotedMessage = {
+type WhatsAppQaDriverQuotedMessage = {
   messageId?: string;
   participant?: string;
   text?: string;
 };
 
-export type WhatsAppQaDriverObservedReaction = {
+type WhatsAppQaDriverObservedReaction = {
   emoji: string;
   fromMe?: boolean;
   messageId?: string;
   participant?: string;
 };
 
-export type WhatsAppQaDriverObservedPoll = {
+type WhatsAppQaDriverObservedPoll = {
   options: string[];
   question?: string;
 };
@@ -53,20 +54,21 @@ export type WhatsAppQaDriverObservedMessage = {
   mediaType?: string;
   messageId?: string;
   observedAt: string;
+  participantJid?: string;
   poll?: WhatsAppQaDriverObservedPoll;
   quoted?: WhatsAppQaDriverQuotedMessage;
   reaction?: WhatsAppQaDriverObservedReaction;
   text: string;
 };
 
-export type WhatsAppQaDriverSendTextOptions = Pick<ActiveWebSendOptions, "quotedMessageKey">;
+type WhatsAppQaDriverSendTextOptions = Pick<ActiveWebSendOptions, "quotedMessageKey">;
 
-export type WhatsAppQaDriverSendMediaOptions = Pick<
+type WhatsAppQaDriverSendMediaOptions = Pick<
   ActiveWebSendOptions,
   "asDocument" | "fileName" | "gifPlayback" | "quotedMessageKey"
 >;
 
-export type WhatsAppQaDriverSendReactionOptions = {
+type WhatsAppQaDriverSendReactionOptions = {
   fromMe: boolean;
   participant?: string;
 };
@@ -306,15 +308,19 @@ function normalizeObservedMessage(
     return null;
   }
   const fromJid = message.key.remoteJid ?? undefined;
+  const senderJid =
+    fromJid && isWhatsAppGroupJid(fromJid) ? (message.key.participant ?? fromJid) : fromJid;
+  const participantJid = message.key.participant ?? undefined;
   return {
     fromJid,
-    fromPhoneE164: fromJid ? jidToE164(fromJid, { authDir }) : null,
+    fromPhoneE164: senderJid ? jidToE164(senderJid, { authDir }) : null,
     hasMedia: media ? true : undefined,
     kind,
     mediaFileName: media?.fileName,
     mediaType: media?.mediaType,
     messageId: message.key.id ?? undefined,
     observedAt: new Date().toISOString(),
+    ...(participantJid ? { participantJid } : {}),
     poll,
     quoted,
     reaction,

@@ -6,9 +6,15 @@ included:
   - ActivityWidget
   - WatchApp
   - ../shared/OpenClawKit/Sources/OpenClawChatUI
+  - ../shared/OpenClawKit/Sources/OpenClawKit
+  - ../shared/OpenClawKit/Sources/OpenClawNativeState
+  - ../shared/OpenClawKit/Sources/OpenClawProtocol
+  - ../swabble/Sources/SwabbleKit
 
 excluded:
   - ../macos
+  - ../macos-mlx-tts
+  - ../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
 
 type_body_length:
   warning: 900

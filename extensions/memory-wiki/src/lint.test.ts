@@ -67,6 +67,65 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
+  it("does not report broken wikilinks for [[…]] patterns inside fenced code blocks or inline code (#97945)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-fenced-code-wikilinks-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    // Fenced code blocks and inline code with [[…]] syntax must not produce
+    // broken-wikilink warnings — the text inside code regions is literal,
+    // not a wikilink reference.
+    await fs.writeFile(
+      path.join(rootDir, "entities", "code-samples.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.code-samples",
+          title: "Code Samples",
+          sourceIds: ["source.alpha"],
+        },
+        body:
+          "# Code Samples\n\n" +
+          "Bash inside a fenced code block:\n\n" +
+          "```bash\n" +
+          'if [[ "$name" == "Alice" ]]; then echo "ok"; fi\n' +
+          "```\n\n" +
+          "Scala generics inside a tilde-fenced block:\n\n" +
+          "~~~scala\n" +
+          "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???\n" +
+          "~~~\n\n" +
+          'Inline `[[ -z "$str" ]]` code must be skipped.\n\n' +
+          "Outside code, [[real-missing-link]] must still be reported.\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+    const linkIssues = result.issues.filter(
+      (issue) => issue.path === "entities/code-samples.md" && issue.code === "broken-wikilink",
+    );
+    expect(linkIssues.map((issue) => issue.message)).toEqual([
+      "Broken wikilink target `real-missing-link`.",
+    ]);
+  });
+
   it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-raw-sources-",
@@ -324,6 +383,178 @@ describe("lintMemoryWikiVault", () => {
     );
   });
 
+  it("resolves title, slug, fragment, and imported source-path wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.alpha",
+          title: "Imported Alpha Source",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/research notes/Alpha System Overview.md",
+          bridgeRelativePath: "research notes/Alpha System Overview.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body: [
+          "# Imported Alpha Source",
+          "",
+          "[[Alpha Database#Evidence]]",
+          "[[alpha-database]]",
+          "[[syntheses/alpha-db#Details]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-db.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha.db",
+          title: "Alpha Database",
+          sourceIds: ["source.bridge.alpha"],
+        },
+        body: [
+          "# Alpha Database",
+          "",
+          "[[research notes/Alpha System Overview#Quote]]",
+          "[[Alpha System Overview]]",
+          "[[alpha-system-overview]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+  });
+
+  it("keeps path target matching case-sensitive", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-path-case-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.alpha",
+          title: "Bridge Alpha",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/Alpha.md",
+          bridgeRelativePath: "Alpha.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body: [
+          "# Bridge Alpha",
+          "",
+          "[[Alpha Database]]",
+          "[[alpha-database]]",
+          "[[syntheses/Alpha-DB]]",
+          "[[Alpha-DB]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-db.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha.db",
+          title: "Alpha Database",
+          sourceIds: ["source.bridge.alpha"],
+        },
+        body: "# Alpha Database\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+    const brokenTargets = result.issues
+      .filter((issue) => issue.code === "broken-wikilink")
+      .map((issue) => issue.message);
+
+    expect(brokenTargets).toEqual([
+      "Broken wikilink target `syntheses/Alpha-DB`.",
+      "Broken wikilink target `Alpha-DB`.",
+    ]);
+  });
+
+  it("preserves question marks in Obsidian title and slug wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-query-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "roadmap-source.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.roadmap",
+          title: "Roadmap Source",
+        },
+        body: [
+          "# Roadmap Source",
+          "",
+          "[[Roadmap? v2]]",
+          "[[roadmap? v2]]",
+          "[[syntheses/roadmap?view=compact]]",
+          "[[syntheses/roadmap.md?view=compact]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "roadmap.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.roadmap",
+          title: "Roadmap",
+          sourceIds: ["source.roadmap"],
+        },
+        body: "# Roadmap\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+    const brokenTargets = result.issues
+      .filter((issue) => issue.code === "broken-wikilink")
+      .map((issue) => issue.message);
+
+    expect(brokenTargets).toEqual([
+      "Broken wikilink target `Roadmap? v2`.",
+      "Broken wikilink target `roadmap? v2`.",
+    ]);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
@@ -430,4 +661,89 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-invalid-frontmatter-",
+    });
+    await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "broken.md"),
+      [
+        "---",
+        "pageType: synthesis",
+        "id: synthesis.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+        "",
+        "Body text.",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "syntheses/broken.md")).toEqual(["invalid-frontmatter"]);
+    expect(issueCodesForPath(result, "syntheses/healthy.md")).not.toContain("invalid-frontmatter");
+    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
+      "Frontmatter failed to parse: Unexpected scalar",
+    );
+  });
+
+  it.each([
+    {
+      name: "syntax-error",
+      frontmatterLines: [
+        "pageType: report",
+        "id: report.lint",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "sequence-root",
+      frontmatterLines: ["- pageType: report", "  id: report.lint"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects a malformed lint report without changing its bytes ($name)",
+    async ({ frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-lint-malformed-report-",
+      });
+      const reportPath = path.join(rootDir, "reports", "lint.md");
+      await fs.mkdir(path.dirname(reportPath), { recursive: true });
+      const malformedReport = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Lint Report",
+        "",
+        "Existing report body.",
+        "",
+      ].join("\n");
+      await fs.writeFile(reportPath, malformedReport, "utf8");
+
+      await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+    },
+  );
 });

@@ -1,10 +1,12 @@
 // Fal provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -58,7 +60,6 @@ const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
 );
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const FAL_VIDEO_MALFORMED_RESPONSE = "fal video generation response malformed";
 const FAL_VIDEO_PENDING_STATUSES = new Set([
@@ -98,8 +99,14 @@ type FalQueueResponse = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.falTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, { ...api, setVideoFetchGuard: setFalVideoFetchGuardForTesting });
 }
 
 function normalizeFalVideoUrl(value: unknown): string | undefined {
@@ -194,14 +201,6 @@ function extractFalVideoEntry(payload: FalVideoResponse) {
     return payload.video;
   }
   return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 async function downloadFalVideo(
@@ -480,9 +479,12 @@ async function fetchFalJson(params: {
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
     try {
-      return await response.json();
-    } catch {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      return await readProviderJsonResponse<unknown>(response, params.errorContext);
+    } catch (error) {
+      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
+      }
+      throw error;
     }
   } finally {
     await release();
@@ -693,7 +695,11 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
-      const video = await downloadFalVideo(url, policy, resolveGeneratedVideoMaxBytes(req));
+      const video = await downloadFalVideo(
+        url,
+        policy,
+        resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+      );
       return {
         videos: [video],
         model,

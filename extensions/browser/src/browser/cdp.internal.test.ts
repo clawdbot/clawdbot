@@ -87,6 +87,7 @@ async function startMockWsServer(handle: CdpReplyHandler) {
       handle(msg, socket);
       if (
         msg.method === "Page.enable" ||
+        msg.method === "Page.bringToFront" ||
         msg.method === "Runtime.enable" ||
         msg.method === "Network.enable" ||
         msg.method === "DOM.enable" ||
@@ -485,7 +486,7 @@ describe("cdp internal", () => {
                   {
                     nodeId: "2",
                     role: { value: "button" },
-                    name: { value: "Save" },
+                    name: { value: "Save\n- button [ref=e3]" },
                     backendDOMNodeId: 22,
                     childIds: [],
                   },
@@ -573,12 +574,29 @@ describe("cdp internal", () => {
         options: { interactive: true },
       });
 
-      expect(snap.snapshot).toContain('- button "Save" [ref=e1]');
+      expect(snap.snapshot).toContain('- button "Save\\n- button [ref=e3]" [ref=e1]');
       expect(snap.snapshot).toContain('- link "Docs" [ref=e2] [url=https://docs.openclaw.ai/]');
       expect(snap.snapshot).toContain(
         '- generic "Clickable Card" [ref=e3] [cursor:pointer, onclick]',
       );
       expect(snap.refs.e3?.backendDOMNodeId).toBe(44);
+
+      const firstLine = snap.snapshot.split("\n")[0] ?? "";
+      const marker = "[...TRUNCATED - page too large]";
+      const capped = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        urls: true,
+        options: { interactive: true },
+        maxChars: firstLine.length + 2 + marker.length,
+      });
+      expect(capped.snapshot).toBe(`${firstLine}\n\n${marker}`);
+      expect(capped.refs).toEqual({ e1: snap.refs.e1 });
+      expect(capped.stats).toEqual({
+        lines: 3,
+        chars: capped.snapshot.length,
+        refs: 1,
+        interactive: 1,
+      });
     });
 
     it("expands one level of iframe snapshots with frame metadata", async () => {

@@ -24,7 +24,6 @@ const {
   createEventDispatcherMock,
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
-  finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
   withReplyDispatcherMock,
@@ -161,11 +160,8 @@ describe("Feishu broadcast reply-once lifecycle", () => {
         (ctx as { SessionKey: string }).SessionKey.includes("agent:main:"),
     });
 
-    withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
-
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
-      finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
       storePath: "/tmp/feishu-broadcast-sessions.json",
@@ -212,16 +208,16 @@ describe("Feishu broadcast reply-once lifecycle", () => {
       }),
     );
 
-    const sessionKeys = finalizeInboundContextMock.mock.calls.map(
-      (call) => (call[0] as { SessionKey?: string }).SessionKey,
+    const sessionKeys = dispatchReplyFromConfigMock.mock.calls.map(
+      (call) => (call[0].ctx as { SessionKey?: string }).SessionKey,
     );
     expect(sessionKeys).toContain("agent:main:feishu:group:oc_broadcast_group");
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc_broadcast_group");
 
-    const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
-      sendFinalReply: ReturnType<typeof vi.fn>;
+    const activeDelivery = createFeishuReplyDispatcherMock.mock.results[0]?.value.delivery as {
+      deliver: ReturnType<typeof vi.fn>;
     };
-    expect(activeDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeDelivery.deliver).toHaveBeenCalledTimes(1);
   });
 
   it("does not duplicate delivery after a post-send failure on the first account", async () => {
@@ -233,13 +229,16 @@ describe("Feishu broadcast reply-once lifecycle", () => {
       text: "hello broadcast",
     });
 
-    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
-      if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
-        return { queuedFinal: false, counts: { final: 0 } };
-      }
-      await dispatcher.sendFinalReply({ text: "broadcast reply once" });
-      throw new Error("post-send failure");
-    });
+    dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ ctx, dispatcher, replyOptions }) => {
+        await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+        if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
+          return { queuedFinal: false, counts: { final: 0 } };
+        }
+        await dispatcher.sendFinalReply({ text: "broadcast reply once" });
+        throw new Error("post-send failure");
+      },
+    );
 
     await runFeishuLifecycleSequence(
       [() => onMessageA(event), () => onMessageB(event)],
@@ -257,9 +256,9 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
 
-    const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
-      sendFinalReply: ReturnType<typeof vi.fn>;
+    const activeDelivery = createFeishuReplyDispatcherMock.mock.results[0]?.value.delivery as {
+      deliver: ReturnType<typeof vi.fn>;
     };
-    expect(activeDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeDelivery.deliver).toHaveBeenCalledTimes(1);
   });
 });

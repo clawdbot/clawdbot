@@ -16,6 +16,7 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
+  protocolCommandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
@@ -29,6 +30,7 @@ export function resolveCliExecutionStartupContext(params: {
     startupPolicy: resolveCliStartupPolicy({
       argv: params.argv,
       commandPath,
+      protocolCommandPath: params.protocolCommandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
       routeMode: params.routeMode,
@@ -43,7 +45,7 @@ export async function applyCliExecutionStartupPresentation(params: {
   showBanner?: boolean;
   version?: string;
 }) {
-  // JSON-mode commands must keep stdout machine-readable; route diagnostics away first.
+  // Machine-readable commands must route diagnostics away before startup can print.
   if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
     routeLogsToStderr();
   }
@@ -69,6 +71,8 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }) {
   await ensureCliCommandBootstrap({
     runtime: params.runtime,
@@ -81,5 +85,9 @@ export async function ensureCliExecutionBootstrap(params: {
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
+    ...(params.skipPristineStartupStateMigrations
+      ? { skipPristineStartupStateMigrations: true }
+      : {}),
+    ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
   });
 }

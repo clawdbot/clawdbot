@@ -9,6 +9,9 @@ Skills are compact triggerable workflows. Metadata is always visible; body loads
 
 ## Hard rules
 
+- For durable OpenClaw skill creation or updates in an agent session, use
+  `skill_workshop` to create or revise a pending proposal. Do not scaffold or
+  apply live `SKILL.md` files with shell commands or helper scripts.
 - Keep `SKILL.md` lean; Codex is already capable.
 - Put only trigger-critical facts in frontmatter `description`.
 - Quote frontmatter `description`.
@@ -52,11 +55,14 @@ Use for PDF manipulation. Prefer deterministic scripts for page edits.
 ## Edit workflow
 
 1. Read existing skill and nearby resource names.
-2. Remove generic advice the base model already knows.
-3. Keep brittle command syntax, auth caveats, safety rules, and validation.
-4. Replace tables with bullets unless a table is clearly needed.
-5. Relax prose; fragments ok.
-6. Validate frontmatter and run any script tests touched.
+2. Draft the proposed `SKILL.md` content.
+3. Create or revise the pending proposal through `skill_workshop` when the
+   change should persist as an OpenClaw skill.
+4. Remove generic advice the base model already knows.
+5. Keep brittle command syntax, auth caveats, safety rules, and validation.
+6. Replace tables with bullets unless a table is clearly needed.
+7. Relax prose; fragments ok.
+8. Validate frontmatter and run any script tests touched.
 
 ## Validation
 

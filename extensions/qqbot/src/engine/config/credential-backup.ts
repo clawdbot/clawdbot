@@ -11,8 +11,8 @@
  *   - During plugin startup, if the live config has an empty appId or
  *     secret, the gateway consults the backup and restores the values
  *     via the config mutation API.
- *   - Legacy JSON backups are imported on first read, then removed after
- *     SQLite has the canonical copy.
+ *   - Legacy JSON backups are imported by `openclaw doctor --fix`, not by
+ *     runtime startup.
  *
  * Safety notes:
  *   - Only restore when credentials are **actually empty** — never
@@ -21,11 +21,6 @@
  *     precisely when appId is unknown.
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
-import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
-import { getQQBotDataPath } from "../utils/platform.js";
 import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 
 interface CredentialBackup {
@@ -45,18 +40,6 @@ function createCredentialBackupStore() {
   });
 }
 
-function safeName(id: string): string {
-  return id.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function getLegacyOsHomeCredentialBackupFile(accountId: string): string {
-  return path.join(getQQBotDataPath("data"), `credential-backup-${safeName(accountId)}.json`);
-}
-
-function getLegacyOsHomeCredentialBackupFileWithoutAccount(): string {
-  return path.join(getQQBotDataPath("data"), "credential-backup.json");
-}
-
 function credentialBackupKey(accountId: string): string {
   return buildQQBotStateKey("credential-backup", accountId);
 }
@@ -65,49 +48,12 @@ function isUsableBackup(data: CredentialBackup | null | undefined): data is Cred
   return Boolean(data?.accountId && data.appId && data.clientSecret);
 }
 
-function loadUsableBackupFromFile(filePath: string): CredentialBackup | null {
-  const data = loadJsonFile<CredentialBackup>(filePath);
-  return isUsableBackup(data) ? data : null;
-}
-
-function removeFileQuietly(filePath: string): void {
-  try {
-    fs.unlinkSync(filePath);
-  } catch {
-    /* ignore cleanup errors */
-  }
-}
-
-function findLegacyBackup(accountId?: string): { data: CredentialBackup; filePath: string } | null {
-  const candidates = accountId
-    ? [
-        getCredentialBackupFile(accountId),
-        getLegacyCredentialBackupFile(),
-        getLegacyOsHomeCredentialBackupFile(accountId),
-        getLegacyOsHomeCredentialBackupFileWithoutAccount(),
-      ]
-    : [getLegacyCredentialBackupFile(), getLegacyOsHomeCredentialBackupFileWithoutAccount()];
-
-  for (const filePath of candidates) {
-    const data = loadUsableBackupFromFile(filePath);
-    if (!data) {
-      continue;
-    }
-    if (accountId && data.accountId !== accountId) {
-      continue;
-    }
-    return { data, filePath };
-  }
-  return null;
-}
-
 /** Persist a credential snapshot (called once gateway reaches READY). */
 export function saveCredentialBackup(accountId: string, appId: string, clientSecret: string): void {
   if (!appId || !clientSecret) {
     return;
   }
   try {
-    const backupPath = getCredentialBackupFile(accountId);
     const data: CredentialBackup = {
       accountId,
       appId,
@@ -115,7 +61,6 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
       savedAt: new Date().toISOString(),
     };
     createCredentialBackupStore().register(credentialBackupKey(accountId), data);
-    removeFileQuietly(backupPath);
   } catch {
     /* best-effort — ignore */
   }
@@ -124,8 +69,8 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
 /**
  * Load a credential snapshot for `accountId`.
  *
- * Consults SQLite first; falls back to shipped JSON backups and imports
- * them when the embedded `accountId` matches the request.
+ * Reads SQLite only. Legacy JSON backup import is owned by doctor/setup
+ * migration so runtime startup stays canonical-state-only.
  */
 export function loadCredentialBackup(accountId?: string): CredentialBackup | null {
   try {
@@ -135,16 +80,6 @@ export function loadCredentialBackup(accountId?: string): CredentialBackup | nul
       if (isUsableBackup(data)) {
         return data;
       }
-    }
-
-    const legacy = findLegacyBackup(accountId);
-    if (legacy) {
-      createCredentialBackupStore().register(
-        credentialBackupKey(legacy.data.accountId),
-        legacy.data,
-      );
-      removeFileQuietly(legacy.filePath);
-      return legacy.data;
     }
   } catch {
     /* corrupt file — ignore */

@@ -5,9 +5,11 @@
 .shell {
   --shell-pad: 16px;
   --shell-gap: 16px;
-  --shell-nav-width: 258px;
-  --shell-nav-rail-width: 78px;
-  --shell-topbar-height: 52px;
+  --shell-nav-expanded-width: 258px;
+  --shell-nav-width: var(--shell-nav-expanded-width);
+  /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
+     (layout.mobile.css) and the chat split toolbar restore the row height. */
+  --shell-topbar-height: 0px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
@@ -25,6 +27,25 @@
   overflow: hidden;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 250;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  text-decoration: none;
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.shell-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;
@@ -35,13 +56,134 @@
   overflow: hidden;
 }
 
+/* Collapsing hides the sidebar entirely; shell chrome and Cmd+B bring it back.
+   Keep --shell-nav-width in sync for fixed-position consumers (e.g. the
+   docked terminal panel). */
 .shell--nav-collapsed {
-  grid-template-columns: var(--shell-nav-rail-width) minmax(0, 1fr);
+  grid-template-columns: 0 minmax(0, 1fr);
+  --shell-nav-width: 0px;
+}
+
+/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
+.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
+  display: none;
+}
+
+/* Web shell controls mirror the native Mac titlebar strip. On native macOS
+   hosts without the full strip, they sit below the AppKit drag region. */
+.shell-chrome-controls {
+  position: fixed;
+  top: 10px;
+  left: calc(var(--shell-nav-width) + 10px);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shell-chrome-controls__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--muted);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.shell-chrome-controls__button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
+  color: var(--text);
+}
+
+.shell-chrome-controls__button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.shell-chrome-controls__button:disabled {
+  opacity: 0.42;
+}
+
+.shell-chrome-controls__button svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.shell--mobile-nav .shell-chrome-controls {
+  display: none;
+}
+
+html.openclaw-native-macos .shell-chrome-controls {
+  top: 52px;
+}
+
+/* Newer Mac apps host a native sidebar toggle in the titlebar next to
+   back/forward and add openclaw-native-nav; the in-page nav toggles would
+   duplicate it, so they disappear (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Search stays: native-nav-only hosts
+   provide native search/new-thread controls only while the rail is
+   collapsed, so the expanded cluster keeps the pointer path to the palette.
+   Older apps only add openclaw-native-macos and keep all web controls. */
+html.openclaw-native-nav .shell-chrome-controls__nav-toggle,
+html.openclaw-native-nav .shell--nav-collapsed .shell-chrome-controls,
+html.openclaw-native-nav .topbar .topbar-nav-toggle {
+  display: none;
+}
+
+/* Web-chrome hosts provide this entire cluster in the native titlebar. */
+html.openclaw-native-web-chrome .shell-chrome-controls {
+  display: none;
+}
+
+.macos-titlebar-controls {
+  position: fixed;
+  top: 0;
+  /* Clear the traffic lights (~74px cluster) with breathing room before the
+     first hosted button, so the two groups read as separate. */
+  left: 92px;
+  /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 156px;
+  height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+.macos-titlebar-controls__button.topbar-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.macos-titlebar-controls__button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
+  color: var(--text);
+}
+
+.macos-titlebar-controls__button:disabled {
+  opacity: 0.38;
+}
+
+.shell--mobile-nav .macos-titlebar-controls {
+  display: none;
 }
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
+  --shell-nav-width: 0px;
 }
 
 .shell--onboarding .topbar {
@@ -57,17 +199,511 @@
 }
 
 /* ===========================================
+   Settings Takeover
+   ===========================================
+   Settings routes replace the app chrome with a dedicated sidebar
+   (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
+   shell stays in charge and the settings sidebar rides inside the drawer. */
+
+.shell {
+  --shell-settings-nav-width: 288px;
+}
+
+.shell--settings:not(.shell--mobile-nav) {
+  grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
+  grid-template-rows: 0 1fr;
+  --shell-nav-width: var(--shell-settings-nav-width);
+}
+
+.shell--settings:not(.shell--mobile-nav) .content {
+  padding: 44px clamp(28px, 5vw, 72px) 72px;
+}
+
+.shell--settings:not(.shell--mobile-nav) .content--custodian {
+  padding: 0;
+}
+
+.shell--settings:not(.shell--mobile-nav) .content-header {
+  max-height: none;
+}
+
+.shell--settings:not(.shell--mobile-nav) .page-title {
+  font-size: 26px;
+}
+
+.shell--settings .content-header,
+.shell--settings .settings-workspace {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+.settings-sidebar {
+  --scrollbar-size: 6px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+}
+
+:root[data-theme-mode="light"] .settings-sidebar {
+  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+}
+
+.settings-sidebar__header {
+  flex-shrink: 0;
+  /* 8px top pad centers the 32px back button on the shared 24px chrome
+     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
+     clearance. */
+  padding: 8px 12px 6px;
+}
+
+.settings-sidebar__back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.settings-sidebar__back:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.settings-sidebar__back:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__back-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
+.settings-sidebar__back-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__esc {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-sidebar__title {
+  margin: 14px 0 0;
+  padding: 0 9px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-strong);
+}
+
+.settings-sidebar__search {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin: 8px 12px 0;
+  padding-bottom: 8px;
+  color: var(--muted);
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__search-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 32px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .settings-sidebar__search-input {
+    font-size: 16px;
+  }
+}
+
+.settings-sidebar__search-clear {
+  position: absolute;
+  inset-inline-end: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.settings-sidebar__search-clear:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.settings-sidebar__search-clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px 12px 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.settings-sidebar__empty {
+  margin: 8px 9px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.settings-sidebar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-sidebar__group-label {
+  padding: 0 9px;
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+/* Settings rail entries are anchors but read as app chrome: default arrow,
+   not the UA link pointer. */
+.settings-sidebar__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__item--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.settings-sidebar__item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.72;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover .settings-sidebar__item-icon,
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  opacity: 1;
+}
+
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  color: var(--accent);
+}
+
+.settings-sidebar__item-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__item-label {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: default;
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 21px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+openclaw-settings-save-indicator {
+  min-width: 0;
+}
+
+.settings-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-save-indicator--danger {
+  color: var(--danger);
+}
+
+.settings-save-indicator--saved {
+  animation: settingsSaveIndicatorFade 2s ease-out both;
+}
+
+.settings-save-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-save-indicator__claw svg {
+  fill: currentColor;
+  stroke: none;
+  animation: chatWorkingClawFlex 2.4s ease-out infinite;
+}
+
+.settings-save-indicator__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  animation: chatWorkingClawSnip 2.4s ease-out infinite;
+}
+
+.settings-save-indicator__claw--saved svg,
+.settings-save-indicator__claw--saved svg .claw-icon__jaw {
+  animation-duration: 650ms;
+  animation-iteration-count: 1;
+}
+
+.settings-save-indicator__check {
+  color: var(--ok);
+}
+
+.settings-save-indicator__spinner svg {
+  animation: spin 0.7s linear infinite;
+}
+
+.settings-save-indicator__apply {
+  border-radius: 999px;
+}
+
+.settings-save-indicator__apply {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--text);
+}
+
+@keyframes settingsSaveIndicatorFade {
+  0%,
+  88% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-save-indicator--saved,
+  .settings-save-indicator__claw svg,
+  .settings-save-indicator__claw svg .claw-icon__jaw,
+  .settings-save-indicator__spinner svg {
+    animation: none;
+  }
+}
+
+.settings-sidebar__footer .sidebar-footer-build {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+/* ===========================================
    Topbar
    =========================================== */
 
+/* Hidden by default: on desktop the sidebar owns navigation, so no topbar row
+   renders. Narrow viewports show it as the drawer/search header
+   (layout.mobile.css), and desktop chat split view brings it back as the
+   backdrop for the fixed split toolbar (see below). */
 .topbar {
   grid-area: topbar;
   position: sticky;
   top: 0;
   z-index: 40;
-  display: flex;
+  display: none;
   align-items: center;
-  padding: 0 24px;
+  padding: 0 12px;
   min-height: var(--shell-topbar-height);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
@@ -78,7 +714,7 @@
 .topnav-shell {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   width: 100%;
   min-height: var(--shell-topbar-height);
   padding: 0;
@@ -88,50 +724,10 @@
   box-shadow: none;
 }
 
-.sidebar-menu-trigger {
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 38px;
-  height: 38px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-}
-
-.sidebar-menu-trigger:hover {
-  border-color: color-mix(in srgb, var(--border-strong) 88%, transparent);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-  transform: translateY(-1px);
-}
-
-.sidebar-menu-trigger:active {
-  transform: translateY(0);
-}
-
-.sidebar-menu-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.topbar-nav-toggle {
-  display: none;
-}
-
 .topnav-shell__actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -140,10 +736,30 @@
   flex: 1;
 }
 
-.topbar .nav-collapse-toggle {
-  width: 36px;
-  height: 36px;
-  margin-bottom: 0;
+.topbar-brand {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.topbar-brand__logo {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+}
+
+.topbar-brand__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar .nav-collapse-toggle__icon {
@@ -156,110 +772,8 @@
   height: 20px;
 }
 
-.topnav-shell .dashboard-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.topnav-shell .dashboard-header__breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link,
-.topnav-shell .dashboard-header__breadcrumb-sep {
-  color: var(--muted);
-}
-
-.topnav-shell .dashboard-header__breadcrumb-segment {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link {
-  display: inline-flex;
-  align-items: center;
-  margin: -2px -4px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link:hover,
-.topnav-shell .dashboard-header__breadcrumb-link:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-current {
-  color: var(--accent);
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-context {
-  max-width: 18ch;
-  overflow: hidden;
-  color: var(--muted);
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 720px) {
-  .topnav-shell .dashboard-header__breadcrumb-context {
-    max-width: 10ch;
-  }
-}
-
-.topbar-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.topbar-status .pill {
-  padding: 6px 10px;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  height: 32px;
-  box-sizing: border-box;
-}
-
-.topbar-status .pill .mono {
-  display: flex;
-  align-items: center;
-  line-height: 1;
-  margin-top: 0px;
-}
-
-.topbar-status .statusDot {
-  width: 6px;
-  height: 6px;
-}
-
-.topbar-status .theme-orb__trigger {
-  width: 26px;
-  height: 26px;
-  font-size: 13px;
-}
-
 .topbar-search {
-  display: inline-flex;
+  display: none;
   align-items: center;
   gap: 12px;
   min-height: 38px;
@@ -269,7 +783,6 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
   font-size: 13px;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -288,139 +801,56 @@
   box-shadow: var(--focus-ring);
 }
 
-.topbar-search__label {
-  flex: 1;
-  text-align: left;
+.topbar-search svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-
-.topbar-search__kbd {
+.topbar-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  line-height: 1;
-  color: var(--muted);
-}
-
-.topbar-theme-mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
-}
-
-.topbar-theme-mode__btn {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
-    color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
+    color var(--duration-fast) ease;
 }
 
-.topbar-theme-mode__btn:hover {
+.topbar-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
-  background: var(--bg-hover);
 }
 
-.topbar-theme-mode__btn:focus-visible {
+.topbar-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.topbar-theme-mode__btn--active {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.topbar-theme-mode__btn svg {
-  width: 14px;
-  height: 14px;
+/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
+   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.topbar-icon-btn svg {
+  width: 17px;
+  height: 17px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.75px;
+  stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  position: absolute;
-  left: 50%;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-  z-index: 60;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before {
-  content: none;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: attr(data-tooltip);
-  top: calc(100% + 6px);
-  min-width: max-content;
-  max-width: min(220px, 60vw);
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: center;
-  white-space: nowrap;
-  transform: translateY(-3px);
-}
-
-@media (hover: hover) {
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    opacity: 1;
-  }
-
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::before,
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: none !important;
-  display: none !important;
+.topbar .topbar-nav-toggle {
+  display: none;
 }
 
 /* ===========================================
@@ -438,54 +868,122 @@
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
-.shell-nav-backdrop {
-  display: none;
+/* 1px overlay on the nav border edge; the divider paints its own centered
+   line, so the host needs no background here. */
+.sidebar-resizer {
+  grid-area: nav;
+  align-self: stretch;
+  justify-self: end;
+  z-index: 20;
+  width: 1px;
+}
+
+.shell:has(.sidebar-resizer.dragging) {
+  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {
+  /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
+     never shine through with a mismatched tone. */
+  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  --scrollbar-size: 6px;
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  background: var(--sidebar-bg);
 }
 
 :root[data-theme-mode="light"] .sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  --sidebar-bg: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
 .sidebar-shell {
+  --sidebar-pad-x: 10px;
   display: flex;
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 10px 12px;
+  /* 9px top pad centers the brand row's 30px icons on the app's shared
+     24px chrome centerline (pane-header actions, floating toggles). The
+     macOS app overrides this with its 50px titlebar clearance. */
+  padding: 9px var(--sidebar-pad-x) 12px;
   border: none;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 
-.sidebar--collapsed {
-  width: var(--shell-nav-rail-width);
-  min-width: var(--shell-nav-rail-width);
-  flex: 0 0 var(--shell-nav-rail-width);
-}
-
-.sidebar-shell__header,
-.sidebar-shell__footer {
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 12px;
   flex-shrink: 0;
 }
 
-.sidebar-shell__header {
+.sidebar-brand__actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 0;
-  padding: 0 8px 18px;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.sidebar-brand__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-brand__icon:hover:not(:disabled),
+.sidebar-brand__icon:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.sidebar-brand__icon:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-brand__icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-brand__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-brand__new-thread {
+  width: 32px;
+  height: 32px;
+  color: var(--text);
+}
+
+.sidebar-brand__new-thread svg {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-shell__body {
@@ -493,369 +991,1209 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* Keep the pre-unification horizontal clip: with only overflow-y set,
+     overflow-x would compute to auto and overwide rows would mint a
+     horizontal scrollbar beside the divider. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
+  scrollbar-width: thin;
+  /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
+     both values share --sidebar-pad-x so they cannot drift. */
+  margin-right: calc(-1 * var(--sidebar-pad-x));
+  padding-right: var(--sidebar-pad-x);
+}
+
+.sidebar-shell__body::-webkit-scrollbar,
+.sidebar-shell__body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .sidebar-shell__footer {
-  padding: 12px 0 0;
+  flex-shrink: 0;
+  padding: 4px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-brand {
+/* Ambient health chips (failed cron, expiring model auth) above the footer bar. */
+.sidebar-attention {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 10px;
+}
+
+.sidebar-attention__item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.sidebar-brand__logo {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
+  width: 100%;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
 }
 
-.sidebar-brand__copy {
+/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
+   the open button carries the click padding so the whole pill stays a target. */
+.sidebar-attention__open {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 6px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.sidebar-attention__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px 6px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.sidebar-attention__dismiss:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-attention__dismiss svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-attention__item--warning {
+  border-color: var(--warn-subtle);
+  background: rgba(234, 179, 8, 0.06);
+}
+
+.sidebar-attention__item--error {
+  border-color: var(--danger-subtle);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.sidebar-attention__item:hover {
+  border-color: var(--border-strong);
+}
+
+.sidebar-attention__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--warn, #b7791f);
+}
+
+.sidebar-attention__item--error .sidebar-attention__icon {
+  color: var(--danger);
+}
+
+.sidebar-attention__icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-attention__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card {
+  position: relative;
+  margin: 0 8px 10px;
+}
+
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+/* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+.shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 48px));
+  margin-left: 32px;
+}
+
+/* Native dashboard actions must also clear AppKit's drag strip. */
+html.openclaw-native-macos
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card {
+  margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+}
+
+.sidebar-update-card__action {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 34px 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__action:hover:not(:disabled),
+.sidebar-update-card__action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+}
+
+.sidebar-update-card__action:focus-visible,
+.sidebar-update-card__dismiss:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__icon,
+.sidebar-update-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-update-card__icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-update-card__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__dismiss {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-update-card__dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__icon svg,
+.sidebar-update-card__dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-nav {
+  padding: 0;
+}
+
+.sidebar-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px;
+  margin-top: 10px;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-sessions--removal-drop {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.sidebar-session-error {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-session-error .callout__content {
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-session-error .callout__dismiss {
+  width: 22px;
+  height: 22px;
+}
+
+.sidebar-recent-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 -8px;
+  /* Sessions are app chrome, not hyperlinks: the whole region uses the
+     default arrow cursor; the pointer hand is reserved for real links. */
+  cursor: default;
+}
+
+.sidebar-shell__body--scroll-top {
+  --sidebar-body-mask: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-shell__body--scroll-middle {
+  --sidebar-body-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 23px,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-shell__body--scroll-bottom {
+  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+}
+
+.sidebar-shell__body--scroll-top,
+.sidebar-shell__body--scroll-middle,
+.sidebar-shell__body--scroll-bottom {
+  -webkit-mask-image: var(--sidebar-body-mask);
+  mask-image: var(--sidebar-body-mask);
+}
+
+.sidebar-recent-sessions__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 28px;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__group--session-drop {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.sidebar-recent-sessions__group--dragging {
+  opacity: 0.45;
+}
+
+.sidebar-recent-sessions__group--section-drop-before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.sidebar-recent-sessions__group--section-drop-after {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.sidebar-recent-sessions__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  /* 9px left matches .sidebar-recent-session__link text inset so zone labels
+     and session titles share one left edge. */
+  padding: 0 10px 0 9px;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+}
+
+.sidebar-recent-sessions__head--draggable {
+  cursor: grab;
+}
+
+.sidebar-recent-sessions__head--draggable:active {
+  cursor: grabbing;
+}
+
+.sidebar-recent-sessions__head--root {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--sidebar-bg);
+}
+
+.sidebar-session-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.sidebar-session-group-toggle__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+  opacity: 0;
+}
+
+.sidebar-recent-sessions__head:hover
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon,
+.sidebar-recent-sessions__head:focus-within
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon {
+  opacity: 0.75;
+}
+
+.sidebar-session-group-toggle__icon svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-provider-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+.sidebar-session-group-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.sidebar-session-group-count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warn);
+}
+
+.sidebar-session-group-count--error svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-group-attention {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
+.sidebar-session-catalog-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 3px 10px 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.sidebar-session-group-drag-handle {
+  width: 8px;
+  height: 18px;
+  flex: 0 0 8px;
+  border-radius: 3px;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
+  background-position: 0 0;
+  background-size: 4px 4px;
+  color: var(--muted);
+  opacity: 0;
+  cursor: grab;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
+.sidebar-recent-sessions__head--draggable:focus-within .sidebar-session-group-drag-handle {
+  opacity: 0.55;
+}
+
+.sidebar-session-group-drag-handle:active {
+  cursor: grabbing;
+}
+
+.sidebar-session-sort {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-sort--filtered::after {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--bg);
+  content: "";
+}
+
+.sidebar-session-sort:hover,
+.sidebar-session-sort[aria-expanded="true"],
+.sidebar-session-sort[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-sort svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Group header kebab: hidden until hover/focus like row actions, but always
+   reachable on touch pointers where hover does not exist. */
+.sidebar-session-group-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head:hover .sidebar-session-group-actions,
+.sidebar-recent-sessions__head:focus-within .sidebar-session-group-actions,
+.sidebar-session-group-actions[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-session-group-actions:hover,
+.sidebar-session-group-actions[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-group-actions svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+    opacity: 0.75;
+  }
+
+  .sidebar-session-group-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Agent scope chip: a borderless select in the Sessions group header, sized
+   as metadata rather than a form control. */
+
+.sidebar-recent-sessions__label-text {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  opacity: 0.85;
+}
+
+/* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
+   when rows stream in or grow a second subtitle line after first layout, so a
+   grid list keeps a stale height and the next section paints over its rows. */
+.sidebar-recent-sessions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 12px;
+}
+
+.sidebar-session-tree,
+.sidebar-session-tree__children {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.sidebar-brand__eyebrow {
-  font-size: 12px; /* was 10px */
-  line-height: 1.1;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  text-transform: uppercase;
+.sidebar-session-tree__children {
+  margin-left: 12px;
+  padding-left: 7px;
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 52%, transparent);
 }
 
-.sidebar-brand__title {
-  font-size: 15px;
-  line-height: 1.1;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-nav {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 0;
-  scrollbar-width: none;
-}
-
-.sidebar-sessions {
-  display: grid;
-  gap: 10px;
-  flex-shrink: 0;
-  padding: 0 8px;
-  margin-bottom: 16px;
-}
-
-.sidebar-new-session {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 38px;
-  box-sizing: border-box;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border) 70%);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 11%, var(--bg-elevated) 89%);
-  color: var(--text-strong);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-}
-
-.sidebar-new-session:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-hover) 82%);
-  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
-  transform: translateY(-1px);
-}
-
-.sidebar-new-session:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-new-session__icon,
-.sidebar-new-session__icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.sidebar-new-session__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-}
-
-.sidebar-new-session__icon svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-recent-sessions {
-  display: grid;
-  gap: 6px;
-  margin: 0 -8px;
-}
-
-.sidebar-recent-sessions__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0 10px;
+.sidebar-session-tree__loading {
   min-height: 28px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-session-tree__show-more {
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 0;
   background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
   text-align: left;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
 }
 
-.sidebar-recent-sessions__label:hover {
+.sidebar-session-tree__show-more:hover,
+.sidebar-session-tree__show-more:focus-visible {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
 }
 
-.sidebar-recent-sessions__label-text {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
+  gap: 8px;
 }
 
-.sidebar-recent-sessions__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__chevron {
-  transform: rotate(-90deg);
-}
-
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__list {
-  display: none;
-}
-
-.sidebar-recent-sessions__list {
-  display: grid;
-  gap: 4px;
-}
-
-/* UX-009 — Sidebar session search */
-.sidebar-session-search {
-  padding: 0 2px;
-}
-
-.sidebar-session-search__input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-session-search__input::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
-}
-
-.sidebar-session-search__input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border) 40%);
-  background: var(--bg-elevated);
-}
-
-.sidebar-recent-sessions__empty {
-  display: block;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--muted);
-  opacity: 0.7;
-}
-
-/* Animate non-matching session items out */
-.sidebar-recent-session--hidden {
-  opacity: 0;
-  max-height: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease-out,
-    max-height 120ms ease-out;
-}
-
-.sidebar-session-select {
-  display: grid;
-  gap: 4px;
+.sidebar-session-catalog-host {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
-.sidebar-session-select--collapsed {
-  justify-items: center;
-  position: relative;
-}
-
-.sidebar-session-select .chat-controls__session-row {
-  min-height: 0;
-}
-
-.sidebar-session-select .chat-controls__session-notice {
-  min-height: 0;
-}
-
-.sidebar-session-select .chat-session-picker {
-  width: 100%;
-  max-width: 100%;
-  max-height: min(480px, calc(100vh - 120px));
-}
-
-.sidebar-session-select--collapsed .chat-controls__session-trigger {
-  width: 44px;
-  min-height: 44px;
-  justify-content: center;
-  padding: 0;
-  border-radius: var(--radius-lg);
-}
-
-.sidebar-session-select--collapsed .chat-controls__session-trigger-label,
-.sidebar-session-select--collapsed .chat-controls__session-trigger-icon {
-  display: none;
-}
-
-.sidebar-session-select--collapsed .chat-session-picker {
-  position: absolute;
-  top: 0;
-  left: calc(100% + 8px);
-  width: min(360px, calc(100vw - 96px));
-  max-width: min(360px, calc(100vw - 96px));
-  z-index: var(--z-dropdown);
-}
-
-.sidebar-recent-session {
-  display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+.sidebar-session-catalog-host__head {
+  display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 7px 9px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  min-height: 19px;
+  padding: 1px 12px 1px 20px;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+}
+
+.sidebar-session-catalog-host__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+}
+
+.sidebar-session-catalog-host__count {
+  width: 20px;
+  flex: 0 0 20px;
   color: var(--muted);
-  text-decoration: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.68;
+  text-align: center;
+}
+
+.sidebar-session-catalog-host__count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warn);
+}
+
+.sidebar-session-catalog-host__count--error svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-host__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-session-catalog-project__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 18px;
+  padding: 2px 12px 0 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 35%, var(--text) 65%);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-catalog-project__head:hover,
+.sidebar-session-catalog-project__head:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-project__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.sidebar-session-catalog-project__icon svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-project__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.sidebar-session-catalog-project__count {
+  width: 20px;
+  flex: 0 0 20px;
+  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
+  padding-left: 18px;
+}
+
+.sidebar-session-pagination {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 10px 10px;
+}
+
+.sidebar-session-pagination__button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sidebar-session-pagination__button:hover,
+.sidebar-session-pagination__button:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-session-empty-hint {
+  display: block;
+  padding: 4px 10px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-session-empty-placeholder {
+  /* Match the section title: 9px header inset + 8px drag handle + 8px gap. */
+  padding-left: 25px;
+}
+
+.sidebar-session--archived {
+  opacity: 0.62;
+}
+
+.sidebar-session--archived:hover,
+.sidebar-session--archived.sidebar-recent-session--active,
+.sidebar-session--archived.sidebar-recent-session--selected {
+  opacity: 0.82;
+}
+
+.sidebar-session__archive-glyph {
+  display: inline-flex;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.sidebar-session__archive-glyph svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-recent-session--dragging {
+  opacity: 0.45;
+}
+
+/* Every sidebar session source renders a thread. Keep density and text styling
+   here so gateway threads and native coding catalogs cannot drift apart. */
+.sidebar-recent-session {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 30px;
+  padding-right: 4px;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  cursor: default;
+  transition:
+    background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
 .sidebar-recent-session:hover {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
   color: var(--text);
-  text-decoration: none;
 }
 
-.sidebar-recent-session--active {
-  background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+/* Selection is a filled neutral pill (hover fill, one step stronger), not an
+   accent border: 1px accent outlines read as focus/error chrome on the
+   red-leaning themes. Derive from --text so it holds in light + dark.
+   Doubled class outranks .sidebar-recent-session:hover so the selection fill
+   does not degrade to the weaker hover fill while the row is under pointer. */
+.sidebar-recent-session.sidebar-recent-session--active {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 46%, transparent);
+/* Multi-select is an accent wash so it stays distinguishable by hue from the
+   neutral --active fill when a selection includes the active row. */
+.sidebar-recent-session.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-strong);
 }
 
-.sidebar-recent-session--active .sidebar-recent-session__dot {
-  background: var(--accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.sidebar-recent-session__body {
-  display: grid;
-  gap: 2px;
+.sidebar-recent-session__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 3px 4px 3px 9px;
+  color: inherit;
+  cursor: default;
+  text-decoration: none;
+}
+
+.sidebar-child-session-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 31px;
+  height: 30px;
+  flex: 0 0 31px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+/* Expanded parents already show their children below, so the collapse control
+   is quiet until row hover; collapsed toggles stay visible because the count
+   and status tint are the only signal that hidden children exist. */
+.sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
+.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the collapse control usable, matching the
+   session-action touch override in components.css. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-child-session-toggle[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.sidebar-child-session-toggle:hover,
+.sidebar-child-session-toggle:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
+  color: var(--text);
+}
+
+.sidebar-child-session-toggle--running {
+  color: var(--run);
+}
+
+.sidebar-child-session-toggle--failed {
+  color: var(--danger);
+}
+
+.sidebar-child-session-toggle__icon {
+  display: inline-flex;
+}
+
+.sidebar-child-session-toggle__icon svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.sidebar-child-session-toggle__count {
+  min-width: 9px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sidebar-recent-session__link:hover {
+  text-decoration: none;
+}
+
+.sidebar-board-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 76%, var(--muted));
+}
+
+.sidebar-board-glyph svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.viewer-facepile {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.viewer-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border: 1.5px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  color: white;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar {
+  margin-left: -5px;
+}
+
+/* Tooltip anchors need a real box. ViewerAvatar deliberately renders through a
+   display:contents host, whose own rect would otherwise resolve at the origin. */
+.viewer-facepile__tooltip-anchor {
+  display: inline-flex;
+}
+
+.viewer-facepile > openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
+.viewer-facepile > .viewer-avatar:not(:first-child) {
+  margin-left: -5px;
+}
+
+.viewer-avatar > img,
+.viewer-avatar > span {
+  width: 100%;
+  height: 100%;
+}
+
+/* Two classes on purpose: `.viewer-avatar > span` below sets display and
+   outranks a lone class, which showed image + initials side by side. */
+.viewer-avatar > .viewer-avatar__fallback {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > img {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > .viewer-avatar__fallback {
+  display: grid;
+}
+
+.viewer-avatar > img {
+  object-fit: cover;
+}
+
+.viewer-avatar > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-avatar--overflow {
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+.viewer-facepile--session {
+  margin-left: 1px;
+}
+
+.viewer-avatar--footer,
+.viewer-facepile--footer .viewer-avatar--overflow {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.viewer-avatar--profile {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  font-size: var(--control-ui-text-sm);
+}
+
+.viewer-facepile-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: -2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: default;
+}
+
+.viewer-facepile-trigger:hover,
+.viewer-facepile-trigger:focus-visible {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
+  color: var(--text);
 }
 
-.sidebar-recent-session__meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px; /* was 11px */
+.sidebar-recent-session--child {
+  min-height: 30px;
+}
+
+.sidebar-recent-session--child .sidebar-recent-session__link {
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.sidebar-recent-session--child .sidebar-recent-session__name {
+  font-size: 12px;
+}
+
+.sidebar-recent-session--child .session-row-trail {
+  font-size: 10px;
+}
+
+.sidebar-child-session__status {
+  display: inline-flex;
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
-.sidebar-recent-session__live {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 12%, transparent);
+.sidebar-child-session__status--done {
+  color: var(--ok);
 }
 
-.sidebar-nav::-webkit-scrollbar {
-  display: none;
+.sidebar-child-session__status--failed,
+.sidebar-child-session__status--timeout {
+  color: var(--danger);
+}
+
+.sidebar-child-session__status svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8px;
+}
+
+.sidebar-recent-session--active .sidebar-recent-session__name {
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.sidebar-recent-session__aside {
+  padding-right: 2px;
+}
+
+/* Resting rows give the title the full sidebar width: the trailing aside
+   overlays the row instead of reserving button width in-flow. It must not
+   intercept clicks on the link tail beneath it — the buttons re-enable
+   their own pointer-events on hover/focus. Child rows keep the in-flow
+   aside because their runtime trail is resting content, not a hover swap. */
+.sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* Rows with a child toggle keep it as the rightmost in-flow control; the
+   overlaid actions land just left of it, at the link's right edge — the
+   same link-relative geometry as toggle-less rows, so one mask fits both. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+  > .sidebar-recent-session__aside {
+  right: 35px;
+}
+
+/* While the actions are surfaced, the link content fades out beneath them.
+   A mask (not a background scrim) keeps the fade correct over rest, hover,
+   active, and selected row backgrounds alike. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):hover > .sidebar-recent-session__link,
+.sidebar-recent-session:not(.sidebar-recent-session--child):focus-within
+  > .sidebar-recent-session__link {
+  mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+}
+
+/* Touch keeps the actions permanently visible, so the fade is permanent too. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
+    mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+  }
 }
 
 .nav-collapse-toggle {
@@ -866,8 +2204,7 @@
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-full);
-  cursor: pointer;
+  border-radius: var(--radius-md);
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -904,91 +2241,498 @@
   stroke-linejoin: round;
 }
 
-.nav-section {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 16px;
-}
-
-.nav-section:last-child {
-  margin-bottom: 0;
-}
-
 .nav-section__items {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
-.nav-section--collapsed .nav-section__items {
-  display: none;
-}
-
-.nav-section__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0 10px;
-  min-height: 28px;
-  background: transparent;
-  border: none;
+.sidebar-zone-entry {
+  min-width: 0;
   border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  cursor: pointer;
-  text-align: left;
   transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    opacity var(--duration-fast) ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow var(--duration-fast) ease;
 }
 
-.nav-section__label:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .sidebar-r .sidebar-zone-entry {
+      opacity: 0;
+      transform: translateX(-8px) scale(0.98);
+    }
+  }
 }
 
-.nav-section__label-text {
-  font-size: 12px;
+.sidebar-zone-entry--dragging {
+  opacity: 0.45;
+}
+
+.sidebar-zone-entry--drop-before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.sidebar-zone-entry--drop-after {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+/* Button variant of .nav-item (e.g. the "More" menu row). */
+.nav-item--action {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar-customize-menu:not(wa-dropdown) {
+  position: fixed;
+  z-index: 120;
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-customize-menu {
+  position: fixed;
+  z-index: 120;
+}
+
+wa-dropdown.sidebar-customize-menu::part(menu) {
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.sidebar-customize-menu__title {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar-customize-menu__group-title {
+  margin: 6px 4px 2px;
+  padding: 7px 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  color: var(--muted);
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.nav-section__chevron {
+.sidebar-customize-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
+  cursor: default;
+  text-decoration: none;
+}
+
+.sidebar-customize-menu__item:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-customize-menu__item > a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Pin-editor rows: wa-dropdown flags every row [checkbox-adjacent] when the menu
+   holds checkbox items and tucks the shadow checkmark into a 2em start inset via
+   a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
+   rebuild the check column here or the checkmark lands outside the row edge. */
+.sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
+  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px flex gap */
+}
+
+.sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
+  width: 14px;
+  min-width: 14px;
+  margin-inline: -22px 0; /* pull back into the padding; the 8px flex gap spaces the icon */
+}
+
+.sidebar-customize-menu__text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-customize-menu__separator {
+  margin: 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+/* More-menu row for the route the app is currently on. */
+.sidebar-customize-menu__item--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+}
+
+.sidebar-customize-menu__item--active .nav-item__icon {
+  color: var(--accent);
+}
+
+.session-menu:not(wa-dropdown) {
+  position: fixed;
+  z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.session-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.session-menu::part(menu) {
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Popover hosts live in the top layer so menus escape in-page stacking
+   contexts (e.g. the sidebar resizer above the nav); the host itself must
+   stay a zero-size shell around its fixed-position menu. */
+openclaw-menu-surface[popover],
+openclaw-native-link-menu[popover],
+openclaw-session-menu[popover] {
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.sidebar-session-sort-menu:not(wa-dropdown) {
+  position: fixed;
+  z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.sidebar-session-sort-menu::part(menu) {
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.sidebar-session-sort-menu__title {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.session-menu__item,
+.sidebar-session-sort-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.session-menu__item:hover:not(:disabled),
+.session-menu__item:focus-visible,
+.sidebar-session-sort-menu__item:hover,
+.sidebar-session-sort-menu__item:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.session-menu__item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__item--destructive {
+  color: var(--danger);
+}
+
+.session-menu__icon,
+.session-menu__check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
-.nav-section__chevron svg {
-  width: 12px;
-  height: 12px;
+.session-menu__check {
+  color: var(--accent);
+}
+
+.session-menu__icon {
+  color: var(--muted);
+}
+
+.session-menu__icon svg,
+.session-menu__check svg,
+.session-menu__chevron svg {
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.5px;
+  stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.nav-section--collapsed .nav-section__chevron {
-  transform: rotate(-90deg);
+.session-menu__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.session-menu__sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-menu__chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.session-menu__shortcut {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+}
+
+.session-menu__info {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-menu__separator {
+  margin: 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__submenu-host {
+  position: relative;
+}
+
+.session-menu__submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 4px);
+  max-height: min(360px, calc(100vh - 24px));
+  overflow-y: auto;
+}
+
+.session-menu__submenu--left {
+  right: calc(100% + 4px);
+  left: auto;
+}
+
+.session-menu__icon-picker {
+  width: 184px;
+  padding: 8px;
+}
+
+.session-menu__icon-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.session-menu__icon-picker-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.session-menu__icon-picker-back:hover,
+.session-menu__icon-picker-back:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.session-menu__icon-picker-back svg {
+  width: 15px;
+  height: 15px;
+}
+
+.session-menu__icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 24px);
+  gap: 5px;
+}
+
+.session-menu__icon-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.session-menu__icon-choice:hover,
+.session-menu__icon-choice[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  color: var(--text-strong);
+}
+
+.session-menu__icon-choice svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+}
+
+.session-menu__emoji-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-menu__emoji-field input {
+  width: 58px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.session-menu__remove-icon {
+  width: 100%;
+  margin-top: 7px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.session-menu__remove-icon:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.session-menu__remove-icon:disabled,
+.session-menu__icon-choice:disabled {
+  opacity: 0.42;
+}
+
+/* Nav rail entries are anchors (for middle-click/new-tab) but read as app
+   chrome: override the UA link pointer back to the default arrow. */
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  min-height: 40px;
+  min-height: 32px;
   padding: 0 9px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -1020,9 +2764,41 @@
   stroke-linejoin: round;
 }
 
+.workboard-board-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--workboard-board-color, var(--muted)) 34%, transparent);
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--workboard-board-color, var(--muted)) 16%,
+    var(--bg-elevated)
+  );
+  color: var(--workboard-board-color, var(--muted));
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.workboard-board-glyph--sidebar {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 9px;
+}
+
+.nav-item--active .workboard-board-glyph {
+  color: var(--workboard-board-color, var(--accent));
+}
+
 .nav-item__text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -1041,10 +2817,7 @@
 .nav-item--active {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    0 12px 24px color-mix(in srgb, black 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .nav-item.active .nav-item__icon,
@@ -1053,207 +2826,767 @@
   color: var(--accent);
 }
 
-.sidebar--collapsed .sidebar-shell {
-  padding: 12px 8px 10px;
+/* Pinned sessions share the page-nav visual contract while retaining session actions. */
+.sidebar-zone-entry .sidebar-recent-session {
+  position: relative;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
-.sidebar--collapsed .sidebar-shell__header {
-  justify-content: center;
-  align-items: center;
-  gap: 0;
-  padding: 0 2px 16px;
-}
-
-.sidebar--collapsed .sidebar-nav {
-  padding: 0;
-}
-
-.sidebar--collapsed .sidebar-sessions {
-  justify-items: center;
-  padding: 0;
-  margin-bottom: 14px;
-}
-
-.sidebar--collapsed .sidebar-new-session {
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border-radius: var(--radius-lg);
-}
-
-.sidebar--collapsed .nav-section {
-  gap: 6px;
-  margin-bottom: 16px;
-}
-
-.sidebar--collapsed .nav-item {
-  justify-content: center;
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  margin: 0 auto;
-  border-radius: var(--radius-lg);
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.sidebar--collapsed .nav-item__icon {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar--collapsed .nav-item__icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar--collapsed .nav-item__text,
-.sidebar--collapsed .nav-item__external-icon {
-  display: none;
-}
-
-.sidebar--collapsed .nav-item--active::before,
-.sidebar--collapsed .nav-item.active::before {
-  content: "";
-  position: absolute;
-  left: 8px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 86%, transparent);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
-}
-
-.sidebar--collapsed .nav-item.active,
-.sidebar--collapsed .nav-item--active {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
-    color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%
-  );
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 10px 20px color-mix(in srgb, black 18%, transparent);
-}
-
-.sidebar--collapsed .nav-collapse-toggle {
-  width: 42px;
-  height: 42px;
-  border-color: color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 8px 18px color-mix(in srgb, black 16%, transparent);
-}
-
-.sidebar--collapsed .sidebar-brand__logo {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 10px 20px color-mix(in srgb, black 20%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
-}
-
-.sidebar-utility-group {
-  display: grid;
+.sidebar-zone-entry .sidebar-recent-session__link {
   gap: 8px;
+  min-height: 30px;
+  padding: 0;
 }
 
-.sidebar-utility-link {
-  min-height: 42px;
+.sidebar-zone-entry .sidebar-recent-session__name {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.sidebar-version {
+.sidebar-zone-entry .sidebar-recent-session:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.sidebar-pinned-session__icon {
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  opacity: 0.72;
+  transition:
+    opacity var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-pinned-session__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-pinned-session__icon .session-icon__named,
+.sidebar-pinned-session__icon .session-icon__svg {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-pinned-session__icon .session-icon__named svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-pinned-session__icon .session-icon__emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.sidebar-zone-entry .sidebar-recent-session:hover .sidebar-pinned-session__icon,
+.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
+  opacity: 1;
+}
+
+.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
+  color: var(--accent);
+}
+
+.sidebar-zone-entry .sidebar-recent-session__aside {
+  padding-right: 0;
+}
+
+/* Footer agent chip: identity-first entrance to the active agent. The body
+   resumes the latest conversation; trailing actions create/open the menu. */
+.sidebar-agent-card {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-agent-card__main {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
 }
 
-.sidebar-version__label {
-  font-size: 12px; /* was 11px */
+.sidebar-agent-card__main:hover,
+.sidebar-agent-card__main:focus-visible,
+.sidebar-agent-card--open .sidebar-agent-card__main {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-card__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-card__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
-.sidebar-version__text {
+.sidebar-agent-card__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+.sidebar-agent-card__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-agent-card__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-card__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.sidebar-agent-card__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-agent-card__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-card__menu-unread {
+  flex: none;
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+}
+
+.sidebar-agent-approval-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-agent-card__approval-count {
+  flex: none;
+  margin-left: auto;
+}
+
+/* "Pages" section head: zone-style label plus the pin-editor affordance. */
+.sidebar-nav__head {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px 2px 12px;
+}
+
+.sidebar-nav__head .sidebar-recent-sessions__label-text {
+  flex: 1 1 auto;
+}
+
+.sidebar-nav__head-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-nav__head-action:hover,
+.sidebar-nav__head-action:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-nav__head-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Home carries approval and outbox counts at the row's edge; run/unread state
+   rings the leading icon instead (see .session-glyph). */
+.nav-item__state {
+  flex: none;
+  margin-left: auto;
+}
+
+.sidebar-home-session-states {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Zone 5: product chrome in one slim footer bar. The shell footer's top
+   border is the only divider (and the pet's ledge); no second line here. */
+.sidebar-footer-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+}
+
+.sidebar-identity-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-identity-card:hover,
+.sidebar-identity-card:focus-visible,
+.sidebar-identity-card[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-identity-card:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-identity-card .viewer-avatar--footer {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  font-size: 10px;
+}
+
+.sidebar-identity-card__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-identity-card__name,
+.sidebar-identity-card__subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__name {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sidebar-identity-card__subtitle {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.sidebar-identity-card__subtitle--gateway {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-identity-card__gateway-health {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-identity-card__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-identity-card__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-identity-card__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__gateway-primary {
+  flex: none;
+}
+
+.sidebar-identity-card__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sidebar-identity-card__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.sidebar-identity-card__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+openclaw-tooltip.sidebar-hover-tooltip {
+  --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
+}
+
+.sidebar-hover-card {
+  width: min(320px, calc(100vw - 44px));
+  max-width: 100%;
+  color: var(--text);
   font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.sidebar-hover-card__region {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sidebar-hover-card__heading {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-hover-card__people {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: min(240px, 45vh);
+  overflow-y: auto;
+}
+
+.sidebar-hover-card__person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-hover-card__person .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-color: var(--card);
+  font-size: 9px;
+}
+
+.sidebar-hover-card__person-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-hover-card__person-name,
+.sidebar-hover-card__person-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-hover-card__person-name {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.sidebar-hover-card__you,
+.sidebar-hover-card__person-email {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sidebar-hover-card__person-email {
+  font-size: 11px;
+}
+
+.sidebar-hover-card__divider {
+  height: 1px;
+  margin: 10px 0;
+  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
+}
+
+.sidebar-hover-card__server-details {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sidebar-hover-card__summary {
   color: var(--text);
   font-weight: 600;
 }
 
-.sidebar-version__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 78%, white 22%);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
-  opacity: 1;
-  margin: 0 auto;
+.sidebar-hover-card__metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
 }
 
-.sidebar-version__status {
+.sidebar-hover-card__metadata-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sidebar-hover-card__metadata-row dt {
+  color: var(--muted);
+}
+
+.sidebar-hover-card__metadata-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.sidebar-hover-card__metadata-value--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sidebar-footer-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 7px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sidebar-footer-bar__status:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.sidebar-footer-bar__status:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-footer-bar__status-detail {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.72;
+}
+
+.sidebar-footer-bar__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+}
+
+.sidebar-session-group-running {
+  flex: none;
+  margin-left: 4px;
+}
+
+.sidebar-agent-menu__agent-switch {
+  min-width: 0;
+}
+
+/* Help destinations are real hyperlinks; keep them looking like menu rows. */
+.sidebar-identity-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* The help flyout must escape the menu box, so the root stays
+   overflow-visible; the viewport bound moves to a flex column where only
+   the switcher list shrinks and scrolls (the action rows always fit). */
+.sidebar-agent-menu {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  max-height: calc(100vh - 16px);
+}
+
+.sidebar-identity-menu {
+  overflow: visible;
+}
+
+wa-dropdown.sidebar-identity-menu::part(menu) {
+  min-width: max(224px, var(--sidebar-identity-menu-min-width, 224px));
+}
+
+.sidebar-identity-menu__header {
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.sidebar-agent-menu__filter {
+  padding: 2px 8px 6px;
+}
+
+.sidebar-agent-menu__filter input {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-agent-menu__empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Identity-menu strip: build identity left, theme switch right. */
+.sidebar-identity-menu__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 2px;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* Dev-checkout branch strip: only rendered when the gateway runs from a git
+   checkout off main. Sits on its own row above the icon bar so the full branch
+   name stays readable without crowding the footer controls. */
+.sidebar-footer-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 10px 2px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--danger);
+}
+
+.sidebar-footer-branch__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-status__dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
-  margin-left: auto;
 }
 
-.sidebar-version__status.sidebar-connection-status--online {
+.sidebar-status__dot.sidebar-connection-status--online {
   background: var(--ok);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
-.sidebar-version__status.sidebar-connection-status--offline {
+.sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-.sidebar--collapsed .sidebar-shell__footer {
-  padding: 8px 0 2px;
-}
-
-.sidebar--collapsed .sidebar-utility-group {
-  justify-items: center;
-  gap: 6px;
-}
-
-.sidebar--collapsed .sidebar-version {
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  justify-content: center;
-  border-radius: var(--radius-lg);
-}
-
-.sidebar--collapsed .sidebar-version__status {
-  margin-left: 0;
-}
-
-/* Mode switch in sidebar — hidden on desktop, shown on mobile */
 .sidebar-mode-switch {
-  display: none;
+  display: inline-flex;
+  margin-left: 2px;
 }
 
-.shell--nav-collapsed .shell-nav {
-  width: var(--shell-nav-rail-width);
-  min-width: var(--shell-nav-rail-width);
-  overflow: visible;
+.theme-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
 }
 
-.shell--nav-collapsed .sidebar {
-  overflow: visible;
+.theme-mode-toggle:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.theme-mode-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.theme-mode-toggle svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .nav-item__external-icon {
@@ -1293,14 +3626,30 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve space for the docked operator terminal and browser panels so they
+     reshape the content area (shrink it) instead of overlaying the chat. The
+     panels set these vars; they are 0 when closed. */
+  margin-bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
+      var(--oc-custodian-reserve-bottom, 0px)
+  );
+  margin-right: calc(
+    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
+      var(--oc-custodian-reserve-right, 0px)
+  );
+  transition:
+    margin-bottom 0.16s ease,
+    margin-right 0.16s ease;
+}
+
+/* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
+   with no visible in-page expand control; skip-link-style, so no ring. */
+.content:focus {
+  outline: none;
 }
 
 .content > * + * {
   margin-top: 20px;
-}
-
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
 }
 
 .content--chat {
@@ -1316,6 +3665,31 @@
   margin-top: 0;
 }
 
+.content--chat > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.content--custodian {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.content--custodian > * + * {
+  margin-top: 0;
+}
+
+.content--custodian > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .content--workboard {
   display: flex;
   flex-direction: column;
@@ -1325,6 +3699,22 @@
 
 .content--workboard > * + * {
   margin-top: 14px;
+}
+
+.content--workboard > openclaw-router-outlet,
+.content--workboard openclaw-workboard-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.content--workboard openclaw-workboard-page {
+  gap: 14px;
+}
+
+:root[data-theme-mode="light"] .content {
+  background: var(--bg-content);
 }
 
 /* Content header */
@@ -1342,6 +3732,34 @@
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: 80px;
+}
+
+/* The fixed web chrome sits over the top-left of ordinary page headers too.
+   Settings, mobile drawers, and native hosts own different chrome. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat)
+  .content-header {
+  padding-left: 88px;
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat)
+  .content-header {
+  padding-left: 124px;
+}
+
+.content-header--page + * {
+  margin-top: 20px;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 .content--chat .content-header.content-header--chat-hidden {
@@ -1363,12 +3781,12 @@
   color: var(--accent);
 }
 
-.page-sub {
+.page-subtitle {
+  max-width: 52ch;
+  margin-top: 2px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
 }
 
 .page-meta {
@@ -1405,7 +3823,6 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 0;
@@ -1525,26 +3942,6 @@
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -1569,7 +3966,7 @@
    =========================================== */
 
 @media (max-width: 1100px) {
-  .shell {
+  .shell--mobile-nav {
     --shell-pad: 12px;
     --shell-gap: 12px;
     grid-template-columns: 1fr;
@@ -1580,24 +3977,10 @@
       "content";
   }
 
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
-  }
-
-  .topbar {
+  .shell--mobile-nav .topbar {
     position: static;
-    padding: 12px 14px;
+    padding: 6px 12px;
     gap: 10px;
-  }
-
-  .topbar-status {
-    flex-wrap: wrap;
-  }
-
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
   }
 
   .list-item {
@@ -1617,4 +4000,138 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
+   when the gateway refuses or lacks the terminal surface. */
+.terminal-view-unavailable {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
+.sidebar-session-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.sidebar-session-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.sidebar-session-pr-indicator--open {
+  color: var(--ok);
+}
+
+.sidebar-session-pr-indicator--merged {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
+  color: #7c3aed;
+}
+
+.sidebar-session-pr-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-session__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-recent-session__subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+}
+
+.sidebar-session-attention__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.sidebar-session-attention__icon--question,
+.sidebar-session-attention__icon--approval {
+  color: var(--warn);
+}
+
+.sidebar-session-attention__icon--agent {
+  color: var(--warn);
+}
+
+.sidebar-session-attention__icon--error {
+  color: var(--danger);
+}
+
+.sidebar-session-attention__icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+}
+
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
+.sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sidebar-recent-session--draft {
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-subtle) 60%, transparent);
+}
+
+.sidebar-recent-session--draft .sidebar-recent-session__name {
+  color: var(--text-strong);
+  font-style: italic;
 }

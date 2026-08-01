@@ -1,6 +1,17 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
-import { statusSummaryRuntime } from "./status.summary.runtime.js";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { statusSummaryRuntime } from "../status/summary.runtime.js";
+
+function resolveSessionRuntimeLabel(
+  params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntimeLabel>[0],
+) {
+  return statusSummaryRuntime.resolveSessionRuntimeLabel({
+    ...params,
+    cfg: migratePersistedImplicitMainRoster(params.cfg).config as never,
+  });
+}
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
   it("does not match provider context window overrides across provider id variants", () => {
@@ -157,12 +168,12 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         model: "claude-sonnet-4-6",
         contextTokensOverride: 1_200_000,
       }),
-    ).toBe(1_048_576);
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it.each([
     { contextTokens: 200_000, expected: 200_000 },
-    { contextTokens: 2_000_000, expected: 1_048_576 },
+    { contextTokens: 2_000_000, expected: ANTHROPIC_CONTEXT_1M_TOKENS },
   ])(
     "bounds Anthropic contextTokens=$contextTokens by the fixed native window",
     ({ contextTokens, expected }) => {
@@ -175,7 +186,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
                   models: [
                     {
                       id: "claude-sonnet-4-6",
-                      contextWindow: 1_048_576,
+                      contextWindow: ANTHROPIC_CONTEXT_1M_TOKENS,
                       contextTokens,
                     },
                   ],
@@ -204,7 +215,7 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
 describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
   it("uses the shared /status runtime label for the implicit OpenAI Codex route", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {} as never,
         entry: {
           sessionId: "session-1",
@@ -219,7 +230,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
 
   it("preserves configured default model CLI runtimes", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
@@ -242,7 +253,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
 
   it("preserves configured agent model runtimes before harness selection", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
@@ -268,6 +279,32 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
         model: "gpt-5.5",
         agentId: "research",
         sessionKey: "agent:research:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
+
+  it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
+    expect(
+      resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as never,
+        entry: {
+          sessionId: "locked-codex-session",
+          updatedAt: 0,
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+          modelSelectionLocked: true,
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
       }),
     ).toBe("OpenAI Codex");
   });

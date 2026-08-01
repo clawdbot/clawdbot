@@ -5,9 +5,7 @@ import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
-  updateSessionStoreMock: vi.fn(),
   listSessionsFromStoreMock: vi.fn(),
-  migrateAndPruneGatewaySessionStoreKeyMock: vi.fn(),
   resolveGatewaySessionStoreTargetWithStoreMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
   listAgentIdsMock: vi.fn(),
@@ -23,21 +21,11 @@ vi.mock("../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
-  return {
-    ...actual,
-    updateSessionStore: hoisted.updateSessionStoreMock,
-  };
-});
-
 vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
-    migrateAndPruneGatewaySessionStoreKey: hoisted.migrateAndPruneGatewaySessionStoreKeyMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
     loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
@@ -68,9 +56,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
   };
 
   beforeEach(() => {
-    hoisted.updateSessionStoreMock.mockReset();
     hoisted.listSessionsFromStoreMock.mockReset();
-    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
@@ -83,12 +69,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: targetStore,
     }));
-    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReturnValue({ primaryKey: canonicalKey });
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (_path: string, updater: (store: Record<string, SessionEntry>) => void) => {
-        updater(targetStore);
-      },
-    );
   });
 
   it("hides canonical keys that fail the spawnedBy visibility filter", async () => {
@@ -132,18 +112,16 @@ describe("resolveSessionKeyFromResolveParams", () => {
     await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
   });
 
-  it("re-checks migrated legacy keys through the same visibility filter", async () => {
-    const store = {
-      [legacyKey]: { sessionId: "sess-legacy", spawnedBy: "controller-1", updatedAt: Date.now() },
-    } satisfies Record<string, SessionEntry>;
-    targetStore = store;
+  it("rejects legacy keys with doctor repair guidance", async () => {
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error("stop the Gateway and run openclaw doctor --fix"), {
+        code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+      });
+    });
 
-    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
-    expect(updateSessionStoreCall?.[0]).toBe(storePath);
-    expect(typeof updateSessionStoreCall?.[1]).toBe("function");
+    await expect(
+      resolveSessionKeyFromResolveParams({ cfg: {}, p: { key: canonicalKey } }),
+    ).rejects.toThrow("openclaw doctor --fix");
   });
 
   it("does not let allowMissing mask a deleted-agent error", async () => {

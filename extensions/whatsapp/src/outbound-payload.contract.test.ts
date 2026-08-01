@@ -70,17 +70,21 @@ describe("WhatsApp outbound payload contract", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaAccess: undefined,
-      mediaLocalRoots: undefined,
-      mediaReadFile: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-      quotedMessageKey: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaAccess: undefined,
+        mediaLocalRoots: undefined,
+        mediaReadFile: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {

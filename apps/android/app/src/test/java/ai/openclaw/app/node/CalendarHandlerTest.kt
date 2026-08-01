@@ -9,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
+import java.util.TimeZone
 
 class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
@@ -86,6 +88,58 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     assertFalse(result.ok)
     assertEquals("CALENDAR_NOT_FOUND", result.error?.code)
   }
+
+  @Test
+  fun handleCalendarAdd_normalizesAllDayEventForAndroidProvider() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2026-07-05T09:00:00Z","endISO":"2026-07-06T09:00:00Z","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertTrue(request.isAllDay)
+    assertEquals("UTC", request.timeZoneId)
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun handleCalendarAdd_expandsSameDayAllDayRangeToOneDay() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2026-07-05T09:00:00Z","endISO":"2026-07-05T17:00:00Z","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun handleCalendarAdd_preservesTimedInstantsAndDeviceTimezone() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Call","startISO":"2026-07-05T09:15:00Z","endISO":"2026-07-05T10:45:00Z"}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertFalse(request.isAllDay)
+    assertEquals(TimeZone.getDefault().id, request.timeZoneId)
+    assertEquals(Instant.parse("2026-07-05T09:15:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-05T10:45:00Z").toEpochMilli(), request.endMs)
+  }
 }
 
 private class FakeCalendarDataSource(
@@ -104,6 +158,9 @@ private class FakeCalendarDataSource(
     ),
   private val addError: Throwable? = null,
 ) : CalendarDataSource {
+  var addedRequest: CalendarAddRequest? = null
+    private set
+
   override fun hasReadPermission(context: Context): Boolean = canRead
 
   override fun hasWritePermission(context: Context): Boolean = canWrite
@@ -118,6 +175,7 @@ private class FakeCalendarDataSource(
     request: CalendarAddRequest,
   ): CalendarEventRecord {
     addError?.let { throw it }
+    addedRequest = request
     return addResult
   }
 }

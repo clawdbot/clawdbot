@@ -1,20 +1,39 @@
 // Imessage tests cover test plugin plugin behavior.
+import fs from "node:fs";
+import path from "node:path";
+import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createMessageReceiptFromOutboundResults,
+  sendDurableMessageBatch,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createTestRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearIMessageApprovalReactionTargetsForTest,
+  resolveIMessageApprovalReactionTargetWithPersistence,
+} from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
+import type { IMessageRpcClient } from "./client.js";
 import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { sendMessageIMessage } from "./send.js";
 
 beforeEach(() => {
   resetFacadeRuntimeStateForTest();
+  clearIMessageApprovalReactionTargetsForTest();
 });
 
 afterEach(() => {
@@ -112,6 +131,20 @@ describe("createIMessageTestPlugin", () => {
     });
   });
 
+  it("preserves sanitized HTML formatting as native ranges", () => {
+    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
+    const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
+
+    expect(sanitized).toBe("**bold** ~~strike~~");
+    expect(extractMarkdownFormatRuns(sanitized ?? "")).toEqual({
+      text: "bold strike",
+      ranges: [
+        { start: 0, length: 4, styles: ["bold"] },
+        { start: 5, length: 6, styles: ["strikethrough"] },
+      ],
+    });
+  });
+
   it("declares native iMessage voice memo TTS delivery", () => {
     expect(imessagePlugin.capabilities.tts?.voice).toStrictEqual({
       synthesisTarget: "audio-file",
@@ -160,6 +193,66 @@ describe("createIMessageTestPlugin", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("keeps shared forwarded approvals reaction-resolvable through outbound hooks", async () => {
+    const beforeDeliverPayload = imessagePlugin.outbound?.beforeDeliverPayload;
+    const afterDeliverPayload = imessagePlugin.outbound?.afterDeliverPayload;
+    if (!beforeDeliverPayload || !afterDeliverPayload) {
+      throw new Error("Expected iMessage approval delivery hooks");
+    }
+    const cfg = {
+      channels: { imessage: { enabled: true } },
+    } as OpenClawConfig;
+    const payload = buildTypedExecApprovalPendingReplyPayload({
+      approvalId: "exec-shared-hook",
+      approvalSlug: "shared-hook",
+      command: "echo shared",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const target = {
+      channel: "imessage",
+      to: "+15551230000",
+      accountId: "default",
+    };
+
+    await beforeDeliverPayload({
+      cfg,
+      target,
+      payload,
+      hint: { kind: "approval-pending", approvalKind: "exec" },
+    });
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+
+    await afterDeliverPayload({
+      cfg,
+      target,
+      payload,
+      results: [
+        {
+          channel: "imessage",
+          messageId: "42",
+          meta: {
+            imessageMessageGuid: "p:0/shared-hook-guid",
+            imessageVisibleText: payload.text,
+          },
+        },
+      ],
+    });
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/shared-hook-guid",
+        reactionKey: "👍",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-shared-hook",
+      approvalKind: "exec",
+      decision: "allow-once",
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
@@ -280,6 +373,174 @@ describe("createIMessageTestPlugin", () => {
         },
       },
     });
+  });
+
+  it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
+    const sendText = requireMessageSendText(requireMessageAdapter());
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "imessage", messageId: "42" }],
+      kind: "text",
+    });
+    const sendIMessage = async () => ({
+      messageId: "42",
+      guid: "p:0/stable-guid",
+      sentText: "hello",
+      receipt,
+    });
+
+    const result = await sendText({
+      cfg: {} as never,
+      to: "+15551234567",
+      text: "hello",
+      deps: { imessage: sendIMessage },
+    } as Parameters<typeof sendText>[0] & {
+      deps: { imessage: typeof sendIMessage };
+    });
+
+    expect(result.messageId).toBe("42");
+    expect(result.receipt.primaryPlatformMessageId).toBe("42");
+    expect((result as typeof result & { meta?: Record<string, unknown> }).meta).toEqual({
+      imessageMessageGuid: "p:0/stable-guid",
+      imessageVisibleText: "hello",
+    });
+  });
+
+  it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
+    const cfg = {
+      channels: { imessage: { accounts: { default: {} } } },
+    } as OpenClawConfig;
+    const captionError = new Error("caption failed after native attachment acceptance");
+    const captionClient = {
+      request: vi.fn(async () => {
+        throw captionError;
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+    const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable native attachment\n");
+    const runCliJson = vi.fn(async (args: readonly string[]) => {
+      const attachmentPath = args[args.indexOf("--file") + 1];
+      expect(attachmentPath).toBeDefined();
+      expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
+      return { messageId: "p:0/durable-accepted-attachment" };
+    });
+    const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
+      await sendMessageIMessage(to, text, {
+        ...options,
+        client: captionClient,
+        runCliJson,
+      });
+    const onDeliveryResult = vi.fn();
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
+    );
+    try {
+      await withStateDirEnv("openclaw-imessage-durable-attachment-", async ({ stateDir }) => {
+        const sourcePath = path.join(stateDir, "quarterly-report.pdf");
+        fs.writeFileSync(sourcePath, attachmentBytes);
+
+        const result = await sendDurableMessageBatch({
+          cfg,
+          channel: "imessage",
+          to: "imessage:+15550004567",
+          durability: "required",
+          mediaAccess: { localRoots: [stateDir] },
+          deps: { imessage: nativeSend },
+          onDeliveryResult,
+          payloads: [{ text: "undelivered caption", mediaUrl: sourcePath }],
+        });
+
+        if (result.status === "failed") {
+          throw result.error;
+        }
+        expect(result).toMatchObject({
+          status: "partial_failed",
+          sentBeforeError: true,
+          receipt: { platformMessageIds: ["p:0/durable-accepted-attachment"] },
+          results: [
+            {
+              channel: "imessage",
+              messageId: "p:0/durable-accepted-attachment",
+            },
+          ],
+          payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+        });
+        expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            channel: "imessage",
+            messageId: "p:0/durable-accepted-attachment",
+          }),
+        );
+
+        await drainPendingDeliveries({
+          drainKey: "imessage:default",
+          logLabel: "iMessage accepted attachment recovery",
+          cfg,
+          stateDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
+        });
+        expect(runCliJson).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      releasePinnedPluginChannelRegistry();
+    }
+  });
+
+  it("halts native caption delivery when actual durable progress custody rejects", async () => {
+    const cfg = {
+      channels: { imessage: { accounts: { default: {} } } },
+    } as OpenClawConfig;
+    const custodyError = new Error("durable accepted-attachment custody rejected");
+    const captionRequest = vi.fn(async () => ({ guid: "p:0/caption-must-not-send" }));
+    const captionClient = {
+      request: captionRequest,
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+    const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
+    const runCliJson = vi.fn(async () => ({ messageId: "p:0/durable-custody-attachment" }));
+    const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
+      await sendMessageIMessage(to, text, { ...options, client: captionClient, runCliJson });
+    const onDeliveryResult = vi.fn(async () => {
+      throw custodyError;
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
+    );
+    try {
+      await withStateDirEnv("openclaw-imessage-durable-custody-", async ({ stateDir }) => {
+        const sourcePath = path.join(stateDir, "custody-report.pdf");
+        fs.writeFileSync(sourcePath, attachmentBytes);
+
+        const result = await sendDurableMessageBatch({
+          cfg,
+          channel: "imessage",
+          to: "imessage:+15550004567",
+          durability: "required",
+          mediaAccess: { localRoots: [stateDir] },
+          deps: { imessage: nativeSend },
+          onDeliveryResult,
+          payloads: [{ text: "caption must not send", mediaUrl: sourcePath }],
+        });
+
+        expect(result).toMatchObject({
+          status: "partial_failed",
+          sentBeforeError: true,
+          results: [
+            {
+              channel: "imessage",
+              messageId: "p:0/durable-custody-attachment",
+            },
+          ],
+        });
+        expect(onDeliveryResult).toHaveBeenCalledOnce();
+        expect(runCliJson).toHaveBeenCalledOnce();
+        expect(captionRequest).not.toHaveBeenCalled();
+      });
+    } finally {
+      releasePinnedPluginChannelRegistry();
+    }
   });
 
   it("exposes seeded private API actions for binding contract tests", () => {

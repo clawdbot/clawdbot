@@ -14,6 +14,10 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.js";
 import { stableStringify } from "./stable-stringify.js";
 
+/** Marks media as ready while requester delivery is still being confirmed. */
+export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =
+  "Generated media; delivering completion";
+
 type RecentMediaGenerationTaskStart = {
   task: TaskRecord;
   requestKey?: string;
@@ -204,7 +208,7 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
 }
 
 /** Finds a recent started media task from memory or persisted task state. */
-export function findRecentStartedMediaGenerationTaskForSession(params: {
+function findRecentStartedMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
   sourcePrefix: string;
@@ -276,8 +280,14 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
 }
 
 /** Clears in-memory duplicate guards between tests. */
-export function resetRecentMediaGenerationDuplicateGuardsForTests() {
+function resetRecentMediaGenerationDuplicateGuardsForTests() {
   recentMediaGenerationTaskStarts.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaGenerationDuplicateGuardTestApi")
+  ] = { resetRecentMediaGenerationDuplicateGuardsForTests };
 }
 
 /** Extracts a provider id from a media task source id with the given prefix. */
@@ -299,6 +309,7 @@ export function findActiveMediaGenerationTaskForSession(params: {
   taskKind: string;
   sourcePrefix: string;
   taskLabel?: string;
+  excludeDeliveringCompletion?: boolean;
 }): TaskRecord | undefined {
   return listActiveMediaGenerationTasksForSession(params)[0];
 }
@@ -309,6 +320,7 @@ export function listActiveMediaGenerationTasksForSession(params: {
   taskKind: string;
   sourcePrefix: string;
   taskLabel?: string;
+  excludeDeliveringCompletion?: boolean;
 }): TaskRecord[] {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
@@ -329,6 +341,12 @@ export function listActiveMediaGenerationTasksForSession(params: {
       return false;
     }
     if (taskLabel && !mediaGenerationTaskLabelMatches(task, taskLabel)) {
+      return false;
+    }
+    if (
+      params.excludeDeliveringCompletion &&
+      task.progressSummary === MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS
+    ) {
       return false;
     }
     return true;
@@ -456,6 +474,7 @@ export function buildActiveMediaGenerationTaskPromptContextForSession(params: {
     sessionKey: params.sessionKey,
     taskKind: params.taskKind,
     sourcePrefix: params.sourcePrefix,
+    excludeDeliveringCompletion: true,
   });
   if (!task) {
     return undefined;

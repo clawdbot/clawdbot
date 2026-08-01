@@ -1,15 +1,15 @@
+import {
+  normalizeToolParameterSchema,
+  type ToolParameterSchemaOptions,
+} from "@openclaw/ai/internal/openai";
 /**
  * Tool schema normalization wrappers.
  * Applies provider-compatible parameter schema cleanup while preserving plugin
  * and channel metadata on normalized tools.
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import {
-  normalizeToolParameterSchema,
-  type ToolParameterSchemaOptions,
-} from "./agent-tools-parameter-schema.js";
-import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 

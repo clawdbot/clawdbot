@@ -25,6 +25,8 @@ function parseArgs(argv) {
       options.limit = readLimit(argv[(index += 1)]);
     } else if (arg?.startsWith("--limit=")) {
       options.limit = readLimit(arg.slice("--limit=".length));
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`unknown argument: ${arg}\n${usage()}`);
     } else if (!options.file) {
       options.file = arg;
     } else {

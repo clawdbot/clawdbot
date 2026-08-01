@@ -3,6 +3,7 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -11,12 +12,14 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
+import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
+  assertTaskFlowRegistryMaintenanceReady,
   getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
@@ -87,10 +90,10 @@ type GatewayTaskCancelResult = {
   task?: GatewayTaskCancelSummary;
 };
 
-async function tryCancelCronTaskViaGateway(
+async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron") {
+  if (task.runtime !== "cron" && task.runtime !== "acp") {
     return null;
   }
   try {
@@ -100,16 +103,22 @@ async function tryCancelCronTaskViaGateway(
       params: { taskId: task.taskId },
       timeoutMs: 5_000,
     });
-  } catch {
+  } catch (error) {
+    if (task.runtime === "acp") {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        found: true,
+        cancelled: false,
+        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+        task,
+      };
+    }
     return null;
   }
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  const cfg = getRuntimeConfig();
-  configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  configureTaskRegistryMaintenance();
 }
 
 type SessionRegistryMaintenanceStoreSummary = {
@@ -128,17 +137,36 @@ type SessionRegistryMaintenanceSummary = {
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
-function readRunningCronJobIds(): Set<string> {
+function resolveExplicitCronSessionSegment(sessionKey: string | undefined): string | undefined {
+  const match = /^(?:agent:[^:]+:)?cron:([^:]+)$/u.exec(sessionKey?.trim() ?? "");
+  return match?.[1]?.toLowerCase();
+}
+
+function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
-    const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
-    return new Set(
-      loadCronJobsStoreSync(cronStorePath)
-        .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
-        // Cron session keys are matched case-insensitively against job ids.
-        .map((job) => job.id.toLowerCase()),
+    const cronStorePath = resolveCronJobsStorePath();
+    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
+      (job) => typeof job.state?.runningAtMs === "number",
     );
+    return {
+      // A running job may have been retargeted after its session was created. Keep both historical
+      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
+      // than pruning a live transcript.
+      ids: new Set(
+        runningJobs.flatMap((job) => [
+          job.id.toLowerCase(),
+          normalizeCronLaneSegment(job.id, "job"),
+          ...(job.sessionTarget !== "main" && job.sessionKey
+            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
+                (segment): segment is string => segment !== undefined,
+              )
+            : []),
+        ]),
+      ),
+      count: runningJobs.length,
+    };
   } catch {
-    return new Set();
+    return { ids: new Set(), count: 0 };
   }
 }
 
@@ -146,13 +174,13 @@ async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
-  const runningCronJobIds = readRunningCronJobIds();
+  const runningCronJobs = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
       apply: params.apply,
       retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds,
+      runningCronJobIds: runningCronJobs.ids,
       storePath: target.storePath,
     });
     stores.push({
@@ -166,7 +194,7 @@ async function runSessionRegistryMaintenance(params: {
   }
   return {
     retentionMs: SESSION_REGISTRY_RETENTION_MS,
-    runningCronJobs: runningCronJobIds.size,
+    runningCronJobs: runningCronJobs.count,
     pruned: stores.reduce((total, store) => total + store.pruned, 0),
     stores,
   };
@@ -176,10 +204,7 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
-    return value.slice(0, maxChars);
-  }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -322,8 +347,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = opts.runtime?.trim();
-  const statusFilter = opts.status?.trim();
+  const runtimeFilter = normalizeOptionalString(opts.runtime);
+  const statusFilter = normalizeOptionalString(opts.status);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -335,18 +360,12 @@ export async function tasksListCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: tasks.length,
-          runtime: runtimeFilter ?? null,
-          status: statusFilter ?? null,
-          tasks,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: tasks.length,
+      runtime: runtimeFilter ?? null,
+      status: statusFilter ?? null,
+      tasks,
+    });
     return;
   }
 
@@ -383,7 +402,7 @@ export async function tasksShowCommand(
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(task, null, 2));
+    writeRuntimeJson(runtime, task);
     return;
   }
 
@@ -448,7 +467,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const gatewayResult = await tryCancelCronTaskViaGateway(task);
+  const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
   if (gatewayResult) {
     if (!gatewayResult.found) {
       runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));
@@ -497,8 +516,10 @@ export async function tasksAuditCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
-  const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
-  const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeOptionalString(opts.severity) as
+    | TaskSystemAuditSeverity
+    | undefined;
+  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -508,16 +529,13 @@ export async function tasksAuditCommand(
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        buildTaskSystemAuditJsonPayload(auditResult, {
-          severityFilter,
-          codeFilter,
-          limit: opts.limit,
-        }),
-        null,
-        2,
-      ),
+    writeRuntimeJson(
+      runtime,
+      buildTaskSystemAuditJsonPayload(auditResult, {
+        severityFilter,
+        codeFilter,
+        limit: opts.limit,
+      }),
     );
     return;
   }
@@ -558,6 +576,7 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply
@@ -578,30 +597,24 @@ export async function tasksMaintenanceCommand(
   );
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          mode: opts.apply ? "apply" : "preview",
-          maintenance: {
-            tasks: taskMaintenance,
-            taskFlows: flowMaintenance,
-            sessions: sessionMaintenance,
-          },
-          tasks: summary,
-          diagnostics,
-          auditBefore: {
-            ...auditBefore,
-            taskFlows: flowAuditBefore,
-          },
-          auditAfter: {
-            ...auditAfter,
-            taskFlows: flowAuditAfter,
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      mode: opts.apply ? "apply" : "preview",
+      maintenance: {
+        tasks: taskMaintenance,
+        taskFlows: flowMaintenance,
+        sessions: sessionMaintenance,
+      },
+      tasks: summary,
+      diagnostics,
+      auditBefore: {
+        ...auditBefore,
+        taskFlows: flowAuditBefore,
+      },
+      auditAfter: {
+        ...auditAfter,
+        taskFlows: flowAuditAfter,
+      },
+    });
     return;
   }
 
@@ -612,7 +625,7 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running cron jobs`,
+      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
   runtime.log(

@@ -1,4 +1,5 @@
 // Line plugin module implements media control cards behavior.
+import { postbackAction, truncateLineActionLabel } from "../actions.js";
 import type {
   FlexBox,
   FlexBubble,
@@ -157,11 +158,7 @@ export function createMediaPlayerCard(params: {
       if (controls.previous) {
         controlButtons.push({
           type: "button",
-          action: {
-            type: "postback",
-            label: "⏮",
-            data: controls.previous.data,
-          },
+          action: postbackAction("⏮", controls.previous.data),
           style: "secondary",
           flex: 1,
           height: "sm",
@@ -171,11 +168,7 @@ export function createMediaPlayerCard(params: {
       if (controls.play) {
         controlButtons.push({
           type: "button",
-          action: {
-            type: "postback",
-            label: "▶",
-            data: controls.play.data,
-          },
+          action: postbackAction("▶", controls.play.data),
           style: isPlaying ? "secondary" : "primary",
           flex: 1,
           height: "sm",
@@ -186,11 +179,7 @@ export function createMediaPlayerCard(params: {
       if (controls.pause) {
         controlButtons.push({
           type: "button",
-          action: {
-            type: "postback",
-            label: "⏸",
-            data: controls.pause.data,
-          },
+          action: postbackAction("⏸", controls.pause.data),
           style: isPlaying ? "primary" : "secondary",
           flex: 1,
           height: "sm",
@@ -201,11 +190,7 @@ export function createMediaPlayerCard(params: {
       if (controls.next) {
         controlButtons.push({
           type: "button",
-          action: {
-            type: "postback",
-            label: "⏭",
-            data: controls.next.data,
-          },
+          action: postbackAction("⏭", controls.next.data),
           style: "secondary",
           flex: 1,
           height: "sm",
@@ -231,11 +216,7 @@ export function createMediaPlayerCard(params: {
           (action, index) =>
             ({
               type: "button",
-              action: {
-                type: "postback",
-                label: action.label.slice(0, 15),
-                data: action.data,
-              },
+              action: postbackAction(truncateLineActionLabel(action.label, 15), action.data),
               style: "secondary",
               flex: 1,
               height: "sm",
@@ -311,11 +292,7 @@ export function createAppleTvRemoteCard(params: {
     style: "primary" | "secondary" = "secondary",
   ): FlexButton => ({
     type: "button",
-    action: {
-      type: "postback",
-      label,
-      data,
-    },
+    action: postbackAction(label, data),
     style,
     height: "sm",
     flex: 1,
@@ -510,21 +487,16 @@ export function createDeviceControlCard(params: {
     for (let i = 0; i < limitedControls.length; i += 2) {
       const rowButtons: FlexComponent[] = [];
 
-      for (let j = i; j < Math.min(i + 2, limitedControls.length); j++) {
-        const ctrl = limitedControls[j];
+      for (const [offset, ctrl] of limitedControls.slice(i, i + 2).entries()) {
         const buttonLabel = ctrl.icon ? `${ctrl.icon} ${ctrl.label}` : ctrl.label;
 
         rowButtons.push({
           type: "button",
-          action: {
-            type: "postback",
-            label: buttonLabel.slice(0, 18),
-            data: ctrl.data,
-          },
+          action: postbackAction(truncateLineActionLabel(buttonLabel, 18), ctrl.data),
           style: ctrl.style ?? "secondary",
           flex: 1,
           height: "sm",
-          margin: j > i ? "md" : undefined,
+          margin: offset > 0 ? "md" : undefined,
         } as FlexButton);
       }
 

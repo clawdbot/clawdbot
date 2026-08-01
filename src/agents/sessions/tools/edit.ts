@@ -10,22 +10,26 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
+import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
-  applyEditsToNormalizedContent,
+  applyEditsPreservingLineEndings,
   computeEditsDiff,
-  detectLineEnding,
+  EditNoChangeError,
   type Edit,
   type EditDiffError,
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
-  normalizeToLF,
-  restoreLineEndings,
+  splitNoOpEdits,
   stripBom,
+  validateNoOpEditTargets,
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -42,26 +46,40 @@ type EditRenderState = {
 const replaceEditSchema = Type.Object(
   {
     oldText: Type.String({
-      description:
-        "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+      description: "Exact original text; unique and non-overlapping in this call.",
     }),
-    newText: Type.String({ description: "Replacement text for this targeted edit." }),
+    newText: Type.String({
+      description: "Replacement text.",
+    }),
   },
-  { additionalProperties: false },
+  {},
 );
 
 const editSchema = Type.Object(
   {
-    path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+    path: Type.String({
+      description: "File path; relative/absolute.",
+    }),
     edits: Type.Array(replaceEditSchema, {
       description:
-        "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
     }),
   },
-  { additionalProperties: false },
+  {},
 );
-export type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 
+const EditToolOutputSchema = Type.Union([
+  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
+  Type.Object(
+    {
+      changed: Type.Literal(true),
+      diff: Type.String(),
+      patch: Type.String(),
+      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;
   oldText?: unknown;
@@ -100,7 +118,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
     return input as EditToolInput;
   }
 
-  const args = input as Record<string, unknown>;
+  const args = { ...(input as Record<string, unknown>) };
 
   // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
   if (typeof args.edits === "string") {
@@ -113,17 +131,30 @@ function prepareEditArguments(input: unknown): EditToolInput {
   }
 
   const legacy = args as LegacyEditToolInput;
-  if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
-    return args as unknown as EditToolInput;
+  if (typeof legacy.oldText === "string" && typeof legacy.newText === "string") {
+    const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
+    edits.push({ oldText: legacy.oldText, newText: legacy.newText });
+    args.edits = edits;
   }
 
-  const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-  edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-  const { oldText: _oldText, newText: _newText, ...rest } = legacy;
-  return { ...rest, edits } as EditToolInput;
+  const edits = Array.isArray(args.edits)
+    ? args.edits.map((edit) => {
+        if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
+          return edit;
+        }
+        const candidate = edit as Record<string, unknown>;
+        return { oldText: candidate.oldText, newText: candidate.newText };
+      })
+    : args.edits;
+
+  // Keep the strict provider schema while tolerating model-added metadata.
+  return { path: args.path, edits } as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+function validateEditInput(input: EditToolInput): {
+  path: string;
+  edits: Edit[];
+} {
   if (!Array.isArray(input.edits) || input.edits.length === 0) {
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
@@ -166,7 +197,7 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+      : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });
@@ -183,7 +214,12 @@ type RenderableEditArgs = {
 };
 
 type EditToolResultLike = {
-  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  content: Array<{
+    type: string;
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
   details?: EditToolDetails;
 };
 
@@ -267,13 +303,11 @@ function formatEditCall(
 }
 
 function formatEditResult(
-  args: RenderableEditArgs | undefined,
   preview: EditPreview | undefined,
   result: EditToolResultLike,
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
   isError: boolean,
 ): string | undefined {
-  const rawPath = str(args?.file_path ?? args?.path);
   const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
   const previewError = preview && "error" in preview ? preview.error : undefined;
   if (isError) {
@@ -287,9 +321,9 @@ function formatEditResult(
     return theme.fg("error", errorText);
   }
 
-  const resultDiff = result.details?.diff;
+  const resultDiff = result.details?.changed === true ? result.details.diff : undefined;
   if (resultDiff && resultDiff !== previewDiff) {
-    return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
+    return renderDiff(resultDiff);
   }
 
   return undefined;
@@ -357,35 +391,37 @@ function setEditPreview(
 export function createEditToolDefinition(
   cwd: string,
   options?: EditToolOptions,
-): ToolDefinition<typeof editSchema, EditToolDetails | undefined, EditRenderState> {
+): ToolDefinition<typeof editSchema, EditToolDetails, EditRenderState> {
   const ops = options?.operations ?? defaultEditOperations;
   return {
     name: "edit",
     label: "edit",
     description:
-      "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-    promptSnippet:
-      "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+      "Exact single-file replacements. oldText unique/non-overlapping against original. Merge nearby changes; omit large unchanged spans.",
+    promptSnippet: "Exact file edits; multiple disjoint edits per call",
     promptGuidelines: [
-      "Use edit for precise changes (edits[].oldText must match exactly)",
-      "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
-      "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-      "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+      "oldText must match exactly",
+      "Multiple disjoint locations: one call, multiple edits[]",
+      "Match original file; no overlap/nesting; merge nearby",
+      "oldText minimal but unique; no padding",
     ],
     parameters: editSchema,
+    outputSchema: EditToolOutputSchema,
     renderShell: "self",
     prepareArguments: prepareEditArguments,
     async execute(toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
       void toolCallId;
       void onUpdate;
       void ctx;
-      const { path, edits } = validateEditInput(input);
+      const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
+
+        let realEdits: Edit[] = [];
 
         try {
           await ops.access(absolutePath);
@@ -400,22 +436,33 @@ export function createEditToolDefinition(
         }
 
         const buffer = await ops.readFile(absolutePath);
-        const rawContent = buffer.toString("utf-8");
+        const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
 
           const { bom, text: content } = stripBom(rawContent);
-          const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
-          const { baseContent, newContent } = applyEditsToNormalizedContent(
-            normalizedContent,
-            edits,
+          const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
+          const noOpEdits = editSets.noOpEdits;
+          realEdits = editSets.realEdits;
+          validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+          if (realEdits.length === 0) {
+            return {
+              ...textResult(
+                `No changes made to ${path}. The replacement text is identical to the original.`,
+                { changed: false } satisfies EditToolDetails,
+              ),
+              terminate: true,
+            };
+          }
+          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
+            content,
+            realEdits,
             path,
           );
-          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-          await ops.writeFile(absolutePath, finalContent);
+          await ops.writeFile(absolutePath, bom + finalContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
@@ -426,13 +473,16 @@ export function createEditToolDefinition(
             content: [
               {
                 type: "text",
-                text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
               },
             ],
             details: {
+              changed: true,
               diff: diffResult.diff,
               patch,
-              firstChangedLine: diffResult.firstChangedLine,
+              ...(diffResult.firstChangedLine === undefined
+                ? {}
+                : { firstChangedLine: diffResult.firstChangedLine }),
             },
           };
         } catch (error: unknown) {
@@ -441,19 +491,35 @@ export function createEditToolDefinition(
             .readFile(absolutePath)
             .then((current) => current.toString("utf-8"))
             .catch(() => rawContent);
-          if (didEditLikelyApply({ originalContent: rawContent, currentContent, edits })) {
+          if (
+            didEditLikelyApply({
+              originalContent: rawContent,
+              currentContent,
+              edits: realEdits,
+            })
+          ) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                  text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
                 },
               ],
-              details: { diff: "", patch: "" },
+              details: { changed: true, diff: "", patch: "" },
             };
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
+          }
+          // Terminal no-op: the edit matched but produced identical content.
+          if (normalizedError instanceof EditNoChangeError) {
+            return {
+              ...textResult(
+                `No changes made to ${path}. The replacement produced identical content.`,
+                { changed: false } satisfies EditToolDetails,
+              ),
+              terminate: true,
+            };
           }
           throw normalizedError;
         }
@@ -498,14 +564,23 @@ export function createEditToolDefinition(
         ? JSON.stringify({ path: previewInput.path, edits: previewInput.edits })
         : undefined;
       const typedResult = result as EditToolResultLike;
-      const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
+      const resultDiff =
+        !context.isError && typedResult.details?.changed === true
+          ? typedResult.details.diff
+          : undefined;
       let changed = false;
       if (callComponent) {
         if (typeof resultDiff === "string") {
           changed =
             setEditPreview(
               callComponent,
-              { diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+              {
+                diff: resultDiff,
+                firstChangedLine:
+                  typedResult.details?.changed === true
+                    ? typedResult.details.firstChangedLine
+                    : undefined,
+              },
               argsKey,
             ) || changed;
         }
@@ -522,13 +597,7 @@ export function createEditToolDefinition(
         }
       }
 
-      const output = formatEditResult(
-        context.args,
-        callComponent?.preview,
-        typedResult,
-        theme,
-        context.isError,
-      );
+      const output = formatEditResult(callComponent?.preview, typedResult, theme, context.isError);
       const component = (context.lastComponent as Container | undefined) ?? new Container();
       component.clear();
       if (!output) {

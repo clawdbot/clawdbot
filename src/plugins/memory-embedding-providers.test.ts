@@ -2,13 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
-  getMemoryEmbeddingProvider,
   getRegisteredMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
   restoreRegisteredMemoryEmbeddingProviders,
-  restoreMemoryEmbeddingProviders,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
@@ -63,7 +61,7 @@ function expectCurrentMemoryEmbeddingProvider(
   id: string,
   adapter: MemoryEmbeddingProviderAdapter | undefined,
 ) {
-  expect(getMemoryEmbeddingProvider(id)).toBe(adapter);
+  expect(getRegisteredMemoryEmbeddingProvider(id)?.adapter).toBe(adapter);
 }
 
 function expectMemoryEmbeddingProviderState(params: {
@@ -113,17 +111,6 @@ describe("memory embedding provider registry", () => {
       expectedIds: ["alpha", "beta"],
       expectedCurrent: { id: "alpha", adapter: alpha },
     });
-  });
-
-  it("restores a previous snapshot", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-    registerMemoryEmbeddingProvider(alpha);
-
-    restoreMemoryEmbeddingProviders([beta]);
-
-    expectCurrentMemoryEmbeddingProvider("alpha", undefined);
-    expectCurrentMemoryEmbeddingProvider("beta", beta);
   });
 
   it.each([

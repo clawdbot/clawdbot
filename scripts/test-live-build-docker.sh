@@ -54,6 +54,10 @@ if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
   if docker_e2e_docker_cmd image inspect "$LIVE_IMAGE_NAME" >/dev/null 2>&1; then
     exit 0
   fi
+  if [[ "${OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE:-0}" == "1" ]]; then
+    echo "Required local live-test image not found: $LIVE_IMAGE_NAME" >&2
+    exit 1
+  fi
   echo "==> Live-test image not found locally; pulling: $LIVE_IMAGE_NAME"
   if pull_live_image; then
     exit 0

@@ -199,4 +199,20 @@ describe("task-registry audit", () => {
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
+
+  it("does not flag count-retained cron history as missing cleanup", () => {
+    const findings = listTaskAuditFindings({
+      tasks: [
+        createTask({
+          taskId: "cron-history",
+          runtime: "cron",
+          status: "succeeded",
+          endedAt: Date.now() - 60_000,
+          cleanupAfter: undefined,
+        }),
+      ],
+    });
+
+    expect(findings).toEqual([]);
+  });
 });

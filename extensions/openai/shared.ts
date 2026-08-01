@@ -6,7 +6,7 @@ import {
   matchesExactOrPrefix,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
@@ -35,9 +35,7 @@ type SyntheticOpenAIModelCatalogEntry = {
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
-export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
@@ -82,7 +80,8 @@ const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
   OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
 > = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
 
-const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+const openAIResponsesStreamHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
+const wrapOpenAIResponsesStreamFn = openAIResponsesStreamHooks.wrapStreamFn;
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
   OpenAIResponsesProviderHooks["wrapStreamFn"]
 > = (ctx) =>
@@ -98,7 +97,7 @@ export function buildOpenAIResponsesProviderHooks(options?: {
   return {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
-    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    ...openAIResponsesStreamHooks,
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
     resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,

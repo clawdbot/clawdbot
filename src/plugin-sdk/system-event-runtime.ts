@@ -5,3 +5,4 @@ export {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+export { resolveMainSessionKeyFromConfig } from "../config/sessions/main-session.runtime.js";

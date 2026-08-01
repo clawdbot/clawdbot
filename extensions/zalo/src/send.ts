@@ -5,7 +5,9 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripChannelTargetPrefix, stripTargetKindPrefix } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
@@ -118,11 +120,15 @@ function resolveValidatedSendContext(
   if (!token) {
     return { ok: false, error: "No Zalo bot token configured" };
   }
-  const trimmedChatId = chatId?.trim();
+  const trimmedChatId = normalizeZaloSendChatId(chatId);
   if (!trimmedChatId) {
     return { ok: false, error: "No chat_id provided" };
   }
   return { ok: true, chatId: trimmedChatId, token, fetcher };
+}
+
+function normalizeZaloSendChatId(chatId: string): string {
+  return stripTargetKindPrefix(stripChannelTargetPrefix(chatId, "zalo", "zl"));
 }
 
 function resolveSendContextOrFailure(
@@ -154,7 +160,7 @@ export async function sendMessageZalo(
   }
   const { context } = resolved;
 
-  if (options.mediaUrl) {
+  if (options.mediaUrl && (options.mediaUrl.trim() || !text)) {
     return sendPhotoZalo(context.chatId, options.mediaUrl, {
       ...options,
       token: context.token,
@@ -167,14 +173,14 @@ export async function sendMessageZalo(
       context.token,
       {
         chat_id: context.chatId,
-        text: text.slice(0, 2000),
+        text: truncateUtf16Safe(text, 2000),
       },
       context.fetcher,
     ),
   );
 }
 
-export async function sendPhotoZalo(
+async function sendPhotoZalo(
   chatId: string,
   photoUrl: string,
   options: ZaloSendOptions = {},
@@ -200,7 +206,8 @@ export async function sendPhotoZalo(
         {
           chat_id: context.chatId,
           photo: photoUrl.trim(),
-          caption: options.caption?.slice(0, 2000),
+          caption:
+            options.caption !== undefined ? truncateUtf16Safe(options.caption, 2000) : undefined,
         },
         context.fetcher,
       ))(),

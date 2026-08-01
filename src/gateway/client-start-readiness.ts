@@ -9,10 +9,6 @@ import { waitForEventLoopReady, type EventLoopReadyResult } from "./event-loop-r
 
 // Server-side gateway clients wait for the event loop readiness probe before
 // starting so connect attempts do not race immediately after process startup.
-export type {
-  GatewayClientStartable,
-  GatewayClientStartReadinessOptions,
-} from "../../packages/gateway-client/src/readiness.js";
 
 /** Starts a gateway client once the shared event-loop readiness check passes. */
 export function startGatewayClientWhenEventLoopReady(

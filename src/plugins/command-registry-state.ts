@@ -78,7 +78,15 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
 }): string[] {
   const lines: string[] = [];
   const seen = new Set<string>();
-  for (const command of pluginCommands.values()) {
+  // Plugin discovery can complete in a different order on the next run; only
+  // canonical command ownership may decide bytes in the cached prompt prefix.
+  const commands = Array.from(pluginCommands.values()).toSorted((left, right) => {
+    if (left.pluginId !== right.pluginId) {
+      return left.pluginId < right.pluginId ? -1 : 1;
+    }
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+  });
+  for (const command of commands) {
     for (const entry of command.agentPromptGuidance ?? []) {
       const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
         surface: params?.surface ? normalizeAgentPromptSurfaceKind(params.surface) : undefined,

@@ -5,6 +5,12 @@ import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 export type JsonObject = Record<string, unknown>;
 
+type RunTaskkill = (
+  command: string,
+  args: string[],
+  options: { stdio: "ignore" },
+) => { error?: Error; status: number | null };
+
 type FetchJsonParams = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
   init: RequestInit;
@@ -256,7 +262,7 @@ export function signalChildProcessTree(
     useProcessGroup = platform !== "win32",
   }: {
     platform?: NodeJS.Platform;
-    runTaskkill?: typeof spawnSync;
+    runTaskkill?: RunTaskkill;
     useProcessGroup?: boolean;
   } = {},
 ) {

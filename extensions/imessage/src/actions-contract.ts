@@ -11,6 +11,8 @@ export const IMESSAGE_ACTIONS = {
   removeParticipant: { gate: "removeParticipant", groupOnly: true },
   leaveGroup: { gate: "leaveGroup", groupOnly: true },
   sendAttachment: { gate: "sendAttachment" },
+  poll: { gate: "polls" },
+  "poll-vote": { gate: "polls" },
 } as const;
 
 type IMessageActionSpecs = typeof IMESSAGE_ACTIONS;

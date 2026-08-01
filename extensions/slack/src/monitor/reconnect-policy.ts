@@ -1,4 +1,5 @@
 // Slack plugin module implements reconnect policy behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 
 const SLACK_AUTH_ERROR_RE =
@@ -19,7 +20,11 @@ type EmitterLike = {
   off: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
-export function getSocketEmitter(app: unknown): EmitterLike | null {
+const SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL =
+  "https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections";
+const SLACK_SOCKET_HELLO_MARKER = Buffer.from('"hello"');
+
+function getSocketEmitter(app: unknown): EmitterLike | null {
   const receiver = (app as { receiver?: unknown }).receiver;
   const client =
     receiver && typeof receiver === "object"
@@ -42,6 +47,69 @@ export function getSocketEmitter(app: unknown): EmitterLike | null {
       (
         off as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
       ).call(client, event, listener),
+  };
+}
+
+function isBufferArray(value: unknown): value is Buffer[] {
+  return Array.isArray(value) && value.every((entry) => Buffer.isBuffer(entry));
+}
+
+function resolveSlackSocketModeConnectionCount(message: unknown): number | undefined {
+  const buffer =
+    typeof message === "string"
+      ? Buffer.from(message)
+      : Buffer.isBuffer(message)
+        ? message
+        : message instanceof ArrayBuffer
+          ? Buffer.from(message)
+          : isBufferArray(message)
+            ? Buffer.concat(message)
+            : undefined;
+  if (!buffer?.includes(SLACK_SOCKET_HELLO_MARKER)) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  const count = isRecord(payload) && payload.type === "hello" ? payload.num_connections : undefined;
+  return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
+}
+
+export function formatSlackSocketModeSharedConnectionWarning(activeConnections: number): string {
+  return [
+    `slack socket mode reports ${activeConnections} active connections for this Slack app`,
+    "Slack may deliver each event to any one connection",
+    "ensure every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
+    `See ${SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL}`,
+  ].join("; ");
+}
+
+export function registerSlackSocketModeConnectionDiagnostics(params: {
+  app: unknown;
+  onSharedConnection: (activeConnections: number) => void;
+}): () => void {
+  const emitter = getSocketEmitter(params.app);
+  if (!emitter) {
+    return () => {};
+  }
+  let hasWarned = false;
+  const listener = (message: unknown, isBinary?: unknown) => {
+    if (isBinary === true || hasWarned) {
+      return;
+    }
+    const activeConnections = resolveSlackSocketModeConnectionCount(message);
+    if (activeConnections === undefined || activeConnections <= 1) {
+      return;
+    }
+    hasWarned = true;
+    params.onSharedConnection(activeConnections);
+  };
+  emitter.on("ws_message", listener);
+  return () => {
+    emitter.off("ws_message", listener);
   };
 }
 

@@ -14,7 +14,7 @@ type QaE2eDeps = {
 
 type QaE2eArgs = {
   help: boolean;
-  outputPath: string;
+  outputPath?: string;
 };
 
 async function loadQaE2eRuntime(): Promise<QaE2eRuntime> {
@@ -44,11 +44,17 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   let outputPath = "";
   let positionalMode = false;
+  const setOutputPath = (value: string) => {
+    if (outputPath) {
+      throw new Error("qa:e2e output path was provided more than once");
+    }
+    outputPath = value;
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (positionalMode) {
       if (!outputPath && arg.trim()) {
-        outputPath = arg.trim();
+        setOutputPath(arg.trim());
         continue;
       }
       throw new Error(`Unexpected qa:e2e argument: ${arg}`);
@@ -58,14 +64,14 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      return { help: true, outputPath: ".artifacts/qa-e2e/self-check.md" };
+      return { help: true };
     }
     const inlineOutput = arg.startsWith("--output=") ? arg.slice("--output=".length).trim() : null;
     if (inlineOutput !== null) {
       if (!inlineOutput) {
         throw new Error("--output requires a value");
       }
-      outputPath = inlineOutput;
+      setOutputPath(inlineOutput);
       continue;
     }
     if (arg === "--output") {
@@ -73,7 +79,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
       if (!value || value.startsWith("-")) {
         throw new Error("--output requires a value");
       }
-      outputPath = value;
+      setOutputPath(value);
       index += 1;
       continue;
     }
@@ -83,9 +89,9 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
     if (outputPath) {
       throw new Error(`Unexpected qa:e2e argument: ${arg}`);
     }
-    outputPath = arg.trim();
+    setOutputPath(arg.trim());
   }
-  return { help: false, outputPath: outputPath || ".artifacts/qa-e2e/self-check.md" };
+  return outputPath ? { help: false, outputPath } : { help: false };
 }
 
 export async function main(
@@ -101,7 +107,9 @@ export async function main(
   const { isQaSelfCheckSuccessful, runQaE2eSelfCheck } = await (
     deps.loadRuntime ?? loadQaE2eRuntime
   )();
-  const result = await runQaE2eSelfCheck({ outputPath: args.outputPath });
+  const result = args.outputPath
+    ? await runQaE2eSelfCheck({ outputPath: args.outputPath })
+    : await runQaE2eSelfCheck();
   (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(
     `QA self-check report: ${result.outputPath}\n`,
   );
@@ -110,7 +118,7 @@ export async function main(
 
 function isMainModule() {
   const entry = process.argv[1];
-  return Boolean(entry) && import.meta.url === pathToFileURL(entry).href;
+  return entry !== undefined && import.meta.url === pathToFileURL(entry).href;
 }
 
 if (isMainModule()) {

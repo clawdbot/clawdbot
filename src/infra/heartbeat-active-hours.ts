@@ -46,14 +46,9 @@ function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number 
   return hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
+    const parts = formatter.formatToParts(new Date(nowMs));
     const map: Record<string, string> = {};
     for (const part of parts) {
       if (part.type !== "literal") {
@@ -71,34 +66,57 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   }
 }
 
+/** Prepare one active-hours predicate for repeated schedule probes. */
+export function createActiveHoursPredicate(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+): (nowMs: number) => boolean {
+  const active = heartbeat?.activeHours;
+  if (!active) {
+    return () => true;
+  }
+
+  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
+  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
+  if (startMin === null || endMin === null) {
+    return () => true;
+  }
+  if (startMin === endMin) {
+    return () => false;
+  }
+
+  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
+  let formatter: Intl.DateTimeFormat;
+  try {
+    // Schedule seeking can call this predicate thousands of times. Reusing the
+    // formatter avoids blocking the event loop on repeated Intl construction.
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
+    return () => true;
+  }
+
+  return (nowMs: number) => {
+    const currentMin = resolveMinutesInTimeZone(nowMs, formatter);
+    if (currentMin === null) {
+      return true;
+    }
+    if (endMin > startMin) {
+      return currentMin >= startMin && currentMin < endMin;
+    }
+    return currentMin >= startMin || currentMin < endMin;
+  };
+}
+
 /** Return true when the current time is inside the configured heartbeat window. */
 export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
   nowMs?: number,
 ): boolean {
-  const active = heartbeat?.activeHours;
-  if (!active) {
-    return true;
-  }
-
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
-  if (startMin === null || endMin === null) {
-    return true;
-  }
-  if (startMin === endMin) {
-    return false;
-  }
-
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
-    return true;
-  }
-
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
+  return createActiveHoursPredicate(cfg, heartbeat)(nowMs ?? Date.now());
 }

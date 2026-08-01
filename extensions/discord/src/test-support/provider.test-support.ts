@@ -105,7 +105,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       Object.assign(
         vi.fn(async () => undefined),
         {
-          deactivate: vi.fn(),
+          deactivate: vi.fn(async () => {}),
         },
       ),
     ),
@@ -231,7 +231,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
     Object.assign(
       vi.fn(async () => undefined),
       {
-        deactivate: vi.fn(),
+        deactivate: vi.fn(async () => {}),
       },
     ),
   );
@@ -509,6 +509,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
+  DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));

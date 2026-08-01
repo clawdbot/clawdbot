@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, createTempDirTracker, makeTempDir } from "./temp-dir.js";
+import {
+  cleanupTempDirs,
+  createTempDirTracker,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "./temp-dir.js";
 
 const tempDirs = new Set<string>();
 
@@ -38,5 +43,27 @@ describe("temp-dir test helpers", () => {
 
     expect(fs.existsSync(dir)).toBe(false);
     expect([...tempDirs]).toEqual([]);
+  });
+
+  describe("auto-cleaning tracker", () => {
+    const createdDirs: string[] = [];
+
+    afterEach(() => {
+      for (const dir of createdDirs.splice(0)) {
+        expect(fs.existsSync(dir)).toBe(false);
+      }
+      expect([...autoCleanupTracker.dirs]).toEqual([]);
+    });
+
+    const autoCleanupTracker = useAutoCleanupTempDirTracker(afterEach);
+
+    it("tracks temp dirs with Vitest cleanup", () => {
+      const autoCleanedDir = autoCleanupTracker.make("openclaw-temp-dir-auto-");
+      createdDirs.push(autoCleanedDir);
+      fs.writeFileSync(path.join(autoCleanedDir, "artifact.txt"), "artifact\n", "utf8");
+
+      expect(fs.existsSync(autoCleanedDir)).toBe(true);
+      expect("cleanup" in autoCleanupTracker).toBe(false);
+    });
   });
 });

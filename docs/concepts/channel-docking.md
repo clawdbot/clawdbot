@@ -7,10 +7,10 @@ read_when:
   - A /dock command says the sender is not linked or no active session exists
 ---
 
-Channel docking is call forwarding for one OpenClaw session.
-
-It keeps the same conversation context, but changes where future replies for
-that session are delivered.
+Channel docking is call forwarding for one OpenClaw session. It keeps the same
+conversation context, but changes where future replies for that session are
+delivered. Docking only works from a direct chat; it does not run from a group
+chat.
 
 ## Example
 
@@ -26,7 +26,7 @@ Alice can message OpenClaw on Telegram and Discord:
 }
 ```
 
-If Alice sends this from Telegram:
+If Alice sends this from a Telegram direct chat:
 
 ```text
 /dock_discord
@@ -50,7 +50,7 @@ Common flow:
 
 1. Start an agent task from Telegram.
 2. Move to Discord where you are coordinating work.
-3. Send `/dock_discord` from the Telegram session.
+3. Send `/dock_discord` from the Telegram direct chat.
 4. Keep the same OpenClaw session, but receive future replies in Discord.
 
 ## Required config
@@ -82,8 +82,9 @@ target peer are the same person.
 
 ## Commands
 
-Dock commands are generated from loaded channel plugins that support native
-commands. Current bundled commands:
+OpenClaw generates one `/dock-<channel>` command for every loaded channel plugin
+that supports native commands, so the list grows as plugins are added. Bundled
+plugins that currently support it:
 
 | Target channel | Command            | Alias              |
 | -------------- | ------------------ | ------------------ |
@@ -92,7 +93,8 @@ commands. Current bundled commands:
 | Slack          | `/dock-slack`      | `/dock_slack`      |
 | Telegram       | `/dock-telegram`   | `/dock_telegram`   |
 
-The underscore aliases are useful on native command surfaces such as Telegram.
+The underscore form is also the native command name on surfaces like Telegram
+that expose slash commands directly.
 
 ## What changes
 
@@ -127,6 +129,10 @@ It only changes the delivery route for the current session.
 Add both the current sender and the target peer to the same
 `session.identityLinks` group. For example, if Telegram sender `123` should dock
 to Discord peer `456`, include both `telegram:123` and `discord:456`.
+
+**The command says docking is only available from direct chats.**
+
+Send the dock command from a direct chat with OpenClaw, not from a group chat.
 
 **The command says no active session exists.**
 

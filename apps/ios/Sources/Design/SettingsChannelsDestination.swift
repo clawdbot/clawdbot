@@ -22,6 +22,7 @@ struct SettingsChannelsDestination: View {
             }
             self.channelsCard
         }
+        .font(OpenClawType.body)
         .task(id: self.refreshID) {
             await self.loadChannels(force: false)
         }
@@ -36,9 +37,9 @@ struct SettingsChannelsDestination: View {
                 ProIconBadge(systemName: "point.3.connected.trianglepath.dotted", color: self.summaryColor)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Channels / Integrations")
-                        .font(.headline)
-                    Text(self.summaryDetail)
-                        .font(.caption)
+                        .font(OpenClawType.headline)
+                    Text(verbatim: self.summaryDetail)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -66,7 +67,7 @@ struct SettingsChannelsDestination: View {
                     ProStatusRow(
                         icon: "exclamationmark.triangle",
                         title: "Channel status unavailable",
-                        detail: errorText,
+                        detail: .verbatim(errorText),
                         value: "error",
                         color: OpenClawBrand.warn)
                 } else if !self.canRead {
@@ -135,25 +136,26 @@ struct SettingsChannelsDestination: View {
     }
 
     private var headerValue: String? {
-        if self.isLoading { return "Loading" }
-        guard self.canRead else { return "Offline" }
-        return "\(self.channelEntries.count)"
+        if self.isLoading { return String(localized: "Loading") }
+        guard self.canRead else { return String(localized: "Offline") }
+        return self.channelEntries.count.formatted()
     }
 
     private var summaryDetail: String {
         guard self.canRead else {
-            return "Connect to load channel integrations."
+            return String(localized: "Connect to load channel integrations.")
         }
         if let errorText {
             return errorText
         }
-        return "Installed channel clients, account state, and message-routing readiness."
+        return String(
+            localized: "Installed channel clients, account state, and message-routing readiness.")
     }
 
     private var summaryValue: String {
-        guard self.canRead else { return "offline" }
-        if self.isLoading { return "loading" }
-        if self.errorText != nil { return "error" }
+        guard self.canRead else { return String(localized: "offline") }
+        if self.isLoading { return String(localized: "loading") }
+        if self.errorText != nil { return String(localized: "error") }
         let configured = self.channelEntries.count(where: { $0.configured })
         return "\(configured)/\(self.channelEntries.count)"
     }
@@ -300,7 +302,10 @@ struct SettingsChannelsDestination: View {
     }
 
     static func fallbackDetail(_ id: String) -> String {
-        self.fallbackMetadata[id.lowercased()]?.detail ?? "Channel integration"
+        if id.lowercased() == "clickclack" {
+            return String(localized: "Self-hosted chat bot routing.")
+        }
+        return String(localized: "Channel integration")
     }
 
     static func fallbackSystemImage(_ id: String) -> String {
@@ -310,18 +315,21 @@ struct SettingsChannelsDestination: View {
     private static let fallbackMetadata: [String: SettingsChannelFallbackMetadata] = [
         "clickclack": SettingsChannelFallbackMetadata(
             label: "ClickClack",
-            detail: "Self-hosted chat bot routing.",
             systemImage: "bubble.left.and.bubble.right"),
     ]
 
     private static func relativeTime(_ milliseconds: Int) -> String {
         let age = max(0, Int(Date().timeIntervalSince1970 * 1000) - milliseconds)
         let minutes = age / 60000
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m ago" }
+        if minutes < 1 { return String(localized: "now") }
+        if minutes < 60 {
+            return String(format: String(localized: "%@m ago"), minutes.formatted())
+        }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
-        return "\(hours / 24)d ago"
+        if hours < 24 {
+            return String(format: String(localized: "%@h ago"), hours.formatted())
+        }
+        return String(format: String(localized: "%@d ago"), (hours / 24).formatted())
     }
 
     private static func message(for error: Error) -> String {
@@ -345,15 +353,15 @@ private struct SettingsChannelRow: View {
             HStack(alignment: .top, spacing: 12) {
                 ProIconBadge(systemName: self.entry.systemImage, color: self.entry.color)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(self.entry.label)
-                        .font(.subheadline.weight(.semibold))
-                    Text(self.entry.detailText)
-                        .font(.caption)
+                    Text(verbatim: self.entry.label)
+                        .font(OpenClawType.subheadSemiBold)
+                    Text(verbatim: self.entry.detailText)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let lastError = self.entry.lastError {
-                        Text(lastError)
-                            .font(.caption2.weight(.medium))
+                        Text(verbatim: lastError)
+                            .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawBrand.warn)
                             .lineLimit(2)
                     }
@@ -380,35 +388,46 @@ private struct SettingsChannelRow: View {
     private func accountRow(_ account: SettingsChannelAccount) -> some View {
         HStack(spacing: 10) {
             Image(systemName: account.running || account.connected ? "checkmark.circle.fill" : "circle")
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(account.color)
                 .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(account.displayName)
-                    .font(.caption.weight(.semibold))
-                Text(account.detailText)
-                    .font(.caption2)
+                Text(verbatim: account.displayName)
+                    .font(OpenClawType.captionSemiBold)
+                Text(verbatim: account.detailText)
+                    .font(OpenClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Menu {
                 if account.running {
-                    Button("Stop") {
+                    Button {
                         self.stop(account.id)
+                    } label: {
+                        Text("Stop")
+                            .font(OpenClawType.subhead)
                     }
                 } else {
-                    Button("Start") {
+                    Button {
                         self.start(account.id)
+                    } label: {
+                        Text("Start")
+                            .font(OpenClawType.subhead)
                     }
                     .disabled(!account.configured || !account.enabled)
                 }
                 if account.linked {
-                    Button("Logout", role: .destructive) {
+                    Button(role: .destructive) {
                         self.logout(account.id)
+                    } label: {
+                        Text("Logout")
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
                 Image(systemName: self.actionMenuIcon(account))
+                    .font(OpenClawType.captionSemiBold)
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
@@ -453,16 +472,19 @@ private struct SettingsChannelEntry: Identifiable {
     }
 
     var statusValue: String {
-        if self.connected { return "connected" }
-        if self.running { return "running" }
-        if self.linked { return "linked" }
-        if self.configured { return "configured" }
-        return "not set"
+        if self.connected { return String(localized: "connected") }
+        if self.running { return String(localized: "running") }
+        if self.linked { return String(localized: "linked") }
+        if self.configured { return String(localized: "configured") }
+        return String(localized: "not set")
     }
 
     var detailText: String {
         if let lastActivityText {
-            return "\(self.detail) • active \(lastActivityText)"
+            return String(
+                format: String(localized: "%@ • active %@"),
+                self.detail,
+                lastActivityText)
         }
         if let unavailableReason {
             return unavailableReason
@@ -473,7 +495,6 @@ private struct SettingsChannelEntry: Identifiable {
 
 private struct SettingsChannelFallbackMetadata {
     let label: String
-    let detail: String
     let systemImage: String
 }
 
@@ -496,24 +517,33 @@ private struct SettingsChannelAccount: Identifiable {
 
     var detailText: String {
         let state = if self.connected {
-            "connected"
+            String(localized: "connected")
         } else if self.running {
-            "running"
+            String(localized: "running")
         } else if self.linked {
-            "linked"
+            String(localized: "linked")
         } else if self.configured {
-            "configured"
+            String(localized: "configured")
         } else {
-            "not configured"
+            String(localized: "not configured")
         }
-        let enabledText = self.enabled ? "enabled" : "disabled"
+        let enabledText = self.enabled
+            ? String(localized: "enabled")
+            : String(localized: "disabled")
         if let healthState, !healthState.isEmpty {
-            return "\(state), \(enabledText), \(healthState)"
+            return String(
+                format: String(localized: "%@, %@, %@"),
+                state,
+                enabledText,
+                healthState)
         }
         if let lastError, !lastError.isEmpty {
-            return "\(state), \(enabledText), error"
+            return String(
+                format: String(localized: "%@, %@, error"),
+                state,
+                enabledText)
         }
-        return "\(state), \(enabledText)"
+        return String(format: String(localized: "%@, %@"), state, enabledText)
     }
 
     var color: Color {
@@ -541,7 +571,7 @@ private enum SettingsChannelError: Error {
     var message: String {
         switch self {
         case .invalidPayload:
-            "Could not encode channel request."
+            String(localized: "Could not encode channel request.")
         }
     }
 }
@@ -628,7 +658,7 @@ private struct SettingsChannelsStatesPreview: View {
     {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
                 VStack(spacing: 0) {

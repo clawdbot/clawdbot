@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Sanitizes command text before it is displayed in approval prompts.
 import {
   computeSensitiveRedactionBitmap,
@@ -6,13 +8,14 @@ import {
 } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
-// Escape control characters, Unicode format/line/paragraph separators, and non-ASCII space
-// separators that can spoof approval prompts in common UIs. Ordinary ASCII space (U+0020) is
-// intentionally excluded so normal command text renders unchanged.
+// Escape control characters, Unicode format/line/paragraph separators, unpaired surrogates,
+// and non-ASCII space separators that can spoof or break approval prompts in common UIs.
+// With the Unicode regex flag, valid astral characters are full code points and do not match
+// Cs; only malformed surrogate code units are escaped. Ordinary ASCII space stays unchanged.
 const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
 const EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE =
-  /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
+  /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
 // Hard cap on input the sanitizer will process at all. Above this size we return a constant
 // marker without running any regex work, so an attacker cannot force unbounded CPU/memory.
@@ -58,7 +61,7 @@ function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
     return { text, truncated: false, oversized: false };
   }
   return {
-    text: text.slice(0, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
+    text: truncateUtf16Safe(text, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
     truncated: true,
     oversized: false,
   };
@@ -117,7 +120,10 @@ function sanitizeExecApprovalDisplayTextInternal(
   const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {
+    if (
+      strippedMask[i] &&
+      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
+    ) {
       bypassDetected = true;
       break;
     }
@@ -135,7 +141,7 @@ function sanitizeExecApprovalDisplayTextInternal(
   const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i]) {
-      unionMask[strippedToOrig[i]] = true;
+      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
     }
   }
   let out = "";
@@ -181,10 +187,17 @@ export function sanitizeExecApprovalDisplayTextWithStatus(
  * Sanitizes warning prose for approval UI while preserving real line boundaries.
  */
 export function sanitizeExecApprovalWarningText(warningText: string): string {
+  return sanitizeExecApprovalWarningTextWithStatus(warningText).text;
+}
+
+/** Sanitizes warning prose and reports whether display bounds suppressed any content. */
+export function sanitizeExecApprovalWarningTextWithStatus(
+  warningText: string,
+): SanitizedExecApprovalDisplayText {
   return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  }).text;
+  });
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

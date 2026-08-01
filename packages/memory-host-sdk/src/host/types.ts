@@ -2,6 +2,17 @@
 // package consumers.
 export type MemorySource = "memory" | "sessions";
 
+export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
+
+export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
+
+export type MemoryEntryProvenance = {
+  originClass: MemoryOriginClass;
+  sessionKind: MemorySessionKind;
+  observedAt: number;
+  supersedesKey?: string;
+};
+
 /** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
@@ -12,7 +23,14 @@ export type MemorySearchResult = {
   textScore?: number;
   snippet: string;
   source: MemorySource;
+  importance?: number;
+  triggers?: string;
+  /** Semicolon-separated stable repository identities lifted from inline annotations. */
+  projectKey?: string;
+  /** Future provenance column supplied by the promoted-memory workstream. */
+  originClass?: string;
   citation?: string;
+  provenance?: MemoryEntryProvenance;
 };
 
 /** Cached/probed embedding availability status. */
@@ -46,20 +64,51 @@ export type MemorySyncParams = {
   force?: boolean;
   /** Storage-neutral session transcript targets to refresh. */
   sessions?: MemorySessionSyncTarget[];
-  /**
-   * @deprecated Use `sessions` with `{ agentId, sessionId, sessionKey? }`.
-   * During the deprecation window only canonical OpenClaw transcript paths are accepted.
-   */
-  sessionFiles?: string[];
+  /** Archive/support transcript files to refresh without treating paths as active session identity. */
+  archiveFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
-/** Runtime backend/mode diagnostics for memory search. */
+/** @public Runtime backend/mode diagnostics for memory search. */
+export type MemorySearchRuntimeQmdCollectionValidationDebug = {
+  cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
+  elapsedMs: number;
+  collectionCount: number;
+  listCalls?: number;
+  showCalls?: number;
+};
+
+/** @public */ export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
+  cacheState?: "hit" | "miss" | "write" | "error";
+  elapsedMs: number;
+  supported: boolean;
+};
+
+/** @public */ export type MemorySearchRuntimeQmdSearchPlanDebug = {
+  command?: "query" | "search" | "vsearch";
+  collectionCount?: number;
+  groupCount?: number;
+  sources?: MemorySource[];
+};
+
+/** @public */ export type MemorySearchRuntimeQmdDebug = {
+  collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
+  multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
+  searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;
+};
+
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  embeddingBootstrap?: {
+    ok: false;
+    provider: string;
+    reason: string;
+    degradedTo: "keyword-only";
+  };
+  qmd?: MemorySearchRuntimeQmdDebug;
 };
 
 /** Result of reading a memory file, optionally paginated/truncated. */
@@ -120,6 +169,14 @@ export interface MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      /**
+       * Keyword/FTS scoring only: skip query embedding and vector search.
+       * For reply-path recall (trigger injection) that must not add a
+       * network round-trip per inbound message.
+       */
+      lexicalOnly?: boolean;
+      /** Active repository identities used only for project-aware ranking. */
+      activeProjectKeys?: string[];
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
@@ -127,6 +184,14 @@ export interface MemorySearchManager {
       signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
+  listTriggerCandidates?(opts?: {
+    limit?: number;
+    activeProjectKeys?: string[];
+  }): Promise<MemorySearchResult[]>;
+  listCuratedProjectCandidates?(opts: {
+    activeProjectKeys: string[];
+    limit?: number;
+  }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;

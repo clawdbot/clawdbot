@@ -6,10 +6,9 @@ describe("ACP binding cutover schema", () => {
   it("accepts top-level typed ACP bindings with per-agent runtime defaults", () => {
     const parsed = OpenClawSchema.safeParse({
       agents: {
-        list: [
-          { id: "main", default: true, runtime: { type: "embedded" } },
-          {
-            id: "coding",
+        entries: {
+          main: { default: true, runtime: { type: "embedded" } },
+          coding: {
             runtime: {
               type: "acp",
               acp: {
@@ -20,7 +19,7 @@ describe("ACP binding cutover schema", () => {
               },
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -176,7 +175,7 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts deprecated dm peer kind for backward compatibility", () => {
+  it("accepts the canonical direct peer kind", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
@@ -185,7 +184,7 @@ describe("ACP binding cutover schema", () => {
           match: {
             channel: "plugin-chat",
             accountId: "default",
-            peer: { kind: "dm", id: "legacy-peer" },
+            peer: { kind: "direct", id: "peer" },
           },
         },
       ],

@@ -1,13 +1,13 @@
 // Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { identitiesOverlap } from "../identity.js";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-export class WhatsAppInboundMediaLimitExceededError extends Error {
+class WhatsAppInboundMediaLimitExceededError extends Error {
   constructor(maxBytes: number) {
     super(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
     this.name = "WhatsAppInboundMediaLimitExceededError";
@@ -33,42 +33,35 @@ export async function downloadInboundMedia(
   if (
     !message.imageMessage &&
     !message.videoMessage &&
+    !message.ptvMessage &&
     !message.documentMessage &&
     !message.audioMessage &&
     !message.stickerMessage
   ) {
     return undefined;
   }
-  try {
-    const stream = await downloadMediaMessage(
-      msg as WAMessage,
-      "stream",
-      {},
-      {
-        reuploadRequest: sock.updateMediaMessage,
-        logger: sock.logger,
-      },
-    );
-    const saved = await saveMediaStream(
-      stream as AsyncIterable<unknown>,
-      mimetype,
-      "inbound",
-      maxBytes,
-      fileName,
-    ).catch((err: unknown) => {
-      if (err instanceof Error && /Media exceeds/i.test(err.message)) {
-        throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
-      }
-      throw err;
-    });
-    return { saved, mimetype, fileName };
-  } catch (err) {
-    if (err instanceof WhatsAppInboundMediaLimitExceededError) {
-      throw err;
+  const stream = await downloadMediaMessage(
+    msg as WAMessage,
+    "stream",
+    {},
+    {
+      reuploadRequest: sock.updateMediaMessage,
+      logger: sock.logger,
+    },
+  );
+  const saved = await saveMediaStream(
+    stream as AsyncIterable<unknown>,
+    mimetype,
+    "inbound",
+    maxBytes,
+    fileName,
+  ).catch((err: unknown) => {
+    if (err instanceof Error && /Media exceeds/i.test(err.message)) {
+      throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
     }
-    logVerbose(`downloadMediaMessage failed: ${String(err)}`);
-    return undefined;
-  }
+    throw err;
+  });
+  return { saved, mimetype, fileName };
 }
 
 export async function downloadQuotedInboundMedia(
@@ -82,13 +75,19 @@ export async function downloadQuotedInboundMedia(
     return undefined;
   }
   const quotedMessage = contextInfo.quotedMessage;
+  const self = sock.user;
+  // Baileys copies fromMe into the media-reupload receipt; own quoted media must retain its author.
+  const quotedFromMe = identitiesOverlap(
+    { jid: contextInfo.participant },
+    { jid: self?.id, lid: self?.lid, e164: self?.phoneNumber },
+  );
   return downloadInboundMedia(
     {
       key: {
         id: contextInfo?.stanzaId || undefined,
         remoteJid: contextInfo.remoteJid ?? msg.key?.remoteJid ?? undefined,
         participant: contextInfo?.participant ?? undefined,
-        fromMe: false,
+        fromMe: quotedFromMe,
       },
       message: quotedMessage,
       messageTimestamp: msg.messageTimestamp,

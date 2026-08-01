@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Rejects unresolved merge conflict markers in tracked files.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,21 +32,9 @@ export function findConflictMarkerLines(content) {
 }
 
 /**
- * Lists tracked files in the repository.
- */
-export function listTrackedFiles(cwd = process.cwd()) {
-  const output = execFileSync("git", ["ls-files", "-z"], {
-    cwd,
-    encoding: "utf8",
-  });
-  return output
-    .split("\0")
-    .filter(Boolean)
-    .map((relativePath) => path.join(cwd, relativePath));
-}
-
-/**
- * Scans files for merge conflict markers, skipping binary content.
+ * Scans a list of files for merge conflict markers, skipping binary content.
+ * This is kept for direct, small-scale use (tests); the tracked-files path
+ * uses git grep directly to avoid reading large files into memory.
  */
 export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync) {
   const violations = [];
@@ -75,12 +63,66 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
 }
 
 /**
- * Uses git grep to list tracked files that may contain conflict markers.
+ * Parses output from `git grep -n -z -o -I -E` into violation records.
+ * The record format is:
+ *   path\0line-number\0match-text\n
+ * The path must be read from its NUL delimiter before any newline-based
+ * record splitting: -z reports paths verbatim, and git allows newlines in
+ * tracked filenames, so splitting the output on newlines first would cut a
+ * newline-containing path across two records and silently mangle it.
+ * Keeping parsing to exact grep match records avoids reading candidate files
+ * whole and keeps memory bounded regardless of file size.
  */
-export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd(), run = spawnSync) {
+function parseGitGrepConflictMarkerOutput(stdout) {
+  const byPath = new Map();
+  const output = stdout.toString("utf8");
+  let cursor = 0;
+
+  while (cursor < output.length) {
+    const pathEnd = output.indexOf("\0", cursor);
+    if (pathEnd === -1) {
+      break;
+    }
+    const lineNumberEnd = output.indexOf("\0", pathEnd + 1);
+    if (lineNumberEnd === -1) {
+      break;
+    }
+    // With -o the match text is a single-line match, so the record ends at
+    // the next newline after the line-number field.
+    const matchEnd = output.indexOf("\n", lineNumberEnd + 1);
+    const relativePath = output.slice(cursor, pathEnd);
+    const lineNumber = Number(output.slice(pathEnd + 1, lineNumberEnd));
+    cursor = matchEnd === -1 ? output.length : matchEnd + 1;
+    if (!relativePath || !Number.isFinite(lineNumber) || lineNumber <= 0) {
+      continue;
+    }
+    const existing = byPath.get(relativePath);
+    if (existing) {
+      existing.push(lineNumber);
+    } else {
+      byPath.set(relativePath, [lineNumber]);
+    }
+  }
+
+  const violations = [];
+  for (const [relativePath, lineNumbers] of byPath) {
+    lineNumbers.sort((a, b) => a - b);
+    violations.push({
+      filePath: relativePath,
+      lines: lineNumbers,
+    });
+  }
+  violations.sort((a, b) => a.filePath.localeCompare(b.filePath));
+  return violations;
+}
+
+/**
+ * Uses git grep to find exact conflict-marker matches in tracked files.
+ */
+export function findConflictMarkersInTrackedFiles(cwd = process.cwd(), run = spawnSync) {
   const result = run(
     "git",
-    ["grep", "-l", "-z", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
+    ["grep", "--no-color", "-n", "-z", "-o", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
     {
       cwd,
       encoding: "buffer",
@@ -93,18 +135,7 @@ export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd()
     const stderr = result.stderr?.toString("utf8").trim();
     throw new Error(stderr || `git grep failed with status ${result.status ?? "unknown"}`);
   }
-  return result.stdout
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean)
-    .map((relativePath) => path.join(cwd, relativePath));
-}
-
-/**
- * Finds merge conflict markers in tracked repository files.
- */
-export function findConflictMarkersInTrackedFiles(cwd = process.cwd()) {
-  return findConflictMarkersInFiles(listTrackedFilesWithConflictMarkerCandidates(cwd));
+  return parseGitGrepConflictMarkerOutput(result.stdout);
 }
 
 /**
@@ -119,8 +150,8 @@ export async function main() {
 
   console.error("Found unresolved merge conflict markers:");
   for (const violation of violations) {
-    const relativePath = path.relative(cwd, violation.filePath) || violation.filePath;
-    console.error(`- ${relativePath}:${violation.lines.join(",")}`);
+    // findConflictMarkersInTrackedFiles already returns paths relative to cwd.
+    console.error(`- ${violation.filePath}:${violation.lines.join(",")}`);
   }
   process.exitCode = 1;
 }

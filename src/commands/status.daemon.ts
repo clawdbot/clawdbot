@@ -21,10 +21,11 @@ type DaemonStatusSummary = {
 
 async function buildDaemonStatusSummary(
   serviceLabel: "gateway" | "node",
+  timeoutMs?: number,
 ): Promise<DaemonStatusSummary> {
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
-  const summary = await readServiceStatusSummary(service, fallbackLabel);
+  const summary = await readServiceStatusSummary(service, fallbackLabel, timeoutMs);
   return {
     label: summary.label,
     installed: summary.installed,
@@ -40,11 +41,11 @@ async function buildDaemonStatusSummary(
 }
 
 /** Returns the gateway daemon status summary. */
-export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("gateway");
+export async function getDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
 /** Returns the node service status summary. */
-export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("node");
+export async function getNodeDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("node", timeoutMs);
 }

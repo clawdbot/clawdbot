@@ -12,13 +12,13 @@ import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
-type SyncSessionParams = { needsFullReindex: boolean; targetSessionFiles?: string[] };
+type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
   runInPlaceReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
   syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-  syncSessionFiles: (params: SyncSessionParams) => Promise<unknown>;
+  syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   writeMeta: (meta: MemoryIndexMeta) => void;
   providerKey: string | null;
@@ -62,21 +62,20 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
   }): OpenClawConfig {
     return {
-      memory: { backend: "builtin" },
+      memory: {
+        backend: "builtin",
+        search: {
+          provider: params.provider ?? "openai",
+          model: "mock-embed",
+          store: { vector: {} },
+          cache: { enabled: false },
+          sources: params.sources,
+          rememberAcrossConversations: params.sources?.includes("sessions") ?? false,
+        },
+      },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            remote: { nonBatchConcurrency: 1 },
-            cache: { enabled: false },
-            sources: params.sources,
-            experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
@@ -117,7 +116,7 @@ describe("memory manager reindex recovery", () => {
     harness.sessionsDirtyFiles.add(dirtySessionFile);
     harness.sessionDeltas.set(dirtySessionFile, { ...originalDelta });
     harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncSessionFiles = async () => {
+    harness.syncArchiveFiles = async () => {
       const delta = harness.sessionDeltas.get(dirtySessionFile);
       if (delta) {
         delta.lastSize = 500;
@@ -152,7 +151,7 @@ describe("memory manager reindex recovery", () => {
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
 
     harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncSessionFiles = async () => emptySyncPlan;
+    harness.syncArchiveFiles = async () => emptySyncPlan;
     harness.writeMeta = () => {
       throw new Error("late clean reindex failure");
     };
@@ -224,12 +223,12 @@ describe("memory manager reindex recovery", () => {
 
     const harness = memoryManager as unknown as ReindexHarness;
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-    const sessionSyncCalls: SyncSessionParams[] = [];
+    const sessionSyncCalls: SyncArchiveParams[] = [];
 
     harness.sessionsDirty = true;
     harness.sessionsFullRetryDirty = true;
     harness.sessionsDirtyFiles.clear();
-    harness.syncSessionFiles = async (params) => {
+    harness.syncArchiveFiles = async (params) => {
       sessionSyncCalls.push(params);
       return emptySyncPlan;
     };
@@ -238,7 +237,7 @@ describe("memory manager reindex recovery", () => {
 
     expect(sessionSyncCalls).toHaveLength(1);
     expect(sessionSyncCalls[0]).toMatchObject({ needsFullReindex: true });
-    expect(sessionSyncCalls[0]?.targetSessionFiles).toBeUndefined();
+    expect(sessionSyncCalls[0]?.targetArchiveFiles).toBeUndefined();
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
   });

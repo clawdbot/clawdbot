@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 22.19 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22.22.3+, Node 24.15+, or Node 25.9+** (which includes Node 26). **Node 26 is the default and recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24, and the installer script provisions it when Node is missing. CI and release workflows still pin Node 24; Node 22 remains supported via its LTS line. Node 23 is unsupported. The [installer script](/install#alternative-install-methods) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
 
 ## Check your version
 
@@ -15,7 +15,7 @@ OpenClaw requires **Node 22.19 or newer**. **Node 24 is the default and recommen
 node -v
 ```
 
-If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.19.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
+`v26` (any release) is the recommended default. `v24.15.0` or newer 24.x remains fully supported (and is what CI pins); `v22.22.3` or newer 22.x is the supported Node 22 LTS path; Node `v25.9.0+` is also supported. Node 23 is unsupported. If Node is missing or outside the supported range, pick an install method below.
 
 ## Install Node
 
@@ -34,7 +34,7 @@ If this prints `v24.x.x` or higher, you're on the recommended default. If it pri
     **Ubuntu / Debian:**
 
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
 
@@ -75,12 +75,12 @@ If this prints `v24.x.x` or higher, you're on the recommended default. If it pri
 Example with fnm:
 
 ```bash
-fnm install 24
-fnm use 24
+fnm install 26
+fnm use 26
 ```
 
   <Warning>
-  Make sure your version manager is initialized in your shell startup file (`~/.zshrc` or `~/.bashrc`). If it isn't, `openclaw` may not be found in new terminal sessions because the PATH won't include Node's bin directory.
+  Initialize your version manager in your shell startup file (`~/.zshrc` or `~/.bashrc`). If you skip this, `openclaw` may not be found in new terminal sessions because PATH won't include Node's bin directory.
   </Warning>
 </Accordion>
 

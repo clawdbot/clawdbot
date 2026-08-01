@@ -11,7 +11,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary } from "./os-summary.js";
+import { resolveOsSummary, resolveRuntimeOsLabel } from "./os-summary.js";
 
 type OsSummaryCase = {
   name: string;
@@ -25,6 +25,7 @@ type OsSummaryCase = {
 describe("resolveOsSummary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    spawnSyncMock.mockReset();
   });
 
   it.each<OsSummaryCase>([
@@ -93,5 +94,88 @@ describe("resolveOsSummary", () => {
       });
     }
     expect(resolveOsSummary()).toEqual(expected);
+  });
+});
+
+describe("resolveRuntimeOsLabel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    spawnSyncMock.mockReset();
+  });
+
+  it("reports the macOS product version without an architecture suffix on tahoe", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.6.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.6.0\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    expect(resolveRuntimeOsLabel()).toBe("macOS 26.6.0");
+    expect(spawnSyncMock).toHaveBeenCalledWith("sw_vers", ["-productVersion"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
+  });
+
+  it("falls back to the Darwin release when sw_vers output is blank", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.7.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: "   ",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    expect(resolveRuntimeOsLabel()).toBe("macOS 25.7.0");
+  });
+
+  it("preserves the old Windows os.type/os.release shape", () => {
+    vi.spyOn(os, "platform").mockReturnValue("win32");
+    vi.spyOn(os, "type").mockReturnValue("Windows_NT");
+    vi.spyOn(os, "release").mockReturnValue("10.0.26100");
+    vi.spyOn(os, "arch").mockReturnValue("x64");
+
+    expect(resolveRuntimeOsLabel()).toBe("Windows_NT 10.0.26100");
+  });
+
+  it("preserves the old Linux os.type/os.release shape", () => {
+    vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "type").mockReturnValue("Linux");
+    vi.spyOn(os, "release").mockReturnValue("6.8.0-generic");
+    vi.spyOn(os, "arch").mockReturnValue("x64");
+
+    expect(resolveRuntimeOsLabel()).toBe("Linux 6.8.0-generic");
+  });
+
+  it("caches the Darwin product version for repeated runtime prompt lookups", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.8.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.8.0\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    expect(resolveRuntimeOsLabel()).toBe("macOS 26.8.0");
+    expect(resolveRuntimeOsLabel()).toBe("macOS 26.8.0");
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 });

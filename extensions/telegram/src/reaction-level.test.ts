@@ -122,6 +122,24 @@ describe("resolveTelegramReactionLevel", () => {
     expectExtensiveFlags(result);
   });
 
+  it("resolves omitted-account reaction level from the configured defaultAccount (#61012)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          reactionLevel: "off",
+          defaultAccount: "work",
+          accounts: {
+            work: { botToken: "tok-work", reactionLevel: "extensive" },
+          },
+        },
+      },
+    };
+
+    const result = resolveTelegramReactionLevel({ cfg });
+    expectExtensiveFlags(result);
+  });
+
   it("falls back to global level when account has no reactionLevel", () => {
     const cfg: OpenClawConfig = {
       channels: {

@@ -7,7 +7,7 @@ import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
 import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
-export type BlockedInboundAccessControlResult = {
+type BlockedInboundAccessControlResult = {
   allowed: false;
   shouldMarkRead: false;
   isSelfChat: boolean;
@@ -23,7 +23,7 @@ export type AcceptedInboundAccessControlResult = {
   admission: WhatsAppInboundAdmission;
 };
 
-export type InboundAccessControlResult =
+type InboundAccessControlResult =
   | BlockedInboundAccessControlResult
   | AcceptedInboundAccessControlResult;
 
@@ -141,6 +141,7 @@ export async function checkInboundAccessControl(params: {
       } else {
         await createChannelPairingChallengeIssuer({
           channel: "whatsapp",
+          accountId: policy.account.accountId,
           upsertPairingRequest: async ({ id, meta }) =>
             await upsertChannelPairingRequest({
               channel: "whatsapp",
@@ -198,4 +199,3 @@ export async function checkInboundAccessControl(params: {
 export const testing = {
   resolveWhatsAppInboundPolicy,
 };
-export { testing as __testing };

@@ -14,11 +14,6 @@ export default defineToolPlugin({
       defaultProvider: Type.Optional(Type.String()),
       defaultModel: Type.Optional(Type.String()),
       defaultAuthProfileId: Type.Optional(Type.String()),
-      allowedModels: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Allowlist of provider/model keys like openai/gpt-5.5.",
-        }),
-      ),
       maxTokens: optionalPositiveIntegerSchema(),
       timeoutMs: optionalPositiveIntegerSchema(),
     },

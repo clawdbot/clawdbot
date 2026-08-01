@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginDiscoveryResult } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import {
   resolveCompatRegistryVersion,
@@ -11,7 +11,6 @@ import {
 } from "./installed-plugin-index-policy.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexRegistry } from "./installed-plugin-index-registry.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -22,6 +21,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -33,27 +33,22 @@ export type {
   InstalledPluginIndexRecord,
   InstalledPluginIndexRefreshReason,
   InstalledPluginInstallRecordInfo,
-  InstalledPluginPackageChannelInfo,
-  InstalledPluginStartupInfo,
   LoadInstalledPluginIndexParams,
   RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
-export {
-  CONFIG_PATH_ACTIVATION_COMPAT_CODE,
-  hasMissingConfigPathActivationMetadata,
-} from "./installed-plugin-index-config-path-scope.js";
+export { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 function buildInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & { refreshReason?: InstalledPluginIndexRefreshReason },
-): { index: InstalledPluginIndex; discovery: PluginDiscoveryResult | undefined } {
+): {
+  index: InstalledPluginIndex;
+  discovery: PluginDiscoveryResult | undefined;
+  manifestRegistry: PluginManifestRegistry;
+} {
   const env = params.env ?? process.env;
-  const { candidates, registry, discovery } = resolveInstalledPluginIndexRegistry(params);
-  const registryDiagnostics = registry.diagnostics ?? [];
-  const diagnostics = [...registryDiagnostics];
-  const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const installRecords = normalizeInstallRecordMap(
     params.installRecords ??
       loadInstalledPluginIndexInstallRecordsSync({
@@ -62,8 +57,27 @@ function buildInstalledPluginIndex(
         ...(params.pluginIndexFilePath ? { filePath: params.pluginIndexFilePath } : {}),
       }),
   );
+  const discovery = params.candidates
+    ? { candidates: params.candidates, diagnostics: params.diagnostics ?? [] }
+    : (params.discovery ??
+      discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        extraPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
+        env,
+        installRecords,
+      }));
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    candidates: discovery.candidates,
+    diagnostics: discovery.diagnostics,
+    installRecords,
+  });
+  const diagnostics = [...(registry.diagnostics ?? [])];
+  const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = buildInstalledPluginIndexRecords({
-    candidates,
+    candidates: discovery.candidates,
     registry,
     config: params.config,
     diagnostics,
@@ -84,7 +98,8 @@ function buildInstalledPluginIndex(
       plugins,
       diagnostics,
     },
-    discovery,
+    discovery: params.candidates ? undefined : discovery,
+    manifestRegistry: registry,
   };
 }
 
@@ -96,7 +111,11 @@ export function loadInstalledPluginIndex(
 
 export function loadInstalledPluginIndexWithDiscovery(
   params: LoadInstalledPluginIndexParams = {},
-): { index: InstalledPluginIndex; discovery: PluginDiscoveryResult | undefined } {
+): {
+  index: InstalledPluginIndex;
+  discovery: PluginDiscoveryResult | undefined;
+  manifestRegistry: PluginManifestRegistry;
+} {
   return buildInstalledPluginIndex(params);
 }
 
@@ -104,22 +123,6 @@ export function refreshInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
-}
-
-export function listInstalledPluginRecords(
-  index: InstalledPluginIndex,
-): readonly InstalledPluginIndexRecord[] {
-  return index.plugins;
-}
-
-export function listEnabledInstalledPluginRecords(
-  index: InstalledPluginIndex,
-  config?: OpenClawConfig,
-): readonly InstalledPluginIndexRecord[] {
-  if (!config) {
-    return index.plugins.filter((plugin) => plugin.enabled);
-  }
-  return index.plugins.filter((plugin) => isInstalledPluginEnabled(index, plugin.pluginId, config));
 }
 
 export function getInstalledPluginRecord(

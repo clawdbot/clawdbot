@@ -7,33 +7,18 @@ read_when:
   - You are debugging native PDF mode vs extraction fallback
 ---
 
-`pdf` analyzes one or more PDF documents and returns text.
-
-Quick behavior:
-
-- Native provider mode for Anthropic and Google model providers.
-- Extraction fallback mode for other providers (extract text first, then page images when needed).
-- Supports single (`pdf`) or multi (`pdfs`) input, max 10 PDFs per call.
+`pdf` analyzes one or more PDF documents and returns text. It uses native document input on Anthropic and Google models, and falls back to text/image extraction for every other provider.
 
 ## Availability
 
-The tool is only registered when OpenClaw can resolve a PDF-capable model config for the agent:
+The tool registers only when OpenClaw can resolve a PDF-capable model for the agent. Resolution order:
 
-1. `agents.defaults.pdfModel`
-2. fallback to `agents.defaults.imageModel`
-3. fallback to the agent's resolved session/default model
-4. if native-PDF providers are auth-backed, prefer them ahead of generic image fallback candidates
+1. `agents.defaults.pdfModel` (explicit primary/fallbacks)
+2. `agents.defaults.imageModel` (explicit primary/fallbacks)
+3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google) or already has a configured vision model
+4. Auto-detected image/vision-capable providers with usable auth, preferring native-PDF providers first
 
-If no usable model can be resolved, the `pdf` tool is not exposed.
-
-Availability notes:
-
-- The fallback chain is auth-aware. A configured `provider/model` only counts if
-  OpenClaw can actually authenticate that provider for the agent.
-- Native PDF providers are currently **Anthropic** and **Google**.
-- If the resolved session/default provider already has a configured vision/PDF
-  model, the PDF tool reuses that before falling back to other auth-backed
-  providers.
+Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
 
 ## Input reference
 
@@ -50,11 +35,11 @@ Analysis prompt.
 </ParamField>
 
 <ParamField path="pages" type="string">
-Page filter like `1-5` or `1,3,7-9`.
+Page filter like `1-5` or `1,3,7-9`. Not supported in native provider mode.
 </ParamField>
 
 <ParamField path="password" type="string">
-Password for encrypted PDFs in extraction fallback mode.
+Password for encrypted PDFs. Applies to every PDF in the request; only used by extraction fallback mode.
 </ParamField>
 
 <ParamField path="model" type="string">
@@ -62,66 +47,48 @@ Optional model override in `provider/model` form.
 </ParamField>
 
 <ParamField path="maxBytesMb" type="number">
-Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxBytesMb` or `10`.
+Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset.
 </ParamField>
 
-Input notes:
+Notes:
 
-- `pdf` and `pdfs` are merged and deduplicated before loading.
-- If no PDF input is provided, the tool errors.
-- `pages` is parsed as 1-based page numbers, deduped, sorted, and clamped to the configured max pages.
-- `password` applies to every PDF in the request and is only used by extraction fallback mode.
-- `maxBytesMb` defaults to `agents.defaults.pdfMaxBytesMb` or `10`.
+- `pdf` and `pdfs` are merged and deduplicated before loading; at least one is required.
+- `pages` is parsed as 1-based page numbers, deduped, sorted, and clamped to `agents.defaults.pdfMaxPages` (default `20`). A range that matches no in-bounds pages errors before the model call.
 
 ## Supported PDF references
 
-- local file path (including `~` expansion)
+- Local file path (including `~` expansion)
 - `file://` URL
 - `http://` and `https://` URL
 - OpenClaw-managed inbound refs such as `media://inbound/<id>`
 
-Reference notes:
-
-- Other URI schemes (for example `ftp://`) are rejected with `unsupported_pdf_reference`.
-- In sandbox mode, remote `http(s)` URLs are rejected.
-- With workspace-only file policy enabled, local file paths outside allowed roots are rejected.
-- Managed inbound refs and replayed paths under OpenClaw's inbound media store are allowed with workspace-only file policy.
+Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pdf_reference"`. Remote `http(s)` URLs are rejected when the tool runs sandboxed. With workspace-only file policy enabled, local paths outside allowed roots are rejected; managed inbound refs and replayed paths under OpenClaw's inbound media store are still allowed.
 
 ## Execution modes
 
 ### Native provider mode
 
-Native mode is used for provider `anthropic` and `google`.
-The tool sends raw PDF bytes directly to provider APIs.
+Used for provider `anthropic` and `google` (the only providers that currently declare native PDF document support). Raw PDF bytes go directly to the provider API as a native document/inline-PDF part per file.
 
-Native mode limits:
+Limits:
 
-- `pages` is not supported. If set, the tool returns an error.
-- `password` is not supported. Use a non-native model to analyze encrypted PDFs.
-- Multi-PDF input is supported; each PDF is sent as a native document block /
-  inline PDF part before the prompt.
+- `pages` is not supported; if set, the tool throws `pages is not supported with native PDF providers`.
+- `password` is not supported; if set, the tool throws `password is not supported with native PDF providers`. Use a non-native model for encrypted PDFs.
 
 ### Extraction fallback mode
 
-Fallback mode is used for non-native providers.
+Used for every other provider.
 
-Flow:
+1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
+2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
+3. Send the extracted text (and any rendered images) plus the prompt to the selected model.
 
-1. Extract text from selected pages (up to `agents.defaults.pdfMaxPages`, default `20`).
-2. If extracted text length is below `200` chars, render selected pages to PNG images and include them.
-3. Send extracted content plus prompt to the selected model.
+Details:
 
-Fallback details:
-
-- Page image extraction uses a pixel budget of `4,000,000`.
-- Encrypted PDFs can be opened with the top-level `password` parameter.
-- If the target model does not support image input and there is no extractable text, the tool errors.
-- If text extraction succeeds but image extraction would require vision on a
-  text-only model, OpenClaw drops the rendered images and continues with the
-  extracted text.
-- Extraction fallback uses the bundled `document-extract` plugin. The plugin owns
-  `clawpdf`, which provides text extraction and image rendering through PDFium
-  WebAssembly.
+- Encrypted PDFs open with the top-level `password` parameter.
+- If the model has no image input and there is no extractable text, the tool errors.
+- If image rendering fails, OpenClaw drops the images and continues with the extracted text.
+- If the target model is text-only and extraction produced images, OpenClaw drops the images and sends text only.
 
 ## Config
 
@@ -140,7 +107,13 @@ Fallback details:
 }
 ```
 
-See [Configuration Reference](/gateway/configuration-reference) for full field details.
+| Key                           | Default | Meaning                                                                                   |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `agents.defaults.pdfModel`    | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
+| `agents.defaults.pdfMaxMb`    | `10`    | Per-PDF size cap in MB.                                                                   |
+| `agents.defaults.pdfMaxPages` | `20`    | Max pages processed per PDF.                                                              |
+
+See [Configuration Reference](/gateway/config-agents#agent-defaults) for full field details.
 
 ## Output details
 
@@ -154,16 +127,19 @@ Common `details` fields:
 
 Path fields:
 
-- single PDF input: `details.pdf`
-- multiple PDF inputs: `details.pdfs[]` with `pdf` entries
-- sandbox path rewrite metadata (when applicable): `rewrittenFrom`
+- Single PDF input: `details.pdf`
+- Multiple PDF inputs: `details.pdfs[]` with `pdf` entries
+- Sandbox path rewrite metadata (when applicable): `rewrittenFrom`
 
 ## Error behavior
 
-- Missing PDF input: throws `pdf required: provide a path or URL to a PDF document`
-- Too many PDFs: returns structured error in `details.error = "too_many_pdfs"`
-- Unsupported reference scheme: returns `details.error = "unsupported_pdf_reference"`
-- Native mode with `pages`: throws clear `pages is not supported with native PDF providers` error
+| Condition                         | Result                                                         |
+| --------------------------------- | -------------------------------------------------------------- |
+| No PDF input                      | Throws `pdf required: provide a path or URL to a PDF document` |
+| More than 10 PDFs                 | `details.error = "too_many_pdfs"`                              |
+| Unsupported reference scheme      | `details.error = "unsupported_pdf_reference"`                  |
+| `pages` with a native provider    | Throws `pages is not supported with native PDF providers`      |
+| `password` with a native provider | Throws `password is not supported with native PDF providers`   |
 
 ## Examples
 

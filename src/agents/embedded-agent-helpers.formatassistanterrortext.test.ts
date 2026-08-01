@@ -4,14 +4,15 @@ import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -70,6 +71,14 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("preserves overload wording for Z.AI rate-limit errors", () => {
+    const msg = makeAssistantError(
+      '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
   it("rewrites generic provider internal errors without support request ids", () => {
     const msg = makeAssistantError(
       "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
@@ -104,6 +113,17 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
   });
+  it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
+    // Thinking-signature failures are also invalid_request_error, so the
+    // replay-invalid copy must win before the generic invalid-request path.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    );
+    const replayCopy =
+      "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
+    expect(formatAssistantErrorText(msg)).toBe(replayCopy);
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(replayCopy);
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);
@@ -116,13 +136,28 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("classifies provider upstream_error payloads as server errors for fallback", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "Upstream request failed",
+      errorType: "upstream_error",
+    });
+
+    expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantError(
+          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+        ),
+      ),
+    ).toBe("server_error");
+  });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
     // not expose arbitrary provider-controlled structured payload content.
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
@@ -340,6 +375,13 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
 
+  it("does not rewrite Provider finish_reason: error into a timeout (#109218)", () => {
+    const msg = makeAssistantError("Provider finish_reason: error");
+    // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
+    // may return undefined for some paths — assert the concrete copy we preserve).
+    expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
+  });
+
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
     const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -520,6 +562,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns a certificate-specific message for TLS validation failures", () => {
+    const msg = makeAssistantError(
+      "Hostname/IP does not match certificate's altnames: Host: api.example.com",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+        "Check the endpoint hostname, proxy, and local certificate trust.",
+    );
+  });
+
   it("keeps non-transport config errors that mention proxy settings actionable", () => {
     const msg = makeAssistantError(
       'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
@@ -649,6 +701,33 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
+  });
+
+  it("truncates fallback raw error text on UTF-16 code-point boundary without dangling surrogates", () => {
+    // 601 UTF-16 code units: emoji (surrogate pair) straddles the 600-unit truncation boundary
+    const prefix = "x".repeat(599);
+    const emoji = "🎉"; // U+1F389 — high surrogate 0xD83C + low surrogate 0xDF89
+    const raw = prefix + emoji; // 601 code units total
+
+    const result = formatRawAssistantErrorForUi(raw);
+
+    // Result must end with "…" after truncation
+    expect(result).toMatch(/…$/);
+
+    // Verify the truncated portion contains no dangling surrogates
+    for (let i = 0; i < result.length - 1; i++) {
+      const codeUnit = result.charCodeAt(i);
+      // High surrogate (0xD800-0xDBFF) must be followed by a low surrogate
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = result.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+      }
+      // Low surrogate (0xDC00-0xDFFF) must be preceded by a high surrogate
+      if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        const prev = i > 0 ? result.charCodeAt(i - 1) : -1;
+        expect(prev >= 0xd800 && prev <= 0xdbff).toBe(true);
+      }
+    }
   });
 });
 

@@ -21,7 +21,7 @@ export function getPairingAdapter(channelId: ChannelId): ChannelPairingAdapter |
   return plugin?.pairing ?? null;
 }
 
-export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
+function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
   const adapter = getPairingAdapter(channelId);
   if (!adapter) {
     throw new Error(`Channel ${channelId} does not support pairing`);

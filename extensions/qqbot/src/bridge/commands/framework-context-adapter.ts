@@ -11,6 +11,7 @@
 
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SlashCommandContext } from "../../engine/commands/slash-commands.js";
+import type { QQBotGroupCommandLevel } from "../../engine/config/group.js";
 import type { ResolvedQQBotAccount } from "../../types.js";
 import type { QQBotFromParseResult } from "./from-parser.js";
 
@@ -32,6 +33,7 @@ interface BuildFrameworkSlashContextInput {
   account: ResolvedQQBotAccount;
   from: QQBotFromParseResult;
   commandName: string;
+  groupCommandLevel?: QQBotGroupCommandLevel;
 }
 
 export function buildFrameworkSlashContext({
@@ -39,6 +41,7 @@ export function buildFrameworkSlashContext({
   account,
   from,
   commandName,
+  groupCommandLevel,
 }: BuildFrameworkSlashContextInput): SlashCommandContext {
   const args = ctx.args ?? "";
   const rawContent = args ? `/${commandName} ${args}` : `/${commandName}`;
@@ -55,6 +58,7 @@ export function buildFrameworkSlashContext({
     appId: account.appId,
     accountConfig: account.config as unknown as Record<string, unknown>,
     commandAuthorized: ctx.isAuthorizedSender,
+    groupCommandLevel,
     queueSnapshot: { ...DEFAULT_QUEUE_SNAPSHOT },
   };
 }

@@ -3,13 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-} from "../trajectory/paths.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
+import { sessionsTailCommand } from "./sessions-tail.js";
+import { setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -44,14 +46,6 @@ function makeEvent(
   };
 }
 
-function writeJsonl(filePath: string, events: TrajectoryEvent[]): void {
-  fs.writeFileSync(filePath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
-}
-
-function appendJsonl(filePath: string, event: TrajectoryEvent): void {
-  fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`);
-}
-
 function runtimeOutput(runtime: RuntimeEnv): string {
   return vi
     .mocked(runtime.log)
@@ -70,7 +64,7 @@ async function waitForRuntimeOutput(
       throw new Error(`Timed out waiting for output containing ${pattern}`);
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }
@@ -78,35 +72,19 @@ async function waitForRuntimeOutput(
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
-  let trajectoryPath: string;
   let previousStateDir: string | undefined;
-  let previousTrajectoryDir: string | undefined;
 
   beforeEach(() => {
-    setSessionsTailFollowIntervalMsForTests(10);
+    setSessionsTailFollowIntervalMsForTests(2);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    previousTrajectoryDir = process.env.OPENCLAW_TRAJECTORY_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
-    delete process.env.OPENCLAW_TRAJECTORY_DIR;
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
         list: [{ id: "main" }, { id: "ops" }],
       },
     });
     storePath = path.join(tmpDir, "sessions.json");
-    trajectoryPath = path.join(tmpDir, "session-one.trajectory.jsonl");
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        [sessionKey]: {
-          sessionId: "session-one",
-          sessionFile: "session-one.jsonl",
-          updatedAt: 2,
-          status: "running",
-        },
-      })}\n`,
-    );
   });
 
   afterEach(() => {
@@ -116,17 +94,44 @@ describe("sessionsTailCommand", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    if (previousTrajectoryDir === undefined) {
-      delete process.env.OPENCLAW_TRAJECTORY_DIR;
-    } else {
-      process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDir;
-    }
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  async function writeSessionEntry(
+    key = sessionKey,
+    entry: Partial<SessionEntry> = {},
+  ): Promise<void> {
+    await upsertSessionEntry(
+      { sessionKey: key, storePath },
+      {
+        sessionId: "session-one",
+        updatedAt: 2,
+        status: "running",
+        ...entry,
+      },
+    );
+  }
+
+  async function appendEvents(
+    events: TrajectoryEvent[],
+    params: { key?: string; sessionId?: string } = {},
+  ): Promise<void> {
+    appendSqliteTrajectoryRuntimeEvents(
+      {
+        agentId: "main",
+        sessionId: params.sessionId ?? "session-one",
+        storePath,
+      },
+      events.map((event) => ({ ...event, sessionKey: params.key ?? event.sessionKey })),
+    );
+  }
+
   it("renders compact redacted progress lines", async () => {
     const runtime = makeRuntime();
-    writeJsonl(trajectoryPath, [
+    await writeSessionEntry();
+    await appendEvents([
       makeEvent({
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
@@ -163,7 +168,8 @@ describe("sessionsTailCommand", () => {
 
   it("honors the tail count before rendering existing trajectory events", async () => {
     const runtime = makeRuntime();
-    writeJsonl(trajectoryPath, [
+    await writeSessionEntry();
+    await appendEvents([
       makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
       makeEvent({
         type: "tool.call",
@@ -188,25 +194,26 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
   });
 
-  it("uses a session trajectory pointer for relocated runtime files", async () => {
+  it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
     const runtime = makeRuntime();
-    const relocatedDir = path.join(tmpDir, "relocated-trajectories");
-    const relocatedTrajectoryPath = path.join(relocatedDir, "session-one.jsonl");
-    fs.mkdirSync(relocatedDir, { recursive: true });
-    fs.writeFileSync(
-      resolveTrajectoryPointerFilePath(path.join(tmpDir, "session-one.jsonl")),
-      `${JSON.stringify({
-        traceSchema: "openclaw-trajectory-pointer",
-        schemaVersion: 1,
-        sessionId: "session-one",
-        runtimeFile: relocatedTrajectoryPath,
-      })}\n`,
+
+    await sessionsTailCommand({ store: storePath, sessionKey, tail: "9007199254740992" }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tail must be a non-negative integer, for example --tail 25.",
     );
-    writeJsonl(relocatedTrajectoryPath, [
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("tails SQLite trajectory rows from the database", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-one", storePath }, [
       makeEvent({
         type: "tool.result",
         ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "bash", success: true },
+        data: { name: "sqlite", success: true },
       }),
     ]);
 
@@ -214,67 +221,64 @@ describe("sessionsTailCommand", () => {
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
-    expect(output).toContain("bash ok");
+    expect(output).toContain("sqlite ok");
     expect(output).not.toContain("No sessions found");
   });
 
-  it("preserves events appended while follow mode starts", async () => {
+  it("isolates trajectory rows by session id", async () => {
     const runtime = makeRuntime();
-    writeJsonl(trajectoryPath, [
-      makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
-    ]);
-    const appendedEvent = makeEvent({
-      type: "tool.result",
-      ts: "2026-05-18T12:04:21.000Z",
-      data: { name: "bash", success: true },
-    });
-    let appended = false;
-    vi.mocked(runtime.log).mockImplementation((message) => {
-      if (!appended && String(message).includes("session.started")) {
-        appended = true;
-        appendJsonl(trajectoryPath, appendedEvent);
-      }
-    });
-
-    const run = sessionsTailCommand(
-      { store: storePath, sessionKey, tail: "1", follow: true },
-      runtime,
+    await writeSessionEntry();
+    await writeSessionEntry("agent:main:old", { sessionId: "old-session" });
+    await appendEvents(
+      [
+        makeEvent({
+          sessionId: "old-session",
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "stale", success: true },
+        }),
+      ],
+      { sessionId: "old-session" },
     );
-    try {
-      await waitForRuntimeOutput(runtime, "bash ok");
-    } finally {
-      process.emit("SIGTERM", "SIGTERM");
-      await run;
-    }
+    await appendEvents([
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:22.000Z",
+        data: { name: "current", success: true },
+      }),
+    ]);
+
+    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
-    expect(output).toContain("session.started");
-    expect(output).toContain("tool.result");
-    expect(output).toContain("bash ok");
+    expect(output).toContain("current ok");
+    expect(output).not.toContain("stale ok");
   });
 
-  it("continues following when a bounded trajectory window is rewritten", async () => {
+  it("continues following when SQLite trajectory rows are appended", async () => {
     const runtime = makeRuntime();
-    writeJsonl(trajectoryPath, [
+    await writeSessionEntry();
+    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
       makeEvent({
         sourceSeq: 1,
         type: "session.started",
         ts: "2026-05-18T12:04:17.000Z",
       }),
     ]);
-    const rewrittenEvent = makeEvent({
+    const appendedEvent = makeEvent({
       sourceSeq: 2,
       type: "tool.result",
       ts: "2026-05-18T12:04:21.000Z",
-      data: { name: "python", success: true },
+      data: { name: "sqlite", success: true },
     });
-    let rewritten = false;
+    let appended = false;
     vi.mocked(runtime.log).mockImplementation((message) => {
-      if (!rewritten && String(message).includes("session.started")) {
-        rewritten = true;
-        const nextPath = path.join(tmpDir, "session-one.next.trajectory.jsonl");
-        writeJsonl(nextPath, [rewrittenEvent]);
-        fs.renameSync(nextPath, trajectoryPath);
+      if (!appended && String(message).includes("session.started")) {
+        appended = true;
+        appendSqliteTrajectoryRuntimeEvents(
+          { agentId: "main", sessionId: "session-one", storePath },
+          [appendedEvent],
+        );
       }
     });
 
@@ -283,7 +287,7 @@ describe("sessionsTailCommand", () => {
       runtime,
     );
     try {
-      await waitForRuntimeOutput(runtime, "python ok");
+      await waitForRuntimeOutput(runtime, "sqlite ok");
     } finally {
       process.emit("SIGTERM", "SIGTERM");
       await run;
@@ -291,34 +295,30 @@ describe("sessionsTailCommand", () => {
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
-    expect(output).toContain("python ok");
+    expect(output).toContain("sqlite ok");
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = makeRuntime();
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
-    fs.mkdirSync(opsSessionsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(opsSessionsDir, "sessions.json"),
-      `${JSON.stringify({
-        [opsSessionKey]: {
-          sessionId: "ops-session",
-          sessionFile: "ops-session.jsonl",
-          updatedAt: 3,
-          status: "done",
-        },
-      })}\n`,
+    const opsStorePath = path.join(opsSessionsDir, "sessions.json");
+    await upsertSessionEntry(
+      { sessionKey: opsSessionKey, storePath: opsStorePath },
+      { sessionId: "ops-session", updatedAt: 3, status: "done" },
     );
-    writeJsonl(path.join(opsSessionsDir, "ops-session.trajectory.jsonl"), [
-      makeEvent({
-        sessionId: "ops-session",
-        sessionKey: opsSessionKey,
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "bash", success: true },
-      }),
-    ]);
+    appendSqliteTrajectoryRuntimeEvents(
+      { agentId: "ops", sessionId: "ops-session", storePath: opsStorePath },
+      [
+        makeEvent({
+          sessionId: "ops-session",
+          sessionKey: opsSessionKey,
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "bash", success: true },
+        }),
+      ],
+    );
 
     await sessionsTailCommand({ sessionKey: opsSessionKey }, runtime);
 
@@ -326,158 +326,6 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("agent:ops:telegram:direct:own…");
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
-    expect(output).not.toContain("No sessions found");
-  });
-
-  it("skips placeholder store entries without transcript session ids", async () => {
-    const runtime = makeRuntime();
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        "agent:main:cron:placeholder": {
-          label: "placeholder cron",
-          updatedAt: 3,
-        },
-        [sessionKey]: {
-          sessionId: "session-one",
-          sessionFile: "session-one.jsonl",
-          updatedAt: 2,
-          status: "done",
-        },
-      })}\n`,
-    );
-    writeJsonl(trajectoryPath, [
-      makeEvent({
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "bash", success: true },
-      }),
-    ]);
-
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
-
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("bash ok");
-    expect(output).not.toContain("No sessions found");
-  });
-
-  it("tails entries pinned by sessionFile when sessionId was normalized away", async () => {
-    const runtime = makeRuntime();
-    const legacySessionFile = path.join(tmpDir, "legacy-session.jsonl");
-    const legacyTrajectoryPath = path.join(tmpDir, "legacy-session.trajectory.jsonl");
-    fs.writeFileSync(legacySessionFile, "");
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        [sessionKey]: {
-          sessionFile: legacySessionFile,
-          updatedAt: 2,
-          status: "running",
-        },
-      })}\n`,
-    );
-    writeJsonl(legacyTrajectoryPath, [
-      makeEvent({
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "legacy", success: true },
-      }),
-    ]);
-
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
-
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("legacy ok");
-    expect(output).not.toContain("No sessions found");
-  });
-
-  it("uses trajectory pointers for sessionFile-only entries with original runtime ids", async () => {
-    const runtime = makeRuntime();
-    const legacySessionFile = path.join(tmpDir, "legacy-session.jsonl");
-    const pointerPath = resolveTrajectoryPointerFilePath(legacySessionFile);
-    const runtimeTrajectoryPath = path.join(tmpDir, "runtime-original.jsonl");
-    fs.writeFileSync(legacySessionFile, "");
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        [sessionKey]: {
-          sessionFile: legacySessionFile,
-          updatedAt: 2,
-          status: "running",
-        },
-      })}\n`,
-    );
-    fs.writeFileSync(
-      pointerPath,
-      `${JSON.stringify({
-        sessionId: "runtime-original",
-        runtimeFile: runtimeTrajectoryPath,
-      })}\n`,
-    );
-    writeJsonl(runtimeTrajectoryPath, [
-      makeEvent({
-        sessionId: "runtime-original",
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "pointer", success: true },
-      }),
-    ]);
-
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
-
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("pointer ok");
-    expect(output).not.toContain("No sessions found");
-  });
-
-  it("keeps trajectory directory fallback for pointer session ids", async () => {
-    const runtime = makeRuntime();
-    const legacySessionFile = path.join(tmpDir, "legacy-session.jsonl");
-    const pointerPath = resolveTrajectoryPointerFilePath(legacySessionFile);
-    const trajectoryDir = path.join(tmpDir, "trajectories");
-    process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
-    fs.mkdirSync(trajectoryDir, { recursive: true });
-    fs.writeFileSync(legacySessionFile, "");
-    fs.writeFileSync(
-      storePath,
-      `${JSON.stringify({
-        [sessionKey]: {
-          sessionFile: legacySessionFile,
-          updatedAt: 2,
-          status: "running",
-        },
-      })}\n`,
-    );
-    fs.writeFileSync(
-      pointerPath,
-      `${JSON.stringify({
-        sessionId: "runtime-original",
-        runtimeFile: path.join(tmpDir, "missing-pointer-runtime.jsonl"),
-      })}\n`,
-    );
-    writeJsonl(
-      resolveTrajectoryFilePath({
-        sessionFile: legacySessionFile,
-        sessionId: "runtime-original",
-      }),
-      [
-        makeEvent({
-          sessionId: "runtime-original",
-          type: "tool.result",
-          ts: "2026-05-18T12:04:21.000Z",
-          data: { name: "trajectory-dir", success: true },
-        }),
-      ],
-    );
-
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
-
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("trajectory-dir ok");
     expect(output).not.toContain("No sessions found");
   });
 });

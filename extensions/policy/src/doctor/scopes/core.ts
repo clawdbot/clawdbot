@@ -1,6 +1,6 @@
 // Policy doctor health-check factories for one policy scope.
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
-import { CHECK_IDS } from "../metadata.js";
+import { CHECK_IDS } from "../check-ids.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
 export function createPolicyCoreChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {

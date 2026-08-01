@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
@@ -33,6 +34,16 @@ type Options = {
   scopeBytes: number;
   quiet: boolean;
 };
+
+const VALUE_FLAGS = new Set([
+  "--iters",
+  "--batches",
+  "--snap-dir",
+  "--mode",
+  "--max-rss-growth-mb",
+  "--max-tracked-retention",
+  "--scope-bytes",
+]);
 
 function readValue(raw: string | undefined, flag: string): string {
   const value = raw?.trim() ?? "";
@@ -53,9 +64,16 @@ function parseArgs(argv: string[]): Options {
     scopeBytes: 2_000_000,
     quiet: false,
   };
+  const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+    const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
     const next = argv[i + 1];
+    if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        fail(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
+    }
     switch (arg) {
       case "--iters":
         opts.iters = parsePositiveInt(next, arg);

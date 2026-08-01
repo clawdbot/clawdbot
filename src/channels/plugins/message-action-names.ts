@@ -1,5 +1,6 @@
 /**
- * Canonical message action names accepted by channel message tool dispatch.
+ * Deliberately closed, core-owned vocabulary so every transport can render every action.
+ * Plugins add names through a core PR; runtime registration is intentionally unsupported.
  */
 export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "send",
@@ -56,7 +57,6 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "ban",
   "set-profile",
   "set-presence",
-  "set-profile",
   "download-file",
   "upload-file",
 ] as const;

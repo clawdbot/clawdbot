@@ -108,17 +108,22 @@ describe("zalouser outbound", () => {
       accountId: "default",
     } as never);
 
-    expect(mockSendMessage).toHaveBeenCalledWith("123456", "hello world\nthis is a test", {
-      profile: "default",
-      isGroup: true,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "123456",
+      "hello world\nthis is a test",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: true,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
     expect(result).toEqual({
       channel: "zalouser",
       messageId: "mid-1",
-      ok: true,
+      receipt: undefined,
     });
   });
 
@@ -142,17 +147,22 @@ describe("zalouser outbound", () => {
       accountId: "work",
     } as never);
 
-    expect(mockSendMessage).toHaveBeenCalledWith("987654", "hello user", {
-      profile: "work-profile",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "987654",
+      "hello user",
+      expect.objectContaining({
+        profile: "work-profile",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
     expect(result).toEqual({
       channel: "zalouser",
       messageId: "mid-1",
-      ok: true,
+      receipt: undefined,
     });
   });
 
@@ -165,13 +175,18 @@ describe("zalouser outbound", () => {
       text: "hello default",
     } as never);
 
-    expect(mockSendMessage).toHaveBeenCalledWith("111222", "hello default", {
-      profile: "default",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textChunkLimit: 10,
-    });
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "111222",
+      "hello default",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textChunkLimit: 10,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 });
 

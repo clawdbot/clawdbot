@@ -8,7 +8,7 @@
     "../../src/**/*.test.ts",
     "../../src/**/*.test.tsx",
     "../../ui/**/*.d.ts",
-    "../../ui/src/ui/app.ts",
+    "../../ui/src/main.ts",
     "../../ui/**/*.test.ts",
     "../../ui/**/*.test.tsx",
     "../../packages/**/*.d.ts",

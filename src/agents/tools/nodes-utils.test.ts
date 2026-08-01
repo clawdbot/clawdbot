@@ -26,34 +26,118 @@ beforeEach(() => {
 });
 
 describe("resolveNodeIdFromList defaults", () => {
+  it("keeps compact display-name matching opt-in", () => {
+    const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
+
+    expect(() => resolveNodeIdFromList(nodes, "MacStudio")).toThrow(/unknown node: MacStudio/);
+    expect(
+      resolveNodeIdFromList(nodes, "MacStudio", false, { allowCompactDisplayName: true }),
+    ).toBe("mac-1");
+  });
+
   it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1 }),
-      node({ nodeId: "android-1", platform: "android", connectedAtMs: 2 }),
+      node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1, lastSeenAtMs: 5000 }),
+      node({ nodeId: "android-1", platform: "android", connectedAtMs: 2, lastSeenAtMs: 1000 }),
     ];
 
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("android-1");
   });
 
+  it("ignores offline recency when any eligible node is connected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "offline-phone",
+        platform: "ios",
+        connected: false,
+        lastSeenAtMs: 5000,
+      }),
+      node({
+        nodeId: "connected-desktop",
+        platform: "android",
+        connected: true,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 1000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("connected-desktop");
+  });
+
   it("preserves local Mac preference when exactly one local Mac candidate exists", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "ios-1", platform: "ios" }),
-      node({ nodeId: "mac-1", platform: "macos" }),
+      node({ nodeId: "ios-1", platform: "ios", lastSeenAtMs: 5000 }),
+      node({ nodeId: "mac-1", platform: "macos", lastSeenAtMs: 1000 }),
     ];
 
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("mac-1");
   });
 
-  it("uses stable nodeId ordering when connectedAtMs is unavailable", () => {
-    // Deterministic tie-breaking keeps repeated tool calls from bouncing
-    // between connected nodes.
+  it("prefers most recently seen node when all candidates are disconnected", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "z-node", platform: "ios", connectedAtMs: undefined }),
-      node({ nodeId: "a-node", platform: "android", connectedAtMs: undefined }),
+      node({
+        nodeId: "abc123-desktop",
+        platform: "macos",
+        connected: false,
+        connectedAtMs: 9000,
+        lastSeenAtMs: 1000,
+      }),
+      node({
+        nodeId: "def456-phone",
+        platform: "ios",
+        connected: false,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 5000,
+      }),
     ];
 
-    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def456-phone");
   });
+
+  it("prefers node with lastSeenAtMs over node without when all disconnected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "abc-no-seen",
+        platform: "ios",
+        connected: false,
+        connectedAtMs: 9000,
+      }),
+      node({
+        nodeId: "def-has-seen",
+        platform: "android",
+        connected: false,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 3000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def-has-seen");
+  });
+
+  it.each([undefined, 3000])(
+    "uses stable nodeId ordering when disconnected-node lastSeenAtMs ties at %s",
+    (lastSeenAtMs) => {
+      // Deterministic tie-breaking keeps repeated wake attempts on one target.
+      const nodes: NodeListNode[] = [
+        node({
+          nodeId: "z-node",
+          platform: "ios",
+          connected: false,
+          connectedAtMs: 9000,
+          lastSeenAtMs,
+        }),
+        node({
+          nodeId: "a-node",
+          platform: "android",
+          connected: false,
+          connectedAtMs: 1000,
+          lastSeenAtMs,
+        }),
+      ];
+
+      expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
+    },
+  );
 });
 
 describe("listNodes", () => {
@@ -67,7 +151,8 @@ describe("listNodes", () => {
         paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
       });
 
-    await expect(listNodes({})).resolves.toEqual([
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).resolves.toEqual([
       {
         nodeId: "pair-1",
         displayName: "Pair 1",
@@ -75,8 +160,22 @@ describe("listNodes", () => {
         remoteIp: "1.2.3.4",
       },
     ]);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(1, "node.list", {}, {});
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(2, "node.pair.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.list",
+      {},
+      {},
+      { signal },
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.list",
+      {},
+      {},
+      {
+        signal,
+      },
+    );
   });
 
   it("rethrows unexpected node.list failures without fallback", async () => {
@@ -84,8 +183,9 @@ describe("listNodes", () => {
       new Error("gateway closed (1008): unauthorized"),
     );
 
-    await expect(listNodes({})).rejects.toThrow("gateway closed (1008): unauthorized");
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).rejects.toThrow("gateway closed (1008): unauthorized");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
   });
 });

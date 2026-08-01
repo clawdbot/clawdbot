@@ -154,7 +154,7 @@ object TalkDirectiveParser {
     keys: List<String>,
   ): String? {
     for (key in keys) {
-      val value = obj[key].asStringOrNull()?.trim()
+      val value = obj.valueForKey(key).asStringOrNull()?.trim()
       if (!value.isNullOrEmpty()) return value
     }
     return null
@@ -165,7 +165,7 @@ object TalkDirectiveParser {
     keys: List<String>,
   ): Double? {
     for (key in keys) {
-      val value = obj[key].asDoubleOrNull()
+      val value = obj.valueForKey(key).asDoubleOrNull()
       if (value != null) return value
     }
     return null
@@ -176,7 +176,7 @@ object TalkDirectiveParser {
     keys: List<String>,
   ): Int? {
     for (key in keys) {
-      val value = obj[key].asIntOrNull()
+      val value = obj.valueForKey(key).asIntOrNull()
       if (value != null) return value
     }
     return null
@@ -187,7 +187,7 @@ object TalkDirectiveParser {
     keys: List<String>,
   ): Long? {
     for (key in keys) {
-      val value = obj[key].asLongOrNull()
+      val value = obj.valueForKey(key).asLongOrNull()
       if (value != null) return value
     }
     return null
@@ -198,11 +198,13 @@ object TalkDirectiveParser {
     keys: List<String>,
   ): Boolean? {
     for (key in keys) {
-      val value = obj[key].asBooleanOrNull()
+      val value = obj.valueForKey(key).asBooleanOrNull()
       if (value != null) return value
     }
     return null
   }
+
+  private fun JsonObject.valueForKey(key: String): JsonElement? = this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 }
 
 private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

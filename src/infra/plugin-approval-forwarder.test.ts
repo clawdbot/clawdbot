@@ -1,6 +1,6 @@
 // Covers plugin approval forwarding through channel capabilities.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -34,7 +34,13 @@ const PLUGIN_DISABLED_CFG = {
   },
 } as OpenClawConfig;
 
-function createForwarder(params: { cfg: OpenClawConfig; deliver?: ReturnType<typeof vi.fn> }) {
+function createForwarder(params: {
+  cfg: OpenClawConfig;
+  deliver?: ReturnType<typeof vi.fn>;
+  resolveSessionTarget?: NonNullable<
+    Parameters<typeof createExecApprovalForwarder>[0]
+  >["resolveSessionTarget"];
+}) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const forwarder = createExecApprovalForwarder({
     getConfig: () => params.cfg,
@@ -42,6 +48,7 @@ function createForwarder(params: { cfg: OpenClawConfig; deliver?: ReturnType<typ
       NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
     >,
     nowMs: () => 1000,
+    resolveSessionTarget: params.resolveSessionTarget,
   });
   return { deliver, forwarder };
 }
@@ -125,6 +132,71 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(false);
     });
 
+    it.each(["webchat", "tui"])(
+      "does not forward %s-originated approvals to stale session channels",
+      async (turnSourceChannel) => {
+        const resolveSessionTarget = vi.fn(async ({ request }) =>
+          request.request.turnSourceChannel
+            ? null
+            : { channel: "telegram" as const, to: "123", accountId: "default" },
+        );
+        const cfg = {
+          approvals: { plugin: { enabled: true, mode: "session" } },
+        } as OpenClawConfig;
+        const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
+
+        await expect(
+          forwarder.handlePluginApprovalRequested!(
+            makePluginRequest({
+              request: {
+                ...makePluginRequest().request,
+                turnSourceChannel,
+              },
+            }),
+          ),
+        ).resolves.toBe(false);
+        expect(resolveSessionTarget).toHaveBeenCalledWith(
+          expect.objectContaining({
+            request: expect.objectContaining({
+              request: expect.objectContaining({ turnSourceChannel }),
+            }),
+          }),
+        );
+        expect(deliver).not.toHaveBeenCalled();
+      },
+    );
+
+    it("preserves session fallback for non-deliverable background sources", async () => {
+      const resolveSessionTarget = vi.fn(async ({ request }) =>
+        request.request.turnSourceChannel
+          ? null
+          : { channel: "telegram" as const, to: "123", accountId: "default" },
+      );
+      const cfg = {
+        approvals: { plugin: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
+
+      await expect(
+        forwarder.handlePluginApprovalRequested!(
+          makePluginRequest({
+            request: {
+              ...makePluginRequest().request,
+              turnSourceChannel: "heartbeat",
+            },
+          }),
+        ),
+      ).resolves.toBe(true);
+      expect(resolveSessionTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            request: expect.objectContaining({ turnSourceChannel: null }),
+          }),
+        }),
+      );
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+
     it("forwards to configured targets", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
@@ -146,28 +218,31 @@ describe("plugin approval forwarding", () => {
               {
                 label: "Allow Once",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-req-1 allow-once",
+                  type: "approval",
+                  approvalId: "plugin-req-1",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
                 },
-                value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-req-1 allow-always",
+                  type: "approval",
+                  approvalId: "plugin-req-1",
+                  approvalKind: "plugin",
+                  decision: "allow-always",
                 },
-                value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-req-1 deny",
+                  type: "approval",
+                  approvalId: "plugin-req-1",
+                  approvalKind: "plugin",
+                  decision: "deny",
                 },
-                value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
             ],
@@ -201,19 +276,21 @@ describe("plugin approval forwarding", () => {
               {
                 label: "Allow Once",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-req-1 allow-once",
+                  type: "approval",
+                  approvalId: "plugin-req-1",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
                 },
-                value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-req-1 deny",
+                  type: "approval",
+                  approvalId: "plugin-req-1",
+                  approvalKind: "plugin",
+                  decision: "deny",
                 },
-                value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
             ],

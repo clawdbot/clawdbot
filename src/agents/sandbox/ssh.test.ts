@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
@@ -105,6 +106,22 @@ describe("sandbox ssh helpers", () => {
         "line-2\n" +
         "-----END OPENSSH PRIVATE KEY-----\n",
     );
+  });
+
+  it.each([
+    ["identityFile", "IdentityFile"] as const,
+    ["certificateFile", "CertificateFile"] as const,
+    ["knownHostsFile", "UserKnownHostsFile"] as const,
+  ])("rejects %s values that would break ssh config directives", async (field, directive) => {
+    await expect(
+      createSshSandboxSessionFromSettings({
+        command: "ssh",
+        target: "peter@example.com:2222",
+        strictHostKeyChecking: true,
+        updateHostKeys: false,
+        [field]: `/tmp/key\n  ${directive} /tmp/injected`,
+      }),
+    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks.`);
   });
 
   it("wraps remote exec commands with env and workdir", () => {
@@ -236,6 +253,87 @@ describe("sandbox ssh helpers", () => {
       expect(stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "validates exec workdirs without creating missing directories",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
+      const project = path.join(root, "workspace", "project");
+      await fs.mkdir(project, { recursive: true });
+      const canonicalProject = await fs.realpath(project);
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        buildRemoteWorkdirValidationCommand({
+          workdir: project,
+          root: path.join(root, "workspace"),
+        }),
+      ]);
+
+      expect(stdout.trim()).toBe(canonicalProject);
+      await expect(
+        execFileAsync("/bin/sh", [
+          "-c",
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(root, "workspace", "missing"),
+            root: path.join(root, "workspace"),
+          }),
+        ]),
+      ).rejects.toThrow(/remote directory not found/);
+      await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked exec workdirs inside the trusted remote root",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.symlink(root, path.join(workspace, "escape"));
+
+      await expect(
+        execFileAsync("/bin/sh", [
+          "-c",
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(workspace, "escape"),
+            root: workspace,
+          }),
+        ]),
+      ).rejects.toThrow(/unsafe remote directory symlink/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "validates exec workdirs when the trusted remote root is slash",
+    async () => {
+      const root = makeTempDir(tempDirs, "openclaw-ssh-root-");
+      const project = path.join(root, "project");
+      await fs.mkdir(project, { recursive: true });
+      const canonicalProject = await fs.realpath(project);
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        buildRemoteWorkdirValidationCommand({
+          workdir: canonicalProject,
+          root: "/",
+        }),
+      ]);
+
+      expect(stdout.trim()).toBe(canonicalProject);
+    },
+  );
+
+  it("builds remote workdir validation commands with quoted literal paths", () => {
+    const command = buildRemoteWorkdirValidationCommand({
+      workdir: "/remote/workspace/project one",
+      root: "/remote/workspace",
+    });
+
+    expect(command).toContain("openclaw-validate-workdir");
+    expect(command).toContain("project one");
+    expect(command).toContain("remote directory must be absolute");
+  });
 
   it.runIf(process.platform !== "win32")(
     "rejects symlinked directories inside the trusted remote root",

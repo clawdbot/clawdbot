@@ -28,7 +28,7 @@ paths:
   - src/agents/agent-tools.abort.ts
   - src/agents/agent-tools.before-tool-call*.ts
   - src/agents/agent-tools.read.ts
-  - src/agents/agent-tools-parameter-schema.ts
+  - packages/ai/src/providers/agent-tools-parameter-schema.ts
   - src/agents/sessions/tools/**
   - src/agents/embedded-agent-runner/effective-tool-policy.ts
   - src/agents/embedded-agent-runner/tool-name-allowlist.ts

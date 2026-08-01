@@ -1,7 +1,10 @@
 /** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import {
+  listLegacyAuthProfileArchives,
+  listLegacyAuthProfileSources,
+} from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   readPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
@@ -15,7 +18,7 @@ import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -37,24 +40,20 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStoreAgentDirs,
-  listLegacyAuthJsonPaths,
+  listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 /** Stable finding codes emitted by `openclaw secrets audit`. */
-export type SecretsAuditCode =
-  | "PLAINTEXT_FOUND"
-  | "REF_UNRESOLVED"
-  | "REF_SHADOWED"
-  | "LEGACY_RESIDUE";
+type SecretsAuditCode = "PLAINTEXT_FOUND" | "REF_UNRESOLVED" | "REF_SHADOWED" | "LEGACY_RESIDUE";
 
 /** Audit severity used for CLI output and check-mode exit behavior. */
-export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
+type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
 /** One secret audit finding with file/path context. */
-export type SecretsAuditFinding = {
+type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
   file: string;
@@ -65,10 +64,10 @@ export type SecretsAuditFinding = {
 };
 
 /** Overall audit state derived from findings and unresolved refs. */
-export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
+type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-export type SecretsAuditReport = {
+type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
   resolution: {
@@ -221,6 +220,13 @@ function collectConfigSecrets(params: {
     ) {
       continue;
     }
+    if (
+      target.entry.id === "models.providers.*.apiKey" &&
+      typeof target.value === "string" &&
+      isNonSecretApiKeyMarker(target.value)
+    ) {
+      continue;
+    }
     if (!hasPlaintext) {
       continue;
     }
@@ -298,42 +304,6 @@ function collectAuthStoreSecrets(params: {
         profileId: entry.profileId,
       });
       trackAuthProviderState(params.collector, entry.provider, "oauth");
-    }
-  }
-}
-
-function collectAuthJsonResidue(params: { stateDir: string; collector: AuditCollector }): void {
-  for (const authJsonPath of listLegacyAuthJsonPaths(params.stateDir)) {
-    params.collector.filesScanned.add(authJsonPath);
-    const parsedResult = readJsonObjectIfExists(authJsonPath);
-    if (parsedResult.error) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: authJsonPath,
-        jsonPath: "<root>",
-        message: `Invalid JSON in legacy auth.json: ${parsedResult.error}`,
-      });
-      continue;
-    }
-    const parsed = parsedResult.value;
-    if (!parsed) {
-      continue;
-    }
-    for (const [providerId, value] of Object.entries(parsed)) {
-      if (!isRecord(value)) {
-        continue;
-      }
-      if (value.type === "api_key" && isNonEmptyString(value.key)) {
-        addFinding(params.collector, {
-          code: "LEGACY_RESIDUE",
-          severity: "warn",
-          file: authJsonPath,
-          jsonPath: providerId,
-          message: "Legacy auth.json contains static api_key credentials.",
-          provider: providerId,
-        });
-      }
     }
   }
 }
@@ -425,6 +395,44 @@ function collectModelsJsonSecrets(params: {
         provider: providerId,
       });
     }
+  }
+}
+
+function collectLegacyAuthSourceFindings(params: {
+  config: OpenClawConfig;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  collector: AuditCollector;
+}): void {
+  const seen = new Set<string>();
+  const agentDirs = listAuthProfileStoreAgentDirs(params.config, params.stateDir);
+  for (const agentDir of agentDirs) {
+    for (const source of listLegacyAuthProfileSources({ agentDir, env: params.env })) {
+      if (seen.has(source.path)) {
+        continue;
+      }
+      seen.add(source.path);
+      addFinding(params.collector, {
+        code: "LEGACY_RESIDUE",
+        severity: source.kind === "auth-state" ? "info" : "warn",
+        file: source.path,
+        jsonPath: "<root>",
+        message: `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
+      });
+    }
+  }
+  for (const archive of listLegacyAuthProfileArchives({ agentDirs, env: params.env })) {
+    if (seen.has(archive.path)) {
+      continue;
+    }
+    seen.add(archive.path);
+    addFinding(params.collector, {
+      code: "LEGACY_RESIDUE",
+      severity: "warn",
+      file: archive.path,
+      jsonPath: "<root>",
+      message: `Archived auth source ${archive.kind} may contain plaintext credentials; retain it only as long as recovery requires.`,
+    });
   }
 }
 
@@ -632,7 +640,7 @@ export async function runSecretsAudit(
   };
 
   const stateDir = resolveStateDir(env, os.homedir);
-  const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
+  const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
   let resolution = {
     refsChecked: 0,
@@ -681,15 +689,10 @@ export async function runSecretsAudit(
     });
   }
 
-  collectEnvPlaintext({
-    envPath,
-    collector,
-  });
-  collectAuthJsonResidue({
-    stateDir,
-    collector,
-  });
-
+  for (const envPath of envPaths) {
+    collectEnvPlaintext({ envPath, collector });
+  }
+  collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
   const summary = summarizeFindings(collector.findings);
   const status: SecretsAuditStatus =
     summary.unresolvedRefCount > 0

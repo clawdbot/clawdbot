@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  buildPortableAuthProfileStoreForAgentCopy,
   resolveAuthProfilePortability,
 } from "./portability.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
@@ -35,7 +35,7 @@ describe("auth profile portability", () => {
       },
     };
 
-    const portable = buildPortableAuthProfileSecretsStoreForAgentCopy(store);
+    const portable = buildPortableAuthProfileStoreForAgentCopy(store);
 
     expect(portable.copiedProfileIds).toEqual(["openai:api-key", "github-copilot:default"]);
     expect(portable.skippedProfileIds).toEqual(["openai:default"]);

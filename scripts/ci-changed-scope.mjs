@@ -1,54 +1,80 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
+
+const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
 const FULL_SCOPE = {
   runNode: true,
   runMacos: true,
+  runIosBuild: true,
   runAndroid: true,
   runWindows: true,
   runSkillsPython: true,
   runChangedSmoke: true,
   runControlUiI18n: true,
+  runUiTests: true,
 };
 
 const EMPTY_SCOPE = {
   runNode: false,
   runMacos: false,
+  runIosBuild: false,
   runAndroid: false,
   runWindows: false,
   runSkillsPython: false,
   runChangedSmoke: false,
   runControlUiI18n: false,
+  runUiTests: false,
 };
 
-const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
+const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/plistbuddy\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
+  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
+const IOS_BUILD_RE =
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
+const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
-const TEST_ONLY_PATH_RE =
-  /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
+  /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/store\.session-lifecycle-mutation\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:exec-allowlist-pattern|fs-safe-remove|ssh-client\.windows|update-managed-service-handoff|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+const WINDOWS_DAEMON_SCOPE_RE =
+  /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
-const NATIVE_ONLY_RE =
-  /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
+const CONTROL_UI_HARD_GENERATED_I18N_RE =
+  /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
+const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
+
+export class ControlUiGeneratedArtifactsMixedError extends Error {}
+export class NativeGeneratedArtifactsMixedError extends Error {}
+const CHROMIUM_UI_TEST_SCOPE_RE =
+  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$|package\.json$|\.github\/workflows\/ci\.yml$)/;
+const NATIVE_I18N_SCOPE_RE =
+  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
+// Android base resources are co-owned: source PRs edit their English content,
+// while the generator rewrites managed sections. Treat them as generated only
+// alongside a hard-generated artifact so neither ownership path blocks the other.
+const NATIVE_COOWNED_GENERATED_I18N_RE =
+  /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
+const NATIVE_HARD_GENERATED_I18N_RE =
+  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -58,7 +84,7 @@ const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
-  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/test-projects\.test-support\.d\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|run-vitest|test-projects)\.test\.ts$)/;
+  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/(?:test-projects\.test-support|lib\/(?:changed-path-facts|ci-changed-node-test-plan))\.d\.mts$|scripts\/lib\/(?:changed-path-facts|ci-changed-node-test-plan)\.mjs$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|ci-changed-node-test-plan|run-vitest|test-projects)\.test\.ts$)/;
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
@@ -72,34 +98,31 @@ const NODE_FAST_SCOPE_RE = new RegExp(
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
-    return {
-      runNode: true,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: true,
-      runSkillsPython: true,
-      runChangedSmoke: true,
-      runControlUiI18n: true,
-    };
+    return { ...FULL_SCOPE };
   }
 
   let runNode = false;
   let runMacos = false;
+  let runIosBuild = false;
   let runAndroid = false;
   let runWindows = false;
   let runSkillsPython = false;
   let runChangedSmoke = false;
   let runControlUiI18n = false;
+  let runUiTests = false;
   let hasNonDocs = false;
   let hasNonNativeNonDocs = false;
 
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
     if (!path) {
       continue;
     }
 
-    if (DOCS_PATH_RE.test(path)) {
+    const isAppleSwiftConfig = APPLE_SWIFT_CONFIG_RE.test(path);
+
+    if (facts.surface === "docs") {
       continue;
     }
 
@@ -115,9 +138,13 @@ export function detectChangedScope(changedPaths) {
 
     if (
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
-      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path))
+      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path) || isAppleSwiftConfig)
     ) {
       runMacos = true;
+    }
+
+    if (IOS_BUILD_RE.test(path) || isAppleSwiftConfig) {
+      runIosBuild = true;
     }
 
     if (!NATIVE_PROTOCOL_GEN_RE.test(path) && ANDROID_NATIVE_RE.test(path)) {
@@ -129,8 +156,10 @@ export function detectChangedScope(changedPaths) {
     }
 
     if (
-      WINDOWS_SCOPE_RE.test(path) &&
-      (!TEST_ONLY_PATH_RE.test(path) || WINDOWS_TEST_SCOPE_RE.test(path))
+      (WINDOWS_SCOPE_RE.test(path) ||
+        WINDOWS_SQLITE_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
+      (!facts.isTestOnly || WINDOWS_TEST_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }
@@ -139,11 +168,18 @@ export function detectChangedScope(changedPaths) {
       runChangedSmoke = true;
     }
 
-    if (CONTROL_UI_I18N_SCOPE_RE.test(path)) {
+    if (
+      CONTROL_UI_I18N_SCOPE_RE.test(path) ||
+      (CONTROL_UI_RAW_COPY_SOURCE_RE.test(path) && !facts.isTestOnly)
+    ) {
       runControlUiI18n = true;
     }
 
-    if (!NATIVE_ONLY_RE.test(path)) {
+    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path)) {
+      runUiTests = true;
+    }
+
+    if (!facts.isNativeOnly) {
       hasNonNativeNonDocs = true;
     }
   }
@@ -155,12 +191,193 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
+    runIosBuild,
     runAndroid,
     runWindows,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,
+    runUiTests,
   };
+}
+
+/**
+ * Generated Control UI locale snapshots belong in their isolated automation PR.
+ * Mixing them into a source PR recreates deterministic rebase conflicts.
+ * @param {string[]} changedPaths
+ */
+export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchName = "") {
+  if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
+    return;
+  }
+  const generatedPaths = changedPaths.filter((filePath) =>
+    CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (generatedPaths.length === 0) {
+    return;
+  }
+  const sourcePaths = changedPaths.filter(
+    (filePath) => !CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (sourcePaths.length === 0) {
+    return;
+  }
+  if (isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths)) {
+    return;
+  }
+  throw new ControlUiGeneratedArtifactsMixedError(
+    [
+      "Control UI generated locale artifacts must be isolated from source changes.",
+      "Commit English/source changes only; the locale refresh workflow owns generated translation memory and metadata.",
+      ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
+      ...sourcePaths.map((filePath) => `- source: ${filePath}`),
+    ].join("\n"),
+  );
+}
+
+function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
+  const requiredOwners = [
+    ".gitattributes",
+    "scripts/ci-changed-scope.mjs",
+    "scripts/control-ui-i18n.ts",
+    "scripts/control-ui-i18n-verify.ts",
+    "scripts/lib/control-ui-i18n-catalog.ts",
+    "scripts/lib/control-ui-i18n-sync-plan.ts",
+    "ui/AGENTS.md",
+    "ui/config/control-ui-locales.ts",
+    "ui/vite.config.ts",
+  ];
+  if (!requiredOwners.every((owner) => changedPaths.includes(owner))) {
+    return false;
+  }
+
+  const assetsDir = new URL("../ui/src/i18n/.i18n/", import.meta.url);
+  const locales = readdirSync(assetsDir)
+    .filter((fileName) => fileName.endsWith(".tm.jsonl"))
+    .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
+  const requiredGeneratedPaths = [
+    "ui/src/i18n/.i18n/catalog-fallbacks.json",
+    ...locales.flatMap((locale) => [
+      `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
+      `ui/src/i18n/.i18n/${locale}.meta.json`,
+    ]),
+  ];
+  if (
+    generatedPaths.length !== requiredGeneratedPaths.length ||
+    !requiredGeneratedPaths.every((filePath) => generatedPaths.includes(filePath))
+  ) {
+    return false;
+  }
+
+  return locales.every((locale) => {
+    const adapterPath = `ui/src/i18n/locales/${locale}.ts`;
+    if (!changedPaths.includes(adapterPath)) {
+      return false;
+    }
+    let source;
+    try {
+      source = readFileSync(new URL(`../${adapterPath}`, import.meta.url), "utf8").trim();
+    } catch {
+      return false;
+    }
+    const exportName = locale.replaceAll("-", "_");
+    return (
+      source ===
+      `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`
+    );
+  });
+}
+
+export function shouldStrictControlUiI18n(changedPaths) {
+  return (
+    changedPaths === null ||
+    changedPaths.some((filePath) => CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath))
+  );
+}
+
+/**
+ * Native translations and platform resources are committed by one serialized
+ * automation PR. Source PRs own only source plus the stable-ID inventory.
+ * @param {string[]} changedPaths
+ */
+export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName = "") {
+  if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
+    return;
+  }
+  const generatedPaths = changedPaths.filter((filePath) =>
+    NATIVE_HARD_GENERATED_I18N_RE.test(filePath),
+  );
+  if (generatedPaths.length === 0) {
+    return;
+  }
+  const generatedCompanionPaths = changedPaths.filter((filePath) =>
+    NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
+  );
+  const sourcePaths = changedPaths.filter(
+    (filePath) =>
+      !NATIVE_HARD_GENERATED_I18N_RE.test(filePath) &&
+      !NATIVE_COOWNED_GENERATED_I18N_RE.test(filePath),
+  );
+  if (sourcePaths.length === 0) {
+    return;
+  }
+  throw new NativeGeneratedArtifactsMixedError(
+    [
+      "Native generated locale artifacts must be isolated from source changes.",
+      "Commit native source changes and apps/.i18n/native-source.json only; the native locale refresh workflow owns translated and platform-generated artifacts.",
+      ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
+      ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
+      ...sourcePaths.map((filePath) => `- source: ${filePath}`),
+    ].join("\n"),
+  );
+}
+
+export function shouldStrictNativeI18n(changedPaths) {
+  return (
+    changedPaths === null ||
+    changedPaths.some((filePath) => NATIVE_HARD_GENERATED_I18N_RE.test(filePath))
+  );
+}
+
+function resolveChangedBranchName() {
+  const githubBranch = process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME;
+  if (githubBranch) {
+    return githubBranch;
+  }
+  try {
+    return execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+export function resolveAllowedGeneratedMixBranch(
+  env = process.env,
+  branchName = resolveChangedBranchName(),
+) {
+  if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
+    return "";
+  }
+  if (RELEASE_BRANCH_RE.test(branchName)) {
+    return branchName;
+  }
+  if (
+    env.GITHUB_ACTIONS === "true" &&
+    env.GITHUB_EVENT_NAME === "push" &&
+    env.GITHUB_REF === "refs/heads/main" &&
+    branchName === "main"
+  ) {
+    return branchName;
+  }
+  return "";
+}
+
+export function shouldRunNativeI18n(changedPaths) {
+  return (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+  );
 }
 
 /**
@@ -180,8 +397,9 @@ export function detectNodeFastScope(changedPaths) {
   let runCiRouting = false;
 
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
-    if (!path || DOCS_PATH_RE.test(path)) {
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
+    if (!path || facts.surface === "docs") {
       continue;
     }
 
@@ -207,11 +425,12 @@ export function detectNodeFastScope(changedPaths) {
  * @returns {InstallSmokeScope}
  */
 function detectInstallSmokeScopeForPath(path) {
+  const facts = getChangedPathFacts(path);
   const runFullInstallSmoke = FULL_INSTALL_SMOKE_SCOPE_RE.test(path);
   const runFastInstallSmoke =
     runFullInstallSmoke ||
     FAST_INSTALL_SMOKE_SCOPE_RE.test(path) ||
-    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !TEST_ONLY_PATH_RE.test(path));
+    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !facts.isTestOnly);
   return { runFastInstallSmoke, runFullInstallSmoke };
 }
 
@@ -230,8 +449,9 @@ export function detectInstallSmokeScope(changedPaths) {
   let runFastInstallSmoke = false;
   let runFullInstallSmoke = false;
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
-    if (!path || DOCS_PATH_RE.test(path)) {
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
+    if (!path || facts.surface === "docs") {
       continue;
     }
     const pathScope = detectInstallSmokeScopeForPath(path);
@@ -265,7 +485,7 @@ export function listChangedPaths(
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
-  const output = execFileSync("git", ["diff", "--name-only", diffBase, head], {
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", diffBase, head], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
@@ -292,12 +512,15 @@ export function writeGitHubOutput(
     runFullInstallSmoke: scope.runChangedSmoke,
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
+  runNativeI18n = true,
+  changedPaths = null,
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
+  appendFileSync(outputPath, `run_ios_build=${scope.runIosBuild}\n`, "utf8");
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
@@ -320,6 +543,24 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `strict_control_ui_i18n=${shouldStrictControlUiI18n(changedPaths)}\n`,
+    "utf8",
+  );
+  appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
+  appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `strict_native_i18n=${shouldStrictNativeI18n(changedPaths)}\n`,
+    "utf8",
+  );
+  const changedPathsJson = JSON.stringify(changedPaths);
+  appendFileSync(
+    outputPath,
+    `changed_paths_json=${Buffer.byteLength(changedPathsJson, "utf8") <= CHANGED_PATHS_OUTPUT_MAX_BYTES ? changedPathsJson : "null"}\n`,
+    "utf8",
+  );
 }
 
 function isDirectRun() {
@@ -366,16 +607,29 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE);
+      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
       process.exit(0);
     }
+    const allowedGeneratedMixBranch = resolveAllowedGeneratedMixBranch();
+    assertControlUiGeneratedArtifactsIsolated(changedPaths, allowedGeneratedMixBranch);
+    assertNativeGeneratedArtifactsIsolated(changedPaths, allowedGeneratedMixBranch);
     writeGitHubOutput(
       detectChangedScope(changedPaths),
       process.env.GITHUB_OUTPUT,
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
+      shouldRunNativeI18n(changedPaths),
+      changedPaths,
     );
-  } catch {
-    writeGitHubOutput(FULL_SCOPE);
+  } catch (error) {
+    if (
+      error instanceof ControlUiGeneratedArtifactsMixedError ||
+      error instanceof NativeGeneratedArtifactsMixedError
+    ) {
+      console.error(error.message);
+      process.exitCode = 1;
+    } else {
+      writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
+    }
   }
 }

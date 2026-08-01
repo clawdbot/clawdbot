@@ -3,6 +3,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,17 +17,6 @@ import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
-
-type DiscordGroupConfig = {
-  requireMention?: boolean;
-  slug?: string;
-  channels?: Record<string, DiscordGroupConfig>;
-};
-
-type DiscordConfigWithGuilds = {
-  accounts?: Record<string, { guilds?: Record<string, DiscordGroupConfig> }>;
-  guilds?: Record<string, DiscordGroupConfig>;
-};
 
 function loadGroupsRuntime() {
   return groupsRuntimeLoader.load();
@@ -49,99 +40,6 @@ async function resolveRuntimeChannelId(raw?: string | null): Promise<string | nu
   } catch {
     return normalized;
   }
-}
-
-function normalizeDiscordSlug(value?: string | null) {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return "";
-  }
-  return normalized
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function resolveDiscordGuilds(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): Record<string, DiscordGroupConfig> | undefined {
-  const discord = cfg.channels?.discord as DiscordConfigWithGuilds | undefined;
-  if (!discord) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  const accountGuilds = normalizedAccountId
-    ? discord.accounts?.[normalizedAccountId]?.guilds
-    : undefined;
-  return accountGuilds ?? discord.guilds;
-}
-
-function resolveDiscordGuildEntry(
-  guilds: Record<string, DiscordGroupConfig> | undefined,
-  groupSpace?: string | null,
-): DiscordGroupConfig | undefined {
-  if (!guilds || Object.keys(guilds).length === 0) {
-    return undefined;
-  }
-  const space = normalizeOptionalString(groupSpace) ?? "";
-  if (space && guilds[space]) {
-    return guilds[space];
-  }
-  const slug = normalizeDiscordSlug(space);
-  if (slug && guilds[slug]) {
-    return guilds[slug];
-  }
-  if (slug) {
-    const match = Object.values(guilds).find((entry) => normalizeDiscordSlug(entry?.slug) === slug);
-    if (match) {
-      return match;
-    }
-  }
-  return guilds["*"];
-}
-
-function resolveDiscordChannelEntry(
-  channels: Record<string, DiscordGroupConfig> | undefined,
-  params: { groupId?: string | null; groupChannel?: string | null },
-): DiscordGroupConfig | undefined {
-  if (!channels || Object.keys(channels).length === 0) {
-    return undefined;
-  }
-  const groupId = normalizeOptionalString(params.groupId);
-  const groupChannel = normalizeOptionalString(params.groupChannel);
-  const channelSlug = normalizeDiscordSlug(groupChannel);
-  return (
-    (groupId ? channels[groupId] : undefined) ??
-    (channelSlug ? (channels[channelSlug] ?? channels[`#${channelSlug}`]) : undefined) ??
-    (groupChannel ? channels[groupChannel] : undefined) ??
-    channels["*"]
-  );
-}
-
-function resolveDiscordRequireMentionFallback(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  accountId?: string | null;
-}): boolean | undefined {
-  if (params.channel !== "discord") {
-    return undefined;
-  }
-  const guildEntry = resolveDiscordGuildEntry(
-    resolveDiscordGuilds(params.cfg, params.accountId),
-    params.groupSpace,
-  );
-  const channelEntry = resolveDiscordChannelEntry(guildEntry?.channels, params);
-  if (typeof channelEntry?.requireMention === "boolean") {
-    return channelEntry.requireMention;
-  }
-  if (typeof guildEntry?.requireMention === "boolean") {
-    return guildEntry.requireMention;
-  }
-  return undefined;
 }
 
 /** Resolves whether a group/channel turn requires an explicit mention. */
@@ -178,17 +76,6 @@ export async function resolveGroupRequireMention(params: {
   if (typeof requireMention === "boolean") {
     return requireMention;
   }
-  const discordRequireMention = resolveDiscordRequireMentionFallback({
-    cfg,
-    channel,
-    groupId,
-    groupChannel,
-    groupSpace,
-    accountId: ctx.AccountId,
-  });
-  if (typeof discordRequireMention === "boolean") {
-    return discordRequireMention;
-  }
   return resolveChannelGroupRequireMention({
     cfg,
     channel,
@@ -210,15 +97,16 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
   }
-  const labels: Record<string, string> = {
-    imessage: "iMessage",
-    whatsapp: "WhatsApp",
-  };
-  const label = labels[providerKey];
+  const channelId = normalizeChatChannelId(providerKey);
+  const label = channelId ? findChatChannelMeta(channelId)?.label : undefined;
   if (label) {
     return label;
   }
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
+}
+
+function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channel" {
+  return normalizeOptionalLowercaseString(chatType) === "channel" ? "channel" : "group chat";
 }
 
 /**
@@ -237,28 +125,27 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
+  const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
+  const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
 
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} group chat.`);
-  if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
-    lines.push(
-      `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
-    );
-  }
+  lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
   if (messageToolOnly) {
     lines.push(
-      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+      `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
     );
   } else {
     lines.push(
-      "Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+      `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
     );
   }
   lines.push(
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
-  const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
+  const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
+  const tableMode = getLoadedChannelPluginForRead(channelId)?.messaging?.defaultMarkdownTableMode;
+  const tableGuidance =
+    tableMode === "block" || tableMode === "off" ? "" : " Avoid Markdown tables.";
   lines.push(
     `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
   );
@@ -273,8 +160,9 @@ export function buildGroupChatContext(params: {
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
     );
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
   }
   if (canUseSilentReply) {
     lines.push(
@@ -312,7 +200,9 @@ export function buildDirectChatContext(params: {
     );
     return lines.join(" ");
   }
-  lines.push("Your replies are automatically sent to this conversation.");
+  lines.push(
+    "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
+  );
   return lines.join(" ");
 }
 
@@ -338,17 +228,12 @@ export function resolveGroupSilentReplyBehavior(params: {
 
 /** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
-  cfg: OpenClawConfig;
-  sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
-  silentToken: string;
-  silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
-  const activationLine =
-    activation === "always"
-      ? "Activation: always-on (you receive every group message)."
-      : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  return `${activationLine} Address the specific sender noted in the message context.`;
+  if (activation === "always") {
+    return "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
+  }
+  return "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.";
 }

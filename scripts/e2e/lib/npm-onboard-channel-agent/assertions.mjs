@@ -129,16 +129,14 @@ function configureMockModel() {
 
 function assertMockModelConfig() {
   const mockPort = parseMockOpenAiPort(process.argv[3]);
-  const expectedModelRef = "openai/gpt-5.5";
+  const expectedModelRef = "openai/gpt-5.6-luna";
   const expectedBaseUrl = `http://127.0.0.1:${mockPort}/v1`;
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const provider = cfg.models?.providers?.openai;
   const defaultModel = cfg.agents?.defaults?.model?.primary;
   const defaultRuntime = cfg.agents?.defaults?.models?.[expectedModelRef]?.agentRuntime?.id;
-  const agent = Array.isArray(cfg.agents?.list)
-    ? (cfg.agents.list.find((entry) => entry?.id === "main") ?? cfg.agents.list[0])
-    : undefined;
+  const agent = cfg.agents?.entries?.main;
   const agentModel = agent?.model?.primary;
   const agentRuntime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
   if (provider?.baseUrl !== expectedBaseUrl) {
@@ -160,12 +158,12 @@ function assertMockModelConfig() {
   if (defaultRuntime !== "openclaw") {
     throw new Error(`mock default runtime was not preserved; got ${defaultRuntime}`);
   }
-  if (agent && agentModel !== expectedModelRef) {
+  if (agentModel !== expectedModelRef) {
     throw new Error(
       `mock agent model was not preserved; expected ${expectedModelRef}, got ${agentModel}`,
     );
   }
-  if (agent && agentRuntime !== "openclaw") {
+  if (agentRuntime !== "openclaw") {
     throw new Error(`mock agent runtime was not preserved; got ${agentRuntime}`);
   }
 }

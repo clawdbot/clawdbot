@@ -10,22 +10,32 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  applyModelRuntimeDirective,
+  resolveModelRuntimeDirective,
+} from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
+import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
+  applySessionDirectiveFields,
   canPersistSessionDirectiveDefaults,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
@@ -34,11 +44,37 @@ import {
   formatInternalVerboseCurrentReplyOnlyText,
   formatInternalVerbosePersistenceDeniedText,
   enqueueModeSwitchEvents,
+  persistSessionDirectiveSnapshot,
+  resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+
+const DIRECTIVE_ACK_MESSAGES = {
+  verbose: {
+    off: "Verbose logging disabled.",
+    on: "Verbose logging enabled.",
+    full: "Verbose logging set to full.",
+  },
+  trace: {
+    off: "Trace disabled.",
+    on: "Trace enabled. Warning: trace output may contain sensitive information.",
+    raw: "Trace set to raw. Warning: trace output may contain sensitive information.",
+  },
+  reasoning: {
+    off: "Reasoning visibility disabled.",
+    on: "Reasoning visibility enabled.",
+    stream: "Reasoning stream enabled.",
+  },
+  elevated: {
+    off: "Elevated mode disabled.",
+    on: "Elevated mode set to ask (approvals may still apply).",
+    ask: "Elevated mode set to ask (approvals may still apply).",
+    full: "Elevated mode set to full (auto-approve).",
+  },
+} as const;
 
 /** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
@@ -55,6 +91,7 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -79,30 +116,29 @@ export async function handleDirectiveOnly(
     config: params.cfg,
   });
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+  });
   const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: resolveRuntimePolicySessionKey({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-    }),
+    sessionKey: runtimePolicySessionKey,
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
-  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
+  const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
     commandAuthorized: params.commandAuthorized,
     senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
-    messageProvider: params.messageProvider,
-    surface: params.surface,
-    gatewayClientScopes: params.gatewayClientScopes,
-    commandAuthorized: params.commandAuthorized,
-    senderIsOwner: params.senderIsOwner,
-  });
-
+  const thinkingCatalog =
+    params.thinkingCatalog && params.thinkingCatalog.length > 0
+      ? params.thinkingCatalog
+      : allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
     directives,
     cfg: params.cfg,
@@ -113,7 +149,12 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
+    allowedModelKeys,
     allowedModelCatalog,
+    currentThinkLevel: currentThinkLevel ?? "off",
+    thinkingCatalog,
+    runtimePolicySessionKey,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
     surface: params.surface,
@@ -133,21 +174,40 @@ export async function handleDirectiveOnly(
     allowedModelKeys,
     allowedModelCatalog,
     provider,
+    agentId: activeAgentId,
   });
   if (modelResolution.errorText) {
     return { text: modelResolution.errorText };
   }
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
+  if (modelSelection && isModelSelectionLocked(sessionEntry)) {
+    return { text: MODEL_SELECTION_LOCKED_MESSAGE };
+  }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  const thinkingCatalog =
-    params.thinkingCatalog && params.thinkingCatalog.length > 0
-      ? params.thinkingCatalog
-      : allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : undefined;
+  const modelRuntimeResolution = modelSelection
+    ? resolveModelRuntimeDirective({
+        rawRuntime: directives.rawModelRuntime,
+        provider: resolvedProvider,
+        cfg: params.cfg,
+        sessionEntry,
+      })
+    : ({ kind: "unchanged" } as const);
+  if (modelRuntimeResolution.kind === "invalid") {
+    return { text: modelRuntimeResolution.errorText };
+  }
+  const prospectiveSessionEntry = { ...sessionEntry };
+  applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    provider: resolvedProvider,
+    modelId: resolvedModel,
+    agentId: activeAgentId,
+    sessionKey: runtimePolicySessionKey,
+    sessionEntry: prospectiveSessionEntry,
+  });
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
@@ -165,38 +225,36 @@ export async function handleDirectiveOnly(
   if (directives.hasThinkDirective && !directives.thinkLevel && !directives.clearThinkLevel) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
-      const level = currentThinkLevel ?? "off";
+      const level = resolveSupportedThinkingLevel({
+        provider: resolvedProvider,
+        model: resolvedModel,
+        level: currentThinkLevel ?? "off",
+        catalog: thinkingCatalog,
+        agentRuntime: thinkingRuntime,
+      });
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}`,
+          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}`,
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
-    if (!directives.rawVerboseLevel) {
-      const level = currentVerboseLevel ?? "off";
-      return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, full, off"),
-      };
-    }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+      text: directives.rawVerboseLevel
+        ? `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`
+        : withOptions(`Current verbose level: ${currentVerboseLevel ?? "off"}.`, "on, full, off"),
     };
   }
   if (directives.hasTraceDirective && !directives.traceLevel) {
-    if (!directives.rawTraceLevel) {
-      const level = (sessionEntry.traceLevel as "on" | "off" | "raw" | undefined) ?? "off";
-      return {
-        text: withOptions(`Current trace level: ${level}.`, "on, off, raw"),
-      };
-    }
     return {
-      text: `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on, raw.`,
+      text: directives.rawTraceLevel
+        ? `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on, raw.`
+        : withOptions(`Current trace level: ${sessionEntry.traceLevel ?? "off"}.`, "on, off, raw"),
     };
   }
   if (
@@ -204,25 +262,22 @@ export async function handleDirectiveOnly(
     directives.fastMode === undefined &&
     !directives.clearFastMode
   ) {
-    if (
-      !directives.rawFastMode ||
-      normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status"
-    ) {
+    const isFastStatus = normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status";
+    if (!directives.rawFastMode || isFastStatus) {
       const statusText = formatFastModeCurrentStatus({
         mode: effectiveFastMode,
         source: effectiveFastModeSource,
         fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
       });
-      if (normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status") {
-        return { text: statusText };
-      }
       return {
-        text: withOptions(
-          statusText,
-          formatFastModeCommandOptions({
-            fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
-          }),
-        ),
+        text: isFastStatus
+          ? statusText
+          : withOptions(
+              statusText,
+              formatFastModeCommandOptions({
+                fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+              }),
+            ),
       };
     }
     return {
@@ -230,14 +285,13 @@ export async function handleDirectiveOnly(
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
-    if (!directives.rawReasoningLevel) {
-      const level = currentReasoningLevel ?? "off";
-      return {
-        text: withOptions(`Current reasoning level: ${level}.`, "on, off, stream"),
-      };
-    }
     return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
+      text: directives.rawReasoningLevel
+        ? `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`
+        : withOptions(
+            `Current reasoning level: ${currentReasoningLevel ?? "off"}.`,
+            "on, off, stream",
+          ),
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -275,25 +329,21 @@ export async function handleDirectiveOnly(
     };
   }
   if (directives.hasExecDirective) {
-    if (directives.invalidExecHost) {
-      return {
-        text: `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: auto, sandbox, gateway, node.`,
-      };
+    const invalidExecMessage = directives.invalidExecHost
+      ? `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: auto, sandbox, gateway, node.`
+      : directives.invalidExecSecurity
+        ? `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, allowlist, full.`
+        : directives.invalidExecAsk
+          ? `Unrecognized exec ask "${directives.rawExecAsk ?? ""}". Valid: off, on-miss, always.`
+          : directives.invalidExecNode
+            ? "Exec node requires a value."
+            : undefined;
+    if (invalidExecMessage) {
+      return { text: invalidExecMessage };
     }
-    if (directives.invalidExecSecurity) {
-      return {
-        text: `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, allowlist, full.`,
-      };
-    }
-    if (directives.invalidExecAsk) {
-      return {
-        text: `Unrecognized exec ask "${directives.rawExecAsk ?? ""}". Valid: off, on-miss, always.`,
-      };
-    }
-    if (directives.invalidExecNode) {
-      return {
-        text: "Exec node requires a value.",
-      };
+    const unexpectedExecArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+    if (unexpectedExecArguments) {
+      return unexpectedExecArguments;
     }
     if (!directives.hasExecOptions) {
       const execDefaults = resolveExecDefaults({
@@ -322,6 +372,11 @@ export async function handleDirectiveOnly(
     return queueAck;
   }
 
+  const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+  if (unexpectedNativeArguments) {
+    return unexpectedNativeArguments;
+  }
+
   if (
     directives.hasThinkDirective &&
     directives.thinkLevel &&
@@ -330,10 +385,11 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       level: directives.thinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     })
   ) {
     return {
-      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
     };
   }
 
@@ -349,110 +405,60 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       level: nextThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     })
       ? resolveSupportedThinkingLevel({
           provider: resolvedProvider,
           model: resolvedModel,
           level: nextThinkLevel,
           catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
         })
       : undefined;
   const shouldRemapUnsupportedThinkLevel =
     Boolean(remappedUnsupportedThinkLevel) && remappedUnsupportedThinkLevel !== nextThinkLevel;
 
-  const prevElevatedLevel =
-    currentElevatedLevel ??
-    (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
-    (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
   const prevReasoningLevel =
     currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-  let elevatedChanged =
+  const elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
-  const shouldPersistSessionEntry =
-    (directives.hasThinkDirective &&
-      (Boolean(directives.thinkLevel) || directives.clearThinkLevel)) ||
-    (directives.hasFastDirective &&
-      (directives.fastMode !== undefined || directives.clearFastMode)) ||
-    (directives.hasVerboseDirective &&
-      Boolean(directives.verboseLevel) &&
-      allowInternalVerbosePersistence) ||
-    (directives.hasTraceDirective && Boolean(directives.traceLevel)) ||
-    (directives.hasReasoningDirective && Boolean(directives.reasoningLevel)) ||
-    (directives.hasElevatedDirective && Boolean(directives.elevatedLevel)) ||
-    (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) ||
-    Boolean(modelSelection) ||
-    directives.hasQueueDirective ||
-    shouldRemapUnsupportedThinkLevel;
+  let modelSelectionApplied = true;
+  let sessionChangesApplied = true;
+  const appliedSessionEntry = sessionEntry;
+  const touchedSessionFields = resolveDirectiveTouchedSessionFields({
+    directives,
+    allowPrivilegedPersistence,
+  });
+  if (shouldRemapUnsupportedThinkLevel && !touchedSessionFields.includes("thinkingLevel")) {
+    touchedSessionFields.push("thinkingLevel");
+  }
+  // Validated, authorized directives have already named every field they can mutate.
+  const shouldPersistSessionEntry = touchedSessionFields.length > 0;
   const fastModeChanged =
     (directives.hasFastDirective &&
       directives.fastMode !== undefined &&
       directives.fastMode !== currentFastMode) ||
     (directives.clearFastMode && currentFastMode !== fastModeState.mode);
-  let reasoningChanged =
-    directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+  const reasoningChanged =
+    directives.hasReasoningDirective &&
+    directives.reasoningLevel !== undefined &&
+    directives.reasoningLevel !== prevReasoningLevel;
   if (shouldPersistSessionEntry) {
-    if (directives.clearThinkLevel) {
-      delete sessionEntry.thinkingLevel;
-    } else if (
-      directives.hasThinkDirective &&
-      directives.thinkLevel &&
-      resolvedDirectiveThinkLevel
-    ) {
-      sessionEntry.thinkingLevel = resolvedDirectiveThinkLevel;
-    }
-    if (directives.clearFastMode) {
-      delete sessionEntry.fastMode;
-    } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
-      sessionEntry.fastMode = directives.fastMode;
-    }
+    const initialSessionEntry = { ...sessionEntry };
+    applySessionDirectiveFields({
+      directives,
+      sessionEntry,
+      allowPrivilegedPersistence,
+      allowTracePersistence: true,
+      allowElevatedPersistence: elevatedEnabled && elevatedAllowed,
+      persistDirectiveOnlyFields: true,
+    });
     if (shouldRemapUnsupportedThinkLevel && remappedUnsupportedThinkLevel) {
       sessionEntry.thinkingLevel = remappedUnsupportedThinkLevel;
-    }
-    if (
-      directives.hasVerboseDirective &&
-      directives.verboseLevel &&
-      allowInternalVerbosePersistence
-    ) {
-      applyVerboseOverride(sessionEntry, directives.verboseLevel);
-    }
-    if (directives.hasTraceDirective && directives.traceLevel) {
-      applyTraceOverride(sessionEntry, directives.traceLevel);
-    }
-    if (directives.hasReasoningDirective && directives.reasoningLevel) {
-      if (directives.reasoningLevel === "off") {
-        // Persist explicit off so it overrides model-capability defaults.
-        sessionEntry.reasoningLevel = "off";
-      } else {
-        sessionEntry.reasoningLevel = directives.reasoningLevel;
-      }
-      reasoningChanged =
-        directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
-    }
-    if (directives.hasElevatedDirective && directives.elevatedLevel) {
-      // Unlike other toggles, elevated defaults can be "on".
-      // Persist "off" explicitly so `/elevated off` actually overrides defaults.
-      sessionEntry.elevatedLevel = directives.elevatedLevel;
-      elevatedChanged =
-        elevatedChanged ||
-        (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
-    }
-    if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
-      if (directives.execHost) {
-        sessionEntry.execHost = directives.execHost;
-      }
-      if (directives.execSecurity) {
-        sessionEntry.execSecurity = directives.execSecurity;
-      }
-      if (directives.execAsk) {
-        sessionEntry.execAsk = directives.execAsk;
-      }
-      if (directives.execNode) {
-        sessionEntry.execNode = directives.execNode;
-      }
     }
     if (modelSelection) {
       const applied = applyModelOverrideToSessionEntry({
@@ -461,36 +467,55 @@ export async function handleDirectiveOnly(
         profileOverride,
         markLiveSwitchPending: true,
       });
-      modelSelectionUpdated = applied.updated;
-    }
-    if (directives.hasQueueDirective && directives.queueReset) {
-      delete sessionEntry.queueMode;
-      delete sessionEntry.queueDebounceMs;
-      delete sessionEntry.queueCap;
-      delete sessionEntry.queueDrop;
-    } else if (directives.hasQueueDirective) {
-      if (directives.queueMode) {
-        sessionEntry.queueMode = directives.queueMode;
-      }
-      if (typeof directives.debounceMs === "number") {
-        sessionEntry.queueDebounceMs = directives.debounceMs;
-      }
-      if (typeof directives.cap === "number") {
-        sessionEntry.queueCap = directives.cap;
-      }
-      if (directives.dropPolicy) {
-        sessionEntry.queueDrop = directives.dropPolicy;
-      }
+      const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
+      modelSelectionUpdated = applied.updated || appliedRuntime.updated;
     }
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const persistence = await persistSessionDirectiveSnapshot({
+        storePath,
+        sessionKey,
+        initialEntry: initialSessionEntry,
+        sessionEntry,
+        sessionStore,
+        hasModelSelection: Boolean(modelSelection),
+        reassertLiveModelSwitchPending:
+          modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
+        touchedFields: touchedSessionFields,
+      });
+      sessionChangesApplied = persistence.sessionChangesApplied;
+      modelSelectionApplied = persistence.modelSelectionApplied;
     }
-    if (modelSelection && modelSelectionUpdated && sessionKey) {
+    if (modelSelection && !modelSelectionApplied) {
+      sessionChangesApplied = false;
+    }
+    if (!sessionChangesApplied) {
+      if (params.persistenceState) {
+        params.persistenceState.sessionChangesApplied = false;
+      }
+      return {
+        text: modelSelection
+          ? "Model change was not applied because the session changed. Retry."
+          : "Session settings were not applied because the session changed. Retry.",
+      };
+    }
+    if (
+      modelSelection &&
+      modelSelectionApplied &&
+      !modelSelection.isDefault &&
+      !params.persistenceState &&
+      params.canPersistStickyModelSelection === true
+    ) {
+      persistStickyModelSelectionBestEffort({
+        agentId: activeAgentId,
+        model: `${modelSelection.provider}/${modelSelection.model}`,
+      });
+    }
+    if (modelSelection && modelSelectionUpdated && modelSelectionApplied && sessionKey) {
       triggerSessionPatchHook({
         cfg: params.cfg,
-        sessionEntry,
+        sessionEntry: appliedSessionEntry,
         sessionKey,
         patch: {
           key: sessionKey,
@@ -505,13 +530,26 @@ export async function handleDirectiveOnly(
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
+        nextRouteResolution: "resolved",
         nextModelOverrideSource: "user",
-        nextAuthProfileId: profileOverride,
-        nextAuthProfileIdSource: profileOverride ? "user" : undefined,
+        nextAuthProfileId: appliedSessionEntry.authProfileOverride,
+        nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,
+        nextThinking: {
+          level: appliedSessionEntry.thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg: params.cfg,
+            provider: modelSelection.provider,
+            modelId: modelSelection.model,
+            agentId: activeAgentId,
+            sessionKey: runtimePolicySessionKey,
+            sessionEntry: appliedSessionEntry,
+          }),
+        },
       });
     }
   }
-  if (modelSelection) {
+  if (modelSelection && modelSelectionApplied) {
     const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
     if (nextLabel !== initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
@@ -522,7 +560,7 @@ export async function handleDirectiveOnly(
   }
   enqueueModeSwitchEvents({
     enqueueSystemEvent,
-    sessionEntry,
+    sessionEntry: appliedSessionEntry,
     sessionKey,
     elevatedChanged,
     reasoningChanged,
@@ -556,88 +594,43 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
-    parts.push(
-      !allowInternalVerbosePersistence
-        ? formatDirectiveAck(formatInternalVerboseCurrentReplyOnlyText())
-        : directives.verboseLevel === "off"
-          ? formatDirectiveAck("Verbose logging disabled.")
-          : directives.verboseLevel === "full"
-            ? formatDirectiveAck("Verbose logging set to full.")
-            : formatDirectiveAck("Verbose logging enabled."),
-    );
+    const message = allowPrivilegedPersistence
+      ? DIRECTIVE_ACK_MESSAGES.verbose[directives.verboseLevel]
+      : formatInternalVerboseCurrentReplyOnlyText();
+    parts.push(formatDirectiveAck(message));
   }
   if (directives.hasTraceDirective && directives.traceLevel) {
-    parts.push(
-      directives.traceLevel === "off"
-        ? formatDirectiveAck("Trace disabled.")
-        : directives.traceLevel === "raw"
-          ? formatDirectiveAck(
-              "Trace set to raw. Warning: trace output may contain sensitive information.",
-            )
-          : formatDirectiveAck(
-              "Trace enabled. Warning: trace output may contain sensitive information.",
-            ),
-    );
+    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
   }
-  if (
-    directives.hasVerboseDirective &&
-    directives.verboseLevel &&
-    !allowInternalVerbosePersistence
-  ) {
+  if (directives.hasVerboseDirective && directives.verboseLevel && !allowPrivilegedPersistence) {
     parts.push(formatDirectiveAck(formatInternalVerbosePersistenceDeniedText()));
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
-    parts.push(
-      directives.reasoningLevel === "off"
-        ? formatDirectiveAck("Reasoning visibility disabled.")
-        : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled.")
-          : formatDirectiveAck("Reasoning visibility enabled."),
-    );
+    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
-    parts.push(
-      directives.elevatedLevel === "off"
-        ? formatDirectiveAck("Elevated mode disabled.")
-        : directives.elevatedLevel === "full"
-          ? formatDirectiveAck("Elevated mode set to full (auto-approve).")
-          : formatDirectiveAck("Elevated mode set to ask (approvals may still apply)."),
-    );
+    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
     if (shouldHintDirectRuntime) {
       parts.push(formatElevatedRuntimeHint());
     }
   }
-  if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
-    const execParts: string[] = [];
-    if (directives.execHost) {
-      execParts.push(`host=${directives.execHost}`);
-    }
-    if (directives.execSecurity) {
-      execParts.push(`security=${directives.execSecurity}`);
-    }
-    if (directives.execAsk) {
-      execParts.push(`ask=${directives.execAsk}`);
-    }
-    if (directives.execNode) {
-      execParts.push(`node=${directives.execNode}`);
-    }
+  if (directives.hasExecDirective && directives.hasExecOptions && allowPrivilegedPersistence) {
+    const execParts = Object.entries({
+      host: directives.execHost,
+      security: directives.execSecurity,
+      ask: directives.execAsk,
+      node: directives.execNode,
+    })
+      .filter(([, value]) => Boolean(value))
+      .map(([key, value]) => `${key}=${value}`);
     if (execParts.length > 0) {
       parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
     }
   }
-  if (directives.hasExecDirective && directives.hasExecOptions && !allowInternalExecPersistence) {
+  if (directives.hasExecDirective && directives.hasExecOptions && !allowPrivilegedPersistence) {
     parts.push(formatDirectiveAck(formatInternalExecPersistenceDeniedText()));
   }
-  if (
-    !directives.hasThinkDirective &&
-    shouldRemapUnsupportedThinkLevel &&
-    remappedUnsupportedThinkLevel
-  ) {
-    parts.push(
-      `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
-    );
-  }
-  if (modelSelection) {
+  if (modelSelection && modelSelectionApplied) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
@@ -648,6 +641,24 @@ export async function handleDirectiveOnly(
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
+    if (modelRuntimeResolution.kind === "clear") {
+      parts.push("Runtime reset to configured policy.");
+    } else if (modelRuntimeResolution.kind === "set") {
+      parts.push(`Runtime set to ${modelRuntimeResolution.runtime} for this session.`);
+    }
+  } else if (modelSelection) {
+    parts.push("Model change was not applied because the session changed. Retry.");
+  }
+  // Report the model change before the thinking remap it triggered: the remap is a
+  // consequence of the model switch, so the cause should be announced first.
+  if (
+    !directives.hasThinkDirective &&
+    shouldRemapUnsupportedThinkLevel &&
+    remappedUnsupportedThinkLevel
+  ) {
+    parts.push(
+      `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
+    );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));

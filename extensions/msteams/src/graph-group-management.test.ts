@@ -56,7 +56,7 @@ describe("addParticipantMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("adds member to a chat with default role", async () => {
+  it("maps the default chat member role to Graph owner", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -71,7 +71,7 @@ describe("addParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: ["owner"],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-1')",
       },
     });
@@ -163,7 +163,7 @@ describe("addParticipantMSTeams", () => {
     );
   });
 
-  it("adds member to a channel", async () => {
+  it("maps the default channel member role to an empty Graph role list", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -178,8 +178,29 @@ describe("addParticipantMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/members",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: [],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-3')",
+      },
+    });
+  });
+
+  it("preserves the owner role for a channel", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      userId: "user-aad-id-4",
+      role: "owner",
+    });
+
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/members",
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-4')",
       },
     });
   });

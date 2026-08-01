@@ -32,7 +32,7 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-export function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
+function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {

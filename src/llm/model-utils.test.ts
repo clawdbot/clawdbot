@@ -1,5 +1,5 @@
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it } from "vitest";
-import { clampThinkingLevel, getSupportedThinkingLevels } from "./model-utils.js";
 import type { Model } from "./types.js";
 
 function makeModel(

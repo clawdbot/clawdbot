@@ -77,10 +77,15 @@ describe("createChannelOutboundRuntimeSend", () => {
       channelId: "whatsapp" as never,
       unavailableMessage: "unavailable",
     });
+    const onPlatformSendDispatch = vi.fn();
 
     await runtimeSend.sendMessage("+15551234567", "hello", {
       cfg: {},
       accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 3,
+      deliveryPartCount: 4,
+      onPlatformSendDispatch,
     });
 
     const params = expectSingleCallParams(sendText);
@@ -88,6 +93,10 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.to).toBe("+15551234567");
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
+    expect(params.deliveryQueueId).toBe("queue-1");
+    expect(params.deliveryPartIndex).toBe(3);
+    expect(params.deliveryPartCount).toBe(4);
+    expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   });
 
   it("preserves rendered html formatting through lazy text sends", async () => {

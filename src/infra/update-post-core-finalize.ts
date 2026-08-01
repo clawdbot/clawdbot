@@ -56,6 +56,7 @@ function buildFinalizeEnv(
   effectiveChannel: UpdateChannel,
   compatHostVersion?: string,
   sourceConfigPath?: string,
+  serviceRepairPolicy?: "external",
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   delete env.OPENCLAW_SERVICE_MARKER;
@@ -68,10 +69,13 @@ function buildFinalizeEnv(
   if (sourceConfigPath) {
     env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV] = sourceConfigPath;
   }
+  if (serviceRepairPolicy) {
+    env.OPENCLAW_SERVICE_REPAIR_POLICY = serviceRepairPolicy;
+  }
   return env;
 }
 
-export type PostCoreFinalizeOutcome =
+type PostCoreFinalizeOutcome =
   | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
   | { status: "ok"; entrypoint: string }
   | {
@@ -84,7 +88,7 @@ export type PostCoreFinalizeOutcome =
 
 type FinalizeSpawnResult = { code: number | null; stderr?: string };
 
-export type PostCoreFinalizeSpawner = (params: {
+type PostCoreFinalizeSpawner = (params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;
@@ -141,6 +145,7 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   channel?: UpdateChannel;
   timeoutMs?: number;
   preUpdateConfig?: PreUpdateConfigRestoreInput;
+  serviceRepairPolicy?: "external";
   resolveEntrypoint?: (root: string) => Promise<string | undefined>;
   spawnFinalize?: PostCoreFinalizeSpawner;
   env?: NodeJS.ProcessEnv;
@@ -195,6 +200,7 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
       effectiveChannel,
       compatHostVersion,
       sourceConfigPath,
+      params.serviceRepairPolicy,
     );
     const spawnResult = await spawnFinalize({
       argv,

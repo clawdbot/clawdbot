@@ -8,12 +8,21 @@ export const CODEX_CONTROL_METHODS = {
   account: "account/read",
   compact: "thread/compact/start",
   feedback: "feedback/upload",
+  forkThread: "thread/fork",
   listMcpServers: "mcpServerStatus/list",
   listSkills: "skills/list",
   listThreads: "thread/list",
+  listThreadTurns: "thread/turns/list",
+  readThread: "thread/read",
   rateLimits: "account/rateLimits/read",
+  archiveThread: "thread/archive",
+  renameThread: "thread/name/set",
   resumeThread: "thread/resume",
   review: "review/start",
+  unarchiveThread: "thread/unarchive",
+  getThreadGoal: "thread/goal/get",
+  setThreadGoal: "thread/goal/set",
+  clearThreadGoal: "thread/goal/clear",
 } as const;
 
 type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;

@@ -23,10 +23,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
 });
 
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import {
-  deliverInboundReplyWithMessageSendContext,
-  resolveDurableInboundReplyToId,
-} from "./durable-delivery.js";
+import { deliverInboundReplyWithMessageSendContext } from "./durable-delivery.js";
 
 type SendDurableMessageBatchRequest = {
   cfg?: unknown;
@@ -34,6 +31,7 @@ type SendDurableMessageBatchRequest = {
   to?: string;
   threadId?: string | number | null;
   durability?: string;
+  requireUnknownSendReconciliation?: boolean;
   gatewayClientScopes?: readonly string[];
 };
 
@@ -87,41 +85,6 @@ describe("durable inbound reply delivery", () => {
     });
   });
 
-  it("preserves explicit null reply targets instead of falling back to context ids", () => {
-    expect(
-      resolveDurableInboundReplyToId({
-        replyToId: null,
-        payload: { text: "plain reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBeNull();
-  });
-
-  it("falls back to payload and context reply targets when no explicit null is provided", () => {
-    expect(
-      resolveDurableInboundReplyToId({
-        payload: { text: "payload reply", replyToId: "payload-reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBe("payload-reply");
-
-    expect(
-      resolveDurableInboundReplyToId({
-        payload: { text: "context reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBe("context-full-reply");
-  });
-
   it("preserves explicit null thread targets instead of falling back to context thread", async () => {
     await deliverInboundReplyWithMessageSendContext({
       cfg: {},
@@ -165,6 +128,7 @@ describe("durable inbound reply delivery", () => {
     });
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
+    expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBeUndefined();
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
@@ -190,6 +154,7 @@ describe("durable inbound reply delivery", () => {
     });
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("required");
+    expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBe(true);
   });
 
   it("reports durable partial send failures as failed delivery", async () => {

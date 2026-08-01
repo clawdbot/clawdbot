@@ -28,12 +28,19 @@ function shouldLoadPlugins(params: {
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];
+  protocolCommandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const suppressDoctorStdout = params.jsonOutputMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  // Commander resolves required option values before selecting the action command, so this path
+  // remains authoritative when a protocol option value itself begins with "-".
+  const ownsProtocolStdout = params.protocolCommandPath
+    ? resolveCliCommandPathPolicy(params.protocolCommandPath).ownsProtocolStdout
+    : commandPolicy.ownsProtocolStdout;
+  // Protocol commands own stdout from process startup, before their action installs later routing.
+  const suppressDoctorStdout = params.jsonOutputMode || ownsProtocolStdout;
   const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,

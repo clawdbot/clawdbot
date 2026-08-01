@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
-export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
+function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
   if (value.length > maxEncodedBytes * 2) {
     return null;
@@ -33,7 +33,7 @@ export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buff
   return decoded;
 }
 
-export type SubagentInlineAttachment = {
+type SubagentInlineAttachment = {
   name: string;
   content: string;
   encoding?: "utf8" | "base64";

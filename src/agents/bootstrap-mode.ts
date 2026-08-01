@@ -1,11 +1,16 @@
 // Bootstrap mode resolver for deciding whether a run gets full, limited, or no
 // workspace bootstrap files.
 export type BootstrapMode = "full" | "limited" | "none";
+export type BootstrapContextRunKind = "default" | "heartbeat" | "cron" | "commitment-only";
+
+export function isHeartbeatLifecycleRunKind(runKind: BootstrapContextRunKind | undefined): boolean {
+  return runKind === "heartbeat" || runKind === "commitment-only";
+}
 
 /** Resolve the bootstrap mode for one agent run. */
 export function resolveBootstrapMode(params: {
   bootstrapPending: boolean;
-  runKind?: "default" | "heartbeat" | "cron";
+  runKind?: BootstrapContextRunKind;
   isInteractiveUserFacing: boolean;
   isPrimaryRun: boolean;
   isCanonicalWorkspace: boolean;
@@ -14,7 +19,7 @@ export function resolveBootstrapMode(params: {
   if (!params.bootstrapPending) {
     return "none";
   }
-  if (params.runKind === "heartbeat" || params.runKind === "cron") {
+  if (isHeartbeatLifecycleRunKind(params.runKind) || params.runKind === "cron") {
     // Background maintenance turns should not consume or mutate bootstrap state.
     return "none";
   }

@@ -62,9 +62,7 @@ public enum OpenClawChatEventText {
     }
 
     private static func stringValue(_ value: Any?) -> String? {
-        if let string = value as? String {
-            return string
-        }
+        if let string = value as? String { return string }
         if let wrapped = value as? AnyCodable {
             return self.stringValue(wrapped.value)
         }

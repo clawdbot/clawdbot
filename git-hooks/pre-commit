@@ -16,6 +16,18 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || true)"
+if [[ -n "$GIT_DIR" ]] && \
+  { [[ -f "$GIT_DIR/MERGE_HEAD" ]] || \
+    [[ -f "$GIT_DIR/CHERRY_PICK_HEAD" ]] || \
+    [[ -f "$GIT_DIR/REVERT_HEAD" ]] || \
+    [[ -f "$GIT_DIR/REBASE_HEAD" ]] || \
+    [[ -d "$GIT_DIR/rebase-merge" ]] || \
+    [[ -d "$GIT_DIR/rebase-apply" ]]; }; then
+  # Sequencer commits stage the operation result, not just the user's local edits.
+  exit 0
+fi
+
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
 # Robustness: NUL-delimited file list handles spaces/newlines safely.
 # Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.

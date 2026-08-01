@@ -11,6 +11,7 @@ export type Locale =
   | "ja-JP"
   | "ko"
   | "fr"
+  | "hi"
   | "ar"
   | "it"
   | "tr"
@@ -20,4 +21,5 @@ export type Locale =
   | "th"
   | "vi"
   | "nl"
-  | "fa";
+  | "fa"
+  | "ru";

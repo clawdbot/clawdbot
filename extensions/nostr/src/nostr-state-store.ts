@@ -11,7 +11,7 @@ type NostrBusState = {
   lastProcessedAt: number | null;
   /** Gateway startup timestamp (seconds) - events before this are old */
   gatewayStartedAt: number | null;
-  /** Recent processed event IDs for overlap dedupe across restarts */
+  /** Retired replay-guard seed, cleared after durable ingress tombstone migration. */
   recentEventIds: string[];
 };
 

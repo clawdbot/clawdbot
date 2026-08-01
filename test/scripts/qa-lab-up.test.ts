@@ -34,6 +34,19 @@ describe("scripts/qa-lab-up", () => {
     );
   });
 
+  it("accepts the pnpm run argument separator", async () => {
+    const runQaDockerUpCommand = vi.fn(async () => {});
+    const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));
+
+    await expect(
+      qaLabUpTesting.runQaLabUp(["--", "--gateway-port", "4100"], { loadRuntime }),
+    ).resolves.toBe(0);
+
+    expect(runQaDockerUpCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayPort: 4100 }),
+    );
+  });
+
   it("accepts the maximum TCP port before loading the Docker runtime", async () => {
     const runQaDockerUpCommand = vi.fn(async () => {});
     const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));

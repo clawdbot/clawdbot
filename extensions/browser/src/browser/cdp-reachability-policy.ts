@@ -4,22 +4,32 @@
  * CDP control-plane probes may target loopback even when page navigation policy
  * is stricter, so this module scopes the exception to browser control only.
  */
-import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 
-function withCdpHostnameAllowed(
+function withCdpControlHostname(
   profile: ResolvedBrowserProfile,
   ssrfPolicy?: SsrFPolicy,
+  requireAllowlistMatch = false,
 ): SsrFPolicy | undefined {
-  if (!ssrfPolicy || !profile.cdpHost) {
+  const cdpHost = normalizeHostname(profile.cdpHost);
+  if (!ssrfPolicy || !cdpHost) {
     return ssrfPolicy;
   }
-  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
+  const allowedHostnames = (ssrfPolicy.allowedHostnames ?? [])
+    .map((pattern) => normalizeHostname(pattern))
+    .filter((pattern) => pattern && pattern !== "*" && pattern !== "*.");
+  if (
+    requireAllowlistMatch &&
+    allowedHostnames.length > 0 &&
+    !matchesHostnameAllowlist(cdpHost, allowedHostnames)
+  ) {
     return ssrfPolicy;
   }
-  return withAllowedHostname(ssrfPolicy, profile.cdpHost);
+  return withExactHostnamePolicy(ssrfPolicy, cdpHost);
 }
 
 export function resolveCdpReachabilityPolicy(
@@ -33,7 +43,10 @@ export function resolveCdpReachabilityPolicy(
   if (!capabilities.isRemote && profile.cdpIsLoopback && profile.driver === "openclaw") {
     return undefined;
   }
-  return withCdpHostnameAllowed(profile, ssrfPolicy);
+  // Configured local relays are control-plane endpoints even when page policy
+  // excludes loopback. Remote CDP hosts must still satisfy an explicit
+  // allowedHostnames before their control policy is narrowed.
+  return withCdpControlHostname(profile, ssrfPolicy, capabilities.isRemote);
 }
 
 /** Alias used by callers that treat reachability and control as one CDP policy. */

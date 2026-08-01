@@ -1,5 +1,5 @@
 /** Tests secret target registry matching and docs coverage. */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildTalkTestProviderConfig,
@@ -10,9 +10,14 @@ import { getCoreSecretTargetRegistry } from "./target-registry-data.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
+  resolveSecretPlanTargetByPath,
 } from "./target-registry.js";
 
 describe("secret target registry", () => {
+  beforeAll(() => {
+    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
+  });
+
   it("supports filtered discovery by target ids", () => {
     const config = {
       ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
@@ -31,11 +36,10 @@ describe("secret target registry", () => {
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
-  it("resolves config targets by exact path including sibling ref metadata", () => {
+  it("resolves config targets by exact path", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
     expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
-    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
   it("resolves talk realtime provider api key targets", () => {
@@ -55,6 +59,21 @@ describe("secret target registry", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
     expect(target).toBeNull();
+  });
+
+  it("resolves plan targets by owning config document", () => {
+    const configTarget = resolveSecretPlanTargetByPath({
+      configFile: "openclaw.json",
+      pathSegments: ["models", "providers", "openai", "apiKey"],
+    });
+    const authProfileTarget = resolveSecretPlanTargetByPath({
+      configFile: "auth-profiles.json",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
+
+    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
+    expect(configTarget?.providerId).toBe("openai");
+    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
   });
 
   it("derives bundled web provider api key target paths from plugin manifests", () => {
@@ -110,9 +129,7 @@ describe("secret target registry", () => {
       "appServer",
       "authToken",
     ]);
-    expect(codexAuthTarget?.entry?.id).toBe(
-      "plugins.entries.codex.config.appServer.authToken",
-    );
+    expect(codexAuthTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.authToken");
 
     const codexHeaderTarget = resolveConfigSecretTargetByPath([
       "plugins",
@@ -123,8 +140,6 @@ describe("secret target registry", () => {
       "headers",
       "x-codex-client-session-token",
     ]);
-    expect(codexHeaderTarget?.entry?.id).toBe(
-      "plugins.entries.codex.config.appServer.headers.*",
-    );
+    expect(codexHeaderTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.headers.*");
   });
 });

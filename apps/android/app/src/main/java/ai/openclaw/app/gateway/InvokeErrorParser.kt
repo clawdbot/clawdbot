@@ -1,5 +1,7 @@
 package ai.openclaw.app.gateway
 
+private val invokeErrorCodePattern = Regex("^[A-Z][A-Z0-9_]*$")
+
 data class ParsedInvokeError(
   val code: String,
   val message: String,
@@ -24,7 +26,7 @@ fun parseInvokeErrorMessage(raw: String): ParsedInvokeError {
   if (parts.size == 2) {
     val code = parts[0].trim()
     val rest = parts[1].trim()
-    if (code.isNotEmpty() && code.all { it.isUpperCase() || it == '_' }) {
+    if (invokeErrorCodePattern.matches(code)) {
       return ParsedInvokeError(
         code = code,
         message = rest.ifEmpty { trimmed },

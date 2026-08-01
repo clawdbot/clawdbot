@@ -16,22 +16,26 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
-  "google/gemini-3-flash-preview",
-  "moonshot/kimi-k2.7-code",
+  "google/gemini-3.5-flash",
+  "cohere/command-a-plus-05-2026",
+  "moonshot/kimi-k3",
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
-  "openai/gpt-5.5",
+  "openai/gpt-5.6",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4.3",
+  "xai/grok-4.5",
+  "xai/grok-4.20-0309-reasoning",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m3",
@@ -53,6 +57,12 @@ export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIOR
 /** Default cap for the small-model live smoke lane. */
 export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli"]);
+const DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS = new Set([
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
   "fireworks",
   "google",
@@ -80,13 +90,6 @@ for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
   } else {
     HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.set(provider, new Set([id]));
   }
-}
-
-/** Return providers represented in the high-signal live model priority list. */
-export function getHighSignalLiveModelProviders(): string[] {
-  return [...HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.keys()].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
 }
 
 function isHighSignalClaudeModelId(id: string): boolean {
@@ -127,7 +130,7 @@ function isPreGemini3ModelId(id: string): boolean {
 
 function isMutableLatestAliasLiveModelRef(id: string): boolean {
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
-  return modelName.endsWith("-latest");
+  return /(?:^|-)latest(?:-|$)/.test(modelName);
 }
 
 function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
@@ -154,7 +157,7 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   if (provider === "openai") {
-    return modelName !== "gpt-5.5";
+    return !DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS.has(modelName);
   }
   return !modelName.startsWith("gpt-5.2");
 }

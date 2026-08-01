@@ -37,10 +37,11 @@ const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveProviderRefOwnership: typeof import("./providers.js").resolveProviderRefOwnership;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveCatalogHookProviderPluginIds: typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
-let resolveExternalAuthProfileCompatFallbackPluginIds: typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
+let resolveUsageHookProviderPluginContracts: typeof import("./providers.js").resolveUsageHookProviderPluginContracts;
 let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
@@ -520,9 +521,10 @@ describe("resolvePluginProviders", () => {
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
+      resolveProviderRefOwnership,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
-      resolveExternalAuthProfileCompatFallbackPluginIds,
+      resolveUsageHookProviderPluginContracts,
       resolveExternalAuthProfileProviderPluginIds,
       resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
@@ -557,6 +559,32 @@ describe("resolvePluginProviders", () => {
     setOwningProviderManifestPlugins();
 
     expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+    expect(resolveProviderRefOwnership({ provider: "claude-cli" })).toEqual({
+      status: "owned",
+      pluginIds: ["anthropic"],
+    });
+  });
+
+  it("marks explicit provider refs with multiple owners as ambiguous", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "first-owner",
+        providerIds: [],
+        cliBackends: ["shared-cli"],
+        origin: "workspace",
+      }),
+      createManifestProviderPlugin({
+        id: "second-owner",
+        providerIds: [],
+        cliBackends: ["shared-cli"],
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(resolveProviderRefOwnership({ provider: "shared-cli" })).toEqual({
+      status: "ambiguous",
+      pluginIds: ["first-owner", "second-owner"],
+    });
   });
 
   it("maps explicit cli-backend model refs to owning plugin ids", () => {
@@ -870,6 +898,27 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["ollama"]);
   });
 
+  it("loads usage hooks only for manifest-declared providers", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "usage-owner",
+        providerIds: ["usage-provider"],
+        enabledByDefault: true,
+        contracts: { usageProviders: ["usage-provider"] },
+      }),
+      createManifestProviderPlugin({
+        id: "regular-provider",
+        providerIds: ["regular-provider"],
+        enabledByDefault: true,
+      }),
+    ]);
+
+    expect(
+      resolveUsageHookProviderPluginContracts({ config: {}, env: {} as NodeJS.ProcessEnv }),
+    ).toEqual([{ pluginId: "usage-owner", providerIds: ["usage-provider"] }]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -890,38 +939,6 @@ describe("resolvePluginProviders", () => {
       }),
     ).toEqual(["external-auth-owner"]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps undeclared external auth provider fallback scoped to active external providers", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "declared-auth-owner",
-        providerIds: ["declared"],
-        origin: "workspace",
-        contracts: { externalAuthProviders: ["declared"] },
-      }),
-      createManifestProviderPlugin({
-        id: "legacy-auth-owner",
-        providerIds: ["legacy"],
-        origin: "workspace",
-      }),
-    ]);
-    const declaredPluginIds = new Set(["declared-auth-owner"]);
-
-    expect(
-      resolveExternalAuthProfileCompatFallbackPluginIds({
-        config: {
-          plugins: {
-            entries: {
-              "declared-auth-owner": { enabled: true },
-              "legacy-auth-owner": { enabled: true },
-            },
-          },
-        },
-        env: {} as NodeJS.ProcessEnv,
-        declaredPluginIds,
-      }),
-    ).toEqual(["legacy-auth-owner"]);
   });
 
   it("filters bundled provider plugins by allowlist by default", () => {
@@ -1805,3 +1822,4 @@ describe("resolvePluginProviders", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

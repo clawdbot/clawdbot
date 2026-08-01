@@ -16,7 +16,7 @@ Adds GitHub Copilot model provider support to OpenClaw.
 
 ## Surface
 
-providers: github-copilot; contracts: memoryEmbeddingProviders
+providers: `github-copilot`; contracts: `memoryEmbeddingProviders`, `usageProviders`
 
 ## Related docs
 

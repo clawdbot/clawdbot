@@ -1,6 +1,7 @@
 // Before-terminal-delivery tests cover the async gate that can suppress or
 // release deferred assistant events and block replies at run completion.
 import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   emitAssistantTextDeltaAndEnd,
   createSubscribedSessionHarness,
@@ -218,6 +219,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await subscription.waitForPendingEvents();
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Fallback answer." }),
+      { assistantMessageIndex: 1 },
     );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
@@ -253,6 +255,32 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Accepted answer." }),
+      { assistantMessageIndex: 1 },
     );
+  });
+
+  it("preserves original transcript media references on deferred block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-media",
+      onBlockReply,
+      onBeforeTerminalDelivery: vi.fn(async () => undefined),
+      blockReplyBreak: "message_end",
+    });
+    const text = "MEDIA:/tmp/generated.png\nAttached image";
+
+    emitMessageStartAndEndForAssistantText({ emit, text });
+    emit({
+      type: "agent_end",
+      messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
+      willRetry: false,
+    });
+
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+    const payload = onBlockReply.mock.calls[0]?.[0] as object;
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/generated.png"],
+    });
   });
 });

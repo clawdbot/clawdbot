@@ -1,53 +1,57 @@
-// Browser tests cover session tab cleanup plugin behavior.
+// Browser tests cover periodic session-tab cleanup failure handling.
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isPrimaryTrackedBrowserSessionKey,
-  runTrackedBrowserTabCleanupOnce,
-} from "./session-tab-cleanup.js";
-import {
-  countTrackedSessionBrowserTabsForTests,
-  resetTrackedSessionBrowserTabsForTests,
-  trackSessionBrowserTab,
-} from "./session-tab-registry.js";
 
-describe("session tab cleanup", () => {
+const registryMocks = vi.hoisted(() => ({
+  sweepTrackedBrowserTabs: vi.fn(),
+}));
+
+vi.mock("./session-tab-registry.js", () => registryMocks);
+
+import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
+
+describe("session tab cleanup timer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    resetTrackedSessionBrowserTabsForTests();
+    registryMocks.sweepTrackedBrowserTabs.mockReset();
+    clearRuntimeConfigSnapshot();
+    const config = {
+      browser: {
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 30,
+          maxTabsPerSession: 10,
+          sweepMinutes: 1,
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
   });
 
   afterEach(() => {
-    resetTrackedSessionBrowserTabsForTests();
+    clearRuntimeConfigSnapshot();
     vi.useRealTimers();
   });
 
-  it("classifies primary sessions without matching subagent, cron, or acp sessions", () => {
-    expect(isPrimaryTrackedBrowserSessionKey("agent:main:main")).toBe(true);
-    expect(isPrimaryTrackedBrowserSessionKey("agent:main:subagent:child")).toBe(false);
-    expect(isPrimaryTrackedBrowserSessionKey("agent:main:cron:nightly")).toBe(false);
-    expect(isPrimaryTrackedBrowserSessionKey("agent:main:acp:child")).toBe(false);
-  });
+  it("warns on sweep store failures and continues scheduling", async () => {
+    registryMocks.sweepTrackedBrowserTabs
+      .mockRejectedValueOnce(new Error("sqlite read failed"))
+      .mockResolvedValueOnce(0);
+    const onWarn = vi.fn();
+    const stop = startTrackedBrowserTabCleanupTimer({ onWarn });
 
-  it("only cleans up tracked tabs for primary-agent sessions", async () => {
-    vi.setSystemTime(1_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "primary-tab" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:subagent:child", targetId: "child-tab" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:cron:nightly", targetId: "cron-tab" });
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.waitFor(() =>
+      expect(onWarn).toHaveBeenCalledWith(
+        "failed to sweep tracked browser tabs: Error: sqlite read failed",
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.waitFor(() => expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2));
 
-    const closed = await runTrackedBrowserTabCleanupOnce({
-      now: 10_000,
-      closeTab: vi.fn(async () => {}),
-      cleanup: {
-        enabled: true,
-        idleMinutes: 0.001,
-        maxTabsPerSession: 8,
-        sweepMinutes: 5,
-      },
-    });
-
-    expect(closed).toBe(1);
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(0);
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:cron:nightly")).toBe(1);
+    await stop();
   });
 });

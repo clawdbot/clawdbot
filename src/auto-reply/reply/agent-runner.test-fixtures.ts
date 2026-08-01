@@ -1,7 +1,6 @@
 // Shared fixtures for agent runner tests and temporary session files.
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { FollowupRun } from "./queue.js";
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
@@ -38,6 +37,10 @@ export async function writeTestSessionStore(
   sessionKey: string,
   entry: SessionEntry,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf8");
+  const fileEntry = entry as SessionEntry & { sessionFile?: string; transcriptPath?: string };
+  if (fileEntry.sessionFile) {
+    fileEntry.transcriptPath = fileEntry.sessionFile;
+    delete fileEntry.sessionFile;
+  }
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
 }

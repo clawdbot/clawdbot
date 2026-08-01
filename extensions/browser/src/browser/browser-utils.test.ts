@@ -1,16 +1,11 @@
 // Browser tests cover browser utils plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
   getHeadersWithAuth,
   normalizeCdpHttpBaseForJsonEndpoints,
 } from "./cdp.helpers.js";
-import { testApi } from "./client-fetch.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
-import { shouldRejectBrowserMutation } from "./csrf.js";
 import { toBoolean } from "./routes/utils.js";
-import type { BrowserServerState } from "./server-context.js";
-import { listKnownProfileNames } from "./server-context.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 describe("toBoolean", () => {
@@ -81,84 +76,6 @@ describe("browser target id resolution", () => {
   });
 });
 
-describe("browser CSRF loopback mutation guard", () => {
-  it("rejects mutating methods from non-loopback origin", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        origin: "https://evil.example",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows mutating methods from loopback origin", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        origin: "http://127.0.0.1:18789",
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        origin: "http://localhost:18789",
-      }),
-    ).toBe(false);
-  });
-
-  it("allows mutating methods without origin/referer (non-browser clients)", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects mutating methods with origin=null", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        origin: "null",
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects mutating methods from non-loopback referer", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        referer: "https://evil.example/attack",
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects cross-site mutations via Sec-Fetch-Site when present", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "POST",
-        secFetchSite: "cross-site",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not reject non-mutating methods", () => {
-    expect(
-      shouldRejectBrowserMutation({
-        method: "GET",
-        origin: "https://evil.example",
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldRejectBrowserMutation({
-        method: "OPTIONS",
-        origin: "https://evil.example",
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("cdp.helpers", () => {
   it("preserves query params when appending CDP paths", () => {
     const url = appendCdpPath("https://example.com?token=abc", "/json/version");
@@ -199,6 +116,13 @@ describe("cdp.helpers", () => {
     expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
   });
 
+  it("decodes percent-encoded basic auth credentials from URLs", () => {
+    const headers = getHeadersWithAuth("https://alice:p%40ss%20word@example.com");
+    expect(headers.Authorization).toBe(
+      `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
+    );
+  });
+
   it("keeps preexisting authorization headers", () => {
     const headers = getHeadersWithAuth("https://user:pass@example.com", {
       Authorization: "Bearer token",
@@ -208,54 +132,5 @@ describe("cdp.helpers", () => {
 
   it("does not add custom headers when none are required", () => {
     expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toStrictEqual({});
-  });
-});
-
-describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
-  it("falls back to per-port bridge auth when config auth is not available", () => {
-    const port = 18765;
-    const getBridgeAuthForPort = vi.fn((candidate: number) =>
-      candidate === port ? { token: "registry-token" } : undefined,
-    );
-    const init = testApi.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
-      getRuntimeConfig: () => ({}),
-      resolveBrowserControlAuth: () => ({}),
-      getBridgeAuthForPort,
-    });
-    const headers = new Headers(init.headers ?? {});
-    expect(headers.get("authorization")).toBe("Bearer registry-token");
-    expect(getBridgeAuthForPort).toHaveBeenCalledWith(port);
-  });
-});
-
-describe("browser server-context listKnownProfileNames", () => {
-  it("includes configured and runtime-only profile names", () => {
-    const resolved = resolveBrowserConfig({
-      defaultProfile: "openclaw",
-      profiles: {
-        openclaw: { cdpPort: 18800, color: "#FF4500" },
-      },
-    });
-    const openclaw = resolveProfile(resolved, "openclaw");
-    if (!openclaw) {
-      throw new Error("expected openclaw profile");
-    }
-
-    const state: BrowserServerState = {
-      server: null as unknown as BrowserServerState["server"],
-      port: 18791,
-      resolved,
-      profiles: new Map([
-        [
-          "stale-removed",
-          {
-            profile: { ...openclaw, name: "stale-removed" },
-            running: null,
-          },
-        ],
-      ]),
-    };
-
-    expect(listKnownProfileNames(state).toSorted()).toEqual(["openclaw", "stale-removed", "user"]);
   });
 });

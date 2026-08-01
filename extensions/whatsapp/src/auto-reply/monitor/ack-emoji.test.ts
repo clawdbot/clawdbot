@@ -45,7 +45,7 @@ describe("resolveWhatsAppAckEmoji", () => {
     ).toBe("👀");
   });
 
-  it("keeps an explicit empty emoji disabled", () => {
+  it("falls back to the routed agent identity for an empty emoji", () => {
     const cfg = createConfig({ emoji: " ", direct: true, group: "mentions" });
 
     expect(
@@ -54,7 +54,7 @@ describe("resolveWhatsAppAckEmoji", () => {
         agentId: "agent",
         ackConfig: cfg.channels?.whatsapp?.ackReaction,
       }),
-    ).toBe("");
+    ).toBe("🔥");
   });
 
   it("falls back to the routed agent identity emoji when the ack object has no emoji", () => {

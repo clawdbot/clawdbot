@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadSessionStore } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { clearAbortCutoffInSessionRuntime } from "./abort-cutoff.runtime.js";
 
@@ -29,7 +29,6 @@ describe("clearAbortCutoffInSessionRuntime", () => {
         abortCutoffTimestamp: 123,
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       const cleared = await clearAbortCutoffInSessionRuntime({
         sessionEntry: entry,
@@ -38,7 +37,7 @@ describe("clearAbortCutoffInSessionRuntime", () => {
         storePath,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionEntry({ storePath, sessionKey });
       expect(cleared).toBe(true);
       expect(sessionStore[sessionKey]?.sessionId).toBe("cutoff-session");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");

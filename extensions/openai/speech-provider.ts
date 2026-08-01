@@ -1,4 +1,6 @@
 // Openai provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -28,7 +30,6 @@ import {
 } from "./tts.js";
 
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
@@ -48,6 +49,10 @@ type OpenAITtsProviderOverrides = {
   voice?: string;
   speed?: number;
 };
+
+function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+  return trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY);
+}
 
 function normalizeOpenAISpeechResponseFormat(
   value: unknown,
@@ -132,7 +137,7 @@ function normalizeOpenAIProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.openai.apiKey",
+      path: "tts.providers.openai.apiKey",
     }),
     baseUrl,
     model: trimToUndefined(raw?.model) ?? "gpt-4o-mini-tts",
@@ -175,47 +180,6 @@ function readOpenAIOverrides(
     voice: trimToUndefined(overrides.voice),
     speed: normalizeOpenAISpeechSpeed(overrides.speed, baseUrl),
   };
-}
-
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-}
-
-function renderOpenAITtsPersonaInstructions(req: {
-  label?: string;
-  prompt?: {
-    profile?: string;
-    scene?: string;
-    sampleContext?: string;
-    style?: string;
-    accent?: string;
-    pacing?: string;
-    constraints?: string[];
-  };
-}): string | undefined {
-  const prompt = req.prompt;
-  if (!prompt) {
-    return undefined;
-  }
-  const lines = [
-    req.label ? `Persona: ${req.label}` : undefined,
-    prompt.profile ? `Profile: ${prompt.profile}` : undefined,
-    prompt.scene ? `Scene: ${prompt.scene}` : undefined,
-    prompt.style ? `Style: ${prompt.style}` : undefined,
-    prompt.accent ? `Accent: ${prompt.accent}` : undefined,
-    prompt.pacing ? `Pacing: ${prompt.pacing}` : undefined,
-    prompt.sampleContext ? `Sample context: ${prompt.sampleContext}` : undefined,
-    ...(prompt.constraints ?? []).map((constraint) => `Constraint: ${constraint}`),
-  ]
-    .map((line) => trimToUndefined(line))
-    .filter((line): line is string => Boolean(line));
-  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 function isCustomOpenAITtsBaseUrl(baseUrl: string | undefined): boolean {
@@ -321,28 +285,11 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readOpenAIProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
-    prepareSynthesis: (ctx) => {
-      const config = readOpenAIProviderConfig(ctx.providerConfig);
-      if (config.instructions) {
-        return undefined;
-      }
-      const instructions = renderOpenAITtsPersonaInstructions({
-        label: ctx.persona?.label ?? ctx.persona?.id,
-        prompt: ctx.persona?.prompt,
-      });
-      return instructions
-        ? {
-            providerConfig: {
-              instructions,
-            },
-          }
-        : undefined;
-    },
+      Boolean(resolveOpenAISpeechApiKey(readOpenAIProviderConfig(providerConfig))),
     synthesize: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
@@ -362,19 +309,22 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
+      const fileExtension = responseFormatToFileExtension(responseFormat);
       return {
         audioBuffer,
         outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
-        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+        fileExtension,
+        voiceCompatible:
+          req.target === "voice-note" &&
+          isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
       };
     },
     synthesizeTelephony: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
@@ -391,7 +341,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat: outputFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },

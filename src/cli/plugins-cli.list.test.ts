@@ -1,6 +1,7 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
-import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -17,9 +18,22 @@ import {
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
+const workshopMocks = vi.hoisted(() => ({
+  detectToolPolicyDiagnostic: vi.fn(),
+}));
+
+const cleanDoctorMessage =
+  "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+  'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+
+vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
+  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
+}));
+
 describe("plugins cli list", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
   it("includes imported state in JSON output", async () => {
@@ -83,7 +97,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
@@ -123,9 +137,8 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
     expect(output).toContain(
-      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
     );
     expect(output).toContain(
       'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
@@ -136,7 +149,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured Codex runtime plugin in doctor output", async () => {
@@ -182,7 +195,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured ACPX runtime plugin in doctor output", async () => {
@@ -204,7 +217,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("openclaw doctor --fix");
     expect(output).toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured ACPX runtime with ACP-specific guidance", async () => {
@@ -232,7 +245,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured ACPX runtime with ACP-specific guidance", async () => {
@@ -255,7 +268,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
@@ -276,7 +289,7 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).not.toContain('Configured runtime "codex"');
-    expect(output).toContain("No plugin issues detected.");
+    expect(output).toContain(cleanDoctorMessage);
   });
 
   it("does not report configured Codex runtime when the plugin is enabled", async () => {
@@ -299,7 +312,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports configured Codex runtime when the plugin record is disabled", async () => {
@@ -327,7 +340,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('but "codex" is disabled');
     expect(output).toContain('Enable the "codex" plugin');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured Codex runtime without install advice", async () => {
@@ -359,7 +372,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Remove "codex" from plugins.deny');
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured Codex runtime entry without install advice", async () => {
@@ -393,7 +406,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("Set plugins.entries.codex.enabled=true");
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports config-selected plugin source shadowing in doctor output", async () => {
@@ -453,7 +466,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {
@@ -619,5 +632,40 @@ describe("plugins cli list", () => {
     expect(buildPluginSnapshotReport).toHaveBeenCalledWith({ config: {} });
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
+  });
+
+  it("explains a policy-hidden built-in Skill Workshop at the legacy inspect surface", async () => {
+    const config: OpenClawConfig = {
+      tools: { profile: "messaging" },
+    };
+    loadConfig.mockReturnValue(config);
+    workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
+      agentId: "main",
+      source: "tools.profile",
+      detail: 'tools.profile: "messaging" does not include "skill_workshop".',
+      fix: 'Add tools.alsoAllow: ["skill_workshop"].',
+      message:
+        'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
+    });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
+    );
+    expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
+      config,
+      workshopEnabled: true,
+    });
+    expect(runtimeErrors.at(-1)).toContain(
+      'tools.profile: "messaging" does not include "skill_workshop".',
+    );
+    expect(runtimeErrors.at(-1)).toContain('Add tools.alsoAllow: ["skill_workshop"].');
   });
 });

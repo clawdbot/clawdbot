@@ -1,7 +1,7 @@
 // Covers the chat.history final byte-budget fallback, including the sentinel
 // that prevents an empty (blank) transcript from being returned to the dashboard.
 import { describe, expect, it } from "vitest";
-import { enforceChatHistoryFinalBudget } from "./chat.js";
+import { enforceChatHistoryFinalBudget } from "./chat-history-budget.js";
 
 type DisplayMessage = {
   role?: string;
@@ -21,21 +21,21 @@ describe("enforceChatHistoryFinalBudget", () => {
     ];
     const result = enforceChatHistoryFinalBudget({ messages, maxBytes: 1_000_000 });
     expect(result.messages).toEqual(messages);
-    expect(result.placeholderCount).toBe(0);
   });
 
   it("returns the empty array unchanged for empty input", () => {
     const result = enforceChatHistoryFinalBudget({ messages: [], maxBytes: 10 });
     expect(result.messages).toEqual([]);
-    expect(result.placeholderCount).toBe(0);
   });
 
   it("keeps just the last message when the full set is over budget but the last fits", () => {
     const big = { role: "user", content: [{ type: "text", text: "x".repeat(4000) }] };
     const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
     const result = enforceChatHistoryFinalBudget({ messages: [big, last], maxBytes: 2_000 });
+    // The same last-message reference survives so callers can detect which
+    // originals were omitted by identity.
     expect(result.messages).toEqual([last]);
-    expect(result.placeholderCount).toBe(0);
+    expect(result.messages[0]).toBe(last);
   });
 
   it("falls back to a small placeholder when even the last message is too large", () => {
@@ -43,12 +43,17 @@ describe("enforceChatHistoryFinalBudget", () => {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7 },
+      __openclaw: { id: "abc", seq: 7, turnBoundary: true },
     };
     const result = enforceChatHistoryFinalBudget({ messages: [last], maxBytes: 2_000 });
     expect(result.messages).toHaveLength(1);
     expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
-    expect(result.placeholderCount).toBe(1);
+    expect(
+      (result.messages[0] as { __openclaw?: { turnBoundary?: boolean } })["__openclaw"]
+        ?.turnBoundary,
+    ).toBe(true);
+    // The placeholder is a new object, not the oversized original.
+    expect(result.messages[0]).not.toBe(last);
   });
 
   it("returns a metadata-free sentinel (never an empty transcript) when even the placeholder is over budget", () => {
@@ -68,6 +73,5 @@ describe("enforceChatHistoryFinalBudget", () => {
     expect(firstText(result.messages)).toContain("chat.history unavailable");
     // The sentinel does not carry the oversized source metadata.
     expect((result.messages[0] as Record<string, unknown>)["__openclaw"]).toBeUndefined();
-    expect(result.placeholderCount).toBe(1);
   });
 });

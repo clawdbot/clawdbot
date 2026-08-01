@@ -33,8 +33,9 @@ Options:
 }
 
 function parseQaLabUpArgs(argv: readonly string[]) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
   return parseArgs({
-    args: [...argv],
+    args: [...args],
     options,
     allowPositionals: false,
   }).values;

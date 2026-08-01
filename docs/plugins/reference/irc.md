@@ -16,7 +16,7 @@ Adds the IRC channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: irc
+channels: `irc`
 
 ## Related docs
 

@@ -1,11 +1,10 @@
 // Discord tests cover send.webhook.proxy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordError, RateLimitError } from "./internal/rest-errors.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
-
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
@@ -40,8 +39,14 @@ function cancelTrackedResponse(
 
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     makeProxyFetchMock.mockReset();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("falls back to global fetch when the Discord proxy URL is invalid", async () => {
@@ -101,10 +106,38 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
-  it("uses global fetch when the Discord proxy URL is remote", async () => {
-    const globalFetchMock = vi
-      .spyOn(globalThis, "fetch")
+  it("uses proxy fetch when the Discord proxy is a DNS host", async () => {
+    const proxiedFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-dns" }), { status: 200 }));
+    makeProxyFetchMock.mockReturnValue(proxiedFetch);
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://mitm-proxy:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://mitm-proxy:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses proxy fetch when the Discord proxy URL is arbitrary DNS", async () => {
+    const proxiedFetch = vi
+      .fn()
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
+    makeProxyFetchMock.mockReturnValue(proxiedFetch);
 
     const cfg = {
       channels: {
@@ -123,9 +156,35 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(globalFetchMock).toHaveBeenCalled();
-    globalFetchMock.mockRestore();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses proxy fetch when the Discord proxy URL is a non-loopback IP", async () => {
+    const proxiedFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
+    makeProxyFetchMock.mockReturnValue(proxiedFetch);
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://10.0.0.10:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://10.0.0.10:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
   it("uses global fetch when no proxy is configured", async () => {
@@ -154,12 +213,162 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     globalFetchMock.mockRestore();
   });
 
-  it("throws typed rate limit errors for webhook 429 responses", async () => {
-    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }), {
-        status: 429,
-      }),
+  it("accepts Discord's no-body webhook response when wait is false", async () => {
+    const response = new Response(null, { status: 204 });
+    const jsonSpy = vi.spyOn(response, "json");
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: false,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    expect(jsonSpy).not.toHaveBeenCalled();
+    globalFetchMock.mockRestore();
+  });
+
+  it("keeps a successful send when the webhook response body exceeds the limit", async () => {
+    const tracked = cancelTrackedResponse(`{"id":"${"x".repeat(16 * 1024 * 1024)}"}`, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(tracked.response);
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    expect(tracked.wasCanceled()).toBe(true);
+    globalFetchMock.mockRestore();
+  });
+
+  it("keeps a successful send when the webhook response body is malformed", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("not json", { status: 200 }));
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    globalFetchMock.mockRestore();
+  });
+
+  it("retries rate-limited webhook sends after the Discord retry-after delay", async () => {
+    vi.useFakeTimers();
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "Slow down", retry_after: 0.75, global: false }), {
+          status: 429,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "msg-retried", channel_id: "thread-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    const sent = sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      threadId: "thread-1",
+      wait: true,
+    });
+    const outcome = sent.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
     );
+
+    await vi.advanceTimersByTimeAsync(749);
+    expect(globalFetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toMatchObject({
+      ok: true,
+      value: { messageId: "msg-retried", channelId: "thread-1" },
+    });
+    expect(globalFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries proven pre-connect webhook failures", async () => {
+    vi.useFakeTimers();
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "msg-connected", channel_id: "thread-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    const sent = sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+    const outcome = sent.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toMatchObject({
+      ok: true,
+      value: { messageId: "msg-connected" },
+    });
+    expect(globalFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries ambiguous webhook server failures that could duplicate a message", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("bad gateway", { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "unexpected-duplicate" }), { status: 200 }),
+      );
+
+    await expect(
+      sendWebhookMessageDiscord("hello", {
+        cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+        accountId: "default",
+        webhookId: "123",
+        webhookToken: "abc",
+        wait: true,
+      }),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(globalFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws typed rate limit errors for webhook 429 responses", async () => {
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }),
+        {
+          status: 429,
+        },
+      );
+    });
 
     const cfg = {
       channels: {

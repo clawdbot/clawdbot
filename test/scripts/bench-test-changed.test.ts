@@ -87,6 +87,15 @@ describe("bench-test-changed script", () => {
     expect(nextFlag.stderr).not.toContain("at ");
   });
 
+  it("rejects duplicate max worker values before inspecting git state", () => {
+    const result = runBenchTestChanged(["--max-workers", "2", "--max-workers", "3"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--max-workers was provided more than once");
+    expect(result.stderr).not.toContain("at ");
+  });
+
   it("rejects unknown options before collecting changed paths", () => {
     const result = runBenchTestChanged(["--max-worker", "4"]);
 

@@ -19,7 +19,7 @@ type StatusAggregateDb = {
   };
 };
 
-export const MEMORY_STATUS_AGGREGATE_SQL =
+const MEMORY_STATUS_AGGREGATE_SQL =
   `SELECT 'files' AS kind, source, COUNT(*) as c FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
   `UNION ALL\n` +
   `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;

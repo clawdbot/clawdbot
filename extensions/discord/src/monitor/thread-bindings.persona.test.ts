@@ -32,4 +32,9 @@ describe("thread binding persona", () => {
     } satisfies ThreadBindingRecord;
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
   });
+
+  it("does not split a surrogate pair at the length limit", () => {
+    const prefix = "a".repeat(76);
+    expect(resolveThreadBindingPersona({ label: `${prefix}😀tail` })).toBe(`⚙️ ${prefix}`);
+  });
 });

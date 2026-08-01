@@ -4,18 +4,7 @@
  * Downscales base64 image content for provider payload limits using the configured image processor.
  */
 import type { ImageContent } from "../../llm/types.js";
-import {
-  createImageProcessor,
-  isImageProcessorUnavailableError,
-  type ImageProbe,
-} from "../../media/image-ops.js";
-
-interface ImageResizeOptions {
-  maxWidth?: number; // Default: 2000
-  maxHeight?: number; // Default: 2000
-  maxBytes?: number; // Default: 4.5MB of base64 payload (below Anthropic's 5MB limit)
-  jpegQuality?: number; // Default: 80
-}
+import { convertImageToPng, createImageProcessor, type ImageProbe } from "../../media/image-ops.js";
 
 interface ResizedImage {
   data: string; // base64
@@ -27,34 +16,79 @@ interface ResizedImage {
   wasResized: boolean;
 }
 
-// 4.5MB of base64 payload. Provides headroom below Anthropic's 5MB limit.
-const DEFAULT_MAX_BYTES = 4.5 * 1024 * 1024;
+type ProcessImageResult =
+  | { ok: true; image: ImageContent; hints: string[] }
+  | { ok: false; message: string };
 
-const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
-  maxWidth: 2000,
-  maxHeight: 2000,
-  maxBytes: DEFAULT_MAX_BYTES,
-  jpegQuality: 80,
-};
+const INLINE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-function maxBinaryBytesForBase64Budget(maxBase64Bytes: number): number {
-  return Math.floor(maxBase64Bytes / 4) * 3;
+function baseMimeType(mimeType: string | undefined): string {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
+  return normalized === "image/jpg" ? "image/jpeg" : (normalized ?? "");
 }
 
-interface EncodedCandidate {
-  data: string;
-  encodedSize: number;
-  mimeType: string;
+async function normalizeImageForProvider(
+  image: ImageContent,
+): Promise<{ image: ImageContent; convertedFrom?: string } | null> {
+  const mimeType = baseMimeType(image.mimeType);
+  if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
+    return { image: { ...image, mimeType } };
+  }
+  try {
+    const output = await convertImageToPng(Buffer.from(image.data, "base64"));
+    return {
+      image: { type: "image", data: output.toString("base64"), mimeType: "image/png" },
+      convertedFrom: mimeType || image.mimeType,
+    };
+  } catch {
+    return null;
+  }
 }
 
-function encodeCandidate(buffer: Buffer, mimeType: string): EncodedCandidate {
-  const data = buffer.toString("base64");
+/** Normalize image formats for model input, then enforce inline size limits when enabled. */
+export async function processImage(
+  image: ImageContent,
+  options: { autoResizeImages: boolean },
+): Promise<ProcessImageResult> {
+  const normalized = await normalizeImageForProvider(image);
+  if (!normalized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be converted to a supported inline image format.]",
+    };
+  }
+
+  const hints: string[] = [];
+  if (normalized.convertedFrom) {
+    hints.push(`[Image converted from ${normalized.convertedFrom} to image/png.]`);
+  }
+  if (!options.autoResizeImages) {
+    return { ok: true, image: normalized.image, hints };
+  }
+
+  const resized = await resizeImage(normalized.image);
+  if (!resized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be resized below the inline image size limit.]",
+    };
+  }
+  const dimensionNote = formatDimensionNote(resized);
+  if (dimensionNote) {
+    hints.push(dimensionNote);
+  }
   return {
-    data,
-    encodedSize: Buffer.byteLength(data, "utf-8"),
-    mimeType,
+    ok: true,
+    image: { type: "image", data: resized.data, mimeType: resized.mimeType },
+    hints,
   };
 }
+
+const MAX_IMAGE_WIDTH = 2000;
+const MAX_IMAGE_HEIGHT = 2000;
+// 4.5MB of base64 payload leaves headroom below Anthropic's 5MB limit.
+const MAX_IMAGE_BASE64_BYTES = 4.5 * 1024 * 1024;
+const JPEG_QUALITY = 80;
 
 function orientedDimensions(probe: ImageProbe): { width: number; height: number } {
   return probe.orientation && probe.orientation >= 5 && probe.orientation <= 8
@@ -63,23 +97,19 @@ function orientedDimensions(probe: ImageProbe): { width: number; height: number 
 }
 
 /**
- * Resize an image to fit within the specified max dimensions and encoded file size.
- * Returns null if the image cannot be resized below maxBytes.
+ * Resize an image to fit within the inline dimensions and base64 payload limit.
+ * Returns null if Rastermill cannot produce output within those limits.
  *
  * Uses Rastermill for image processing. If no Rastermill backend is available,
  * returns null.
  *
- * Strategy for staying under maxBytes:
- * 1. First resize to maxWidth/maxHeight
+ * Strategy for staying under the inline limits:
+ * 1. First resize to the maximum dimensions
  * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
  * 3. If still too large, search decreasing quality/compression settings
  * 4. If still too large, progressively reduce dimensions
  */
-export async function resizeImage(
-  img: ImageContent,
-  options?: ImageResizeOptions,
-): Promise<ResizedImage | null> {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
+async function resizeImage(img: ImageContent): Promise<ResizedImage | null> {
   const inputBuffer = Buffer.from(img.data, "base64");
   const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
   const processor = createImageProcessor();
@@ -90,17 +120,16 @@ export async function resizeImage(
       return null;
     }
     const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
-    const format = img.mimeType?.split("/")[1] ?? "png";
 
     // Check if already within all limits (dimensions AND encoded size)
     if (
-      originalWidth <= opts.maxWidth &&
-      originalHeight <= opts.maxHeight &&
-      inputBase64Size < opts.maxBytes
+      originalWidth <= MAX_IMAGE_WIDTH &&
+      originalHeight <= MAX_IMAGE_HEIGHT &&
+      inputBase64Size <= MAX_IMAGE_BASE64_BYTES
     ) {
       return {
         data: img.data,
-        mimeType: img.mimeType ?? `image/${format}`,
+        mimeType: img.mimeType,
         originalWidth,
         originalHeight,
         width: originalWidth,
@@ -109,39 +138,35 @@ export async function resizeImage(
       };
     }
 
-    const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40, 35]));
+    const qualitySteps = [JPEG_QUALITY, 85, 70, 55, 40, 35];
     const output = await processor.encode(inputBuffer, {
       format: "auto",
       limits: {
-        maxWidth: opts.maxWidth,
-        maxHeight: opts.maxHeight,
+        maxWidth: MAX_IMAGE_WIDTH,
+        maxHeight: MAX_IMAGE_HEIGHT,
       },
-      maxBytes: maxBinaryBytesForBase64Budget(opts.maxBytes),
-      opaque: { format: "jpeg", quality: opts.jpegQuality },
+      maxBase64Bytes: MAX_IMAGE_BASE64_BYTES,
+      opaque: { format: "jpeg", quality: JPEG_QUALITY },
       transparent: { format: "png" },
       search: {
         quality: qualitySteps,
         compressionLevel: [6, 9],
       },
     });
-    const candidate = encodeCandidate(output.data, output.mimeType);
-    if (candidate.encodedSize > opts.maxBytes || output.withinBudget === false) {
+    if (output.withinBudget !== true) {
       return null;
     }
 
     return {
-      data: candidate.data,
-      mimeType: candidate.mimeType,
+      data: output.data.toString("base64"),
+      mimeType: output.mimeType,
       originalWidth,
       originalHeight,
       width: output.width,
       height: output.height,
-      wasResized: !output.data.equals(inputBuffer),
+      wasResized: output.resized,
     };
-  } catch (error) {
-    if (isImageProcessorUnavailableError(error)) {
-      return null;
-    }
+  } catch {
     return null;
   }
 }
@@ -150,7 +175,7 @@ export async function resizeImage(
  * Format a dimension note for resized images.
  * This helps the model understand the coordinate mapping.
  */
-export function formatDimensionNote(result: ResizedImage): string | undefined {
+function formatDimensionNote(result: ResizedImage): string | undefined {
   if (!result.wasResized) {
     return undefined;
   }

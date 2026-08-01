@@ -7,6 +7,22 @@ import {
 } from "./sanitize-for-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
   it("strips ASCII control chars (CR/LF/NUL/tab)", () => {
     expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/abcde");
@@ -32,8 +48,8 @@ describe("buildAgentSystemPrompt uses sanitized workspace/sandbox strings", () =
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/project\nINJECT\u2028MORE",
     });
-    expect(prompt).toContain("Your working directory is: /tmp/projectINJECTMORE");
-    expect(prompt).not.toContain("Your working directory is: /tmp/project\n");
+    expect(prompt).toContain("Working directory: /tmp/projectINJECTMORE");
+    expect(prompt).not.toContain("Working directory: /tmp/project\n");
     expect(prompt).not.toContain("\u2028");
   });
 
@@ -88,6 +104,17 @@ describe("wrapPromptDataBlock", () => {
     });
     expect(block).toContain("\nabcd\n");
     expect(block).not.toContain("\nabcdef\n");
+  });
+
+  it("does not split surrogate pairs when applying max char limits", () => {
+    const block = wrapPromptDataBlock({
+      label: "Data",
+      text: `${"a".repeat(3)}😀tail`,
+      maxChars: 4,
+    });
+
+    expect(block).toContain(`\n${"a".repeat(3)}\n`);
+    expect(hasLoneSurrogate(block)).toBe(false);
   });
 });
 

@@ -203,7 +203,6 @@ async function promptCodexMigrationSkillSelection(
       },
     ],
     initialValues: getDefaultMigrationSkillSelectionValues(skillItems),
-    required: false,
     selectableValues: skillItems.map(getMigrationSkillSelectionValue),
     cursorAt: MIGRATION_SELECTION_ACCEPT,
   });
@@ -264,7 +263,6 @@ async function promptCodexMigrationPluginSelection(
       },
     ],
     initialValues: getDefaultMigrationPluginSelectionValues(pluginItems),
-    required: false,
     selectableValues: pluginItems.map(getMigrationPluginSelectionValue),
     cursorAt: MIGRATION_SELECTION_ACCEPT,
   });

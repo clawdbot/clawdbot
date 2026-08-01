@@ -55,6 +55,27 @@ describe("DebugProxyCaptureStore", () => {
     expect(reopened.isClosed).toBe(false);
   });
 
+  it("rebinds a cached shared store after the state database closes underneath it", () => {
+    const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };
+    const stale = getDebugProxyCaptureStore(options);
+    stale.upsertSession({
+      id: "exit-session",
+      startedAt: 1,
+      mode: "proxy-run",
+      sourceScope: "openclaw",
+      sourceProcess: "cli",
+    });
+
+    // Exit-time hook closes the shared handle out from under the cached store;
+    // finalizeDebugProxyCapture then re-fetches and must not get a dead handle.
+    closeOpenClawStateDatabaseForTest();
+    expect(stale.isClosed).toBe(true);
+
+    const rebound = getDebugProxyCaptureStore(options);
+    expect(Object.is(rebound, stale)).toBe(false);
+    expect(() => rebound.endSession("exit-session")).not.toThrow();
+  });
+
   it("tracks and closes cached stores independently across paths", () => {
     const first = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-first-"),
@@ -116,6 +137,19 @@ describe("DebugProxyCaptureStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
+    expect(
+      lease.store.db
+        .prepare(
+          `SELECT name, strict FROM pragma_table_list
+           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "capture_events", strict: 1 },
+      { name: "capture_sessions", strict: 1 },
+    ]);
+    expect(lease.store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
       events: 1,
@@ -135,6 +169,7 @@ describe("DebugProxyCaptureStore", () => {
       bfree: 1,
       bavail: 1,
       files: 0,
+      frsize: 1024,
       ffree: 0,
     });
 
@@ -243,6 +278,17 @@ describe("DebugProxyCaptureStore", () => {
     expect(duplicateRows[0]?.method).toBe("POST");
     expect(duplicateRows[0]?.duplicateCount).toBe(2);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
+  });
+
+  it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
+    const store = makeStore();
+    const data = `${"x".repeat(8191)}étail`;
+
+    const payload = persistEventPayload(store, { data });
+
+    expect(payload.dataText).toBe("x".repeat(8191));
+    expect(Buffer.byteLength(payload.dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
+    expect(store.readBlob(payload.dataBlobId ?? "")).toBe(data);
   });
 
   it("creates and later upgrades an implicit session for direct event capture", () => {

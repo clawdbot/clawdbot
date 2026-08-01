@@ -1,6 +1,6 @@
 {
   "id": "signal",
-  "icon": "https://cdn.simpleicons.org/signal/111111",
+  "icon": "https://cdn.simpleicons.org/signal",
   "activation": {
     "onStartup": false
   },

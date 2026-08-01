@@ -1,5 +1,6 @@
 /** Converts image provider base64/data-url payloads into generated or source image assets. */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -9,6 +10,7 @@ import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
+const INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES = 1024 * 1024;
 
 // Image asset helpers for provider responses and source uploads. They normalize
 // base64/data-url inputs into in-memory assets with predictable filenames.
@@ -27,6 +29,19 @@ export type OpenAiCompatibleImageResponseEntry = {
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
+
+export function resolveInlineImageJsonResponseMaxBytes(
+  maxImages: number,
+  maxImageBytes: number,
+): number {
+  const imageCount = Number.isFinite(maxImages) ? Math.max(1, Math.trunc(maxImages)) : 1;
+  const imageBytes =
+    Number.isFinite(maxImageBytes) && maxImageBytes > 0
+      ? Math.max(1, Math.trunc(maxImageBytes))
+      : MAX_IMAGE_BYTES;
+  const maxBase64Bytes = Math.ceil((imageBytes * imageCount * 4) / 3);
+  return maxBase64Bytes + INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES;
+}
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {

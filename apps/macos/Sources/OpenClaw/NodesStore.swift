@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawKit
 import OSLog
 
 struct NodeInfo: Identifiable, Codable {
@@ -36,6 +37,12 @@ private struct NodeListResponse: Codable {
     let nodes: [NodeInfo]
 }
 
+enum LocalNodeIdentityState: Equatable {
+    case loading
+    case available(String)
+    case unavailable
+}
+
 @MainActor
 @Observable
 final class NodesStore {
@@ -45,29 +52,80 @@ final class NodesStore {
     var lastError: String?
     var statusMessage: String?
     var isLoading = false
+    private(set) var localNodeIdentityState: LocalNodeIdentityState = .loading
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "nodes")
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
-    private var startCount = 0
+    private let localNodeIdentityProfile: GatewayDeviceIdentityProfile
+    @ObservationIgnored private let localNodeIDLoader: @Sendable (GatewayDeviceIdentityProfile) -> String?
+    @ObservationIgnored private var localNodeIdentityLoad:
+        (generation: UInt64, task: Task<String?, Never>)?
+    @ObservationIgnored private var localNodeIdentityLoadGeneration: UInt64 = 0
+    @ObservationIgnored private var localNodeIdentityPreparationTask: Task<Void, Never>?
+
+    init(
+        localNodeIdentityProfile: GatewayDeviceIdentityProfile = MacNodeModeCoordinator.nodeIdentityProfile,
+        localNodeIDLoader: @escaping @Sendable (GatewayDeviceIdentityProfile) -> String? = { profile in
+            DeviceIdentityStore.loadOrCreatePersisted(profile: profile)?.deviceId
+        })
+    {
+        self.localNodeIdentityProfile = localNodeIdentityProfile
+        self.localNodeIDLoader = localNodeIDLoader
+    }
 
     func start() {
-        self.startCount += 1
-        guard self.startCount == 1 else { return }
+        guard self.task == nil else { return }
+        self.scheduleLocalNodeIdentityPreparation()
         SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
             await self?.refresh()
         }
     }
 
-    func stop() {
-        guard self.startCount > 0 else { return }
-        self.startCount -= 1
-        guard self.startCount == 0 else { return }
-        self.task?.cancel()
-        self.task = nil
+    private func scheduleLocalNodeIdentityPreparation() {
+        guard self.localNodeIdentityPreparationTask == nil else { return }
+        guard case .available = self.localNodeIdentityState else {
+            // Retry on the node refresh lifecycle so transient storage failures recover
+            // without moving identity I/O back into SwiftUI view evaluation.
+            self.localNodeIdentityPreparationTask = Task { [weak self] in
+                guard let self else { return }
+                await self.prepareLocalNodeIdentity()
+                self.localNodeIdentityPreparationTask = nil
+            }
+            return
+        }
+    }
+
+    func prepareLocalNodeIdentity() async {
+        if case .available = self.localNodeIdentityState {
+            return
+        }
+
+        let generation: UInt64
+        let task: Task<String?, Never>
+        if let load = self.localNodeIdentityLoad {
+            generation = load.generation
+            task = load.task
+        } else {
+            self.localNodeIdentityState = .loading
+            self.localNodeIdentityLoadGeneration &+= 1
+            generation = self.localNodeIdentityLoadGeneration
+            let profile = self.localNodeIdentityProfile
+            let loader = self.localNodeIDLoader
+            task = Task.detached(priority: .utility) {
+                loader(profile)
+            }
+            self.localNodeIdentityLoad = (generation, task)
+        }
+
+        let nodeID = await task.value
+        guard self.localNodeIdentityLoad?.generation == generation else { return }
+        self.localNodeIdentityLoad = nil
+        self.localNodeIdentityState = nodeID.map(LocalNodeIdentityState.available) ?? .unavailable
     }
 
     func refresh() async {
+        self.scheduleLocalNodeIdentityPreparation()
         if self.isLoading { return }
         self.statusMessage = nil
         self.isLoading = true

@@ -8,7 +8,7 @@ export function formatApprovalResultValue(value: unknown) {
   return JSON.stringify(value) ?? "<unserializable>";
 }
 
-export function readAcceptedApprovalRequest(result: unknown) {
+function readAcceptedApprovalRequest(result: unknown) {
   const accepted =
     typeof result === "object" && result !== null
       ? (result as { id?: unknown; status?: unknown })

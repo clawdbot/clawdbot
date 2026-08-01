@@ -1,5 +1,5 @@
 // Imessage plugin module implements sanitize outbound behavior.
-import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.
@@ -7,7 +7,9 @@ import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-chun
  */
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/g;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/gi;
-const ROLE_TURN_MARKER_RE = /\b(?:user|system|assistant)\s*:\s*$/gm;
+// Only a standalone role marker on its own line (a leaked turn boundary) — not
+// any line that merely ends with the word "user/system/assistant:" in prose.
+const ROLE_TURN_MARKER_RE = /^[ \t]*(?:user|system|assistant)\s*:\s*$/gm;
 
 /**
  * Strip all assistant-internal scaffolding from outbound text before delivery.
@@ -19,7 +21,7 @@ export function sanitizeOutboundText(text: string): string {
     return text;
   }
 
-  let cleaned = stripAssistantInternalScaffolding(text);
+  let cleaned = sanitizeAssistantVisibleText(text);
 
   cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
   cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");

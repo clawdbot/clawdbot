@@ -4,7 +4,7 @@ import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtim
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
-export type FileStatLike = {
+type FileStatLike = {
   isFile?: unknown;
   nlink?: unknown;
 };

@@ -82,9 +82,49 @@ describe("checkGatewayHealth", () => {
       method: "channels.status",
       params: { probe: true, timeoutMs: 5000 },
       timeoutMs: 6000,
+      config: cfg,
     });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it("reports failed channel diagnostics without marking a reachable gateway unhealthy", async () => {
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("channel probe timed out"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Channel status probe failed: channel probe timed out",
+        "Retry: openclaw channels status --probe",
+      ].join("\n"),
+      "Channel warnings",
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("redacts credentials and terminal controls in channel probe failures", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(
+        new Error(`\u001B[31mchannel probe failed\nAuthorization: Bearer ${token}`),
+      );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg });
+
+    const [message, title] = note.mock.calls.at(-1) ?? [];
+    expect(title).toBe("Channel warnings");
+    expect(message).toContain("channel probe failed\\nAuthorization: Bearer");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain("\u001B");
+    expect(message.split("\n")).toHaveLength(2);
   });
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
@@ -108,6 +148,90 @@ describe("checkGatewayHealth", () => {
     expect(mismatchOutput).toContain("Check `openclaw --version`, `which openclaw`");
     expect(mismatchOutput).toContain(
       "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+    );
+  });
+
+  it("lists every degraded SecretRef owner reported by Gateway status", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedSecretOwners: [
+          {
+            ownerKind: "account",
+            ownerId: "discord:ops",
+            state: "unavailable",
+            paths: ["channels.discord.accounts.ops.token"],
+            reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            degradationState: "stale",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret provider policy denied resolution",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "web-fetch:firecrawl",
+            state: "unavailable",
+            paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+            reason: "resolved secret value was invalid",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
+        "  Retry: openclaw secrets reload",
+        "- stale capability:tts (tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
+        "  Retry: openclaw secrets reload",
+        "- cold capability:web-fetch:firecrawl (plugins.entries.firecrawl.config.webFetch.apiKey): resolved secret value was invalid",
+        "  Retry: openclaw secrets reload",
+      ].join("\n"),
+      "Secret runtime degradation",
+    );
+  });
+
+  it("lists every plugin configured unavailable by Gateway startup", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+          {
+            pluginId: "matrix",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-main-entry",
+              detail: "dist/index.js is missing",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- discord (unreadable-package-json): permission denied",
+        "- matrix (missing-main-entry): dist/index.js is missing",
+      ].join("\n"),
+      "Plugins configured unavailable",
     );
   });
 
@@ -230,6 +354,28 @@ describe("probeGatewayMemoryStatus", () => {
       params: { probe: false },
       timeoutMs: 1234,
       config: cfg,
+    });
+  });
+
+  it("carries last-known llama.cpp facts from the gateway", async () => {
+    callGateway.mockResolvedValue({
+      embedding: { ok: true },
+      embeddingRuntime: {
+        engine: "llama.cpp",
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toMatchObject({
+      checked: true,
+      ready: true,
+      runtimeFacts: {
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
     });
   });
 

@@ -4,7 +4,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../scripts/lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { assertPreparedOpenClawAiDependency } from "../scripts/openclaw-npm-prepublish-verify.ts";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
@@ -23,16 +28,48 @@ import {
   runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
 } from "../scripts/openclaw-npm-release-check.ts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
+
+describe("prepared OpenClaw AI dependency", () => {
+  it("requires the packed root to depend on the exact prepared AI version", () => {
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.1",
+          dependencies: { "@openclaw/ai": "2026.7.2" },
+        },
+      }),
+    ).toThrow("Prepared root and @openclaw/ai tarballs must both be version 2026.7.2.");
+
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.2",
+          dependencies: { "@openclaw/ai": "2026.7.1" },
+        },
+      }),
+    ).toThrow("Prepared root tarball must depend on exact @openclaw/ai@2026.7.2.");
+
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.2",
+          dependencies: { "@openclaw/ai": "2026.7.2" },
+        },
+      }),
+    ).not.toThrow();
+  });
+});
 
 describe("workspace template package paths", () => {
   it("keeps the runtime heartbeat template in the npm pack guard", () => {
@@ -429,7 +466,7 @@ describe("resolveNpmCommandInvocation", () => {
             PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
           },
           windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        });
+        } as { cwd: string; env: NodeJS.ProcessEnv });
 
         expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
           "view",
@@ -776,7 +813,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -786,7 +822,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -796,7 +831,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-beta.1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([
       "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",

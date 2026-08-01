@@ -6,7 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../routing/session-key.js";
@@ -18,10 +18,7 @@ import {
 } from "../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  countActiveDescendantRunsFromRuns,
-  countPendingDescendantRunsFromRuns,
-} from "./subagent-registry-queries.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -29,10 +26,10 @@ import {
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
-  hasSubagentRunEnded,
   isLiveUnendedSubagentRun,
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
+import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 type SubagentListItem = {
   index: number;
@@ -81,7 +78,12 @@ export function resolveSessionEntryForKey(params: {
   const storePath = resolveStorePathForKey(params.cfg, parsed);
   let store = params.cache.get(storePath);
   if (!store) {
-    store = loadSessionStore(storePath);
+    store = Object.fromEntries(
+      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
     params.cache.set(storePath, store);
   }
   return {
@@ -91,22 +93,13 @@ export function resolveSessionEntryForKey(params: {
 }
 
 /** Build child-session indexes from the latest run associated with each child key. */
-export function buildLatestSubagentRunIndex(
+function buildLatestSubagentRunIndex(
   runs: Map<string, SubagentRunRecord>,
   options?: { now?: number },
 ) {
   const now = options?.now ?? Date.now();
-  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
-  for (const entry of runs.values()) {
-    const childSessionKey = entry.childSessionKey?.trim();
-    if (!childSessionKey) {
-      continue;
-    }
-    const existing = latestByChildSessionKey.get(childSessionKey);
-    if (!existing || entry.createdAt > existing.createdAt) {
-      latestByChildSessionKey.set(childSessionKey, entry);
-    }
-  }
+  const readIndex = buildSubagentRunReadIndexFromRuns({ runs, now });
+  const latestByChildSessionKey = new Map(readIndex.latestRunsByChildSessionKey);
 
   const childSessionsByController = new Map<string, string[]>();
   for (const [childSessionKey, entry] of latestByChildSessionKey.entries()) {
@@ -117,7 +110,7 @@ export function buildLatestSubagentRunIndex(
     }
     if (
       !shouldKeepSubagentRunChildLink(entry, {
-        activeDescendants: countActiveDescendantRunsFromRuns(runs, childSessionKey),
+        activeDescendants: readIndex.countActiveDescendantRuns(childSessionKey),
         now,
       })
     ) {
@@ -139,20 +132,7 @@ export function buildLatestSubagentRunIndex(
   return {
     latestByChildSessionKey,
     childSessionsByController,
-  };
-}
-
-/** Create a cached descendant counter for repeated list rendering checks. */
-function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
-  const pendingDescendantCache = new Map<string, number>();
-  return (sessionKey: string) => {
-    if (pendingDescendantCache.has(sessionKey)) {
-      return pendingDescendantCache.get(sessionKey) ?? 0;
-    }
-    const snapshot = runsSnapshot ?? getSubagentRunsSnapshotForRead(subagentRuns);
-    const pending = Math.max(0, countPendingDescendantRunsFromRuns(snapshot, sessionKey));
-    pendingDescendantCache.set(sessionKey, pending);
-    return pending;
+    readIndex,
   };
 }
 
@@ -162,25 +142,6 @@ function isActiveSubagentRun(
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
   return isLiveUnendedSubagentRun(entry) || pendingDescendantCount(entry.childSessionKey) > 0;
-}
-
-function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  if (!hasSubagentRunEnded(entry)) {
-    return "running";
-  }
-  const status = entry.outcome?.status ?? "done";
-  if (status === "ok") {
-    return "done";
-  }
-  if (status === "error") {
-    return "failed";
-  }
-  return status;
 }
 
 function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
@@ -247,8 +208,9 @@ export function buildSubagentList(params: {
   }
   const cache = new Map<string, Record<string, SessionEntry>>();
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-  const { childSessionsByController } = buildLatestSubagentRunIndex(snapshot);
-  const pendingDescendantCount = createPendingDescendantCounter(snapshot);
+  const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
+  const pendingDescendantCount = (sessionKey: string) =>
+    readIndex.countPendingDescendantRuns(sessionKey);
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
     const sessionEntry = resolveSessionEntryForKey({
@@ -259,9 +221,7 @@ export function buildSubagentList(params: {
     const totalTokens = resolveTotalTokens(sessionEntry);
     const usageText = formatTokenUsageDisplay(sessionEntry);
     const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const status = resolveRunStatus(entry, {
-      pendingDescendants,
-    });
+    const status = resolveSubagentDisplayStatus(entry, pendingDescendants);
     const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);

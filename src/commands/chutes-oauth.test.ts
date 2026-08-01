@@ -1,25 +1,11 @@
 // Chutes OAuth tests cover OAuth endpoints, local callback handling, and fetch preconnect behavior.
-import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { loginChutes } from "./chutes-oauth.js";
 
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("No TCP address")));
-        return;
-      }
-      const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
+const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
+const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 
 const urlToString = (url: Request | URL | string): string => {
   if (typeof url === "string") {

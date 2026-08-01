@@ -24,12 +24,12 @@ resolve_plain_gh_bin() {
   fi
 
   local candidate
-  for candidate in /opt/homebrew/bin/gh /usr/local/bin/gh; do
+  while IFS= read -r candidate; do
     if [ -x "$candidate" ]; then
       printf '%s\n' "$candidate"
       return 0
     fi
-  done
+  done < <(plain_gh_system_candidates)
 
   if candidate=$(PATH="$(plain_gh_search_path)" type -P gh 2>/dev/null); then
     printf '%s\n' "$candidate"
@@ -37,6 +37,16 @@ resolve_plain_gh_bin() {
   fi
 
   type -P gh 2>/dev/null
+}
+
+plain_gh_system_candidates() {
+  # bin/gh may intentionally be an Octopool shim; prefer package-manager opt paths.
+  printf '%s\n' \
+    /opt/homebrew/opt/gh/bin/gh \
+    /usr/local/opt/gh/bin/gh \
+    /home/linuxbrew/.linuxbrew/opt/gh/bin/gh \
+    /opt/homebrew/bin/gh \
+    /usr/local/bin/gh
 }
 
 plain_gh_search_path() {

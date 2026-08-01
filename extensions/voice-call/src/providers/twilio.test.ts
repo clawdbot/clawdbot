@@ -1,13 +1,24 @@
 // Voice Call tests cover twilio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
+  guardedJsonApiRequestMock: vi.fn(),
+}));
+
+vi.mock("./shared/guarded-json-api.js", () => ({
+  guardedJsonApiRequest: guardedJsonApiRequestMock,
+}));
+
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
+import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
 const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
 beforeEach(() => {
   vi.useRealTimers();
+  guardedJsonApiRequestMock.mockReset();
 });
 
 function createProvider(): TwilioProvider {
@@ -15,6 +26,64 @@ function createProvider(): TwilioProvider {
     { accountSid: "AC123", authToken: "secret" },
     { publicUrl: "https://example.ngrok.app", streamPath: "/voice/stream" },
   );
+}
+
+type TwilioPrivateCallState = {
+  callWebhookUrls: Map<string, string>;
+  callStreamMap: Map<string, string>;
+  streamAuthTokens: Map<string, string>;
+  twimlStorage: Map<string, string>;
+  notifyCalls: Set<string>;
+  activeStreamCalls: Set<string>;
+};
+
+function getTwilioPrivateCallState(provider: TwilioProvider): TwilioPrivateCallState {
+  return provider as unknown as TwilioPrivateCallState;
+}
+
+function seedTwilioPrivateCallState(params: {
+  provider: TwilioProvider;
+  callId: string;
+  providerCallId: string;
+}): void {
+  const state = getTwilioPrivateCallState(params.provider);
+  state.callWebhookUrls.set(
+    params.providerCallId,
+    `https://example.ngrok.app/voice/twilio?callId=${params.callId}`,
+  );
+  state.callStreamMap.set(params.providerCallId, "MZ-private-state");
+  state.streamAuthTokens.set(params.providerCallId, "stream-token");
+  state.twimlStorage.set(params.callId, "<Response><Say>Hello</Say></Response>");
+  state.notifyCalls.add(params.callId);
+  state.activeStreamCalls.add(params.providerCallId);
+}
+
+function expectTwilioPrivateCallStateReleased(params: {
+  provider: TwilioProvider;
+  callId: string;
+  providerCallId: string;
+}): void {
+  const state = getTwilioPrivateCallState(params.provider);
+  expect(state.callWebhookUrls.has(params.providerCallId)).toBe(false);
+  expect(state.callStreamMap.has(params.providerCallId)).toBe(false);
+  expect(state.streamAuthTokens.has(params.providerCallId)).toBe(false);
+  expect(state.twimlStorage.has(params.callId)).toBe(false);
+  expect(state.notifyCalls.has(params.callId)).toBe(false);
+  expect(state.activeStreamCalls.has(params.providerCallId)).toBe(false);
+}
+
+function expectTwilioPrivateCallStatePresent(params: {
+  provider: TwilioProvider;
+  callId: string;
+  providerCallId: string;
+}): void {
+  const state = getTwilioPrivateCallState(params.provider);
+  expect(state.callWebhookUrls.has(params.providerCallId)).toBe(true);
+  expect(state.callStreamMap.has(params.providerCallId)).toBe(true);
+  expect(state.streamAuthTokens.has(params.providerCallId)).toBe(true);
+  expect(state.twimlStorage.has(params.callId)).toBe(true);
+  expect(state.notifyCalls.has(params.callId)).toBe(true);
+  expect(state.activeStreamCalls.has(params.providerCallId)).toBe(true);
 }
 
 function createContext(rawBody: string, query?: WebhookContext["query"]): WebhookContext {
@@ -113,6 +182,57 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it("redacts turnToken query params from failed verification warnings", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const result = verifyTwilioProviderWebhook({
+        ctx: {
+          headers: {
+            host: "example.com",
+            "x-twilio-signature": "invalid",
+          },
+          rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
+          url: "https://example.com/voice/twilio?callId=call-1&turnToken=secret-turn-token",
+          method: "POST",
+          query: { callId: "call-1", turnToken: "secret-turn-token" },
+        },
+        authToken: "test-auth-token",
+        currentPublicUrl: null,
+        options: {},
+      });
+
+      const messages = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(result.ok).toBe(false);
+      expect(messages).toContain("turnToken=***");
+      expect(messages).toContain("callId=***");
+      expect(messages).not.toContain("secret-turn-token");
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("uses the derived regional hostname for call status", async () => {
+    guardedJsonApiRequestMock.mockResolvedValue({ status: "completed" });
+    const provider = new TwilioProvider({
+      accountSid: "AC123",
+      authToken: "secret",
+      region: "ie1",
+    });
+
+    await expect(provider.getCallStatus({ providerCallId: "CA123" })).resolves.toEqual({
+      status: "completed",
+      isTerminal: true,
+    });
+    expect(guardedJsonApiRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/AC123/Calls/CA123.json",
+        allowedHostnames: ["api.dublin.ie1.twilio.com"],
+      }),
+    );
+  });
+
   it("sends direct initial TwiML for notify-mode outbound calls", async () => {
     const provider = createProvider();
     const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
@@ -302,6 +422,88 @@ describe("TwilioProvider", () => {
     const nextBody = requireResponseBody(nextResult.providerResponseBody);
     expectStreamingTwiml(nextBody);
     expect(nextBody).not.toContain("hold-queue");
+  });
+
+  it("releases all provider call state on terminal callbacks and late replays", () => {
+    const provider = createProvider();
+    const callId = "call-terminal";
+    const providerCallId = "CA-terminal";
+    seedTwilioPrivateCallState({ provider, callId, providerCallId });
+    const terminal = createContext(
+      `CallStatus=completed&Direction=outbound-api&CallSid=${providerCallId}`,
+      { callId, type: "status" },
+    );
+
+    const first = provider.parseWebhookEvent(terminal).events[0];
+    expect(first).toMatchObject({
+      type: "call.ended",
+      callId,
+      providerCallId,
+      reason: "completed",
+    });
+    expectTwilioPrivateCallStateReleased({ provider, callId, providerCallId });
+
+    const lateReplay = provider.parseWebhookEvent(terminal).events[0];
+    expect(lateReplay).toMatchObject({
+      type: "call.ended",
+      callId,
+      providerCallId,
+      reason: "completed",
+    });
+    expectTwilioPrivateCallStateReleased({ provider, callId, providerCallId });
+  });
+
+  it("releases all provider call state after repeated explicit hangups", async () => {
+    const provider = createProvider();
+    const callId = "call-hangup";
+    const providerCallId = "CA-hangup";
+    seedTwilioPrivateCallState({ provider, callId, providerCallId });
+    const apiRequest = createApiRequestMock();
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+    const input = { callId, providerCallId, reason: "hangup-bot" as const };
+
+    await provider.hangupCall(input);
+    expectTwilioPrivateCallStateReleased({ provider, callId, providerCallId });
+    await provider.hangupCall(input);
+    expectTwilioPrivateCallStateReleased({ provider, callId, providerCallId });
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains call state when explicit hangup fails so it can retry", async () => {
+    const provider = createProvider();
+    const callId = "call-hangup-retry";
+    const providerCallId = "CA-hangup-retry";
+    seedTwilioPrivateCallState({ provider, callId, providerCallId });
+    const apiRequest = createApiRequestMock();
+    apiRequest.mockRejectedValueOnce(new Error("temporary Twilio failure")).mockResolvedValue({});
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+    const input = { callId, providerCallId, reason: "hangup-bot" as const };
+
+    await expect(provider.hangupCall(input)).rejects.toThrow("temporary Twilio failure");
+    expectTwilioPrivateCallStatePresent({ provider, callId, providerCallId });
+
+    await provider.hangupCall(input);
+    expectTwilioPrivateCallStateReleased({ provider, callId, providerCallId });
+    expect(apiRequest).toHaveBeenNthCalledWith(
+      1,
+      `/Calls/${providerCallId}.json`,
+      { Status: "completed" },
+      { allowNotFound: true },
+    );
+    expect(apiRequest).toHaveBeenNthCalledWith(
+      2,
+      `/Calls/${providerCallId}.json`,
+      { Status: "completed" },
+      { allowNotFound: true },
+    );
   });
 
   it("QUEUE_TWIML references /voice/hold-music waitUrl", () => {
@@ -649,5 +851,58 @@ describe("TwilioProvider", () => {
     ).rejects.toThrow("Telephony TTS produced no audio");
     expect(sendAudio).toHaveBeenCalled();
     expect(sendMark).not.toHaveBeenCalled();
+  });
+
+  it("exits chunk pacing early when the abort signal fires after the first chunk", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-abort-chunk", "MZ-abort-chunk");
+
+      const sendMark = vi.fn(() => ({ sent: true }));
+      const controller = new AbortController();
+      const sendAudio = vi.fn(() => {
+        // The first send is the synthesis keepalive; the second is the first real audio chunk.
+        if (sendAudio.mock.calls.length === 2) {
+          controller.abort();
+        }
+        return { sent: true };
+      });
+
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(controller.signal);
+        },
+        sendAudio,
+        sendMark,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async () => Buffer.alloc(160 * 10, 0x80),
+      });
+
+      const startedAt = Date.now();
+      await expect(
+        provider.playTts({
+          callId: "call-abort-chunk",
+          providerCallId: "CA-abort-chunk",
+          text: "hello",
+          voice: "default",
+          locale: "en-US",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(Date.now()).toBe(startedAt);
+      expect(sendAudio).toHaveBeenCalledTimes(2);
+      expect(sendMark).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -5,14 +5,27 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ImageContent } from "../../llm/types.js";
+import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
+import {
+  stripExtractedFileImageMetadata,
+  type ExtractedFileImage,
+} from "../../media-understanding/extracted-file-images.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = {
   index: number;
   path: string;
   mediaType: string;
+  workspaceDir?: string;
+};
+
+type OrderedTurnImage = {
+  image?: ImageContent;
+  imageOrder: PromptImageOrderEntry;
+  sourceIndex?: number;
+  sequence: number;
 };
 
 function isGenericMediaType(mediaType: string | undefined): boolean {
@@ -41,29 +54,21 @@ function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): 
 }
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const paths =
-    pathsFromArray && pathsFromArray.length > 0
-      ? pathsFromArray
-      : normalizeOptionalString(ctx.MediaPath)
-        ? [ctx.MediaPath]
-        : [];
-  if (paths.length === 0) {
-    return [];
-  }
-  const types =
-    Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
-      ? ctx.MediaTypes
-      : undefined;
-  const attachments: CurrentImageAttachment[] = [];
-  for (const [index, pathValue] of paths.entries()) {
-    const mediaPath = normalizeOptionalString(pathValue);
-    const mediaType = resolveCurrentImageMediaType(pathValue, types?.[index] ?? ctx.MediaType);
+  return normalizeAttachments(ctx).flatMap((attachment) => {
+    const mediaPath = normalizeOptionalString(attachment.path);
+    const mediaType = resolveCurrentImageMediaType(attachment.path, attachment.mime);
     if (mediaPath && mediaType) {
-      attachments.push({ index, path: mediaPath, mediaType });
+      return [
+        {
+          index: attachment.index,
+          path: mediaPath,
+          mediaType,
+          workspaceDir: attachment.workspaceDir,
+        },
+      ];
     }
-  }
-  return attachments;
+    return [];
+  });
 }
 
 function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
@@ -78,14 +83,81 @@ function createUndescribedImageContext(
   ctx: MsgContext,
   undescribedAttachments: CurrentImageAttachment[],
 ): MsgContext {
-  const first = undescribedAttachments[0];
+  const media = undescribedAttachments.map((attachment) => ({
+    path: attachment.path,
+    contentType: attachment.mediaType,
+    workspaceDir: attachment.workspaceDir,
+  }));
   return {
     ...ctx,
-    MediaPath: first?.path,
-    MediaType: first?.mediaType,
-    MediaPaths: undescribedAttachments.map((attachment) => attachment.path),
-    MediaTypes: undescribedAttachments.map((attachment) => attachment.mediaType),
+    media,
   };
+}
+
+function appendOrderedImages(params: {
+  entries: OrderedTurnImage[];
+  images: ImageContent[] | undefined;
+  imageOrder?: PromptImageOrderEntry[];
+  sourceIndex?: number;
+}) {
+  const images = params.images ?? [];
+  if (!params.imageOrder || params.imageOrder.length === 0) {
+    for (const image of images) {
+      params.entries.push({
+        image,
+        imageOrder: "inline",
+        sourceIndex: params.sourceIndex,
+        sequence: params.entries.length,
+      });
+    }
+    return;
+  }
+
+  let inlineIndex = 0;
+  for (const imageOrder of params.imageOrder) {
+    params.entries.push({
+      image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
+      imageOrder,
+      sourceIndex: params.sourceIndex,
+      sequence: params.entries.length,
+    });
+  }
+  while (inlineIndex < images.length) {
+    params.entries.push({
+      image: images[inlineIndex++],
+      imageOrder: "inline",
+      sourceIndex: params.sourceIndex,
+      sequence: params.entries.length,
+    });
+  }
+}
+
+function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
+  images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
+} {
+  if (entries.length === 0) {
+    return {};
+  }
+  const merged = entries.toSorted((left, right) => {
+    if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
+      return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
+    }
+    if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
+      return left.sequence - right.sequence;
+    }
+    return left.sequence - right.sequence;
+  });
+  const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
+  const result = {
+    ...(images.length > 0 ? { images } : {}),
+    imageOrder: merged.map((entry) => entry.imageOrder),
+  };
+  Object.defineProperty(result, "imageSourceIndexes", {
+    value: merged.map((entry) => entry.sourceIndex),
+  });
+  return result;
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
@@ -94,24 +166,36 @@ export async function resolveCurrentTurnImages(params: {
   cfg: OpenClawConfig;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  extractedFileImages?: ExtractedFileImage[];
 }): Promise<{
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 }> {
-  if (Array.isArray(params.images) && params.images.length > 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+  const entries: OrderedTurnImage[] = [];
+  appendOrderedImages({
+    entries,
+    images: params.images,
+    imageOrder: params.imageOrder,
+  });
+  for (const image of params.extractedFileImages ?? []) {
+    appendOrderedImages({
+      entries,
+      images: [stripExtractedFileImageMetadata(image)],
+      sourceIndex: image.attachmentIndex,
+    });
   }
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
   if (currentImageAttachments.length === 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+    return resolveMergedTurnImages(entries);
   }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+    return resolveMergedTurnImages(entries);
   }
 
   try {
@@ -132,15 +216,20 @@ export async function resolveCurrentTurnImages(params: {
       logVerbose(
         `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
-      return { images: params.images, imageOrder: params.imageOrder };
+      return resolveMergedTurnImages(entries);
     }
-    return images.length > 0
-      ? { images, imageOrder: images.map(() => "inline" as const) }
-      : { images: params.images, imageOrder: params.imageOrder };
+    for (const [index, image] of images.entries()) {
+      appendOrderedImages({
+        entries,
+        images: [image],
+        sourceIndex: undescribedImageAttachments[index]?.index,
+      });
+    }
+    return resolveMergedTurnImages(entries);
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    return { images: params.images, imageOrder: params.imageOrder };
+    return resolveMergedTurnImages(entries);
   }
 }

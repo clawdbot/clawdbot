@@ -1,10 +1,12 @@
 // Gateway net tests cover bind-host selection, loopback/private host detection,
 // trusted proxy IP resolution, container defaults, and interface matching.
+import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
-  __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
@@ -18,28 +20,19 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
+  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
 const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
 
 function clearFlyMachineEnvForTest(): () => void {
-  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  const envSnapshot = captureEnv([...flyMachineEnvKeys]);
   for (const key of flyMachineEnvKeys) {
-    previousEnv.set(key, process.env[key]);
-    delete process.env[key];
+    deleteTestEnvValue(key);
   }
 
-  return () => {
-    for (const key of flyMachineEnvKeys) {
-      const value = previousEnv.get(key);
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  return () => envSnapshot.restore();
 }
 
 function useClearedFlyMachineEnv() {
@@ -367,6 +360,22 @@ describe("resolveGatewayListenHosts", () => {
       expected: ["0.0.0.0"],
     },
     {
+      name: "IPv6 host passthrough",
+      host: "::1",
+      canBindToHost: async () => {
+        throw new Error("should not be called");
+      },
+      expected: ["::1"],
+    },
+    {
+      name: "specific non-loopback host with loopback alias available",
+      host: "100.64.0.1",
+      canBindToHost: async () => {
+        throw new Error("should not be called");
+      },
+      expected: ["100.64.0.1", "127.0.0.1"],
+    },
+    {
       name: "loopback with IPv6 available",
       host: "127.0.0.1",
       canBindToHost: async () => true,
@@ -394,12 +403,31 @@ describe("resolveGatewayListenHosts", () => {
     expect(canBindToHost).not.toHaveBeenCalled();
   });
 
+  it("still adds the IPv4 loopback alias for a specific host on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("100.64.0.1", { canBindToHost });
+    expect(hosts).toEqual(["100.64.0.1", "127.0.0.1"]);
+    expect(canBindToHost).not.toHaveBeenCalled();
+  });
+
   it("still includes ::1 on non-Windows when IPv6 is bindable", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const canBindToHost = vi.fn().mockResolvedValue(true);
     const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
     expect(hosts).toEqual(["127.0.0.1", "::1"]);
     expect(canBindToHost).toHaveBeenCalledWith("::1");
+  });
+});
+
+describe("resolveGatewayRequiredListenHosts", () => {
+  it.each([
+    ["127.0.0.1", ["127.0.0.1"]],
+    ["0.0.0.0", ["0.0.0.0"]],
+    ["::1", ["::1"]],
+    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
+  ])("returns required startup hosts for %s", (host, expected) => {
+    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
   });
 });
 
@@ -548,7 +576,7 @@ describe("isContainerEnvironment", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -587,8 +615,8 @@ describe("isContainerEnvironment", () => {
     });
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
-    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
-    process.env.FLY_APP_NAME = "openclaw-test";
+    setTestEnvValue("FLY_MACHINE_ID", "3d8d5459a03038");
+    setTestEnvValue("FLY_APP_NAME", "openclaw-test");
     expect(isContainerEnvironment()).toBe(true);
   });
 
@@ -666,12 +694,14 @@ describe("resolveGatewayBindHost", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
   it("returns 127.0.0.1 for loopback mode", async () => {
+    const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+    expect(createServerSpy).not.toHaveBeenCalled();
   });
 
   it("returns 0.0.0.0 for lan mode", async () => {
@@ -707,7 +737,7 @@ describe("defaultGatewayBindMode", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 

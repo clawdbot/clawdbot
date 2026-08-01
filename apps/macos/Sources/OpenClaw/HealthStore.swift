@@ -107,11 +107,6 @@ final class HealthStore {
         }
     }
 
-    func stop() {
-        self.loopTask?.cancel()
-        self.loopTask = nil
-    }
-
     func refresh(onDemand: Bool = false) async {
         guard !self.isRefreshing else { return }
         self.isRefreshing = true

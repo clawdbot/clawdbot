@@ -106,11 +106,31 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
             : `npm update ${update.registry.latestVersion}`,
         );
       } else {
-        parts.push(`${registryLabel} ${update.registry.latestVersion} (local newer)`);
+        parts.push(
+          update.registry.tag === "extended-stable"
+            ? `ahead of extended-stable (${update.registry.latestVersion})`
+            : `${registryLabel} ${update.registry.latestVersion} (local newer)`,
+        );
       }
       return;
     }
     if (update.registry?.error) {
+      if (update.registry.reason === "unsupported_git_channel") {
+        parts.push("extended-stable requires a package install");
+        return;
+      }
+      if (update.registry.reason === "selector_missing") {
+        parts.push("npm extended-stable selector missing");
+        return;
+      }
+      if (update.registry.reason === "selector_query_failed") {
+        parts.push("npm extended-stable query failed");
+        return;
+      }
+      if (update.registry.reason === "exact_package_mismatch") {
+        parts.push("npm extended-stable exact package verification failed");
+        return;
+      }
       parts.push(`${registryLabel} unknown`);
     }
   };

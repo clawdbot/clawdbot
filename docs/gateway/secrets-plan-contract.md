@@ -7,9 +7,13 @@ read_when:
 title: "Secrets apply plan contract"
 ---
 
-This page defines the strict contract enforced by `openclaw secrets apply`.
+This page defines the strict contract enforced by `openclaw secrets apply`. If a target does not match these rules, apply fails before mutating any file.
 
-If a target does not match these rules, apply fails before mutating configuration.
+## Plan file requirements
+
+`openclaw secrets apply --from <plan.json>` accepts regular files up to 16 MiB (16,777,216 bytes). The limit applies to the complete serialized file, including whitespace. Directories, FIFOs, device files, and files larger than the limit are rejected before JSON parsing or target validation.
+
+`openclaw secrets configure --plan-out <plan.json>` enforces the same limit on the UTF-8 serialized output before creating the file. Hand-written plans and external plan generators must also keep the serialized file within this boundary.
 
 ## Plan file shape
 
@@ -38,22 +42,16 @@ If a target does not match these rules, apply fails before mutating configuratio
 }
 ```
 
+`openclaw secrets configure` generates plans in this shape. You can also hand-write or edit one.
+
 ## Provider upserts and deletes
 
-Plans may also include two optional top-level fields that mutate the
-`secrets.providers` map alongside the per-target writes:
+Plans may also include two optional top-level fields that mutate the `secrets.providers` map alongside the per-target writes:
 
-- `providerUpserts` — an object keyed by provider alias. Each value is a
-  provider definition (the same shape accepted under
-  `secrets.providers.<alias>` in `openclaw.json`, e.g. an `exec` or `file`
-  provider).
-- `providerDeletes` — an array of provider aliases to remove.
+- `providerUpserts` -- an object keyed by provider alias. Each value is a provider definition (the same shape accepted under `secrets.providers.<alias>` in `openclaw.json`, e.g. an `exec` or `file` provider).
+- `providerDeletes` -- an array of provider aliases to remove.
 
-`providerUpserts` runs before `targets`, so a `target.ref.provider` may
-reference a provider alias that the same plan introduces in
-`providerUpserts`. Without this, plans that reference an alias not yet
-configured in `openclaw.json` fail with `provider "<alias>" is not
-configured`.
+`providerUpserts` runs before `targets`, so a `target.ref.provider` may reference a provider alias that the same plan introduces in `providerUpserts`. Without this ordering, plans that reference an alias not yet configured in `openclaw.json` fail with `provider "<alias>" is not configured`.
 
 ```json5
 {
@@ -79,27 +77,23 @@ configured`.
 }
 ```
 
-Exec providers introduced via `providerUpserts` are still subject to the
-exec consent rules in [Exec provider consent behavior](#exec-provider-consent-behavior):
-plans containing exec providers require `--allow-exec` in write mode.
+Exec providers introduced via `providerUpserts` are still subject to the exec consent rules in [Exec provider consent behavior](#exec-provider-consent-behavior): plans containing exec providers require `--allow-exec` in write mode.
 
 ## Supported target scope
 
-Plan targets are accepted for supported credential paths in:
-
-- [SecretRef Credential Surface](/reference/secretref-credential-surface)
+Plan targets are accepted for supported credential paths in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 
 ## Target type behavior
 
-General rule:
+`target.type` must be a recognized target type, and the normalized `target.path` must match that type's registered path shape.
 
-- `target.type` must be recognized and must match the normalized `target.path` shape.
+Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their canonical type name:
 
-Compatibility aliases remain accepted for existing plans:
-
-- `models.providers.apiKey`
-- `skills.entries.apiKey`
-- `channels.googlechat.serviceAccount`
+| Canonical type                       | Accepted alias                                  |
+| ------------------------------------ | ----------------------------------------------- |
+| `models.providers.apiKey`            | `models.providers.*.apiKey`                     |
+| `skills.entries.apiKey`              | `skills.entries.*.apiKey`                       |
+| `channels.googlechat.serviceAccount` | `channels.googlechat.accounts.*.serviceAccount` |
 
 ## Path validation rules
 
@@ -122,7 +116,7 @@ If a target fails validation, apply exits with an error like:
 Invalid plan target path for models.providers.apiKey: models.providers.openai.baseUrl
 ```
 
-No writes are committed for an invalid plan.
+No writes are committed for an invalid plan: target resolution and path validation run before any file is touched. Separately, once a valid plan starts writing, apply snapshots every touched file first and restores those snapshots if a later write in the same run fails, so a partial write never leaves config, auth-profile, or env state out of sync.
 
 ## Exec provider consent behavior
 
@@ -132,8 +126,8 @@ No writes are committed for an invalid plan.
 
 ## Runtime and audit scope notes
 
-- Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and optional scrub targets.
+- Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
+- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and three optional scrub passes, each on by default: `scrubEnv` (removes migrated plaintext values from `.env` files in the effective state and active-config directories), `scrubAuthProfilesForProviderTargets` (clears plaintext/unused-ref residue in `auth-profiles.json` for providers a plan just migrated), and `scrubLegacyAuthJson` (drops migrated `api_key` entries from legacy `auth.json` stores). Set any of `options.scrubEnv`, `options.scrubAuthProfilesForProviderTargets`, `options.scrubLegacyAuthJson` to `false` in the plan to skip that pass.
 
 ## Operator checks
 

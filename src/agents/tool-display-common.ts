@@ -3,13 +3,12 @@
  * Redacts and summarizes arguments into short labels/details for chat and UI
  * tool update streams.
  */
-import {
-  asOptionalObjectRecord as asRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
@@ -136,7 +135,7 @@ function coerceDisplayValue(
     const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
       const half = Math.floor((maxStringChars - 1) / 2);
-      return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
     }
     return firstLine;
   }
@@ -703,7 +702,7 @@ function resolveDetailFromKeys(
     return undefined;
   }
   if (entries.length === 1) {
-    return entries[0].value;
+    return entries.at(0)?.value;
   }
 
   const seen = new Set<string>();
@@ -817,3 +816,4 @@ export function formatToolDetailText(
   }
   return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

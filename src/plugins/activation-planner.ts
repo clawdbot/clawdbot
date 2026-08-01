@@ -17,7 +17,7 @@ import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-c
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 /** Runtime surface that can request a lazily activated plugin owner. */
-export type PluginActivationPlannerTrigger =
+type PluginActivationPlannerTrigger =
   | { kind: "command"; command: string }
   | { kind: "provider"; provider: string }
   | { kind: "agentHarness"; runtime: string }
@@ -25,7 +25,7 @@ export type PluginActivationPlannerTrigger =
   | { kind: "route"; route: string }
   | { kind: "capability"; capability: PluginManifestActivationCapability };
 
-export type PluginActivationPlannerHintReason =
+type PluginActivationPlannerHintReason =
   | "activation-agent-harness-hint"
   | "activation-capability-hint"
   | "activation-channel-hint"
@@ -33,7 +33,7 @@ export type PluginActivationPlannerHintReason =
   | "activation-provider-hint"
   | "activation-route-hint";
 
-export type PluginActivationPlannerManifestReason =
+type PluginActivationPlannerManifestReason =
   | "manifest-channel-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
@@ -41,17 +41,17 @@ export type PluginActivationPlannerManifestReason =
   | "manifest-setup-provider-owner"
   | "manifest-tool-contract";
 
-export type PluginActivationPlannerReason =
+type PluginActivationPlannerReason =
   | PluginActivationPlannerHintReason
   | PluginActivationPlannerManifestReason;
 
-export type PluginActivationPlanEntry = {
+type PluginActivationPlanEntry = {
   pluginId: string;
   origin: PluginOrigin;
   reasons: readonly PluginActivationPlannerReason[];
 };
 
-export type PluginActivationPlan = {
+type PluginActivationPlan = {
   trigger: PluginActivationPlannerTrigger;
   pluginIds: readonly string[];
   entries: readonly PluginActivationPlanEntry[];

@@ -16,7 +16,7 @@ OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community mai
 
 ## Surface
 
-channels: feishu; contracts: tools; skills
+channels: `feishu`; contracts: `tools`; skills
 
 ## Related docs
 

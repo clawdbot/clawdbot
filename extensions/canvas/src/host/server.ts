@@ -1,10 +1,8 @@
 /**
  * Canvas host server and static-file/live-reload handler implementation.
  */
-import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
 import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
@@ -21,21 +19,19 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { type WebSocket, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  injectCanvasLiveReload,
+  injectCanvasRuntime,
   isA2uiPath,
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
-export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
-
-type ChokidarWatch = typeof import("chokidar").watch;
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 
 /** Options for Canvas host creation. */
-export type CanvasHostOpts = {
+type CanvasHostOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   port?: number;
@@ -47,7 +43,7 @@ export type CanvasHostOpts = {
 };
 
 /** Options for starting a standalone Canvas host HTTP server. */
-export type CanvasHostServerOpts = CanvasHostOpts & {
+type CanvasHostServerOpts = CanvasHostOpts & {
   handler?: CanvasHostHandler;
   ownsHandler?: boolean;
 };
@@ -60,7 +56,7 @@ export type CanvasHostServer = {
 };
 
 /** Options for creating only the Canvas host request handler. */
-export type CanvasHostHandlerOpts = {
+type CanvasHostHandlerOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   basePath?: string;
@@ -102,7 +98,7 @@ function defaultIndexHTML() {
   <div class="card">
     <div class="title">
       <h1>OpenClaw Canvas</h1>
-      <div class="sub">Interactive test page (auto-reload enabled)</div>
+      <div class="sub">Interactive test page</div>
     </div>
 
     <div class="row">
@@ -224,34 +220,19 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(resolveStateDir(), "canvas")];
-  const existing = candidates.find((dir) => {
-    try {
-      return fsSync.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  return existing ?? candidates[0];
+  return path.join(resolveStateDir(), "canvas");
 }
 
-function resolveDefaultWatchFactory(): ChokidarWatch {
-  const importedWatch = (chokidar as { watch?: ChokidarWatch } | undefined)?.watch;
-  if (typeof importedWatch === "function") {
-    return importedWatch.bind(chokidar);
+function shouldIgnoreCanvasWatchPath(rootReal: string, candidatePath: string): boolean {
+  const relative = path.relative(rootReal, candidatePath);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+    return false;
   }
-
-  const require = createRequire(import.meta.url);
-  const runtime = require("chokidar") as
-    | { watch?: ChokidarWatch; default?: { watch?: ChokidarWatch } }
-    | undefined;
-  if (runtime && typeof runtime.watch === "function") {
-    return runtime.watch.bind(runtime);
-  }
-  if (runtime?.default && typeof runtime.default.watch === "function") {
-    return runtime.default.watch.bind(runtime.default);
-  }
-  throw new Error("chokidar.watch unavailable");
+  // Chokidar evaluates ignored matchers against absolute paths. Scope the
+  // policy below the root so the default ~/.openclaw parent is still watched.
+  return relative
+    .split(/[\\/]/u)
+    .some((segment) => segment.startsWith(".") || segment === "node_modules");
 }
 
 /** Creates a Canvas static-file handler with optional live reload. */
@@ -286,30 +267,17 @@ export async function createCanvasHostHandler(
         maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       })
     : null;
-  const sockets = new Set<WebSocket>();
-  if (wss) {
-    wss.on("connection", (ws) => {
-      sockets.add(ws);
-      // ws emits error for maxPayload rejections; close handles final cleanup.
-      ws.on("error", () => {
-        sockets.delete(ws);
-      });
-      ws.on("close", () => sockets.delete(ws));
-    });
-  }
+  wss?.on("connection", (ws) => {
+    // Consume maxPayload errors; ws owns client tracking and close cleanup.
+    ws.on("error", () => {});
+  });
 
   let debounce: NodeJS.Timeout | null = null;
   const broadcastReload = () => {
-    if (!liveReload) {
+    if (!wss) {
       return;
     }
-    for (const ws of sockets) {
-      try {
-        ws.send("reload");
-      } catch {
-        // ignore
-      }
-    }
+    wss.clients.forEach((ws) => ws.send("reload"));
   };
   const scheduleReload = () => {
     if (debounce) {
@@ -325,19 +293,15 @@ export async function createCanvasHostHandler(
   };
 
   let watcherClosed = false;
-  const watchFactory = opts.watchFactory ?? resolveDefaultWatchFactory();
   const watcher = liveReload
-    ? watchFactory(rootReal, {
+    ? (opts.watchFactory ?? chokidar.watch)(rootReal, {
         ignoreInitial: true,
         awaitWriteFinish: {
           stabilityThreshold: writeStabilityThresholdMs,
           pollInterval: writePollIntervalMs,
         },
         usePolling: testMode,
-        ignored: [
-          /(^|[\\/])\../, // dotfiles
-          /(^|[\\/])node_modules([\\/]|$)/,
-        ],
+        ignored: (candidatePath) => shouldIgnoreCanvasWatchPath(rootReal, candidatePath),
       })
     : null;
   watcher?.on("all", () => scheduleReload());
@@ -389,6 +353,11 @@ export async function createCanvasHostHandler(
         urlPath = urlPath === basePath ? "/" : urlPath.slice(basePath.length) || "/";
       }
 
+      // Core owns managed transcript documents; this host keeps only Canvas/A2UI files.
+      if (urlPath === "/documents" || urlPath.startsWith("/documents/")) {
+        return false;
+      }
+
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.statusCode = 405;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -430,7 +399,7 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = data.toString("utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(liveReload ? injectCanvasLiveReload(html) : html);
+        res.end(injectCanvasRuntime(html, { liveReload }));
         return true;
       }
 
@@ -457,13 +426,7 @@ export async function createCanvasHostHandler(
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
-      for (const ws of sockets) {
-        try {
-          ws.terminate?.();
-        } catch {
-          // ignore
-        }
-      }
+      wss?.clients.forEach((ws) => ws.terminate());
       if (wss) {
         await new Promise<void>((resolve) => {
           wss.close(() => resolve());

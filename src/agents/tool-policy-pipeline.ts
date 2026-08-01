@@ -45,6 +45,14 @@ export type ToolPolicyPipelineStep = {
   unavailableCoreToolReason?: string;
 };
 
+/** One policy application, exposed for diagnostics that need exclusion provenance. */
+export type ToolPolicyFilterEvent<TTool extends { name: string } = AnyAgentTool> = {
+  step: ToolPolicyPipelineStep;
+  policy: ToolPolicyLike;
+  before: readonly TTool[];
+  after: readonly TTool[];
+};
+
 /** Builds the default profile, provider, agent, group, and sender policy layers. */
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
@@ -124,14 +132,15 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
 }
 
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
-export function applyToolPolicyPipeline(params: {
-  tools: AnyAgentTool[];
-  toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
+export function applyToolPolicyPipeline<TTool extends { name: string }>(params: {
+  tools: TTool[];
+  toolMeta: (tool: TTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
   auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
-}): AnyAgentTool[] {
+  onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
+}): TTool[] {
   const coreToolNames = new Set(
     params.tools
       .filter((tool) => !params.toolMeta(tool))
@@ -203,6 +212,7 @@ export function applyToolPolicyPipeline(params: {
     }
     const before = filtered;
     filtered = filterToolsByPolicy(before, expanded);
+    params.onFilter?.({ step, policy: expanded, before, after: filtered });
     auditToolPolicyFilter({
       stepLabel: step.label,
       policy: expanded,
@@ -247,7 +257,13 @@ function describeUnknownAllowlistSuffix(params: {
 }
 
 /** Clears process-local warning dedupe state between tests. */
-export function resetToolPolicyWarningCacheForTest(): void {
+function resetToolPolicyWarningCacheForTest(): void {
   seenToolPolicyWarnings.clear();
   toolPolicyWarningOrder.length = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
+  ] = { resetToolPolicyWarningCacheForTest };
 }

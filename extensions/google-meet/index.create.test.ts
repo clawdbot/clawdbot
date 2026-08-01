@@ -10,9 +10,11 @@ import {
   invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome-create.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
+  createVoiceCallGateway: vi.fn(
+    ({ runtime }: { runtime: { gateway: unknown } }) => runtime.gateway,
+  ),
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({
     callId: "call-1",
     dtmfSent: true,
@@ -46,6 +48,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 });
 
 vi.mock("./src/voice-call-gateway.js", () => ({
+  createVoiceCallGateway: voiceCallMocks.createVoiceCallGateway,
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
   speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
@@ -91,13 +94,73 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
   };
   vi.stubGlobal("document", document);
   vi.stubGlobal("location", location);
-  const fn = (0, eval)(`(${CREATE_MEET_FROM_BROWSER_SCRIPT})`) as () => Promise<{
+  type BrowserScriptResult = {
     meetingUri?: string;
-    manualActionReason?: string;
+    manualAction?: { reason: string; message: string };
     notes?: string[];
     retryAfterMs?: number;
-  }>;
-  return { button, result: await fn() };
+  };
+  let scriptResult: BrowserScriptResult | undefined;
+  const { tools } = setup(
+    {
+      defaultTransport: "chrome-node",
+      chromeNode: { node: "parallels-macos" },
+    },
+    {
+      nodesInvokeHandler: async (invokeParams) => {
+        const proxy = invokeParams.params as {
+          path?: string;
+          body?: { fn?: string; url?: string };
+        };
+        if (proxy.path === "/tabs") {
+          return { payload: { result: { tabs: [] } } };
+        }
+        if (proxy.path === "/tabs/open") {
+          return {
+            payload: {
+              result: {
+                targetId: "create-script-tab",
+                title: "Meet",
+                url: proxy.body?.url,
+              },
+            },
+          };
+        }
+        if (proxy.path === "/act") {
+          if (typeof proxy.body?.fn !== "string") {
+            throw new Error("expected browser create script");
+          }
+          const fn = (0, eval)(`(${proxy.body.fn})`) as () => Promise<BrowserScriptResult>;
+          scriptResult = await fn();
+          return {
+            payload: {
+              result: {
+                ok: true,
+                targetId: "create-script-tab",
+                result: {
+                  manualAction: {
+                    reason: "meet-permission-required",
+                    message: "Stop after exercising the browser script.",
+                  },
+                  browserUrl: location.href,
+                  browserTitle: document.title,
+                },
+              },
+            },
+          };
+        }
+        throw new Error(`unexpected browser proxy path ${proxy.path}`);
+      },
+    },
+  );
+  const tool = tools[0] as {
+    execute: (id: string, params: unknown) => Promise<unknown>;
+  };
+  await tool.execute("browser-script", { action: "create", join: false });
+  if (!scriptResult) {
+    throw new Error("browser create script was not exercised");
+  }
+  return { button, result: scriptResult };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -304,7 +367,7 @@ describe("google-meet create flow", () => {
         return false;
       }
       const body = proxy.body as Record<string, unknown>;
-      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new";
+      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new?hl=en";
     });
   });
 
@@ -359,9 +422,11 @@ describe("google-meet create flow", () => {
                   ok: true,
                   targetId: "login-tab",
                   result: {
-                    manualActionReason: "google-login-required",
-                    manualAction:
-                      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+                    manualAction: {
+                      reason: "google-login-required",
+                      message:
+                        "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+                    },
                     browserUrl: "https://accounts.google.com/signin",
                     browserTitle: "Sign in - Google Accounts",
                     notes: ["Sign-in page detected."],
@@ -389,11 +454,10 @@ describe("google-meet create flow", () => {
     expect(payload.error).toBe(
       "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
     );
-    expect(payload.manualActionRequired).toBe(true);
-    expect(payload.manualActionReason).toBe("google-login-required");
-    expect(payload.manualActionMessage).toBe(
-      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
-    );
+    expect(payload.manualAction).toEqual({
+      reason: "google-login-required",
+      message: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+    });
     const browser = requireRecord(payload.browser, "browser payload");
     expect(browser.nodeId).toBe("node-1");
     expect(browser.targetId).toBe("login-tab");
@@ -426,7 +490,9 @@ describe("google-meet create flow", () => {
               payload: {
                 result: {
                   targetId:
-                    proxy.body?.url === "https://meet.google.com/new" ? "create-tab" : "join-tab",
+                    proxy.body?.url === "https://meet.google.com/new?hl=en"
+                      ? "create-tab"
+                      : "join-tab",
                   title: "Meet",
                   url: proxy.body?.url,
                 },
@@ -531,9 +597,11 @@ describe("google-meet create flow", () => {
                   ok: true,
                   targetId: "permission-tab",
                   result: {
-                    manualActionReason: "meet-permission-required",
-                    manualAction:
-                      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+                    manualAction: {
+                      reason: "meet-permission-required",
+                      message:
+                        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+                    },
                     browserUrl: "https://meet.google.com/new",
                     browserTitle: "Meet",
                   },
@@ -552,11 +620,11 @@ describe("google-meet create flow", () => {
     const result = await tool.execute("id", { action: "create" });
 
     expect(result.details.source).toBe("browser");
-    expect(result.details.manualActionRequired).toBe(true);
-    expect(result.details.manualActionReason).toBe("meet-permission-required");
-    expect(result.details.manualActionMessage).toBe(
-      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
-    );
+    expect(result.details.manualAction).toEqual({
+      reason: "meet-permission-required",
+      message:
+        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+    });
     const browser = requireRecord(result.details.browser, "browser details");
     expect(browser.nodeId).toBe("node-1");
     expect(browser.targetId).toBe("permission-tab");
@@ -590,6 +658,16 @@ describe("google-meet create flow", () => {
           }
           if (proxy.path === "/tabs/focus") {
             return { payload: { result: { ok: true } } };
+          }
+          if (proxy.path === "/navigate") {
+            return {
+              payload: {
+                result: {
+                  targetId: "navigated-create-tab",
+                  url: "https://meet.google.com/new?hl=en",
+                },
+              },
+            };
           }
           if (proxy.path === "/act") {
             return {
@@ -625,7 +703,7 @@ describe("google-meet create flow", () => {
     expect(payload.meetingUri).toBe("https://meet.google.com/reu-sedx-tab");
     const browser = requireRecord(payload.browser, "browser payload");
     expect(browser.nodeId).toBe("node-1");
-    expect(browser.targetId).toBe("existing-create-tab");
+    expect(browser.targetId).toBe("navigated-create-tab");
     findNodeInvokeParams(nodesInvoke, "focus existing tab", (params) => {
       if (!params.params || typeof params.params !== "object") {
         return false;
@@ -636,6 +714,32 @@ describe("google-meet create flow", () => {
       }
       const body = proxy.body as Record<string, unknown>;
       return proxy.path === "/tabs/focus" && body.targetId === "existing-create-tab";
+    });
+    findNodeInvokeParams(nodesInvoke, "navigate reused tab to English UI", (params) => {
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      if (!proxy.body || typeof proxy.body !== "object") {
+        return false;
+      }
+      const body = proxy.body as Record<string, unknown>;
+      return (
+        proxy.path === "/navigate" &&
+        body.targetId === "existing-create-tab" &&
+        body.url === "https://meet.google.com/new?hl=en"
+      );
+    });
+    findNodeInvokeParams(nodesInvoke, "act uses navigated target id", (params) => {
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      if (!proxy.body || typeof proxy.body !== "object") {
+        return false;
+      }
+      const body = proxy.body as Record<string, unknown>;
+      return proxy.path === "/act" && body.targetId === "navigated-create-tab";
     });
     const openedCreateTab = mockCalls(nodesInvoke, "nodes invoke").some(([value]) => {
       if (!value || typeof value !== "object") {
@@ -649,6 +753,76 @@ describe("google-meet create flow", () => {
       return proxy.path === "/tabs/open";
     });
     expect(openedCreateTab).toBe(false);
+  });
+
+  it("does not navigate a reused tab that is already using English UI", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          const proxy = params.params as { path?: string; body?: { targetId?: string } };
+          if (proxy.path === "/tabs") {
+            return {
+              payload: {
+                result: {
+                  tabs: [
+                    {
+                      targetId: "english-create-tab",
+                      title: "Meet",
+                      url: "https://meet.google.com/new?hl=en",
+                    },
+                  ],
+                },
+              },
+            };
+          }
+          if (proxy.path === "/tabs/focus") {
+            return { payload: { result: { ok: true } } };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: proxy.body?.targetId ?? "english-create-tab",
+                  result: {
+                    meetingUri: "https://meet.google.com/eng-lish-tab",
+                    browserUrl: "https://meet.google.com/eng-lish-tab",
+                    browserTitle: "Meet",
+                  },
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.create") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { join: false }, respond });
+
+    const navigated = mockCalls(nodesInvoke, "nodes invoke").some(([value]) => {
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+      const params = value as Record<string, unknown>;
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      return proxy.path === "/navigate";
+    });
+    expect(navigated).toBe(false);
   });
 
   it.each([
@@ -666,7 +840,7 @@ describe("google-meet create flow", () => {
       expect(result.notes).toEqual([note]);
       expect(button.click).toHaveBeenCalledTimes(1);
       expect(result.meetingUri).toBeUndefined();
-      expect(result.manualActionReason).toBeUndefined();
+      expect(result.manualAction).toBeUndefined();
     },
   );
 });

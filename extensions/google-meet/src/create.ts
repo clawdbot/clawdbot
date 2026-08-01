@@ -148,6 +148,7 @@ export async function createAndJoinMeetFromParams(params: {
     dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
     message: normalizeOptionalString(params.raw.message),
     requesterSessionKey: normalizeOptionalString(params.raw.requesterSessionKey),
+    agentId: normalizeOptionalString(params.raw.agentId),
   });
   return {
     ...created,

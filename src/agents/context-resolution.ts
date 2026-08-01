@@ -1,3 +1,8 @@
+import {
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+  supportsClaude1MContext,
+} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -6,6 +11,7 @@ import {
   minPositiveContextTokens,
   providerContextTokenCacheKey,
 } from "./context-cache.js";
+import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
@@ -22,27 +28,22 @@ export type ContextTokenResolutionParams = {
   cfg?: OpenClawConfig;
   sourceCfg?: OpenClawConfig | null;
   provider?: string;
+  modelProvider?: string;
   model?: string;
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
   modelContextWindow?: number;
   modelContextTokens?: number;
   allowAsyncLoad?: boolean;
+  allowUnscopedModelLookup?: boolean;
 };
 
-const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
-  "claude-opus-4-8",
-  "claude-opus-4.8",
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-opus-4-7",
-  "claude-opus-4.7",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
-export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
+export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
+export const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
 
 type ConfiguredContextTokens = {
   value: number;
@@ -137,6 +138,43 @@ function resolveConfiguredProviderContextTokens(
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
+function resolveProviderQualifiedModel(provider: string, model: string): string | undefined {
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const prefixedProvider = normalizeProviderId(model.slice(0, slash));
+  const bareModel = model.slice(slash + 1).trim();
+  return prefixedProvider === normalizeProviderId(provider) && bareModel ? bareModel : undefined;
+}
+
+function resolveConfiguredRuntimeContextTokens(
+  cfg: OpenClawConfig | null | undefined,
+  provider: string,
+  modelProvider: string | undefined,
+  model: string,
+): ConfiguredContextTokens | undefined {
+  const explicitResult = resolveConfiguredProviderContextTokens(cfg, provider, model);
+  if (explicitResult) {
+    return explicitResult;
+  }
+  const canonicalProvider = modelProvider?.trim();
+  if (
+    !canonicalProvider ||
+    normalizeProviderId(canonicalProvider) === normalizeProviderId(provider)
+  ) {
+    return undefined;
+  }
+  const canonicalResult = resolveConfiguredProviderContextTokens(cfg, canonicalProvider, model);
+  if (canonicalResult) {
+    return canonicalResult;
+  }
+  const canonicalModel = resolveProviderQualifiedModel(canonicalProvider, model);
+  return canonicalModel
+    ? resolveConfiguredProviderContextTokens(cfg, canonicalProvider, canonicalModel)
+    : undefined;
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -145,18 +183,36 @@ function resolveModelFamilyId(modelId: string): string {
 export function resolveAnthropicFixedContextWindow(
   provider: string,
   model: string,
+  options?: { claudeCli1M?: boolean },
 ): number | undefined {
   const modelId = resolveModelFamilyId(model);
-  if (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
-    modelId.startsWith("claude-fable-5")
-  ) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
-  }
-  if (provider !== "anthropic" && provider !== "anthropic-vertex" && provider !== "claude-cli") {
+  const isAnthropicProvider =
+    provider === "anthropic" || provider === "anthropic-vertex" || provider === "claude-cli";
+  if (!isAnthropicProvider) {
     return undefined;
   }
-  if (!ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))) {
+  if (/^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)) {
+    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  }
+  // Mythos 5 is direct-API only; Claude CLI must keep its discovered or fallback window.
+  if (
+    (provider === "anthropic" || provider === "anthropic-vertex") &&
+    /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)
+  ) {
+    return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;
+  }
+  // Opus 5 is natively 1M on every runtime, including Claude CLI. Keep this
+  // ahead of the legacy CLI opt-in gate used by older 1M variants below.
+  if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
+    return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
+  }
+  if (resolveClaudeSonnet5ModelIdentity({ id: modelId })) {
+    return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;
+  }
+  if (!supportsClaude1MContext({ id: modelId })) {
+    return undefined;
+  }
+  if (provider === "claude-cli" && !modelId.endsWith("[1m]") && options?.claudeCli1M !== true) {
     return undefined;
   }
   return provider === "anthropic-vertex"
@@ -179,18 +235,31 @@ export function resolveContextTokensForModelFromCache(
   const explicitProvider = params.provider?.trim();
 
   if (ref && explicitProvider) {
-    const configuredWindow = resolveConfiguredProviderContextTokens(
+    const configuredWindow = resolveConfiguredRuntimeContextTokens(
       params.cfg,
       explicitProvider,
+      params.modelProvider,
       ref.model,
     );
     const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
-    const sourceConfiguredWindow = resolveConfiguredProviderContextTokens(
+    const sourceConfiguredWindow = resolveConfiguredRuntimeContextTokens(
       sourceConfig,
       explicitProvider,
+      params.modelProvider,
       ref.model,
     );
-    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
+    const extraParamSources = resolveModelExtraParamSources({
+      config: params.cfg,
+      provider: ref.provider,
+      modelId: ref.model,
+    });
+    const effectiveContext1M =
+      extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
+        ? extraParamSources.modelParams.context1m
+        : extraParamSources.defaultParams?.context1m;
+    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model, {
+      claudeCli1M: effectiveContext1M === true,
+    });
     const providerResult = lookupContextTokens(
       providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
     );
@@ -252,6 +321,10 @@ export function resolveContextTokensForModelFromCache(
     if (fixedContextWindow !== undefined) {
       return capOverride(fixedContextWindow);
     }
+  }
+
+  if (params.allowUnscopedModelLookup === false) {
+    return override ?? params.fallbackContextTokens;
   }
 
   // Model-only calls use the raw discovery key. With an explicit provider,

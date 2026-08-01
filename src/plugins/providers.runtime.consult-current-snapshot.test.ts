@@ -1,18 +1,13 @@
 // Verifies provider runtime uses current plugin metadata snapshots.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import {
-  clearLoadPluginMetadataSnapshotMemo,
-  loadPluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 // Mock the persisted-registry loaders so direct metadata loads are observable.
@@ -124,7 +119,6 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
-    clearLoadPluginMetadataSnapshotMemo();
     clearCurrentPluginMetadataSnapshot();
     loadPluginRegistrySnapshotWithMetadata.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReset();
@@ -134,7 +128,6 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
-    clearLoadPluginMetadataSnapshotMemo();
     resetPluginRuntimeStateForTest();
   });
 

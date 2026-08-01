@@ -5,24 +5,31 @@ scenario:
   surface: telemetry
   coverage:
     primary:
-      - telemetry.otel
+      - observability.otlp-http-traces-otel
     secondary:
-      - harness.qa-lab
-      - telemetry.plugin-sdk-runtime-exports
-  objective: Exercise bounded local OTLP capture and OpenTelemetry smoke assertions through QA Lab evidence.
+      - observability.plugin-sdk-diagnostic-runtime-exports
+  objective: Execute the bounded local OTLP runtime producer directly and publish its OpenTelemetry assertions through the shared QA script evidence writer.
   successCriteria:
-    - Package-manager forwarded QA OTEL smoke arguments parse correctly.
-    - Body-size limits are strict positive integers.
-    - Local OTLP receiver rejects malformed, oversized, or truncated protobuf payloads with bounded diagnostics.
-    - Captured OTLP body text is bounded and leak needles remain detectable.
-    - Active local receiver sockets close during cleanup.
-    - Smoke assertions fail on non-2xx OTLP requests and missing release-critical signals.
+    - QA Lab launches the runtime producer directly with a bounded local collector configuration.
+    - The producer emits shared script evidence plus its OTEL assertion summary.
+    - The producer captures release-critical traces, metrics, and correlated logs from the diagnostics runtime.
+    - Smoke assertions reject failed OTLP requests, missing required signals, and configured leak needles.
   docsRefs:
     - docs/gateway/opentelemetry.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
+    - test/e2e/qa-lab/runtime/script-evidence.ts
+    - test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+    - extensions/diagnostics-otel/runtime-api.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
-    summary: Vitest coverage for QA OTEL smoke receiver bounds and signal assertions.
+    kind: script
+    path: test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --output-dir
+      - ${outputDir}
+      - --logs-exporter
+      - both
+    timeoutMs: 120000
+    summary: Direct QA OTEL runtime producer coverage with shared script evidence.

@@ -1,5 +1,5 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
@@ -26,6 +26,7 @@ interface DoctorLintCliOptions {
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
   readonly deep?: boolean;
+  readonly includeAllChecks?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -71,11 +72,12 @@ export async function runDoctorLintCli(
     return exitCodeFromFindings(findings, sevMin);
   }
 
+  const defaultAgentId = tryResolveDefaultAgentId(snapshot.config);
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime,
     cfg: snapshot.config,
-    cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
+    cwd: defaultAgentId ? resolveAgentWorkspaceDir(snapshot.config, defaultAgentId) : process.cwd(),
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
@@ -86,6 +88,7 @@ export async function runDoctorLintCli(
 
   const runOpts: DoctorLintRunOptions = {
     checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
+    includeAllChecks: opts.includeAllChecks === true,
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };

@@ -1,6 +1,8 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import { getPluginCompatRecord } from "../plugins/compat/registry.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -9,15 +11,12 @@ import {
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
 import type {
-  AssembleResult,
   BootstrapResult,
-  CompactResult,
   ContextEngine,
+  ContextEngineInfo,
   ContextEngineMaintenanceResult,
   IngestBatchResult,
   IngestResult,
-  SubagentSpawnPreparation,
-  ContextEngineInfo,
 } from "./types.js";
 
 /**
@@ -25,7 +24,7 @@ import type {
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-export type ContextEngineFactoryContext = {
+type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -43,13 +42,61 @@ export type ContextEngineFactoryContext = {
 export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
-export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+type ContextEngineRegistration = {
+  factory: ContextEngineFactory;
+  owner: string;
+  lifecycle: ContextEngineRegistrationLifecycle;
+};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
+  lifecycle?: ContextEngineRegistrationLifecycle;
 };
 
-const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
+type GuardedContextEngineMethodName = Exclude<keyof ContextEngine, "info" | "dispose">;
+const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
+  "bootstrap maintain ingest ingestBatch afterTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
+    " ",
+  ),
+);
+export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
+);
+function wrapContextEngineWithHostParamProjection(engine: ContextEngine): ContextEngine {
+  const removeAfter = getPluginCompatRecord("context-engine-legacy-host-param-default").removeAfter;
+  const accepted = engine.info.acceptedHostParams;
+  const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
+  const wrappedRecord: Record<PropertyKey, unknown> = {};
+  Object.defineProperty(wrappedRecord, "info", { get: () => engine.info });
+  for (const methodName of GUARDED_CONTEXT_ENGINE_METHODS) {
+    const method = engineRecord[methodName];
+    if (typeof method !== "function") {
+      continue;
+    }
+    wrappedRecord[methodName] = (params: Record<string, unknown>) => {
+      // Removal(2026-08-12): undeclared engines get full params. Contract: context-engine-legacy-host-param-default.
+      const useLegacyDefault =
+        removeAfter !== undefined && new Date().toISOString().slice(0, 10) <= removeAfter;
+      const currentAccepted = accepted ?? (useLegacyDefault ? [] : undefined);
+      if (!currentAccepted) {
+        return method.call(engine, params);
+      }
+      const projected = Object.fromEntries(
+        Object.entries(params).filter(
+          ([key]) => currentAccepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
+        ),
+      );
+      return method.call(engine, projected);
+    };
+  }
+  if (engine.dispose) {
+    wrappedRecord.dispose = engine.dispose.bind(engine);
+  }
+  return Object.create(engine, Object.getOwnPropertyDescriptors(wrappedRecord)) as ContextEngine;
+}
+
 type ResolvedContextEngineMetadata = {
   owner: string;
 };
@@ -64,288 +111,6 @@ const RESOLVED_CONTEXT_ENGINE_METADATA = new WeakMap<
   ResolvedContextEngineMetadata
 >();
 const RUNTIME_QUARANTINE_PROXY_STATE = new WeakMap<ContextEngine, RuntimeQuarantineProxyState>();
-const SESSION_KEY_COMPAT_METHODS = [
-  "bootstrap",
-  "maintain",
-  "ingest",
-  "ingestBatch",
-  "afterTurn",
-  "assemble",
-  "compact",
-] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "runtimeSettings"] as const;
-const LEGACY_COMPAT_METHOD_KEYS = {
-  bootstrap: ["sessionKey", "runtimeSettings"],
-  maintain: ["sessionKey", "runtimeSettings"],
-  ingest: ["sessionKey"],
-  ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey", "runtimeSettings"],
-  assemble: ["sessionKey", "prompt", "runtimeSettings"],
-  compact: ["sessionKey", "runtimeSettings"],
-} as const;
-
-type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
-type SessionKeyCompatParams = {
-  sessionKey?: string;
-  prompt?: string;
-  runtimeSettings?: unknown;
-};
-type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
-type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
-
-function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCompatMethodName {
-  return (
-    typeof value === "string" && (SESSION_KEY_COMPAT_METHODS as readonly string[]).includes(value)
-  );
-}
-
-function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
-  params: unknown,
-  key: K,
-): params is SessionKeyCompatParams & Required<Pick<LegacyCompatParamMap, K>> {
-  return params !== null && typeof params === "object" && Object.hasOwn(params, key);
-}
-
-function withoutLegacyCompatKeys<T extends SessionKeyCompatParams>(
-  params: T,
-  keys: Iterable<LegacyCompatKey>,
-): T {
-  const legacyParams = { ...params };
-  for (const key of keys) {
-    delete legacyParams[key];
-  }
-  return legacyParams;
-}
-
-function issueRejectsLegacyCompatKeyStrictly(issue: unknown, key: LegacyCompatKey): boolean {
-  if (!issue || typeof issue !== "object") {
-    return false;
-  }
-
-  const issueRecord = issue as {
-    code?: unknown;
-    keys?: unknown;
-    message?: unknown;
-  };
-  if (
-    issueRecord.code === "unrecognized_keys" &&
-    Array.isArray(issueRecord.keys) &&
-    issueRecord.keys.some((issueKey) => issueKey === key)
-  ) {
-    return true;
-  }
-
-  return isLegacyCompatErrorForKey(issueRecord.message, key);
-}
-
-function* iterateErrorChain(error: unknown) {
-  let current = error;
-  const seen = new Set<unknown>();
-  while (current !== undefined && current !== null && !seen.has(current)) {
-    yield current;
-    seen.add(current);
-    if (typeof current !== "object") {
-      break;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-}
-
-const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> = {
-  sessionKey: [
-    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionKey['"`]/i,
-    /\badditional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
-    /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
-    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
-    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
-    /['"`]sessionKey['"`].*\b(?:was|is)\s+not allowed\b/i,
-    /"code"\s*:\s*"unrecognized_keys"[^]*"sessionKey"/i,
-  ],
-  prompt: [
-    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]prompt['"`]/i,
-    /\badditional propert(?:y|ies)\b.*['"`]prompt['"`]/i,
-    /\bmust not have additional propert(?:y|ies)\b.*['"`]prompt['"`]/i,
-    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
-    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
-    /['"`]prompt['"`].*\b(?:was|is)\s+not allowed\b/i,
-    /"code"\s*:\s*"unrecognized_keys"[^]*"prompt"/i,
-  ],
-  runtimeSettings: [
-    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeSettings['"`]/i,
-    /\badditional propert(?:y|ies)\b.*['"`]runtimeSettings['"`]/i,
-    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeSettings['"`]/i,
-    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
-    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
-    /['"`]runtimeSettings['"`].*\b(?:was|is)\s+not allowed\b/i,
-    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeSettings"/i,
-  ],
-} as const;
-
-function isLegacyCompatUnknownFieldValidationMessage(
-  message: string,
-  key: LegacyCompatKey,
-): boolean {
-  return LEGACY_UNKNOWN_FIELD_PATTERNS[key].some((pattern) => pattern.test(message));
-}
-
-function isLegacyCompatErrorForKey(error: unknown, key: LegacyCompatKey): boolean {
-  // Some external engines validate params with zod/JSON schema and reject legacy host keys. Walk
-  // common error shapes without depending on a specific validator package.
-  for (const candidate of iterateErrorChain(error)) {
-    if (Array.isArray(candidate)) {
-      if (candidate.some((entry) => issueRejectsLegacyCompatKeyStrictly(entry, key))) {
-        return true;
-      }
-      continue;
-    }
-
-    if (typeof candidate === "string") {
-      if (isLegacyCompatUnknownFieldValidationMessage(candidate, key)) {
-        return true;
-      }
-      continue;
-    }
-
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-
-    const issueContainer = candidate as {
-      message?: unknown;
-      issues?: unknown;
-      errors?: unknown;
-    };
-
-    if (
-      Array.isArray(issueContainer.issues) &&
-      issueContainer.issues.some((issue) => issueRejectsLegacyCompatKeyStrictly(issue, key))
-    ) {
-      return true;
-    }
-
-    if (
-      Array.isArray(issueContainer.errors) &&
-      issueContainer.errors.some((issue) => issueRejectsLegacyCompatKeyStrictly(issue, key))
-    ) {
-      return true;
-    }
-
-    if (
-      typeof issueContainer.message === "string" &&
-      isLegacyCompatUnknownFieldValidationMessage(issueContainer.message, key)
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function detectRejectedLegacyCompatKeys(
-  error: unknown,
-  allowedKeys: readonly LegacyCompatKey[],
-): Set<LegacyCompatKey> {
-  const rejectedKeys = new Set<LegacyCompatKey>();
-  for (const key of allowedKeys) {
-    if (isLegacyCompatErrorForKey(error, key)) {
-      rejectedKeys.add(key);
-    }
-  }
-  return rejectedKeys;
-}
-
-async function invokeWithLegacyCompat<TResult, TParams extends SessionKeyCompatParams>(
-  method: (params: TParams) => Promise<TResult> | TResult,
-  params: TParams,
-  allowedKeys: readonly LegacyCompatKey[],
-  opts?: {
-    onLegacyModeDetected?: () => void;
-    onLegacyKeysDetected?: (keys: Set<LegacyCompatKey>) => void;
-    rejectedKeys?: ReadonlySet<LegacyCompatKey>;
-  },
-): Promise<TResult> {
-  const activeRejectedKeys = new Set(opts?.rejectedKeys ?? []);
-  const availableKeys = allowedKeys.filter((key) => hasOwnLegacyCompatKey(params, key));
-  if (availableKeys.length === 0) {
-    return await method(params);
-  }
-
-  let currentParams =
-    activeRejectedKeys.size > 0 ? withoutLegacyCompatKeys(params, activeRejectedKeys) : params;
-
-  try {
-    return await method(currentParams);
-  } catch (error) {
-    let currentError = error;
-    while (true) {
-      const rejectedKeys = detectRejectedLegacyCompatKeys(currentError, availableKeys);
-      let learnedNewKey = false;
-      for (const key of rejectedKeys) {
-        if (!activeRejectedKeys.has(key)) {
-          activeRejectedKeys.add(key);
-          learnedNewKey = true;
-        }
-      }
-
-      if (!learnedNewKey) {
-        throw currentError;
-      }
-
-      // Once an engine proves it rejects a legacy key, retry without it and remember that choice.
-      opts?.onLegacyModeDetected?.();
-      opts?.onLegacyKeysDetected?.(rejectedKeys);
-      currentParams = withoutLegacyCompatKeys(params, activeRejectedKeys);
-
-      try {
-        return await method(currentParams);
-      } catch (retryError) {
-        currentError = retryError;
-      }
-    }
-  }
-}
-
-function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEngine {
-  const marked = engine as ContextEngine & {
-    [LEGACY_SESSION_KEY_COMPAT]?: boolean;
-  };
-  if (marked[LEGACY_SESSION_KEY_COMPAT]) {
-    return engine;
-  }
-
-  const rejectedKeys = new Set<LegacyCompatKey>();
-  const proxy: ContextEngine = new Proxy(engine, {
-    get(target, property, receiver) {
-      if (property === LEGACY_SESSION_KEY_COMPAT) {
-        return true;
-      }
-
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") {
-        return value;
-      }
-
-      if (!isSessionKeyCompatMethodName(property)) {
-        return value.bind(target);
-      }
-
-      return (params: SessionKeyCompatParams) => {
-        const method = value.bind(target) as (params: SessionKeyCompatParams) => unknown;
-        const allowedKeys = LEGACY_COMPAT_METHOD_KEYS[property];
-        return invokeWithLegacyCompat(method, params, allowedKeys, {
-          onLegacyKeysDetected: (keys) => {
-            for (const key of keys) {
-              rejectedKeys.add(key);
-            }
-          },
-          rejectedKeys,
-        });
-      };
-    },
-  });
-  return proxy;
-}
-
 function wrapResolvedContextEngine(
   engine: ContextEngine,
   metadata: {
@@ -355,19 +120,19 @@ function wrapResolvedContextEngine(
     factoryCtx?: ContextEngineFactoryContext;
   },
 ): ContextEngine {
-  const compatWrapped = wrapContextEngineWithSessionKeyCompat(engine);
+  const projected = wrapContextEngineWithHostParamProjection(engine);
   const wrapped =
     metadata.defaultEngineId &&
     metadata.factoryCtx &&
     metadata.engineId !== metadata.defaultEngineId
       ? wrapContextEngineWithRuntimeQuarantine({
-          engine: compatWrapped,
+          engine: projected,
           engineId: metadata.engineId,
           owner: metadata.owner,
           defaultEngineId: metadata.defaultEngineId,
           factoryCtx: metadata.factoryCtx,
         })
-      : compatWrapped;
+      : projected;
   RESOLVED_CONTEXT_ENGINE_METADATA.set(wrapped, metadata);
   return wrapped;
 }
@@ -378,9 +143,8 @@ function wrapResolvedContextEngine(
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
-const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
-export type ContextEngineRuntimeQuarantine = {
+type ContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -389,13 +153,7 @@ export type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<
-    string,
-    {
-      factory: ContextEngineFactory;
-      owner: string;
-    }
-  >;
+  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -408,10 +166,6 @@ const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryS
     quarantinedEngines: new Map(),
   }),
 );
-
-function getContextEngineRegistryState(): ContextEngineRegistryState {
-  return contextEngineRegistryState;
-}
 
 function requireContextEngineOwner(owner: string): string {
   const normalizedOwner = owner.trim();
@@ -434,8 +188,7 @@ function recordContextEngineQuarantine(params: {
   error: unknown;
   defaultEngineId: string;
 }): ContextEngineRuntimeQuarantine {
-  const registryState = getContextEngineRegistryState();
-  const existing = registryState.quarantinedEngines.get(params.engineId);
+  const existing = contextEngineRegistryState.quarantinedEngines.get(params.engineId);
   if (existing) {
     // First failure wins so logs and diagnostics point at the root cause, not follow-on fallback use.
     return existing;
@@ -448,7 +201,7 @@ function recordContextEngineQuarantine(params: {
     failedAt: new Date(),
     ...(params.owner ? { owner: params.owner } : {}),
   };
-  registryState.quarantinedEngines.set(params.engineId, quarantine);
+  contextEngineRegistryState.quarantinedEngines.set(params.engineId, quarantine);
   try {
     recordPersistedContextEngineQuarantine(quarantine);
   } catch {
@@ -463,23 +216,14 @@ function recordContextEngineQuarantine(params: {
 }
 
 function getContextEngineQuarantine(engineId: string): ContextEngineRuntimeQuarantine | undefined {
-  return getContextEngineRegistryState().quarantinedEngines.get(engineId);
+  return contextEngineRegistryState.quarantinedEngines.get(engineId);
 }
 
 export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
-  const quarantines: ContextEngineRuntimeQuarantine[] = [];
-  for (const entry of getContextEngineRegistryState().quarantinedEngines.values()) {
-    const quarantine: ContextEngineRuntimeQuarantine = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: new Date(entry.failedAt),
-    };
-    if (entry.owner) {
-      quarantine.owner = entry.owner;
-    }
-    quarantines.push(quarantine);
-  }
+  const quarantines = Array.from(
+    contextEngineRegistryState.quarantinedEngines.values(),
+    ({ failedAt, ...quarantine }) => ({ ...quarantine, failedAt: new Date(failedAt) }),
+  );
   const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
   for (const entry of listPersistedContextEngineQuarantines()) {
     if (seenEngineIds.has(entry.engineId)) {
@@ -491,14 +235,13 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
   return quarantines;
 }
 
-export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
-  const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
+function clearContextEngineRuntimeQuarantine(engineId?: string): void {
+  const quarantinedEngines = contextEngineRegistryState.quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
-    clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
-    return;
+  } else {
+    quarantinedEngines.delete(engineId);
   }
-  quarantinedEngines.delete(engineId);
   clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
@@ -512,7 +255,8 @@ export function registerContextEngineForOwner(
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = getContextEngineRegistryState().engines;
+  const lifecycle = opts?.lifecycle ?? "runtime";
+  const registry = contextEngineRegistryState.engines;
   const existing = registry.get(id);
   if (
     id === defaultSlotIdForKey("contextEngine") &&
@@ -524,45 +268,36 @@ export function registerContextEngineForOwner(
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
   }
+  if (existing?.lifecycle === "runtime" && lifecycle === "readOnlyDiscovery") {
+    // Read-only discovery may re-run after live activation. It can collect metadata, but it must
+    // not replace the runtime-safe factory with a closure that captured a read-only plugin mode.
+    return { ok: true };
+  }
   if (existing && opts?.allowSameOwnerRefresh !== true) {
     return { ok: false, existingOwner: existing.owner };
   }
-  registry.set(id, { factory, owner: normalizedOwner });
-  clearContextEngineRuntimeQuarantine(id);
+  registry.set(id, { factory, owner: normalizedOwner, lifecycle });
+  if (lifecycle === "runtime") {
+    clearContextEngineRuntimeQuarantine(id);
+  }
   return { ok: true };
 }
 
-/**
- * Public SDK entry point for third-party registrations.
- *
- * This path is intentionally unprivileged: it cannot claim core-owned ids and
- * it cannot safely refresh an existing registration because the caller's
- * identity is not authenticated.
- */
-export function registerContextEngine(
-  id: string,
-  factory: ContextEngineFactory,
-): ContextEngineRegistrationResult {
-  return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
-}
-
-/**
- * Return the factory for a registered engine, or undefined.
- */
-export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  return getContextEngineRegistryState().engines.get(id)?.factory;
+/** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
+export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
+  return contextEngineRegistryState.engines.get(id);
 }
 
 /**
  * List all registered engine ids.
  */
-export function listContextEngineIds(): string[] {
-  return [...getContextEngineRegistryState().engines.keys()];
+function listContextEngineIds(): string[] {
+  return [...contextEngineRegistryState.engines.keys()];
 }
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = getContextEngineRegistryState().engines;
+  const registry = contextEngineRegistryState.engines;
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
@@ -577,10 +312,7 @@ export function clearContextEnginesForOwner(owner: string): void {
 export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
 ): string | undefined {
-  if (!engine) {
-    return undefined;
-  }
-  const owner = resolveEffectiveContextEngineMetadata(engine)?.owner;
+  const owner = engine && resolveEffectiveContextEngineMetadata(engine)?.owner;
   if (!owner?.startsWith("plugin:")) {
     return undefined;
   }
@@ -619,89 +351,46 @@ function describeResolvedContextEngineContractError(
   if (!info || typeof info !== "object") {
     issues.push("missing info");
   } else {
-    const infoRecord = info as Record<string, unknown>;
     // Engines own their internal info.id; it is metadata, not a handle into the
     // registry. The registered id (plugin slot id) and the engine's own id are
     // allowed to differ, so we only require that info.id is a non-empty string
     // for display/logging purposes and do not enforce equality with engineId.
-    const infoId = typeof infoRecord.id === "string" ? infoRecord.id.trim() : "";
-    if (!infoId) {
-      issues.push("missing info.id");
+    const infoRecord = info as Record<string, unknown>;
+    for (const field of ["id", "name"]) {
+      const value = infoRecord[field];
+      if (typeof value !== "string" || !value.trim()) {
+        issues.push(`missing info.${field}`);
+      }
     }
-    if (typeof infoRecord.name !== "string" || !infoRecord.name.trim()) {
-      issues.push("missing info.name");
+  }
+
+  for (const method of ["ingest", "assemble", "compact"]) {
+    if (typeof candidate[method] !== "function") {
+      issues.push(`missing ${method}()`);
     }
   }
 
-  if (typeof candidate.ingest !== "function") {
-    issues.push("missing ingest()");
-  }
-  if (typeof candidate.assemble !== "function") {
-    issues.push("missing assemble()");
-  }
-  if (typeof candidate.compact !== "function") {
-    issues.push("missing compact()");
-  }
-
-  if (issues.length === 0) {
-    return null;
-  }
-
-  return `Context engine "${engineId}" factory returned an invalid ContextEngine: ${issues.join(", ")}.`;
+  return issues.length === 0
+    ? null
+    : `Context engine "${engineId}" factory returned an invalid ContextEngine: ${issues.join(", ")}.`;
 }
 
-type GuardedContextEngineMethodName =
-  | "bootstrap"
-  | "maintain"
-  | "ingest"
-  | "ingestBatch"
-  | "afterTurn"
-  | "assemble"
-  | "compact"
-  | "prepareSubagentSpawn"
-  | "onSubagentEnded";
-
-const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>([
-  "bootstrap",
-  "maintain",
-  "ingest",
-  "ingestBatch",
-  "afterTurn",
-  "assemble",
-  "compact",
-  "prepareSubagentSpawn",
-  "onSubagentEnded",
-] satisfies GuardedContextEngineMethodName[]);
-
-function contextEngineFallbackResult(
-  methodName: GuardedContextEngineMethodName,
-): BootstrapResult | ContextEngineMaintenanceResult | IngestResult | IngestBatchResult | void {
-  switch (methodName) {
-    case "bootstrap":
-      return {
-        bootstrapped: false,
-        reason: "context engine downgraded to legacy",
-      };
-    case "maintain":
-      return {
-        changed: false,
-        bytesFreed: 0,
-        rewrittenEntries: 0,
-        reason: "context engine downgraded to legacy",
-      };
-    case "ingest":
-      return { ingested: false };
-    case "ingestBatch":
-      return { ingestedCount: 0 };
-    case "afterTurn":
-    case "prepareSubagentSpawn":
-    case "onSubagentEnded":
-      return undefined;
-    case "assemble":
-    case "compact":
-      throw new Error(`No legacy fallback result for ${methodName}`);
-  }
-}
+const CONTEXT_ENGINE_FALLBACK_RESULTS = {
+  bootstrap: { bootstrapped: false, reason: "context engine downgraded to legacy" },
+  maintain: {
+    changed: false,
+    bytesFreed: 0,
+    rewrittenEntries: 0,
+    reason: "context engine downgraded to legacy",
+  },
+  ingest: { ingested: false },
+  ingestBatch: { ingestedCount: 0 },
+} as const satisfies {
+  bootstrap: BootstrapResult;
+  maintain: ContextEngineMaintenanceResult;
+  ingest: IngestResult;
+  ingestBatch: IngestBatchResult;
+};
 
 function contextEngineAbortSignal(methodParams: unknown): AbortSignal | undefined {
   if (!methodParams || typeof methodParams !== "object") {
@@ -714,24 +403,7 @@ function contextEngineAbortSignal(methodParams: unknown): AbortSignal | undefine
   return undefined;
 }
 
-function contextEngineAbortError(methodParams: unknown): Error | undefined {
-  const signal = contextEngineAbortSignal(methodParams);
-  if (!signal?.aborted) {
-    return undefined;
-  }
-  const reason = signal.reason;
-  if (reason instanceof Error) {
-    return reason;
-  }
-  const error = new Error(
-    typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
-  );
-  error.name = "AbortError";
-  return error;
-}
-
-function isContextEngineAbortRejection(error: unknown, methodParams: unknown): boolean {
-  const signal = contextEngineAbortSignal(methodParams);
+function isContextEngineAbortRejection(error: unknown, signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
   }
@@ -739,13 +411,7 @@ function isContextEngineAbortRejection(error: unknown, methodParams: unknown): b
     return true;
   }
   if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    return (
-      error.name === "AbortError" ||
-      message.includes("abort") ||
-      message.includes("cancelled") ||
-      message.includes("canceled")
-    );
+    return error.name === "AbortError" || /abort|cancelled|canceled/iu.test(error.message);
   }
   return typeof error === "string" && /abort|cancelled|canceled/iu.test(error);
 }
@@ -754,32 +420,22 @@ async function invokeFallbackContextEngineMethod(params: {
   getFallbackEngine: () => Promise<ContextEngine>;
   methodName: GuardedContextEngineMethodName;
   methodParams: unknown;
-}): Promise<
-  | AssembleResult
-  | BootstrapResult
-  | CompactResult
-  | ContextEngineMaintenanceResult
-  | IngestBatchResult
-  | IngestResult
-  | SubagentSpawnPreparation
-  | void
-> {
+}): Promise<unknown> {
   const fallbackEngine = await params.getFallbackEngine();
   const fallbackMethod = fallbackEngine[params.methodName] as
     | ((methodParams: unknown) => unknown)
     | undefined;
   if (typeof fallbackMethod === "function") {
-    return (await fallbackMethod.call(fallbackEngine, params.methodParams)) as
-      | AssembleResult
-      | BootstrapResult
-      | CompactResult
-      | ContextEngineMaintenanceResult
-      | IngestBatchResult
-      | IngestResult
-      | SubagentSpawnPreparation
-      | void;
+    return await fallbackMethod.call(fallbackEngine, params.methodParams);
   }
-  return contextEngineFallbackResult(params.methodName);
+  if (params.methodName === "assemble" || params.methodName === "compact") {
+    throw new Error(`No legacy fallback result for ${params.methodName}`);
+  }
+  const fallbackResult =
+    CONTEXT_ENGINE_FALLBACK_RESULTS[
+      params.methodName as keyof typeof CONTEXT_ENGINE_FALLBACK_RESULTS
+    ];
+  return fallbackResult ? { ...fallbackResult } : undefined;
 }
 
 function wrapContextEngineWithRuntimeQuarantine(params: {
@@ -801,17 +457,14 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
     });
     return fallbackEnginePromise;
   };
-  const fallbackInfo = (): ContextEngineInfo => {
-    return (
-      resolvedFallbackEngine?.info ?? {
-        id: params.defaultEngineId,
-        name:
-          params.defaultEngineId === "legacy"
-            ? "Legacy Context Engine"
-            : `${params.defaultEngineId} Context Engine`,
-      }
-    );
-  };
+  const fallbackInfo = (): ContextEngineInfo =>
+    resolvedFallbackEngine?.info ?? {
+      id: params.defaultEngineId,
+      name:
+        params.defaultEngineId === "legacy"
+          ? "Legacy Context Engine"
+          : `${params.defaultEngineId} Context Engine`,
+    };
   const isQuarantined = () => Boolean(getContextEngineQuarantine(params.engineId));
 
   const proxy = new Proxy(params.engine, {
@@ -826,23 +479,26 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
 
       const methodName = property as GuardedContextEngineMethodName;
       return async (methodParams: unknown) => {
-        const aborted = contextEngineAbortError(methodParams);
-        if (aborted) {
-          throw aborted;
+        const abortSignal = contextEngineAbortSignal(methodParams);
+        if (abortSignal?.aborted) {
+          const reason = abortSignal.reason;
+          throw reason instanceof Error
+            ? reason
+            : createAbortError(
+                typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
+              );
         }
+        const invokeFallback = () =>
+          invokeFallbackContextEngineMethod({ getFallbackEngine, methodName, methodParams });
         if (isQuarantined()) {
           // Runtime failures downgrade future guarded calls for this process.
-          return await invokeFallbackContextEngineMethod({
-            getFallbackEngine,
-            methodName,
-            methodParams,
-          });
+          return await invokeFallback();
         }
 
         try {
           return await (value as (methodParams: unknown) => unknown).call(target, methodParams);
         } catch (error) {
-          if (isContextEngineAbortRejection(error, methodParams)) {
+          if (isContextEngineAbortRejection(error, abortSignal)) {
             // Abort is caller intent, not engine instability; never quarantine for it.
             throw error;
           }
@@ -856,15 +512,9 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
           if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
             throw error;
           }
-          try {
-            return await invokeFallbackContextEngineMethod({
-              getFallbackEngine,
-              methodName,
-              methodParams,
-            });
-          } catch {
+          return await invokeFallback().catch(() => {
             throw error;
-          }
+          });
         }
       };
     },
@@ -907,13 +557,10 @@ export async function resolveContextEngine(
   config?: OpenClawConfig,
   options?: ResolveContextEngineOptions,
 ): Promise<ContextEngine> {
+  const defaultEngineId = defaultSlotIdForKey("contextEngine");
   const slotValue = config?.plugins?.slots?.contextEngine;
   const engineId =
-    typeof slotValue === "string" && slotValue.trim()
-      ? slotValue.trim()
-      : defaultSlotIdForKey("contextEngine");
-
-  const defaultEngineId = defaultSlotIdForKey("contextEngine");
+    typeof slotValue === "string" && slotValue.trim() ? slotValue.trim() : defaultEngineId;
   const isDefaultEngine = engineId === defaultEngineId;
 
   const factoryCtx: ContextEngineFactoryContext = {
@@ -928,7 +575,7 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  const entry = getContextEngineRegistryState().engines.get(engineId);
+  const entry = contextEngineRegistryState.engines.get(engineId);
   if (!entry) {
     if (isDefaultEngine) {
       throw new Error(
@@ -945,48 +592,31 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  let engine: ContextEngine;
-  try {
-    engine = await entry.factory(factoryCtx);
-  } catch (factoryError) {
-    if (isDefaultEngine) {
-      throw factoryError;
-    }
-    recordContextEngineQuarantine({
-      engineId,
-      owner: entry.owner,
-      operation: "factory",
-      error: factoryError,
-      defaultEngineId,
-    });
+  if (!isDefaultEngine && entry.lifecycle === "readOnlyDiscovery") {
+    console.warn(
+      `[context-engine] Context engine "${engineId}" owner=${entry.owner} is registered for read-only discovery only; falling back to default engine "${defaultEngineId}" without quarantine until runtime activation registers it.`,
+    );
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  let contractError: string | null;
+  let engine: ContextEngine;
+  let operation: "factory" | "contract-validation" = "factory";
   try {
-    contractError = describeResolvedContextEngineContractError(engineId, engine);
-  } catch (validationError) {
-    if (isDefaultEngine) {
-      throw validationError;
-    }
-    recordContextEngineQuarantine({
-      engineId,
-      owner: entry.owner,
-      operation: "contract-validation",
-      error: validationError,
-      defaultEngineId,
-    });
-    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
-  }
-  if (contractError) {
-    if (isDefaultEngine) {
+    engine = await entry.factory(factoryCtx);
+    operation = "contract-validation";
+    const contractError = describeResolvedContextEngineContractError(engineId, engine);
+    if (contractError) {
       throw new Error(contractError);
     }
+  } catch (error) {
+    if (isDefaultEngine) {
+      throw error;
+    }
     recordContextEngineQuarantine({
       engineId,
       owner: entry.owner,
-      operation: "contract-validation",
-      error: contractError,
+      operation,
+      error,
       defaultEngineId,
     });
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
@@ -1010,7 +640,7 @@ async function resolveDefaultContextEngine(
   defaultEngineId: string,
   factoryCtx: ContextEngineFactoryContext,
 ): Promise<ContextEngine> {
-  const defaultEntry = getContextEngineRegistryState().engines.get(defaultEngineId);
+  const defaultEntry = contextEngineRegistryState.engines.get(defaultEngineId);
   if (!defaultEntry) {
     throw new Error(
       `[context-engine] fallback failed: default engine "${defaultEngineId}" is not registered. ` +

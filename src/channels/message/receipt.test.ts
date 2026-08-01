@@ -86,6 +86,31 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.sentAt).toBe(456);
   });
 
+  it("preserves mixed nested reply metadata when the route has a reply target", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        {
+          channel: "discord",
+          messageId: "m2",
+          receipt: {
+            primaryPlatformMessageId: "m1",
+            platformMessageIds: ["m1", "m2"],
+            parts: [
+              { platformMessageId: "m1", kind: "text", index: 0, replyToId: "reply-1" },
+              { platformMessageId: "m2", kind: "text", index: 1 },
+            ],
+            replyToId: "reply-1",
+            sentAt: 123,
+          },
+        },
+      ],
+      replyToId: "reply-1",
+    });
+
+    expect(receipt.replyToId).toBe("reply-1");
+    expect(receipt.parts.map((part) => part.replyToId)).toEqual(["reply-1", undefined]);
+  });
+
   it("normalizes receipt ids for compatibility edges", () => {
     const receipt = {
       primaryPlatformMessageId: " ",

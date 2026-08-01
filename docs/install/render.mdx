@@ -6,30 +6,20 @@ read_when:
 title: "Render"
 ---
 
-# Render
-
-Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy OpenClaw on [Render](https://render.com) using the repo's `render.yaml` Blueprint. It declares the service, disk, and environment variables in one file.
 
 ## Prerequisites
 
 - A [Render account](https://render.com) (free tier available)
 - An API key from your preferred [model provider](/providers)
 
-## Deploy with a Render Blueprint
+## Deploy
 
 [Deploy to Render](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
 
-Clicking this link will:
+This creates a Render service from `render.yaml`, builds the Docker image, and deploys it. Your service URL follows the pattern `https://<service-name>.onrender.com`.
 
-1. Create a new Render service from the `render.yaml` Blueprint at the root of this repo.
-2. Build the Docker image and deploy
-
-Once deployed, your service URL follows the pattern `https://<service-name>.onrender.com`.
-
-## Understanding the Blueprint
-
-Render Blueprints are YAML files that define your infrastructure. The `render.yaml` in this
-repository configures everything needed to run OpenClaw:
+## The Blueprint
 
 ```yaml
 services:
@@ -53,8 +43,6 @@ services:
       sizeGB: 1
 ```
 
-Key Blueprint features used:
-
 | Feature               | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
 | `runtime: docker`     | Builds from the repo's Dockerfile                          |
@@ -70,70 +58,51 @@ Key Blueprint features used:
 | Starter   | Never             | 1GB+          | Personal use, small teams     |
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
-The Blueprint defaults to `starter`. To use free tier, change `plan: free` in
-your fork's `render.yaml` (but note: no persistent disk means OpenClaw state
-resets on each deploy).
+The Blueprint defaults to `starter`. To use the free tier, change `plan: free` in your fork's `render.yaml` — note that with no persistent disk, OpenClaw state resets on each deploy.
 
 ## After deployment
 
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/`.
-
-Connect using the configured shared secret. This deploy template auto-generates
-`OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service →
-Environment**); if you replace it with password auth, use that password
-instead.
-
-## Render Dashboard features
+The web dashboard is available at `https://<your-service>.onrender.com/`. Connect using the shared secret: the auto-generated `OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service → Environment**), or your password if you switched to password auth.
 
 ### Logs
 
-View real-time logs in **Dashboard → your service → Logs**. Filter by:
-
-- Build logs (Docker image creation)
-- Deploy logs (service startup)
-- Runtime logs (application output)
+**Dashboard → your service → Logs** shows build logs (Docker image creation), deploy logs (service startup), and runtime logs (application output).
 
 ### Shell access
 
-For debugging, open a shell session via **Dashboard → your service → Shell**. The persistent disk is mounted at `/data`.
+**Dashboard → your service → Shell** opens a shell session. The persistent disk is mounted at `/data`.
 
 ### Environment variables
 
-Modify variables in **Dashboard → your service → Environment**. Changes trigger an automatic redeploy.
+Edit variables in **Dashboard → your service → Environment**. Changes trigger an automatic redeploy.
 
 ### Auto-deploy
 
-If you use the original OpenClaw repository, Render will not auto-deploy your OpenClaw. To update it, run a manual Blueprint sync from the dashboard.
+Render redeploys automatically when the connected repo's branch gets a new commit. If you deployed straight from `openclaw/openclaw` instead of your own fork, you have no push access to trigger that, so update by running a manual Blueprint sync from the Dashboard, or point the service at your own fork.
 
 ## Custom domain
 
-1. Go to **Dashboard → your service → Settings → Custom Domains**
+1. **Dashboard → your service → Settings → Custom Domains**
 2. Add your domain
 3. Configure DNS as instructed (CNAME to `*.onrender.com`)
 4. Render provisions a TLS certificate automatically
 
 ## Scaling
 
-Render supports horizontal and vertical scaling:
-
-- **Vertical**: Change the plan to get more CPU/RAM
-- **Horizontal**: Increase instance count (Standard plan and above)
-
-For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
+- **Vertical**: change the plan for more CPU/RAM. Usually sufficient for OpenClaw.
+- **Horizontal**: increase instance count (Standard plan and above). Requires sticky sessions or external state management since OpenClaw keeps runtime state on the local disk.
 
 ## Backups and migration
 
-Export your state, config, auth profiles, and workspace at any time using the
-shell access in the Render Dashboard:
+From the Render Dashboard shell, export state, config, auth profiles, and workspace at any time:
 
 ```bash
 openclaw backup create
 ```
 
-This creates a portable backup archive with OpenClaw state plus any configured
-workspace. See [Backup](/cli/backup) for details.
+This creates a portable backup archive. See [Backup](/cli/backup).
 
 ## Troubleshooting
 
@@ -142,20 +111,19 @@ workspace. See [Backup](/cli/backup) for details.
 Check the deploy logs in the Render Dashboard. Common issues:
 
 - Missing `OPENCLAW_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
-- Port mismatch — ensure `OPENCLAW_GATEWAY_PORT=8080` is set so the gateway binds to the port Render expects
+- Port mismatch — ensure `OPENCLAW_GATEWAY_PORT=8080` so the gateway binds to the port Render expects
 
 ### Slow cold starts (free tier)
 
-Free tier services spin down after 15 minutes of inactivity. The first request after spin-down takes a few seconds while the container starts. Upgrade to Starter plan for always-on.
+Free tier services spin down after 15 minutes of inactivity; the first request after spin-down takes a few seconds while the container starts. Upgrade to Starter for always-on.
 
 ### Data loss after redeploy
 
-This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export a full backup via `openclaw backup create` in the Render shell.
+Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regularly export a backup with `openclaw backup create` from the Render shell.
 
 ### Health check failures
 
-Render expects a 200 response from `/health` within 30 seconds. If builds succeed but deploys fail, the service may be taking too long to start. Check:
+If builds succeed but deploys fail, the service may be taking too long to start or `/health` may not be reachable. Check:
 
 - Build logs for errors
 - Whether the container runs locally with `docker build && docker run`

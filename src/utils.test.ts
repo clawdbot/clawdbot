@@ -8,6 +8,7 @@ import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
   ensureDir,
+  normalizeE164,
   pinConfigDir,
   resolveConfigDir,
   resolveHomeDir,
@@ -53,6 +54,19 @@ describe("sleep", () => {
       setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("normalizeE164", () => {
+  it.each([
+    ["+1234567890", "+1234567890"],
+    ["++1234567890", "+1234567890"],
+    ["1+234+567", "+1234567"],
+    ["whatsapp:+1 (234) 567-8900", "+12345678900"],
+    ["signal: 1 234 567", "+1234567"],
+    ["not a phone number", ""],
+  ])("normalizes %s", (input, expected) => {
+    expect(normalizeE164(input)).toBe(expected);
   });
 });
 

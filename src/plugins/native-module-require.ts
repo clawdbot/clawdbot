@@ -53,6 +53,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
   return (
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
+    code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
@@ -151,7 +152,7 @@ function requireWithOptionalAliases(
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */
-export function withNativeRequireAliases<T>(
+function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
 ): T {

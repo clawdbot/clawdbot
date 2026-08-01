@@ -8,8 +8,12 @@ typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs
 
 protocol CameraServicing: Sendable {
     func listDevices() async -> [CameraController.CameraDeviceInfo]
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
 }
 
 protocol ScreenRecordingServicing: Sendable {
@@ -25,13 +29,26 @@ protocol ScreenRecordingServicing: Sendable {
 protocol LocationServicing: Sendable {
     func authorizationStatus() -> CLAuthorizationStatus
     func accuracyAuthorization() -> CLAccuracyAuthorization
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus
     func currentLocation(
         params: OpenClawLocationGetParams,
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool)
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
+    func stopMonitoringSignificantLocationChanges()
+}
+
+extension LocationServicing {
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
+        LocationAuthorizationSnapshot(
+            authorizationStatus: self.authorizationStatus(),
+            accuracyAuthorization: self.accuracyAuthorization())
+    }
 }
 
 @MainActor
@@ -72,34 +89,62 @@ struct WatchMessagingStatus: Equatable {
     var activationState: String
 }
 
-struct WatchQuickReplyEvent: Equatable {
+struct WatchQuickReplyEvent: Codable, Equatable {
     var replyId: String
     var promptId: String
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var note: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
-struct WatchExecApprovalResolveEvent: Equatable {
+enum WatchMessageKind: String, Codable, Equatable {
+    case chat
+    case quickReply
+}
+
+struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var replyId: String
     var approvalId: String
+    var gatewayStableID: String?
     var decision: OpenClawWatchExecApprovalDecision
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
+}
+
+struct WatchExecApprovalSnapshotRequestItem: Equatable {
+    var approvalId: String
+    var activeResolutionAttemptId: String?
 }
 
 struct WatchExecApprovalSnapshotRequestEvent: Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var gatewayStableID: String?
+    var heldApprovals: [WatchExecApprovalSnapshotRequestItem]
+    var sentAtMs: Int64?
     var transport: String
+
+    init(
+        requestId: String,
+        gatewayStableID: String? = nil,
+        heldApprovals: [WatchExecApprovalSnapshotRequestItem] = [],
+        sentAtMs: Int64?,
+        transport: String)
+    {
+        self.requestId = requestId
+        self.gatewayStableID = gatewayStableID
+        self.heldApprovals = heldApprovals
+        self.sentAtMs = sentAtMs
+        self.transport = transport
+    }
 }
 
 struct WatchAppSnapshotRequestEvent: Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
@@ -109,8 +154,9 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var sessionKey: String?
     var gatewayStableID: String?
     var text: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
+    var messageKind: WatchMessageKind?
 }
 
 struct WatchNotificationSendResult: Equatable {
@@ -128,9 +174,11 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?)
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?)
+    func sendDirectNodeSetup(setupCode: String) async throws -> WatchNotificationSendResult
     func sendNotification(
         id: String,
-        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) async throws -> WatchNotificationSendResult
     func sendExecApprovalPrompt(
         _ message: OpenClawWatchExecApprovalPromptMessage) async throws -> WatchNotificationSendResult
     func sendExecApprovalResolved(
@@ -141,6 +189,8 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
         _ message: OpenClawWatchExecApprovalSnapshotMessage) async throws -> WatchNotificationSendResult
     func syncAppSnapshot(
         _ message: OpenClawWatchAppSnapshotMessage) async throws -> WatchNotificationSendResult
+    func sendChatCompletion(
+        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

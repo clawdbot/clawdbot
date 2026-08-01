@@ -10,13 +10,27 @@ import {
   jsdomOptimizedDeps,
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
+import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
+    find: "@openclaw/gateway-client/browser",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
+  },
+  {
+    find: /^@openclaw\/gateway-protocol\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
+  },
+  {
+    find: /^@openclaw\/(gateway-protocol|retry)$/u,
+    replacement: path.resolve(repoRoot, "packages/$1/src/index.ts"),
+  },
+  {
     find: "../logging/redact.js",
-    replacement: path.resolve(here, "src/ui/browser-redact.ts"),
+    replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
   {
     find: "openclaw/plugin-sdk/test-fixtures",
@@ -47,6 +61,18 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/parse",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
+  },
+  {
+    find: "@openclaw/session-url-contract",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
+  },
+  {
+    find: "@openclaw/workboard-contract",
+    replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
+  },
+  {
     find: /^@openclaw\/net-policy\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
   },
@@ -58,12 +84,21 @@ const workspaceSourceAliases = [
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
+  // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
+  // without this the checks-ui lane flakes on cold hover/interaction tests.
+  testTimeout: 60_000,
+  hookTimeout: 60_000,
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
-  "src/ui/chat/chat-responsive.browser.test.ts",
-  "src/ui/form-controls.browser.test.ts",
-  "src/ui/views/sessions.browser.test.ts",
+  "src/pages/chat/chat-responsive.browser.test.ts",
+  "src/components/form-controls.browser.test.ts",
+  "src/pages/sessions/view.browser.test.ts",
+] as const;
+const mockRegistryUnitTests = [
+  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
+  "src/components/mcp-app-view.test.ts",
+  "src/pages/chat/chat-page.test.ts",
 ] as const;
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [
@@ -106,6 +141,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -114,12 +150,35 @@ export default defineConfig({
           deps: jsdomOptimizedDeps,
           name: "unit",
           include: ["src/**/*.test.ts"],
-          exclude: ["src/**/*.browser.test.ts", "src/**/*.e2e.test.ts", "src/**/*.node.test.ts"],
+          exclude: [
+            "src/**/*.browser.test.ts",
+            "src/**/*.e2e.test.ts",
+            "src/**/*.node.test.ts",
+            ...mockRegistryUnitTests,
+          ],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
+        test: {
+          ...sharedUiTestConfig,
+          // Reuse the canonical singleton-sensitive list so the package and
+          // root runners isolate the same tests without slowing the main suite.
+          isolate: true,
+          deps: jsdomOptimizedDeps,
+          name: "unit-mock-registry",
+          include: [...mockRegistryUnitTests],
+          environment: "jsdom",
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+        },
+      }),
+      defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -133,6 +192,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },

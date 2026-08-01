@@ -5,6 +5,7 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
@@ -12,23 +13,16 @@ import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
-  CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
-  estimateContextChars,
   estimateMessageCharsCached,
   getToolResultText,
-  invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { truncateToolResultText } from "./tool-result-truncation.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
-
-export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
-const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
@@ -51,11 +45,6 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
-
-export {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
@@ -141,33 +130,6 @@ function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] 
   return changed ? stripped : messages;
 }
 
-function truncateTextToBudget(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-
-  if (maxChars <= 0) {
-    return formatContextLimitTruncationNotice(text.length);
-  }
-
-  let bodyBudget = maxChars;
-  for (let i = 0; i < 4; i += 1) {
-    const estimatedSuffix = formatContextLimitTruncationNotice(
-      Math.max(1, text.length - bodyBudget),
-    );
-    bodyBudget = Math.max(0, maxChars - estimatedSuffix.length);
-  }
-
-  let cutPoint = bodyBudget;
-  const newline = text.lastIndexOf("\n", cutPoint);
-  if (newline > bodyBudget * 0.7) {
-    cutPoint = newline;
-  }
-
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
-}
-
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   const content = (msg as { content?: unknown }).content;
   const replacementContent =
@@ -181,8 +143,8 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function estimateBudgetToTextBudget(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO));
+function estimateBudgetToRawChars(maxChars: number): number {
+  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -203,91 +165,36 @@ function truncateToolResultToChars(
   if (!rawText) {
     const omittedChars = Math.max(
       1,
-      estimateBudgetToTextBudget(Math.max(estimatedChars - maxChars, 1)),
+      estimateBudgetToRawChars(Math.max(estimatedChars - maxChars, 1)),
     );
     return replaceToolResultText(msg, formatContextLimitTruncationNotice(omittedChars));
   }
 
-  const textBudget = estimateBudgetToTextBudget(maxChars);
-  if (textBudget <= 0) {
+  if (maxChars <= 0) {
     return replaceToolResultText(msg, formatContextLimitTruncationNotice(rawText.length));
   }
 
-  if (rawText.length <= textBudget) {
-    return replaceToolResultText(msg, rawText);
-  }
-
-  const truncatedText = truncateTextToBudget(rawText, textBudget);
+  const truncatedText = truncateToolResultText(rawText, maxChars, {
+    minKeepChars: 0,
+    minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+    preserveImportantTail: false,
+  });
   return replaceToolResultText(msg, truncatedText);
 }
 
-function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map(
-    (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
-  );
-}
-
-function toolResultsNeedTruncation(params: {
+function enforceToolResultLimit(params: {
   messages: AgentMessage[];
   maxSingleToolResultChars: number;
-}): boolean {
+}): AgentMessage[] {
   const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    if (estimateMessageCharsCached(message, estimateCache) > maxSingleToolResultChars) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function exceedsPreemptiveOverflowThreshold(params: {
-  messages: AgentMessage[];
-  maxContextChars: number;
-}): boolean {
-  const estimateCache = createMessageCharEstimateCache();
-  return estimateContextChars(params.messages, estimateCache) > params.maxContextChars;
-}
-
-function applyMessageMutationInPlace(
-  target: AgentMessage,
-  source: AgentMessage,
-  cache?: MessageCharEstimateCache,
-): void {
-  if (target === source) {
-    return;
-  }
-
-  const targetRecord = target as unknown as Record<string, unknown>;
-  const sourceRecord = source as unknown as Record<string, unknown>;
-  for (const key of Object.keys(targetRecord)) {
-    if (!(key in sourceRecord)) {
-      delete targetRecord[key];
-    }
-  }
-  Object.assign(targetRecord, sourceRecord);
-  if (cache) {
-    invalidateMessageCharsCacheEntry(cache, target);
-  }
-}
-
-function enforceToolResultLimitInPlace(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): void {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    applyMessageMutationInPlace(message, truncated, estimateCache);
-  }
+  let changed = false;
+  const guarded = messages.map((message) => {
+    const next = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    changed ||= next !== message;
+    return next;
+  });
+  return changed ? guarded : messages;
 }
 
 function hasNewToolResultAfterFence(params: {
@@ -328,6 +235,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -397,6 +305,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,
@@ -472,10 +381,6 @@ export function installToolResultContextGuard(params: {
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const maxContextChars = Math.max(
-    1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
-  );
   const maxSingleToolResultChars = Math.max(
     1_024,
     Math.floor(
@@ -495,18 +400,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = toolResultsNeedTruncation({
+    const contextMessages = enforceToolResultLimit({
       messages: sourceMessages,
       maxSingleToolResultChars,
-    })
-      ? cloneMessagesForGuard(sourceMessages)
-      : sourceMessages;
-    if (contextMessages !== sourceMessages) {
-      enforceToolResultLimitInPlace({
-        messages: contextMessages,
-        maxSingleToolResultChars,
-      });
-    }
+    });
     if (params.midTurnPrecheck?.enabled) {
       const prePromptMessageCount = Math.max(
         0,
@@ -551,15 +448,6 @@ export function installToolResultContextGuard(params: {
       }
       lastSeenLength = contextMessages.length;
     }
-    if (
-      exceedsPreemptiveOverflowThreshold({
-        messages: contextMessages,
-        maxContextChars,
-      })
-    ) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
-    }
-
     return contextMessages;
   }) as GuardableTransformContext;
 

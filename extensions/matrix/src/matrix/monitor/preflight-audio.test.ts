@@ -64,8 +64,7 @@ describe("resolveMatrixPreflightAudioTranscript", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
-          MediaPaths: ["/tmp/inbound/voice.ogg"],
-          MediaTypes: ["audio/ogg"],
+          media: [{ path: "/tmp/inbound/voice.ogg", contentType: "audio/ogg" }],
           Provider: "matrix",
           Surface: "matrix",
           OriginatingChannel: "matrix",
@@ -162,6 +161,24 @@ describe("sendMatrixPreflightAudioTranscriptEcho", () => {
       bestEffort: true,
       durability: "best_effort",
     });
+  });
+
+  it("keeps dollar sequences in the transcript literal", async () => {
+    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", results: [] });
+    await sendMatrixPreflightAudioTranscriptEcho({
+      transcript: "tickets cost $$40, confirm with $&",
+      cfg: {
+        tools: { media: { audio: { echoTranscript: true, echoFormat: "heard: {transcript}" } } },
+      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      accountId: "ops",
+      originatingTo: "room:!room:example.org",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "heard: tickets cost $$40, confirm with $&" }],
+      }),
+    );
   });
 
   it("does not echo when transcript echo is disabled", async () => {

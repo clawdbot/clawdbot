@@ -5,9 +5,9 @@ scenario:
   surface: dm
   coverage:
     primary:
-      - channels.dm
+      - channels.inbound-routing-dm
     secondary:
-      - channels.qa-channel
+      - channels.inbound-routing-qa-channel
   objective: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
   successCriteria:
     - Agent replies in DM without channel routing mistakes.
@@ -31,24 +31,24 @@ flow:
   steps:
     - name: replies coherently in DM
       actions:
-        - call: resetBus
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id: alice
-                kind: direct
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.prompt
-        - call: waitForOutboundMessage
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: alice
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              ref: config.prompt
+        - waitForOutbound:
+            conversation:
+              id: alice
+              kind: direct
+            textIncludes:
+              ref: config.expectedMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
           saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
-            - expr: liveTurnTimeoutMs(env, 45000)
         - set: matchingOutbound
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker))"

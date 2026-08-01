@@ -17,8 +17,22 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-function requireEmbeddedAgentCall(index: number): { prompt?: string } {
-  const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as { prompt?: string } | undefined;
+function requireEmbeddedAgentCall(index: number): {
+  prompt?: string;
+  suppressNextUserMessagePersistence?: boolean;
+  userTurnTranscriptRecorder?: {
+    markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+  };
+} {
+  const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as
+    | {
+        prompt?: string;
+        suppressNextUserMessagePersistence?: boolean;
+        userTurnTranscriptRecorder?: {
+          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+        };
+      }
+    | undefined;
   if (!call) {
     throw new Error(`Expected embedded OpenClaw agent call ${index}`);
   }
@@ -69,24 +83,39 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   it("regression, retries once when cron returns interim acknowledgement and no descendants were spawned", async () => {
     usePayloadTextExtraction();
     runEmbeddedAgentMock
+      .mockImplementationOnce(async (request) => {
+        request.userTurnTranscriptRecorder?.markRuntimePersisted({
+          role: "user",
+          content: "test",
+        });
+        return {
+          payloads: [
+            {
+              text: "On it, grabbing current SF and SD weather now and I will summarize right after both come back.",
+            },
+          ],
+          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        };
+      })
       .mockResolvedValueOnce({
         payloads: [
           {
-            text: "On it, grabbing current SF and SD weather now and I will summarize right after both come back.",
+            text: "SF is 62F and SD is 67F. SD is warmer by 5F.",
           },
         ],
-        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-      })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "SF is 62F and SD is 67F. SD is warmer by 5F." }],
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
       });
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(2, 2);
-    expect(requireEmbeddedAgentCall(1).prompt).toContain(
-      "previous response was only an acknowledgement",
+    const firstCall = requireEmbeddedAgentCall(0);
+    const continuationCall = requireEmbeddedAgentCall(1);
+    expect(continuationCall.prompt).toContain("previous response was only an acknowledgement");
+    expect(continuationCall.userTurnTranscriptRecorder).not.toBe(
+      firstCall.userTurnTranscriptRecorder,
     );
+    expect(firstCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(continuationCall.suppressNextUserMessagePersistence).toBe(false);
   });
 
   it("does not retry when the first turn is already a concrete result", async () => {

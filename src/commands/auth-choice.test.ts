@@ -6,7 +6,6 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { testing as providerAuthChoiceTesting } from "../plugins/provider-auth-choice.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -45,6 +44,13 @@ const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+  resolvePluginProviders,
+  resolvePluginSetupProvider: () => undefined,
+  resolveProviderPluginChoice,
+  runProviderModelSelectedHook,
 }));
 
 vi.mock("./auth-choice.apply.api-providers.js", () => {
@@ -673,18 +679,9 @@ describe("applyAuthChoice", () => {
     authTestRoot = (await setupAuthTestEnv("openclaw-auth-")).stateDir;
     defaultProviderPlugins = await createDefaultProviderPlugins();
     resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
-    providerAuthChoiceTesting.setDepsForTest({
-      loadPluginProviderRuntime: async () => ({
-        resolvePluginProviders,
-        resolvePluginSetupProvider: () => undefined,
-        resolveProviderPluginChoice,
-        runProviderModelSelectedHook,
-      }),
-    });
   });
 
   afterAll(async () => {
-    providerAuthChoiceTesting.resetDepsForTest();
     if (authTestRoot) {
       await fs.rm(authTestRoot, { recursive: true, force: true });
     }
@@ -1117,81 +1114,6 @@ describe("applyAuthChoice", () => {
     );
   });
 
-  it("enables the owning plugin for manifest provider auth choices", async () => {
-    await setupTempState();
-    const provider = createFixedChoiceProvider({
-      providerId: "github-copilot",
-      label: "GitHub Copilot",
-      choiceId: "github-copilot-github",
-      method: {
-        id: "github",
-        label: "GitHub Copilot",
-        kind: "token",
-        run: vi.fn(
-          async (): Promise<ProviderAuthResult> => ({
-            profiles: [
-              {
-                profileId: "github-copilot:github",
-                credential: {
-                  type: "token",
-                  provider: "github-copilot",
-                  token: "gho_copilot_test",
-                },
-              },
-            ],
-            defaultModel: "github-copilot/claude-opus-4.7",
-          }),
-        ),
-      },
-    });
-    const manifestSpy = vi
-      .spyOn(providerAuthChoices, "resolveManifestProviderAuthChoice")
-      .mockReturnValue({
-        pluginId: "github-copilot",
-        providerId: "github-copilot",
-        methodId: "github",
-        choiceId: "github-copilot-github",
-        choiceLabel: "GitHub Copilot",
-      });
-    providerAuthChoiceTesting.setDepsForTest({
-      loadPluginProviderRuntime: async () => ({
-        resolvePluginProviders,
-        resolvePluginSetupProvider: () => provider,
-        resolveProviderPluginChoice,
-        runProviderModelSelectedHook,
-      }),
-    });
-    try {
-      const result = await applyAuthChoice({
-        authChoice: "github-copilot-github",
-        config: { plugins: { entries: { "github-copilot": { enabled: false } } } },
-        prompter: createPrompter({}),
-        runtime: createExitThrowingRuntime(),
-        setDefaultModel: true,
-        preserveExistingDefaultModel: true,
-      });
-
-      expect(result.config.plugins?.entries?.["github-copilot"]).toEqual({ enabled: true });
-      expectAuthProfileConfig(result, "github-copilot:github", {
-        provider: "github-copilot",
-        mode: "token",
-      });
-      expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-        "github-copilot/claude-opus-4.7",
-      );
-    } finally {
-      manifestSpy.mockRestore();
-      providerAuthChoiceTesting.setDepsForTest({
-        loadPluginProviderRuntime: async () => ({
-          resolvePluginProviders,
-          resolvePluginSetupProvider: () => undefined,
-          resolveProviderPluginChoice,
-          runProviderModelSelectedHook,
-        }),
-      });
-    }
-  });
-
   it("uses explicit env for plugin auth resolution instead of host env", async () => {
     await setupTempState();
     process.env.OPENAI_API_KEY = "sk-openai-host"; // pragma: allowlist secret
@@ -1309,3 +1231,4 @@ describe("applyAuthChoice", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,6 @@
-#if Talk
+#if Talk && canImport(ElevenLabsKit)
 @_exported import ElevenLabsKit
 
-public typealias ElevenLabsVoice = ElevenLabsKit.ElevenLabsVoice
 public typealias ElevenLabsTTSRequest = ElevenLabsKit.ElevenLabsTTSRequest
 public typealias ElevenLabsTTSClient = ElevenLabsKit.ElevenLabsTTSClient
 public typealias TalkTTSValidation = ElevenLabsKit.TalkTTSValidation

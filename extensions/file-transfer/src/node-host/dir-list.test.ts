@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DIR_LIST_DEFAULT_MAX_ENTRIES,
-  DIR_LIST_HARD_MAX_ENTRIES,
-  handleDirList,
-} from "./dir-list.js";
+import { handleDirList } from "./dir-list.js";
 
 let tmpRoot: string;
 
@@ -158,12 +154,22 @@ describe("handleDirList — happy path", () => {
     expect(r.entries.map((e) => e.name)).toEqual(["f-1.txt"]);
     expect(r.nextPageToken).toBe("2");
   });
-});
 
-describe("handleDirList — limits", () => {
-  it("clamps maxEntries to the hard ceiling and uses the default for invalid values", () => {
-    expect(DIR_LIST_DEFAULT_MAX_ENTRIES).toBe(200);
-    expect(DIR_LIST_HARD_MAX_ENTRIES).toBe(5000);
-    expect(DIR_LIST_DEFAULT_MAX_ENTRIES).toBeLessThan(DIR_LIST_HARD_MAX_ENTRIES);
+  it("uses the 200-entry default for invalid limits", async () => {
+    await Promise.all(
+      Array.from({ length: 201 }, (_, index) =>
+        fs.writeFile(path.join(tmpRoot, `entry-${String(index).padStart(3, "0")}`), ""),
+      ),
+    );
+
+    for (const maxEntries of [undefined, -1, Number.NaN, "200"] as unknown[]) {
+      const result = await handleDirList({ path: tmpRoot, maxEntries });
+      if (!result.ok) {
+        throw new Error(`expected ok, got ${result.code}`);
+      }
+      expect(result.entries).toHaveLength(200);
+      expect(result.nextPageToken).toBe("200");
+      expect(result.truncated).toBe(true);
+    }
   });
 });

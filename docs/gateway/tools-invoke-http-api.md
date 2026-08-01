@@ -6,12 +6,11 @@ read_when:
 title: "Tools invoke API"
 ---
 
-OpenClaw's Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
+OpenClaw's Gateway exposes an HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
-
-Default max payload size is 2 MB.
+- Default max request body size: 2 MB
 
 ## Authentication
 
@@ -19,25 +18,16 @@ Uses the Gateway auth configuration.
 
 Common HTTP auth paths:
 
-- shared-secret auth (`gateway.auth.mode="token"` or `"password"`):
-  `Authorization: Bearer <token-or-password>`
-- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`):
-  route through the configured identity-aware proxy and let it inject the
-  required identity headers
-- private-ingress open auth (`gateway.auth.mode="none"`):
-  no auth header required
+- shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
+- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`): route through the configured identity-aware proxy and let it inject the required identity headers
+- private-ingress open auth (`gateway.auth.mode="none"`): no auth header required
 
 Notes:
 
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
-- When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
-  configured trusted proxy source; same-host loopback proxies require explicit
-  `gateway.auth.trustedProxy.allowLoopback = true`.
-- Internal same-host callers that bypass the proxy can use
-  `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct
-  fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence
-  keeps the request on the trusted-proxy path instead.
+- `mode="token"` uses `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+- `mode="password"` uses `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- `mode="trusted-proxy"` requires the HTTP request to come from a configured trusted proxy source; same-host loopback proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.
+- Internal same-host callers that bypass the proxy can use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence keeps the request on the trusted-proxy path instead.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -48,23 +38,15 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
 - Shared-secret auth also treats direct tool invokes on this endpoint as owner-sender turns.
-- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on a private ingress) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
+- Trusted identity-bearing HTTP modes (trusted proxy auth, or `gateway.auth.mode="none"` on a private ingress) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
 
 Auth matrix:
 
-- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
-  - proves possession of the shared gateway operator secret
-  - ignores narrower `x-openclaw-scopes`
-  - restores the full default operator scope set:
-    `operator.admin`, `operator.approvals`, `operator.pairing`,
-    `operator.read`, `operator.talk.secrets`, `operator.write`
-  - treats direct tool invokes on this endpoint as owner-sender turns
-- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
-  - authenticate some outer trusted identity or deployment boundary
-  - honor `x-openclaw-scopes` when the header is present
-  - fall back to the normal operator default scope set when the header is absent
-  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
+| Auth mode                                                                               | Behavior                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token` or `password` + `Authorization: Bearer ...`                                     | Proves possession of the shared gateway operator secret. Ignores narrower `x-openclaw-scopes`. Restores the full default operator scope set: `operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`. Treats direct tool invokes as owner-sender turns. |
+| Trusted identity-bearing HTTP (trusted proxy auth, or `mode="none"` on private ingress) | Authenticates an outer trusted identity or deployment boundary. Honors `x-openclaw-scopes` when present. Falls back to the normal operator default scope set when the header is absent. Only loses owner semantics when the caller explicitly narrows scopes and omits `operator.admin`.                               |
 
 ## Request body
 
@@ -80,10 +62,12 @@ Auth matrix:
 
 Fields:
 
-- `tool` (string, required): tool name to invoke.
-- `action` (string, optional): mapped into args if the tool schema supports `action` and the args payload omitted it.
+- `tool` / `name` (string, required): tool name to invoke. `name` takes precedence if both are sent.
+- `action` (string, optional): merged into `args.action` if the tool schema supports an `action` property and `args` did not already set one.
 - `args` (object, optional): tool-specific arguments.
-- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and default agent, or `global` in global scope).
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and the default agent, or `global` in global session scope).
+- `agentId` (string, optional): resolves the session key for that agent. Errors with `400` if it conflicts with an explicit `sessionKey` that already maps to a different agent.
+- `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.
 
 ## Policy + routing behavior
@@ -102,25 +86,28 @@ Important boundary notes:
 
 - Exec approvals are operator guardrails, not a separate authorization boundary for this HTTP endpoint. If a tool is reachable here via Gateway auth + tool policy, `/tools/invoke` does not add an extra per-call approval prompt.
 - If `exec` is reachable here, treat it as a mutating shell surface. Denying `write`, `edit`, `apply_patch`, or HTTP filesystem-write tools does not make shell execution read-only.
-- Do not share Gateway bearer credentials with untrusted callers. If you need separation across trust boundaries, run separate gateways (and ideally separate OS users/hosts).
+- Do not share Gateway bearer credentials with untrusted callers. If you need separation across trust boundaries, run separate gateways (ideally on separate OS users/hosts).
 
 Gateway HTTP also applies a hard deny list by default (even if session policy allows the tool):
 
-- `exec` - direct command execution (RCE surface)
-- `spawn` - arbitrary child process creation (RCE surface)
-- `shell` - shell command execution (RCE surface)
-- `fs_write` - arbitrary file mutation on the host
-- `fs_delete` - arbitrary file deletion on the host
-- `fs_move` - arbitrary file move/rename on the host
-- `apply_patch` - patch application can rewrite arbitrary files
-- `sessions_spawn` - session orchestration; spawning agents remotely is RCE
-- `sessions_send` - cross-session message injection
-- `cron` - persistent automation control plane
-- `gateway` - gateway control plane; prevents reconfiguration via HTTP
-- `nodes` - node command relay can reach system.run on paired hosts
-- `whatsapp_login` - interactive setup requiring terminal QR scan; hangs on HTTP
+| Tool             | Reason                                                    |
+| ---------------- | --------------------------------------------------------- |
+| `exec`           | Direct command execution (RCE surface)                    |
+| `spawn`          | Arbitrary child process creation (RCE surface)            |
+| `shell`          | Shell command execution (RCE surface)                     |
+| `fs_write`       | Arbitrary file mutation on the host                       |
+| `fs_delete`      | Arbitrary file deletion on the host                       |
+| `fs_move`        | Arbitrary file move/rename on the host                    |
+| `apply_patch`    | Patch application can rewrite arbitrary files             |
+| `sessions_spawn` | Session orchestration; spawning agents remotely is RCE    |
+| `sessions_send`  | Cross-session message injection                           |
+| `cron`           | Persistent automation control plane                       |
+| `gateway`        | Gateway control plane; prevents reconfiguration via HTTP  |
+| `nodes`          | Node command relay can reach `system.run` on paired hosts |
 
-You can customize this deny list via `gateway.tools`:
+`cron`, `gateway`, and `nodes` are also owner-only: even outside this default deny list, non-owner callers cannot invoke them on this surface.
+
+Customize the general deny list via `gateway.tools`:
 
 ```json5
 {
@@ -135,26 +122,29 @@ You can customize this deny list via `gateway.tools`:
 }
 ```
 
-`gateway.tools.allow` is an exposure override, not a scope upgrade. In
-identity-bearing HTTP modes, `cron`, `gateway`, and `nodes` remain unavailable
-to callers that do not have owner/admin identity (`operator.admin`) even when
-they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
-the full trusted-operator rule above.
+`gateway.tools.allow` is an exposure override, not a scope upgrade. In identity-bearing HTTP modes, `cron`, `gateway`, and `nodes` remain unavailable to callers without owner/admin identity (`operator.admin`) even when listed in `gateway.tools.allow`. Shared-secret bearer auth still follows the full trusted-operator rule above.
 
 To help group policies resolve context, you can optionally set:
 
 - `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)
 - `x-openclaw-account-id: <accountId>` (when multiple accounts exist)
+- `x-openclaw-message-to: <target>` (delivery target for message-tool policy)
+- `x-openclaw-thread-id: <threadId>` (thread context for message-tool policy)
 
 ## Responses
 
-- `200` → `{ ok: true, result }`
-- `400` → `{ ok: false, error: { type, message } }` (invalid request or tool input error)
-- `401` → unauthorized
-- `429` → auth rate-limited (`Retry-After` set)
-- `404` → tool not available (not found or not allowlisted)
-- `405` → method not allowed
-- `500` → `{ ok: false, error: { type, message } }` (unexpected tool execution error; sanitized message)
+| Status | Meaning                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------- |
+| `200`  | `{ ok: true, result }`                                                                         |
+| `400`  | `{ ok: false, error: { type, message } }` (invalid request or tool input error)                |
+| `401`  | Unauthorized                                                                                   |
+| `403`  | `{ ok: false, error: { type, message, requiresApproval? } }` (tool call blocked by policy)     |
+| `404`  | Tool not available (not found or not allowlisted)                                              |
+| `405`  | Method not allowed                                                                             |
+| `408`  | Request body read timed out                                                                    |
+| `413`  | Request body exceeded the max payload size                                                     |
+| `429`  | Auth rate-limited (`Retry-After` set)                                                          |
+| `500`  | `{ ok: false, error: { type, message } }` (unexpected tool execution error; sanitized message) |
 
 ## Example
 

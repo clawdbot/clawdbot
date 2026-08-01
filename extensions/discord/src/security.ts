@@ -1,6 +1,7 @@
 // Discord plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -44,14 +45,9 @@ const collectDiscordSecurityWarnings =
     },
   });
 
-let discordSecurityAuditModulePromise:
-  | Promise<typeof import("./security-audit.runtime.js")>
-  | undefined;
-
-async function loadDiscordSecurityAuditModule() {
-  discordSecurityAuditModulePromise ??= import("./security-audit.runtime.js");
-  return await discordSecurityAuditModulePromise;
-}
+const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
+  () => import("./security-audit.runtime.js"),
+);
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,

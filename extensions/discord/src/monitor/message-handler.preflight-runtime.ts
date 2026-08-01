@@ -1,28 +1,14 @@
-// Discord plugin module implements message handler.preflight runtime behavior.
-let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
-let preflightAudioRuntimePromise: Promise<typeof import("./preflight-audio.js")> | undefined;
-let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | undefined;
-let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-export async function loadPluralKitRuntime() {
-  pluralkitRuntimePromise ??= import("../pluralkit.js");
-  return await pluralkitRuntimePromise;
-}
+export const loadPluralKitRuntime = createLazyRuntimeModule(() => import("../pluralkit.js"));
 
-export async function loadPreflightAudioRuntime() {
-  preflightAudioRuntimePromise ??= import("./preflight-audio.js");
-  return await preflightAudioRuntimePromise;
-}
+export const loadPreflightAudioRuntime = createLazyRuntimeModule(
+  () => import("./preflight-audio.js"),
+);
 
-export async function loadSystemEventsRuntime() {
-  systemEventsRuntimePromise ??= import("./system-events.js");
-  return await systemEventsRuntimePromise;
-}
+export const loadSystemEventsRuntime = createLazyRuntimeModule(() => import("./system-events.js"));
 
-export async function loadDiscordThreadingRuntime() {
-  discordThreadingRuntimePromise ??= import("./threading.js");
-  return await discordThreadingRuntimePromise;
-}
+export const loadDiscordThreadingRuntime = createLazyRuntimeModule(() => import("./threading.js"));
 
 export function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);

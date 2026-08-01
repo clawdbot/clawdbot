@@ -1,6 +1,15 @@
 // Defines task registry records, statuses, delivery state, and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+/** JSON value shape persisted with runtime-owned task detail. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 /** Runtime family that owns a task run lifecycle. */
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
@@ -139,8 +148,13 @@ export type TaskRecord = {
   endedAt?: number;
   lastEventAt?: number;
   cleanupAfter?: number;
+  /** Tool invocations observed on this run's agent-event stream. */
+  toolUseCount?: number;
+  /** Name of the most recent tool invocation observed for this run. */
+  lastToolName?: string;
   error?: string;
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
+  detail?: JsonValue;
 };

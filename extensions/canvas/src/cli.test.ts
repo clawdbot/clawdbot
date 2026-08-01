@@ -71,6 +71,34 @@ function createCanvasCliDepsWithDefaultParsers() {
   };
 }
 
+const canvasAcknowledgementCommands = [
+  {
+    args: ["present"],
+    command: "canvas.present",
+    message: "canvas present ok",
+  },
+  {
+    args: ["hide"],
+    command: "canvas.hide",
+    message: "canvas hide ok",
+  },
+  {
+    args: ["navigate", "https://example.com"],
+    command: "canvas.navigate",
+    message: "canvas navigate ok",
+  },
+  {
+    args: ["a2ui", "push", "--text", "hello"],
+    command: "canvas.a2ui.pushJSONL",
+    message: "canvas a2ui push ok (v0.8, 2 messages)",
+  },
+  {
+    args: ["a2ui", "reset"],
+    command: "canvas.a2ui.reset",
+    message: "canvas a2ui reset ok",
+  },
+] as const;
+
 describe("canvas CLI", () => {
   it("registers under nodes and captures a snapshot media path", async () => {
     const program = new Command();
@@ -139,6 +167,28 @@ describe("canvas CLI", () => {
     expect(writtenFiles).toHaveLength(0);
   });
 
+  it("rejects malformed node-controlled snapshot base64 before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "png",
+        base64: "Zh==",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
+
   it("rejects unsupported snapshot formats before invoking the node", async () => {
     const program = new Command();
     program.exitOverride();
@@ -154,6 +204,85 @@ describe("canvas CLI", () => {
     ).rejects.toThrow(/invalid format: gif/i);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
     expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("prints an empty canvas eval result instead of a success placeholder", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({ payload: { result: "" } });
+
+    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(["nodes", "canvas", "eval", `""`, "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("");
+    expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
+  });
+
+  it.each(canvasAcknowledgementCommands)(
+    "prints the full successful $command Gateway response with --json",
+    async ({ args, command }) => {
+      const program = new Command();
+      program.exitOverride();
+      const nodes = program.command("nodes");
+      const { deps, runtime } = createCanvasCliDeps();
+      const response = {
+        ok: true,
+        nodeId: "ios-node",
+        command,
+        payload: { acknowledged: true },
+        payloadJSON: '{"acknowledged":true}',
+      };
+      vi.mocked(deps.callGatewayCli).mockResolvedValueOnce(response);
+
+      registerNodesCanvasCommands(nodes, deps);
+      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node", "--json"], {
+        from: "user",
+      });
+
+      expect(deps.callGatewayCli).toHaveBeenCalledTimes(1);
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(response);
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(canvasAcknowledgementCommands)(
+    "preserves the human-readable $command acknowledgement",
+    async ({ args, message }) => {
+      const program = new Command();
+      program.exitOverride();
+      const nodes = program.command("nodes");
+      const { deps, runtime } = createCanvasCliDeps();
+
+      registerNodesCanvasCommands(nodes, deps);
+      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node"], {
+        from: "user",
+      });
+
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(message);
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not print a machine-readable success response when a Canvas invocation fails", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockRejectedValueOnce(new Error("node disconnected"));
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("node disconnected");
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it.each([

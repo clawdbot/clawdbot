@@ -8,7 +8,7 @@ import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-han
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadSessionEntry } from "../gateway/session-utils.js";
+import { loadSessionEntryReadOnly } from "../gateway/session-utils.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -43,7 +43,7 @@ export async function resolveDirectStatusReplyForSession(
     return undefined;
   }
 
-  const statusLoaded = loadSessionEntry(requestedSessionKey);
+  const statusLoaded = loadSessionEntryReadOnly(requestedSessionKey);
   const statusCfg = statusLoaded.cfg ?? params.cfg;
   const statusSessionKey = statusLoaded.canonicalKey;
   const statusEntry = statusLoaded.entry;
@@ -96,6 +96,7 @@ export async function resolveDirectStatusReplyForSession(
     agentCfg,
     resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
   });
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
   let resolvedReasoningLevel = currentReasoningLevel;
   const hasAgentReasoningDefault =
     (agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null) ||
@@ -135,6 +136,7 @@ export async function resolveDirectStatusReplyForSession(
     provider: selectedProvider,
     model: selectedModel,
     contextTokens: statusEntry?.contextTokens ?? 0,
+    thinkingCatalog,
     resolvedThinkLevel: currentThinkLevel,
     resolvedFastMode: currentFastMode,
     resolvedVerboseLevel: currentVerboseLevel ?? "off",

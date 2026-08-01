@@ -8,6 +8,7 @@ import {
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   isSessionTranscriptLeafControl,
@@ -16,7 +17,28 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  repairCanonicalSessionKeys,
+  type CanonicalSessionKeyRepairReport,
+} from "./doctor-session-canonical-keys.js";
+import {
+  repairCanonicalSessionDeliveryStates,
+  type SessionDeliveryStateRepairReport,
+} from "./doctor-session-delivery-state.js";
+import {
+  repairReservedIncognitoSessionKeys,
+  type ReservedIncognitoKeyRepairReport,
+} from "./doctor-session-incognito-key-repair.js";
+import {
+  DoctorSqliteMaintenanceLockUnavailableError,
+  withDoctorSqliteMaintenanceLock,
+} from "./doctor-sqlite-maintenance-lock.js";
+import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
+
+const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -36,6 +58,10 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+  broken: true;
+};
+
 type ActiveTranscriptPath = {
   entries: TranscriptEntry[];
   entriesToPersist: TranscriptEntry[];
@@ -43,7 +69,6 @@ type ActiveTranscriptPath = {
   appendParentId: string | null;
 };
 
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
@@ -92,7 +117,7 @@ function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]
       continue;
     }
     let touched = false;
-    if (message.provider === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    if (isLegacyCodexProviderId(message.provider)) {
       message.provider = OPENAI_PROVIDER_ID;
       touched = true;
     }
@@ -271,7 +296,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
@@ -372,8 +397,62 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+export async function detectSessionTranscriptHealthIssues(params?: {
+  sessionDirs?: string[];
+}): Promise<SessionTranscriptHealthIssue[]> {
+  let sessionDirs = params?.sessionDirs;
+  try {
+    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+  } catch {
+    return [];
+  }
+
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  const issues: SessionTranscriptHealthIssue[] = [];
+  for (const filePath of files) {
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+    if (result.broken) {
+      issues.push(result as SessionTranscriptHealthIssue);
+    }
+  }
+  return issues;
+}
+
+export function sessionTranscriptIssueToHealthFinding(
+  issue: SessionTranscriptHealthIssue,
+): HealthFinding {
+  const metadata =
+    issue.legacyOpenAICodexEntries > 0
+      ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
+          issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
+        }`
+      : "";
+  return {
+    checkId: SESSION_TRANSCRIPTS_CHECK_ID,
+    severity: "info",
+    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
+    path: issue.filePath,
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
+  };
+}
+
+export function sessionTranscriptIssueToRepairEffect(
+  issue: SessionTranscriptHealthIssue,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-rewrite-session-transcript",
+    target: issue.filePath,
+    dryRunSafe: false,
+  };
+}
+
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  sessionSqlite?: boolean;
   shouldRepair?: boolean;
   sessionDirs?: string[];
 }) {
@@ -386,41 +465,168 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
-  const files = await listSessionTranscriptFiles(sessionDirs);
-  if (files.length === 0) {
-    return;
-  }
-
   const results: TranscriptRepairResult[] = [];
-  for (const filePath of files) {
-    results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  if (files.length > 0 && shouldRepair) {
+    for (const filePath of files) {
+      results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+    }
+  } else if (files.length > 0) {
+    results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
   }
   const broken = results.filter((result) => result.broken);
-  if (broken.length === 0) {
+  if (broken.length > 0) {
+    const repairedCount = broken.filter((result) => result.repaired).length;
+    const lines = [
+      `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
+      ...broken.slice(0, 20).map((result) => {
+        const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
+        const status = result.repaired ? "repaired" : "needs repair";
+        const metadata =
+          result.legacyOpenAICodexEntries > 0
+            ? ` openai-codex=${result.legacyOpenAICodexEntries}`
+            : "";
+        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
+      }),
+    ];
+    if (broken.length > 20) {
+      lines.push(`- ...and ${broken.length - 20} more.`);
+    }
+    if (!shouldRepair) {
+      lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
+    } else if (repairedCount > 0) {
+      lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
+    }
+    note(lines.join("\n"), "Session transcripts");
+  }
+
+  if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
+    await noteSessionSqliteMigrationHealth({
+      cfg: params?.cfg,
+      env: params?.env ?? process.env,
+      shouldRepair,
+    });
+  }
+}
+
+async function noteSessionSqliteMigrationHealth(params: {
+  cfg?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  shouldRepair: boolean;
+}): Promise<void> {
+  // Public doctor owns the operator-facing SQLite import; the targeted
+  // --session-sqlite subcommand remains the diagnostic/proof surface.
+  const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
+  let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
+  let deliveryReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
+  let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
+    archivedTranscriptDirectories: [],
+    foundGroups: 0,
+    repairBatches: 0,
+    removedRows: 0,
+    repairedGroups: 0,
+    scannedStores: 0,
+  };
+  const runSessionSqlite = async () => {
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
+      env: params.env,
+      mode: params.shouldRepair ? "import" : "dry-run",
+    });
+    canonicalKeyReport = await repairCanonicalSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    // Import may create the first durable SQLite row for a colliding legacy key.
+    reservedKeyReport = repairReservedIncognitoSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    deliveryReport = repairCanonicalSessionDeliveryStates({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    return report;
+  };
+  let report: Awaited<ReturnType<typeof runSessionSqlite>>;
+  try {
+    report = params.shouldRepair
+      ? await withDoctorSqliteMaintenanceLock({
+          env: params.env,
+          operation: "session SQLite import",
+          run: runSessionSqlite,
+        })
+      : await runSessionSqlite();
+  } catch (error) {
+    if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
+      throw error;
+    }
+    note(
+      `- Skipped: Gateway or another SQLite maintenance command owns the state directory. Stop the Gateway, then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
+      "Session SQLite",
+    );
     return;
   }
-
-  const repairedCount = broken.filter((result) => result.repaired).length;
+  if (reservedKeyReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
+        : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+      "Session SQLite",
+    );
+  }
+  if (canonicalKeyReport.foundGroups > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+        : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
+      "Session SQLite",
+    );
+  }
+  if (deliveryReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
+  }
+  if (
+    report.totals.legacyEntries === 0 &&
+    report.totals.unreferencedJsonlFiles === 0 &&
+    report.totals.issues === 0
+  ) {
+    return;
+  }
   const lines = [
-    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
-    ...broken.slice(0, 20).map((result) => {
-      const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
-      const status = result.repaired ? "repaired" : "needs repair";
-      const metadata =
-        result.legacyOpenAICodexEntries > 0
-          ? ` openai-codex=${result.legacyOpenAICodexEntries}`
-          : "";
-      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
-    }),
+    `- Legacy entries: ${report.totals.legacyEntries}; SQLite entries: ${report.totals.sqliteEntries}.`,
+    `- Transcript events: imported=${report.totals.importedTranscriptEvents}; validated=${report.totals.validatedTranscriptEvents}.`,
   ];
-  if (broken.length > 20) {
-    lines.push(`- ...and ${broken.length - 20} more.`);
+  if (report.totals.archivedTranscriptFiles > 0) {
+    lines.push(
+      `- Archived ${report.totals.archivedTranscriptFiles} legacy transcript artifact(s).`,
+    );
   }
-  if (!shouldRepair) {
-    lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
-  } else if (repairedCount > 0) {
-    lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
+  if (report.totals.archivedUnreferencedJsonlFiles > 0) {
+    lines.push(
+      `- Archived ${report.totals.archivedUnreferencedJsonlFiles} unreferenced JSONL artifact(s).`,
+    );
   }
-
-  note(lines.join("\n"), "Session transcripts");
+  if (report.totals.issues > 0) {
+    lines.push(`- Found ${report.totals.issues} session SQLite issue(s).`);
+  }
+  if (!params.shouldRepair) {
+    lines.push(
+      '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
+    );
+  }
+  note(lines.join("\n"), "Session SQLite");
 }

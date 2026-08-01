@@ -79,16 +79,3 @@ final class HighlightedMenuItemHostView: NSView {
         self.invalidateIntrinsicContentSize()
     }
 }
-
-struct MenuHostedHighlightedItem: NSViewRepresentable {
-    let width: CGFloat
-    let rootView: AnyView
-
-    func makeNSView(context _: Context) -> HighlightedMenuItemHostView {
-        HighlightedMenuItemHostView(rootView: self.rootView, width: self.width)
-    }
-
-    func updateNSView(_ nsView: HighlightedMenuItemHostView, context _: Context) {
-        nsView.update(rootView: self.rootView, width: self.width)
-    }
-}

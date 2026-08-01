@@ -3,12 +3,17 @@ import path from "node:path";
 
 export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
+  // The readiness byte on stderr re-arms the caller's rolling no-output timer,
+  // so the silence window that kills the tree starts only after the forked pid
+  // is on disk; without it, slow spawns under suite load race the first window
+  // and the test reads a missing/empty pid file.
   await fs.writeFile(
     scriptPath,
     [
       "#!/bin/sh",
       '"$NODE_BINARY" -e "setInterval(() => {}, 1000)" &',
       'printf "%s" "$!" > "$PID_FILE"',
+      "echo ready >&2",
       "sleep 30",
     ].join("\n"),
     "utf8",
@@ -17,7 +22,7 @@ export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   return scriptPath;
 }
 
-export function isPidAlive(pid: number): boolean {
+function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -47,5 +52,12 @@ export function killPidIfAlive(pid: number | undefined): void {
   if (pid === undefined || !isPidAlive(pid)) {
     return;
   }
-  process.kill(pid, "SIGKILL");
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    // The process can exit after the liveness probe; ESRCH already satisfies cleanup.
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }

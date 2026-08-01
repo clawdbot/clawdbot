@@ -6,9 +6,13 @@ const { callGatewayToolMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
+vi.mock("../agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  return {
+    ...actual,
+    resolveSessionAgentId: actual.resolveSessionAgentId,
+  };
+});
 
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
@@ -48,7 +52,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    ).toEqual({ text: "Automations listed.\nCount: 2" });
     expect(
       terminalPresentation(
         { action: "list" },
@@ -60,7 +64,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
         { action: "add" },
@@ -69,7 +73,7 @@ describe("cron tool flat-params", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
+  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
       { callGatewayTool: callGatewayToolMock },
@@ -81,9 +85,13 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      sessionKey?: string;
+      sessionTarget?: string;
+    }>();
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionTarget).toBe("current");
+    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("recovers flat cron schedule shorthand for add", async () => {
@@ -113,6 +121,106 @@ describe("cron tool flat-params", () => {
       kind: "agentTurn",
       message: "send report",
     });
+  });
+
+  it("recovers flat script payload fields before agent-turn hints", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-add", {
+      action: "add",
+      name: "queue watcher",
+      everyMs: 60_000,
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload).toEqual({
+      kind: "script",
+      script: "return { notify: 'changed' }",
+      timeoutSeconds: 30,
+      toolBudget: 12,
+    });
+  });
+
+  it("recovers a flat trigger when adding a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-add", {
+      action: "add",
+      name: "watcher",
+      schedule: { kind: "every", everyMs: 60_000 },
+      message: "report the change",
+      trigger: { script: "json({ fire: false })", once: true },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      trigger?: { script?: string; once?: boolean };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.trigger).toEqual({ script: "json({ fire: false })", once: true });
+  });
+
+  it("rejects flat on-exit schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-add", {
+        action: "add",
+        name: "rebuild on exit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+        message: "rebuilt",
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-infer", {
+        action: "add",
+        name: "watch build",
+        command: "make",
+        message: "done",
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat on-exit schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update", {
+        action: "update",
+        jobId: "job-onexit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update-infer", {
+        action: "update",
+        jobId: "job-infer",
+        command: "make",
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("passes local cron wall-clock expression and timezone through add", async () => {
@@ -180,6 +288,72 @@ describe("cron tool flat-params", () => {
       tz: "America/Los_Angeles",
       staggerMs: 30_000,
     });
+  });
+
+  it("recovers flat script payload fields for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-script-update", {
+      action: "update",
+      jobId: "job-script",
+      script: "return { wake: 'now' }",
+      timeoutSeconds: 45,
+      toolBudget: 8,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { payload?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-script",
+      patch: {
+        payload: {
+          kind: "script",
+          script: "return { wake: 'now' }",
+          timeoutSeconds: 45,
+          toolBudget: 8,
+        },
+      },
+    });
+  });
+
+  it("recovers a flat trigger when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-update", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: { script: "json({ fire: true })", once: false },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: { script?: string; once?: boolean } };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({
+      id: "job-trigger",
+      patch: { trigger: { script: "json({ fire: true })", once: false } },
+    });
+  });
+
+  it("recovers a flat trigger clear when updating a job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trigger-clear", {
+      action: "update",
+      jobId: "job-trigger",
+      trigger: null,
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { trigger?: null };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params).toEqual({ id: "job-trigger", patch: { trigger: null } });
   });
 
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {

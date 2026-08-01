@@ -1,16 +1,10 @@
+import type { Message } from "@openclaw/llm-core";
 // Agent Core helper module supports utils behavior.
-import type { Message } from "../../../../llm-core/src/index.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
+import type { FileOperations } from "../types.js";
 
-/** File paths touched by a session branch or compaction range. */
-export interface FileOperations {
-  /** Files read but not necessarily modified. */
-  read: Set<string>;
-  /** Files written by full-file write operations. */
-  written: Set<string>;
-  /** Files modified by edit operations. */
-  edited: Set<string>;
-}
+export type { FileOperations } from "../types.js";
 
 /** Create an empty file-operation accumulator. */
 export function createFileOps(): FileOperations {
@@ -92,6 +86,8 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;
+const IMPORTANT_TOOL_RESULT_TAIL =
+  /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -105,8 +101,57 @@ function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  const truncatedChars = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+  const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
+  const diagnosticSearch = sliceUtf16Safe(text, -maxChars);
+  const diagnosticMatches = Array.from(
+    diagnosticSearch.matchAll(new RegExp(IMPORTANT_TOOL_RESULT_TAIL.source, "gi")),
+  );
+  const diagnosticMatch =
+    diagnosticMatches
+      .toReversed()
+      .find((match) => /^(error|exception|fatal|panic|errno)$/i.test(match[0])) ??
+    diagnosticMatches.at(-1);
+  if (diagnosticMatch) {
+    const head = truncateUtf16Safe(text, maxChars - tailChars);
+    const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
+    // A routine footer can match failure words. Never shorten the original
+    // retained head when doing so would discard an existing diagnostic.
+    if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
+      const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
+      const tailStart = Math.min(diagnosticOffset, text.length - tailChars);
+      // An early diagnostic already lives in the retained prefix; reusing it
+      // as a tail would overlap the head and miscount omitted characters.
+      if (tailStart >= head.length) {
+        const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
+        const truncatedChars = text.length - head.length - tail.length;
+        const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
+        // Commands usually report their actual failure last; preserve that tail
+        // so branch and ordinary compaction summaries can explain what failed.
+        return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
+      }
+    }
+  }
+  const sliced = truncateUtf16Safe(text, maxChars);
+  const truncatedChars = text.length - sliced.length;
+  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
+}
+
+/** Extract text that compaction both estimates and includes in summary prompts. */
+export function getCompactionContentBlockText(block: {
+  type: string;
+  content?: unknown;
+  text?: string;
+}): string {
+  if (block.type === "text" && block.text) {
+    return block.text;
+  }
+  if (block.type !== "toolResult" && block.type !== "tool_result") {
+    return "";
+  }
+  if (block.text) {
+    return block.text;
+  }
+  return typeof block.content === "string" ? block.content : "";
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */
@@ -154,10 +199,7 @@ export function serializeConversation(messages: Message[]): string {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     } else if (msg.role === "toolResult") {
-      const content = msg.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
+      const content = msg.content.map(getCompactionContentBlockText).join("");
       if (content) {
         parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }

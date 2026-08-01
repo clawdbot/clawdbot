@@ -47,14 +47,14 @@ describe("acpx plugin", () => {
     createAcpxRuntimeServiceMock.mockReturnValue(service);
     const openKeyedStore = vi.fn();
 
-    const api = {
+    const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStore } },
+      runtime: { state: { openKeyedStore } } as never,
       registerService: vi.fn(),
       on: vi.fn(),
-    };
+    });
 
-    plugin.register(api as never);
+    plugin.register(api);
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
@@ -66,21 +66,41 @@ describe("acpx plugin", () => {
     params.openKeyedStore({ namespace: "test", maxEntries: 1 });
     expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
     expect(api.registerService).toHaveBeenCalledWith(service);
-    expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock);
+    expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
+      timeoutMs: 120_000,
+    });
+  });
+
+  it("uses configured ACPX timeout for reply_dispatch hook registration", () => {
+    const service = { id: "acpx-service", start: vi.fn() };
+    createAcpxRuntimeServiceMock.mockReturnValue(service);
+
+    const api = createTestPluginApi({
+      pluginConfig: { timeoutSeconds: 180 },
+      runtime: { state: { openKeyedStore: vi.fn() } } as never,
+      registerService: vi.fn(),
+      on: vi.fn(),
+    });
+
+    plugin.register(api);
+
+    expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
+      timeoutMs: 180_000,
+    });
   });
 
   it("does not touch runtime state while registering metadata-only plugin APIs", () => {
     const service = { id: "acpx-service", start: vi.fn() };
     createAcpxRuntimeServiceMock.mockReturnValue(service);
 
-    const api = {
+    const api = createTestPluginApi({
       pluginConfig: {},
-      runtime: {},
+      runtime: {} as never,
       registerService: vi.fn(),
       on: vi.fn(),
-    };
+    });
 
-    expect(() => plugin.register(api as never)).not.toThrow();
+    expect(() => plugin.register(api)).not.toThrow();
     expect(api.registerService).toHaveBeenCalledWith(service);
   });
 
@@ -130,7 +150,79 @@ describe("acpx plugin", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 0, final: 1 },
     });
-    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalledWith(event, ctx);
+    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalledWith(event, {
+      ...ctx,
+      abortSignal: expect.any(AbortSignal),
+    });
+  });
+
+  it("aborts the ACP reply_dispatch runtime path at the configured timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const service = { id: "acpx-service", start: vi.fn() };
+      createAcpxRuntimeServiceMock.mockReturnValue(service);
+      const observedAbortStates: boolean[] = [];
+      tryDispatchAcpReplyHookMock.mockImplementation(async (_event, hookCtx) => {
+        const abortSignal = (hookCtx as { abortSignal?: AbortSignal }).abortSignal;
+        if (!abortSignal) {
+          throw new Error("expected ACPX hook abort signal");
+        }
+        observedAbortStates.push(abortSignal.aborted);
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        observedAbortStates.push(abortSignal.aborted);
+        return {
+          handled: true,
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      });
+
+      const on = vi.fn();
+      const api = createTestPluginApi({
+        pluginConfig: { timeoutSeconds: 0.001 },
+        runtime: { state: { openKeyedStore: vi.fn() } } as never,
+        registerService: vi.fn(),
+        on,
+      });
+
+      plugin.register(api);
+
+      const hook = on.mock.calls.find(([hookName]) => hookName === "reply_dispatch")?.[1];
+      if (!hook) {
+        throw new Error("expected reply_dispatch hook to be registered");
+      }
+
+      const run = hook(
+        {
+          ctx: { raw: "reply ctx" },
+          runId: "run-1",
+          sessionKey: "agent:test:session",
+          inboundAudio: false,
+          shouldRouteToOriginating: false,
+          shouldSendToolSummaries: true,
+          sendPolicy: "allow",
+        },
+        {
+          cfg: {},
+          dispatcher: { dispatch: vi.fn(), getQueuedCounts: vi.fn(), getFailedCounts: vi.fn() },
+          recordProcessed: vi.fn(),
+          markIdle: vi.fn(),
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(run).resolves.toEqual({
+        handled: true,
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      });
+      expect(observedAbortStates).toEqual([false, true]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("declares setup auto-enable reasons for ACPX-owned ACP config", () => {

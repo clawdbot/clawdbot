@@ -1,4 +1,5 @@
 // Github Copilot plugin module implements embeddings behavior.
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -7,11 +8,17 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import { resolveGithubCopilotDomain } from "./domain.js";
+import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 
@@ -27,8 +34,10 @@ const PREFERRED_MODELS = [
 const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
   ...buildCopilotIdeHeaders(),
+  "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
 };
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
@@ -50,28 +59,33 @@ type CopilotModelEntry = {
 type GitHubCopilotEmbeddingClient = {
   githubToken: string;
   model: string;
+  runtimeAuth?: { apiKey: string; baseUrl: string };
   baseUrl?: string;
   headers?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  githubDomain?: string;
 };
 
 function isCopilotSetupError(err: unknown): boolean {
+  if (err instanceof CopilotRuntimeAuthError) {
+    return true;
+  }
   if (!(err instanceof Error)) {
     return false;
   }
   // All Copilot-specific setup failures should allow auto-selection to
   // fall through to the next provider (e.g. OpenAI). This covers: missing
-  // GitHub token, token exchange failures, no embedding models on the plan,
+  // GitHub token, authentication failures, no embedding models on the plan,
   // model discovery errors, and user-pinned model not available on Copilot.
   return (
     err.message.includes("No GitHub token available") ||
-    err.message.includes("Copilot token exchange failed") ||
-    err.message.includes("Copilot token response") ||
+    err.message.includes("Copilot user response") ||
     err.message.includes("No embedding models available") ||
     err.message.includes("GitHub Copilot model discovery") ||
+    err.message.includes("github-copilot.model-discovery") ||
     err.message.includes("GitHub Copilot embedding model") ||
-    err.message.includes("Unexpected response from GitHub Copilot token endpoint")
+    err.message.includes("Unexpected response from GitHub Copilot user endpoint")
   );
 }
 
@@ -97,15 +111,14 @@ async function discoverEmbeddingModels(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+      // Copilot requests carry a bearer token, so reflected upstream text must
+      // be sanitized independently of the operator's log-redaction setting.
+      const detail = redactToolPayloadText(
+        await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+      );
       throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new Error("GitHub Copilot model discovery returned invalid JSON");
-    }
+    const payload = await readProviderJsonResponse(response, "github-copilot.model-discovery");
     const allModels = Array.isArray((payload as { data?: unknown })?.data)
       ? ((payload as { data: CopilotModelEntry[] }).data ?? [])
       : [];
@@ -152,8 +165,9 @@ function pickBestModel(available: string[], userModel?: string): string {
       return preferred;
     }
   }
-  if (available.length > 0) {
-    return available[0];
+  const [firstAvailable] = available;
+  if (firstAvailable) {
+    return firstAvailable;
   }
   throw new Error("No embedding models available from GitHub Copilot");
 }
@@ -202,18 +216,21 @@ async function resolveGitHubCopilotEmbeddingSession(client: GitHubCopilotEmbeddi
   baseUrl: string;
   headers: Record<string, string>;
 }> {
-  const token = await resolveCopilotApiToken({
-    githubToken: client.githubToken,
-    env: client.env,
-    fetchImpl: client.fetchImpl,
-  });
-  const baseUrl = client.baseUrl?.trim() || token.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
+  const auth =
+    client.runtimeAuth ??
+    (await resolveCopilotRuntimeAuth({
+      githubToken: client.githubToken,
+      env: client.env,
+      fetchImpl: client.fetchImpl,
+      githubDomain: client.githubDomain,
+    }));
+  const baseUrl = client.baseUrl?.trim() || auth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
   return {
     baseUrl,
     headers: {
       ...COPILOT_HEADERS_STATIC,
       ...client.headers,
-      Authorization: `Bearer ${token.token}`,
+      Authorization: `Bearer ${auth.apiKey}`,
     },
   };
 }
@@ -228,30 +245,28 @@ async function createGitHubCopilotEmbeddingProvider(
       return [];
     }
 
-    const session = await resolveGitHubCopilotEmbeddingSession(client);
-    const url = `${session.baseUrl.replace(/\/$/, "")}/embeddings`;
+    const url = `${initialSession.baseUrl.replace(/\/$/, "")}/embeddings`;
     return await withRemoteHttpResponse({
       url,
       fetchImpl: client.fetchImpl,
-      ssrfPolicy: buildRemoteBaseUrlPolicy(session.baseUrl),
+      ssrfPolicy: buildRemoteBaseUrlPolicy(initialSession.baseUrl),
       signal,
       init: {
         method: "POST",
-        headers: session.headers,
+        headers: initialSession.headers,
         body: JSON.stringify({ model: client.model, input }),
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+          const detail = redactToolPayloadText(
+            await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+          );
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
 
-        let payload: unknown;
-        try {
-          payload = await response.json();
-        } catch {
-          throw new Error("GitHub Copilot embeddings returned invalid JSON");
-        }
+        const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
+          maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
+        });
         return parseGitHubCopilotEmbeddingPayload(payload, input.length);
       },
     });
@@ -282,28 +297,48 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
   create: async (options) => {
-    const remoteGithubToken = await resolveConfiguredSecretInputString({
-      config: options.config,
-      env: process.env,
+    const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
     });
-    const { githubToken: profileGithubToken } = await resolveFirstGithubToken({
-      agentDir: options.agentDir,
-      config: options.config,
-      env: process.env,
-    });
-    const githubToken = remoteGithubToken.value || profileGithubToken;
-    if (!githubToken) {
+    const customBaseUrl = options.remote?.baseUrl?.trim();
+    const customRuntimeAuth = customBaseUrl
+      ? (() => {
+          if (!explicitValue) {
+            throw new Error(
+              "GitHub Copilot memory custom baseUrl requires an explicit memory.search.remote.apiKey",
+            );
+          }
+          return { apiKey: explicitValue, baseUrl: customBaseUrl };
+        })()
+      : undefined;
+    const value = explicitValue
+      ? explicitValue
+      : (
+          await resolveFirstGithubToken({
+            agentDir: options.agentDir,
+            config: options.config,
+            env: process.env,
+          })
+        ).githubToken;
+    if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
-    const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
-      githubToken,
+    const githubDomain = resolveGithubCopilotDomain({
       env: process.env,
+      config: options.config,
     });
-    const baseUrl =
-      options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
+    // A custom endpoint owns its own explicit credential. Never resolve a
+    // durable GitHub token and then forward it to an operator-supplied host.
+    const runtimeAuth =
+      customRuntimeAuth ??
+      (await resolveCopilotRuntimeAuth({
+        githubToken: value,
+        env: process.env,
+        githubDomain,
+      }));
+    const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
     const ssrfPolicy = buildSsrfPolicy(baseUrl);
 
     // Always discover models even when the user pins one: this validates
@@ -311,7 +346,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     // we attempt any embedding requests.
     const availableModels = await discoverEmbeddingModels({
       baseUrl,
-      copilotToken,
+      copilotToken: runtimeAuth.apiKey,
       headers: options.remote?.headers,
       ssrfPolicy,
     });
@@ -323,7 +358,9 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       baseUrl,
       env: process.env,
       fetchImpl: fetch,
-      githubToken,
+      githubToken: value,
+      runtimeAuth,
+      githubDomain,
       headers: options.remote?.headers,
       model,
     });

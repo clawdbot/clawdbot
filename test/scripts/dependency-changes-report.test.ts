@@ -60,18 +60,16 @@ describe("dependency-changes-report", () => {
     ]);
   });
 
-  it("treats shrinkwrap and package-lock as dependency files", () => {
-    expect(isDependencyFile("npm-shrinkwrap.json")).toBe(true);
-    expect(isDependencyFile("extensions/discord/npm-shrinkwrap.json")).toBe(true);
-    expect(isDependencyFile("package-lock.json")).toBe(true);
-    expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(true);
+  it("treats committed dependency locks as dependency files", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
+    expect(isDependencyFile(".github/release/clawhub-cli/package-lock.json")).toBe(true);
+    expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(false);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
   });
 
-  it("includes plugin shrinkwrap files in git diff pathspecs", () => {
-    expect(dependencyDiffPathspecs()).toContain("extensions/*/package-lock.json");
-    expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
+  it("includes committed dependency locks in git diff pathspecs", () => {
+    expect(dependencyDiffPathspecs()).toContain("pnpm-lock.yaml");
+    expect(dependencyDiffPathspecs()).toContain(".github/release/clawhub-cli/package-lock.json");
   });
 
   it("rejects missing report artifact path option values", () => {
@@ -86,6 +84,24 @@ describe("dependency-changes-report", () => {
       expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
+  });
+
+  it("rejects duplicate and conflicting dependency report inputs", () => {
+    for (const flag of [
+      "--root",
+      "--base-ref",
+      "--base-lockfile",
+      "--head-lockfile",
+      "--json",
+      "--markdown",
+    ]) {
+      expect(() => parseArgs(["--base-ref", "main", flag, "one", flag, "two"])).toThrow(
+        `${flag} was provided more than once.`,
+      );
+    }
+    expect(() => parseArgs(["--base-ref", "main", "--base-lockfile", "base-lock.yaml"])).toThrow(
+      "Use either --base-ref or --base-lockfile, not both.",
+    );
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {

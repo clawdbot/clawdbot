@@ -1,6 +1,7 @@
 // Provider-index normalization tests cover preview catalogs, install metadata, auth choices, and malformed input.
 import { describe, expect, it } from "vitest";
-import { loadOpenClawProviderIndex, normalizeOpenClawProviderIndex } from "./index.js";
+import { loadOpenClawProviderIndex } from "./index.js";
+import { normalizeOpenClawProviderIndex } from "./normalize.js";
 
 describe("OpenClaw provider index", () => {
   it("normalizes provider preview catalog rows through model catalog validation", () => {
@@ -149,6 +150,15 @@ describe("OpenClaw provider index", () => {
       (model) => model.id === "kimi-k2.6",
     );
     expect(kimi?.status).toBe("preview");
+    const kimiK3 = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k3",
+    );
+    expect(kimiK3).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1048576,
+      status: "preview",
+    });
     const kimiCode = index.providers.moonshot?.previewCatalog?.models.find(
       (model) => model.id === "kimi-k2.7-code",
     );
@@ -158,10 +168,27 @@ describe("OpenClaw provider index", () => {
       contextWindow: 262144,
       status: "preview",
     });
-    expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
-    const deepseekChat = index.providers.deepseek?.previewCatalog?.models.find(
-      (model) => model.id === "deepseek-chat",
+    const kimiCodeHighSpeed = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.7-code-highspeed",
     );
-    expect(deepseekChat?.contextWindow).toBe(131072);
+    expect(kimiCodeHighSpeed).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      status: "preview",
+    });
+    expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
+    expect(
+      index.providers.deepseek?.previewCatalog?.models.map(({ id, reasoning, contextWindow }) => ({
+        id,
+        reasoning,
+        contextWindow,
+      })),
+    ).toEqual([
+      { id: "deepseek-v4-flash", reasoning: true, contextWindow: 1000000 },
+      { id: "deepseek-v4-pro", reasoning: true, contextWindow: 1000000 },
+      { id: "deepseek-chat", reasoning: undefined, contextWindow: 1000000 },
+      { id: "deepseek-reasoner", reasoning: true, contextWindow: 1000000 },
+    ]);
   });
 });

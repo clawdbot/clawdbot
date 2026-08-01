@@ -5,36 +5,34 @@
  */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-  updateSessionStore,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
+import {
+  resolveCompletionFromSessionEntry,
+  resolveSubagentRunOrphanReason,
+  type SubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
-
+export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 export const MAX_ANNOUNCE_RETRY_COUNT = 3;
@@ -42,9 +40,6 @@ export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
-
-/** Why a registry run can no longer be matched to a live child session. */
-type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
 
 /** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
@@ -61,7 +56,7 @@ export function capFrozenResultText(resultText: string): string {
     0,
     FROZEN_RESULT_TEXT_MAX_BYTES - Buffer.byteLength(notice, "utf8"),
   );
-  const payload = Buffer.from(trimmed, "utf8").subarray(0, maxPayloadBytes).toString("utf8");
+  const payload = truncateUtf8Prefix(trimmed, maxPayloadBytes);
   return `${payload}${notice}`;
 }
 
@@ -76,7 +71,9 @@ export function resolveAnnounceRetryDelayMs(retryCount: number) {
 
 function formatAnnounceGiveUpLogField(value: string): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return JSON.stringify(normalized.length > 2_000 ? `${normalized.slice(0, 2_000)}…` : normalized);
+  return JSON.stringify(
+    normalized.length > 2_000 ? `${truncateUtf16Safe(normalized, 2_000)}…` : normalized,
+  );
 }
 
 /** Logs a sanitized final give-up line for failed subagent announce delivery. */
@@ -94,24 +91,11 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
-// Session keys may differ only by casing after legacy writes. Prefer exact
-// matches, then fall back to normalized lookup for recovery paths.
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 /** Persists child session timing/status derived from the subagent registry row. */
-export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
+export async function persistSubagentSessionTiming(
+  entry: SubagentRunRecord,
+  options?: { isCurrentGeneration?: () => boolean },
+) {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey) {
     return;
@@ -129,77 +113,62 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await updateSessionStore(storePath, (store) => {
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return;
-    }
+  await patchSessionEntry(
+    { storePath, sessionKey: childSessionKey },
+    (sessionEntry) => {
+      // Recheck under the session-store write lock. A completion may have
+      // waited behind a steer/restart that transferred this session's ownership.
+      if (options?.isCurrentGeneration && !options.isCurrentGeneration()) {
+        return null;
+      }
+      if (status === "killed") {
+        const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
+          notBeforeMs: entry.startedAt ?? entry.createdAt,
+        });
+        if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
+          // A provider result already reached durable session state. The kill
+          // marker is provisional and must not erase restart reconciliation evidence
+          // or leave the session looking aborted after that completion won.
+          if (sessionEntry.abortedLastRun !== true) {
+            return null;
+          }
+          const completedEntry = { ...sessionEntry };
+          delete completedEntry.abortedLastRun;
+          return completedEntry;
+        }
+      }
+      const next = { ...sessionEntry };
 
-    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-      sessionEntry.startedAt = startedAt;
-    } else {
-      delete sessionEntry.startedAt;
-    }
+      if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+        next.startedAt = startedAt;
+      } else {
+        delete next.startedAt;
+      }
 
-    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-      sessionEntry.endedAt = endedAt;
-    } else {
-      delete sessionEntry.endedAt;
-    }
+      if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+        next.endedAt = endedAt;
+      } else {
+        delete next.endedAt;
+      }
 
-    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      sessionEntry.runtimeMs = runtimeMs;
-    } else {
-      delete sessionEntry.runtimeMs;
-    }
+      if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+        next.runtimeMs = runtimeMs;
+      } else {
+        delete next.runtimeMs;
+      }
 
-    if (status) {
-      sessionEntry.status = status;
-    } else {
-      delete sessionEntry.status;
-    }
-  });
-}
-
-/** Resolves whether a registry row is orphaned from its child session entry. */
-export function resolveSubagentRunOrphanReason(params: {
-  entry: SubagentRunRecord;
-  storeCache?: Map<string, Record<string, SessionEntry>>;
-  includeStaleUnended?: boolean;
-  now?: number;
-}): SubagentRunOrphanReason | null {
-  const childSessionKey = params.entry.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return "missing-session-entry";
-  }
-  try {
-    const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    let store = params.storeCache?.get(storePath);
-    if (!store) {
-      store = loadSessionStore(storePath);
-      params.storeCache?.set(storePath, store);
-    }
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return "missing-session-entry";
-    }
-    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
-      return "missing-session-id";
-    }
-    if (
-      params.includeStaleUnended === true &&
-      sessionEntry.abortedLastRun !== true &&
-      isStaleUnendedSubagentRun(params.entry, params.now)
-    ) {
-      return "stale-unended-run";
-    }
-    return null;
-  } catch {
-    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
-    return null;
-  }
+      if (status) {
+        next.status = status;
+      } else {
+        delete next.status;
+      }
+      if (status && status !== "killed") {
+        delete next.abortedLastRun;
+      }
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }
 
 // Attachment cleanup must stay within the recorded root even if paths were
@@ -212,9 +181,9 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
+    return true;
   }
 
   const resolveReal = async (targetPath: string): Promise<string | null> => {
@@ -234,17 +203,18 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
       resolveReal(entry.attachmentsDir),
     ]);
     if (!dirReal) {
-      return;
+      return true;
     }
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
     if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return;
+      return false;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+    return true;
   } catch {
-    // best effort
+    return false;
   }
 }
 
@@ -343,13 +313,25 @@ export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const storeCache = new Map<string, Record<string, SessionEntry>>();
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
+    if (entry.collect && entry.collectorCompletion) {
+      // Waitable collector tombstones intentionally outlive delete-mode sessions.
+      continue;
+    }
+    if (entry.requesterSettleWake) {
+      // Requester-settle outbox rows can intentionally outlive delete-mode
+      // child sessions. Restore replays the obligation before retiring them.
+      continue;
+    }
+    if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
+      // Provider completion or interrupted recovery still owns these rows.
+      // Their bounded reconciliation runs even when the session vanished.
+      continue;
+    }
     const orphanReason = resolveSubagentRunOrphanReason({
       entry,
-      storeCache,
       includeStaleUnended: true,
       now,
     });
@@ -373,7 +355,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 /** Resolves the completed subagent archive delay from config. */
-export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
@@ -385,4 +367,52 @@ export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+/** Resolves the archive deadline for one newly registered run. */
+export function resolveSubagentArchiveAtMs(params: {
+  cfg?: OpenClawConfig;
+  now: number;
+  spawnMode: "run" | "session";
+  cleanup: "keep" | "delete";
+  collect?: boolean;
+}): number | undefined {
+  if (params.spawnMode === "session" || params.collect || params.cleanup === "keep") {
+    return undefined;
+  }
+  const archiveAfterMs = resolveArchiveAfterMs(params.cfg);
+  return archiveAfterMs ? params.now + archiveAfterMs : undefined;
+}
+
+/** Backfills the retention deadline added after collector groups first shipped. */
+export function backfillCollectorArchiveAtMs(
+  entry: SubagentRunRecord,
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!entry.collect) {
+    return false;
+  }
+  const endedAt =
+    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+  const capturedAt =
+    endedAt === undefined && !entry.collectorCompletion
+      ? undefined
+      : typeof entry.completion?.capturedAt === "number" &&
+          Number.isFinite(entry.completion.capturedAt)
+        ? entry.completion.capturedAt
+        : endedAt;
+  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+  const expectedArchiveAt =
+    capturedAt !== undefined && archiveAfterMs !== undefined
+      ? capturedAt + archiveAfterMs
+      : undefined;
+  if (entry.archiveAtMs === expectedArchiveAt) {
+    return false;
+  }
+  if (expectedArchiveAt === undefined) {
+    delete entry.archiveAtMs;
+  } else {
+    entry.archiveAtMs = expectedArchiveAt;
+  }
+  return true;
 }

@@ -11,6 +11,7 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../auto-reply/tokens.js";
+import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -27,10 +28,12 @@ import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
-  resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  resolveAnnounceOrigin,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -105,7 +108,7 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
   );
 }
 
-function hasUsableSessionEntry(entry: unknown): boolean {
+export function hasUsableSessionEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
   }
@@ -227,6 +230,9 @@ async function wakeSubagentRunAfterDescendants(params: {
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     preserveFrozenResultFallback: true,
+    // Persist the wake message as the replacement run's task so that any
+    // post-restart redispatch reconstructs the correct prompt.
+    task: wakeMessage,
   });
 }
 
@@ -257,6 +263,7 @@ export async function runSubagentAnnounceFlow(params: {
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onBeforeDeleteChildSession?: () => boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -437,10 +444,24 @@ export async function runSubagentAnnounceFlow(params: {
         if (fallbackReply && !fallbackIsSilent) {
           const cleaned = stripAndClassifyReply(fallbackReply);
           if (cleaned === null) {
+            if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+              logWarn(
+                `cron job completion for session=${targetRequesterSessionKey} ` +
+                  `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                  `the agent replied with the skip sentinel instead of delivering a result`,
+              );
+            }
             return true;
           }
           reply = cleaned;
         } else {
+          if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+            logWarn(
+              `cron job completion for session=${targetRequesterSessionKey} ` +
+                `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                `the agent replied with the skip sentinel instead of delivering a result`,
+            );
+          }
           return true;
         }
       } else if (reply) {
@@ -554,6 +575,14 @@ export async function runSubagentAnnounceFlow(params: {
           })
         : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    let deliveryResultReported = false;
+    const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
+      if (deliveryResultReported) {
+        return;
+      }
+      deliveryResultReported = true;
+      params.onDeliveryResult?.(delivery);
+    };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -576,10 +605,11 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
     });
-    params.onDeliveryResult?.(delivery);
-    didAnnounce = delivery.delivered;
+    reportDeliveryResult(delivery);
+    didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
@@ -589,19 +619,9 @@ export async function runSubagentAnnounceFlow(params: {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // Patch label after all writes complete
-    if (params.label) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.patch",
-          params: { key: params.childSessionKey, label: params.label },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort
-      }
-    }
-    if (shouldDeleteChildSession) {
+    // The spawn label is persisted at run start (agent request `label` →
+    // buildAgentSessionPatch), so no post-run label patch is needed here.
+    if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
       await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,
         childSessionKey: params.childSessionKey,
@@ -641,4 +661,3 @@ export const testing = {
       : defaultSubagentAnnounceDeps;
   },
 };
-export { testing as __testing };

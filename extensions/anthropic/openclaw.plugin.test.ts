@@ -2,26 +2,37 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+type AnthropicCatalogModel = {
+  id?: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  mediaInput?: {
+    image?: {
+      maxSidePx?: number;
+      preferredSidePx?: number;
+      tokenMode?: string;
+    };
+  };
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  thinkingLevelMap?: Record<string, string | null>;
+  status?: string;
+  replacedBy?: string;
+  compat?: { codeMode?: string };
+};
+
 type AnthropicManifest = {
   modelCatalog?: {
     providers?: {
-      anthropic?: {
-        models?: Array<{
-          id?: string;
-          name?: string;
-          reasoning?: boolean;
-          input?: string[];
-          mediaInput?: {
-            image?: {
-              maxSidePx?: number;
-              preferredSidePx?: number;
-              tokenMode?: string;
-            };
-          };
-          contextWindow?: number;
-          maxTokens?: number;
-        }>;
-      };
+      anthropic?: { models?: AnthropicCatalogModel[] };
+      "claude-cli"?: { models?: AnthropicCatalogModel[] };
     };
     discovery?: Record<string, string>;
   };
@@ -32,26 +43,111 @@ const manifest = JSON.parse(
 ) as AnthropicManifest;
 
 describe("Anthropic plugin manifest", () => {
-  it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
-    expect(manifest.modelCatalog?.discovery?.anthropic).toBe("static");
+  it("flags every static Anthropic API model as code-mode preferred", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) {
+      expect(model.compat?.codeMode, model.id).toBe("preferred");
+    }
+  });
+
+  it("publishes the exact Claude Opus 5 API contract", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
+    });
+  });
+
+  it("publishes the exact Claude Sonnet 5 API contract", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-sonnet-5")).toEqual({
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
+    });
+  });
+
+  it("publishes the exact Claude Opus 5 API contract", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
+    });
+    // Opus 5's 1M window is the model default, so the CLI row is not clamped to 200k.
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    expect(cliModels.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("declares Opus 4.8 limits without overstating bare Claude CLI context", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+    });
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+    });
+  });
+
+  it("keeps only the dateless Claude Haiku 4.5 identifier in the static catalog", () => {
+    expect(manifest.modelCatalog?.discovery?.anthropic).toBe("refreshable");
 
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
-    for (const id of ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]) {
-      expect(models.find((model) => model.id === id)).toEqual({
-        id,
-        name: "Claude Haiku 4.5",
-        reasoning: true,
-        input: ["text", "image"],
-        mediaInput: {
-          image: {
-            maxSidePx: 1568,
-            preferredSidePx: 1568,
-            tokenMode: "provider",
-          },
+    expect(models.find((model) => model.id === "claude-haiku-4-5")).toEqual({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: {
+          maxSidePx: 1568,
+          preferredSidePx: 1568,
+          tokenMode: "provider",
         },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      });
-    }
+      },
+      contextWindow: 200000,
+      maxTokens: 64000,
+      compat: { codeMode: "preferred" },
+    });
+    expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });
 });

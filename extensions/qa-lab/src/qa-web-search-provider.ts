@@ -7,9 +7,12 @@ import {
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  createQaLabWebSearchProviderBase,
+  QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
+} from "./qa-web-search-provider.shared.js";
 
-export const QA_LAB_WEB_SEARCH_PROVIDER_ID = "qa-lab-search";
-export const QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY = "OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT";
+export { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "./qa-web-search-provider.shared.js";
 
 const QaLabWebSearchSchema = {
   type: "object",
@@ -44,21 +47,7 @@ function buildQaLabSearchResult(query: string, index: number) {
 
 export function createQaLabWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: QA_LAB_WEB_SEARCH_PROVIDER_ID,
-    label: "QA Lab Search",
-    hint: "Deterministic QA-only web search fixture",
-    requiresCredential: false,
-    envVars: [],
-    placeholder: "(no key needed)",
-    signupUrl: "https://docs.openclaw.ai/concepts/qa-e2e-automation",
-    docsUrl: "https://docs.openclaw.ai/concepts/qa-e2e-automation",
-    credentialPath: "",
-    inactiveSecretPaths: [],
-    getCredentialValue: () => undefined,
-    setCredentialValue: (searchConfigTarget, value) => {
-      void searchConfigTarget;
-      void value;
-    },
+    ...createQaLabWebSearchProviderBase(),
     createTool: () => ({
       description:
         "Search a deterministic QA Lab fixture corpus. This provider is for QA runtime parity only and never calls the public web.",

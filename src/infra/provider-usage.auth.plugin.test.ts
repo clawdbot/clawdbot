@@ -15,6 +15,9 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn(() => ({
   profiles: {},
 }));
 const resolveAuthProfileOrderMock = vi.fn((_params: unknown): string[] => []);
+const resolveApiKeyForProfileMock = vi.fn(
+  async (..._args: unknown[]): Promise<{ apiKey: string; provider: string } | null> => null,
+);
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
@@ -23,7 +26,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
     ensureAuthProfileStoreWithoutExternalProfilesMock(),
   hasAnyAuthProfileStoreSource: () => hasAnyAuthProfileStoreSourceMock(),
   listProfilesForProvider: () => [],
-  resolveApiKeyForProfile: async () => null,
+  resolveApiKeyForProfile: (...args: unknown[]) => resolveApiKeyForProfileMock(...args),
   resolveAuthProfileOrder: (params: unknown) => resolveAuthProfileOrderMock(params),
 }));
 
@@ -45,21 +48,35 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
         origin: "bundled",
         providers: ["minimax", "minimax-portal"],
       },
+      {
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerUsageAuthEnvVars: {
+          openai: ["OPENAI_ADMIN_KEY"],
+        },
+      },
     ],
   }),
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  resolveProviderAuthEvidence: () => ({}),
+  listKnownProviderAuthEnvVarNames: () => [
+    "ANTHROPIC_API_KEY",
+    "MINIMAX_CODE_PLAN_KEY",
+    "OPENAI_API_KEY",
+  ],
   resolveProviderAuthEnvVarCandidates: () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
+    openai: ["OPENAI_API_KEY"],
   }),
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {
       anthropic: ["ANTHROPIC_API_KEY"],
       minimax: ["MINIMAX_CODE_PLAN_KEY"],
+      openai: ["OPENAI_API_KEY"],
     },
     authEvidenceMap: {},
   }),
@@ -111,6 +128,8 @@ describe("resolveProviderAuths plugin boundary", () => {
     });
     resolveAuthProfileOrderMock.mockReset();
     resolveAuthProfileOrderMock.mockReturnValue([]);
+    resolveApiKeyForProfileMock.mockReset();
+    resolveApiKeyForProfileMock.mockResolvedValue(null);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
@@ -131,6 +150,58 @@ describe("resolveProviderAuths plugin boundary", () => {
       },
     ]);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves SecretRef-backed profiles before provider credential classification", async () => {
+    const store = {
+      profiles: {
+        "anthropic:admin": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: { source: "env", id: "ANTHROPIC_ADMIN_KEY" },
+        },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValue(store as never);
+    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:admin"]);
+    resolveApiKeyForProfileMock.mockResolvedValue({
+      apiKey: "sk-ant-admin-secretref",
+      provider: "anthropic",
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          resolveApiKeyCandidatesFromConfigAndStore?: (params?: {
+            providerIds?: string[];
+          }) => Promise<string[]>;
+        };
+      };
+      const candidates =
+        (await params.context.resolveApiKeyCandidatesFromConfigAndStore?.({
+          providerIds: ["anthropic"],
+        })) ?? [];
+      expect(candidates).toEqual(["sk-ant-admin-secretref"]);
+      return candidates[0] ? { token: candidates[0] } : null;
+    });
+
+    const result = await resolveProviderAuthsForTest({
+      providers: ["anthropic"],
+      agentDir: "/tmp/openclaw-agent",
+    });
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+    expect(resolveAuthProfileOrderMock).toHaveBeenCalled();
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith({
+      cfg: {},
+      store,
+      profileId: "anthropic:admin",
+      agentDir: "/tmp/openclaw-agent",
+    });
+    expect(result).toEqual([
+      {
+        provider: "anthropic",
+        token: "sk-ant-admin-secretref",
+      },
+    ]);
   });
 
   it("does not synthesize Codex app-server auth for generic OpenAI usage", async () => {
@@ -266,6 +337,58 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["minimax"]);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an OAuth-default provider route an API key through its billing hook", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "encoded-openai-admin-token",
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["openai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: {
+            HOME: homeDir,
+            OPENAI_API_KEY: "sk-admin-test",
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "openai",
+          token: "encoded-openai-admin-token",
+        },
+      ]);
+    });
+
+    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openai"]);
+  });
+
+  it("detects provider-owned usage credentials without routing them into inference auth", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "encoded-openai-admin-token",
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["openai"],
+          skipPluginAuthWithoutCredentialSource: true,
+          env: {
+            HOME: homeDir,
+            OPENAI_ADMIN_KEY: "sk-admin-test",
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "openai",
+          token: "encoded-openai-admin-token",
+        },
+      ]);
+    });
+
+    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openai"]);
   });
 
   it("does not overlay external auth profiles while checking the skip gate", async () => {

@@ -22,7 +22,7 @@ export function loadAgentTurnMediaRuntime() {
 }
 
 /** Runtime surface needed to resolve agent-turn media attachments. */
-export type AgentTurnAttachmentRuntime = Pick<
+type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
   | "isMediaUnderstandingSkipError"
@@ -50,8 +50,10 @@ export async function resolveAgentTurnAttachments(params: {
   cfg: OpenClawConfig;
   runtime?: AgentTurnAttachmentRuntime;
   includeRecentHistoryImages?: boolean;
+  includeAttachmentIndexes?: boolean;
 }): Promise<{
   attachments: AgentTurnAttachment[];
+  attachmentIndexes?: number[];
   recentHistoryImages: RecentInboundHistoryImage[];
 }> {
   const includeRecentHistoryImages = params.includeRecentHistoryImages ?? true;
@@ -94,6 +96,7 @@ export async function resolveAgentTurnAttachments(params: {
     }),
   });
   const results: AgentTurnAttachment[] = [];
+  const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
     const mediaType = attachment.mime ?? "application/octet-stream";
@@ -113,6 +116,7 @@ export async function resolveAgentTurnAttachments(params: {
         mediaType,
         data: buffer.toString("base64"),
       });
+      resultIndexes.push(attachment.index);
       const historyImage = historyAttachmentByIndex.get(attachment.index);
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
@@ -149,7 +153,11 @@ export async function resolveAgentTurnAttachments(params: {
       await resolveImageAttachment(attachment);
     }
   }
-  return { attachments: results, recentHistoryImages: resolvedHistoryImages };
+  return {
+    attachments: results,
+    ...(params.includeAttachmentIndexes ? { attachmentIndexes: resultIndexes } : {}),
+    recentHistoryImages: resolvedHistoryImages,
+  };
 }
 
 /** Converts inline image content into ACP attachment payloads. */

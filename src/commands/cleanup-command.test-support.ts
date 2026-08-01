@@ -6,9 +6,15 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 const resolveCleanupPlanFromDisk = vi.fn();
 const removePath = vi.fn();
 const listAgentSessionDirs = vi.fn();
+export const prepareLegacyWorkspaceStateReset = vi.fn();
+export const removeLegacyWorkspaceStateForReset = vi.fn();
 export const removeStateAndLinkedPaths = vi.fn();
-const removeWorkspaceDirs = vi.fn();
-export const removeWorkspaceAttestationPaths = vi.fn();
+export const removeWorkspaceDirs = vi.fn();
+
+vi.mock("../agents/workspace-legacy-state.js", () => ({
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+}));
 
 vi.mock("../config/config.js", () => ({
   isNixMode: false,
@@ -22,7 +28,6 @@ vi.mock("./cleanup-utils.js", () => ({
   removePath,
   listAgentSessionDirs,
   removeStateAndLinkedPaths,
-  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 }));
 
@@ -42,9 +47,10 @@ export function resetCleanupCommandMocks() {
   });
   removePath.mockResolvedValue({ ok: true });
   listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
-  removeStateAndLinkedPaths.mockResolvedValue(undefined);
+  prepareLegacyWorkspaceStateReset.mockImplementation((workspaceDir: string) => ({ workspaceDir }));
+  removeLegacyWorkspaceStateForReset.mockResolvedValue({ removedPaths: [], warnings: [] });
+  removeStateAndLinkedPaths.mockResolvedValue(true);
   removeWorkspaceDirs.mockResolvedValue(undefined);
-  removeWorkspaceAttestationPaths.mockResolvedValue(undefined);
 }
 
 export function silenceCleanupCommandRuntime(runtime: RuntimeEnv) {

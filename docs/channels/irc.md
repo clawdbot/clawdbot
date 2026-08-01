@@ -17,8 +17,7 @@ Install the official IRC plugin, then configure it under `channels.irc`.
 openclaw plugins install @openclaw/irc
 ```
 
-2. Enable IRC config in `~/.openclaw/openclaw.json`.
-3. Set at least:
+2. Set at least host, nick, and the channels to join in `~/.openclaw/openclaw.json`:
 
 ```json5
 {
@@ -35,18 +34,38 @@ openclaw plugins install @openclaw/irc
 }
 ```
 
-Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
-
-4. Start/restart gateway:
+3. Start/restart the Gateway:
 
 ```bash
 openclaw gateway run
 ```
 
+Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
+
+## Inbound durability
+
+OpenClaw writes each accepted IRC `PRIVMSG` to its durable ingress queue before normal policy checks and agent dispatch. Pending or retryable messages survive a Gateway restart and remain serialized per channel or direct-message peer.
+
+IRC does not provide a replayable delivery ID or resend messages missed by a disconnected client. OpenClaw therefore assigns a local ID that is stable only within the current TCP connection. The queue protects the local accept-to-dispatch window; it cannot recover a message that never reached OpenClaw or deduplicate a server resend across connections.
+
+## Connection settings
+
+| Key                           | Default                       | Notes                                                       |
+| ----------------------------- | ----------------------------- | ----------------------------------------------------------- |
+| `host`                        | none (required)               | IRC server hostname                                         |
+| `port`                        | `6697` with TLS, `6667` plain | 1-65535                                                     |
+| `tls`                         | `true`                        | Set `false` only for intentional plaintext                  |
+| `nick`                        | none (required)               | Bot nick                                                    |
+| `username`                    | nick, else `openclaw`         | IRC username                                                |
+| `realname`                    | `OpenClaw`                    | Realname/GECOS field                                        |
+| `password` / `passwordFile`   | none                          | Server password; file must be a regular file                |
+| `channels`                    | none                          | Channels to join (`["#openclaw"]`)                          |
+| `accounts` / `defaultAccount` | none                          | Multi-account setup; env vars fill only the default account |
+
 ## Security defaults
 
 - IRC uses raw TCP/TLS sockets outside OpenClaw operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.
-- `channels.irc.dmPolicy` defaults to `"pairing"`.
+- `channels.irc.dmPolicy` defaults to `"pairing"`: unknown DM senders get a pairing code you approve with `openclaw pairing approve irc <code>`.
 - `channels.irc.groupPolicy` defaults to `"allowlist"`.
 - With `groupPolicy="allowlist"`, set `channels.irc.groups` to define allowed channels.
 - Use TLS (`channels.irc.tls=true`) unless you intentionally accept plaintext transport.
@@ -62,7 +81,7 @@ Config keys:
 
 - DM allowlist (DM sender access): `channels.irc.allowFrom`
 - Group sender allowlist (channel sender access): `channels.irc.groupAllowFrom`
-- Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]`
+- Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]` with `requireMention`, `allowFrom`, `enabled`, `tools`, `toolsBySender`, `skills`, and `systemPrompt`
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
 
 Allowlist entries should use stable sender identities (`nick!user@host`).
@@ -79,7 +98,7 @@ If you see logs like:
 - setting `channels.irc.groupAllowFrom` (global for all channels), or
 - setting per-channel sender allowlists: `channels.irc.groups["#channel"].allowFrom`
 
-Example (allow anyone in `#tuirc-dev` to talk to the bot):
+Example (allow anyone in `#openclaw` to talk to the bot):
 
 ```json5
 {
@@ -87,7 +106,7 @@ Example (allow anyone in `#tuirc-dev` to talk to the bot):
     irc: {
       groupPolicy: "allowlist",
       groups: {
-        "#tuirc-dev": { allowFrom: ["*"] },
+        "#openclaw": { allowFrom: ["*"] },
       },
     },
   },
@@ -96,7 +115,7 @@ Example (allow anyone in `#tuirc-dev` to talk to the bot):
 
 ## Reply triggering (mentions)
 
-Even if a channel is allowed (via `groupPolicy` + `groups`) and the sender is allowed, OpenClaw defaults to **mention-gating** in group contexts.
+Even if a channel is allowed (via `groupPolicy` + `groups`) and the sender is allowed, OpenClaw defaults to **mention-gating** in group contexts. The bot counts as mentioned when the message contains the connected bot nick or matches your configured mention patterns.
 
 That means you may see logs like `drop channel … (missing-mention)` unless the message includes a mention pattern that matches the bot.
 
@@ -108,7 +127,7 @@ To make the bot reply in an IRC channel **without needing a mention**, disable m
     irc: {
       groupPolicy: "allowlist",
       groups: {
-        "#tuirc-dev": {
+        "#openclaw": {
           requireMention: false,
           allowFrom: ["*"],
         },
@@ -145,7 +164,7 @@ To reduce risk, restrict tools for that channel.
   channels: {
     irc: {
       groups: {
-        "#tuirc-dev": {
+        "#openclaw": {
           allowFrom: ["*"],
           tools: {
             deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
@@ -166,13 +185,13 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
   channels: {
     irc: {
       groups: {
-        "#tuirc-dev": {
+        "#openclaw": {
           allowFrom: ["*"],
           toolsBySender: {
             "*": {
               deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
             },
-            "id:eigen": {
+            "id:alice": {
               deny: ["gateway", "nodes", "cron"],
             },
           },
@@ -185,9 +204,8 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 
 Notes:
 
-- `toolsBySender` keys should use `id:` for IRC sender identity values:
-  `id:eigen` or `id:eigen!~eigen@174.127.248.171` for stronger matching.
-- Legacy unprefixed keys are still accepted and matched as `id:` only.
+- `toolsBySender` keys should use explicit prefixes (`channel:`, `id:`, `e164:`, `username:`, `name:`). For IRC use `id:` with the sender identity value: `id:alice` or `id:alice!~alice@203.0.113.7` for stronger matching.
+- Legacy unprefixed keys are still accepted, matched as `id:` only, and emit a deprecation warning.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).
@@ -210,7 +228,9 @@ To identify with NickServ after connect:
 }
 ```
 
-Optional one-time registration on connect:
+NickServ identify runs by default whenever a password is set (`enabled` only needs to be `false` to opt out). `service` defaults to `NickServ`; `passwordFile` is an alternative to inline `password`.
+
+Optional one-time registration on connect (`register: true` requires `registerEmail`):
 
 ```json5
 {

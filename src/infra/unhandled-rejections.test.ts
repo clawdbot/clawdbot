@@ -1,55 +1,12 @@
 // Covers transient and benign unhandled rejection classifiers.
 import { describe, expect, it } from "vitest";
 import {
-  isAbortError,
   isBenignUncaughtExceptionError,
   isTransientFileWatchError,
   isTransientNetworkError,
   isTransientSqliteError,
   isTransientUnhandledRejectionError,
 } from "./unhandled-rejections.js";
-
-describe("isAbortError", () => {
-  it("returns true for error with name AbortError", () => {
-    const error = new Error("aborted");
-    error.name = "AbortError";
-    expect(isAbortError(error)).toBe(true);
-  });
-
-  it('returns true for error with "This operation was aborted" message', () => {
-    const error = new Error("This operation was aborted");
-    expect(isAbortError(error)).toBe(true);
-  });
-
-  it("returns true for undici-style AbortError", () => {
-    // Node's undici throws errors with this exact message
-    const error = Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
-    expect(isAbortError(error)).toBe(true);
-  });
-
-  it("returns true for object with AbortError name", () => {
-    expect(isAbortError({ name: "AbortError", message: "test" })).toBe(true);
-  });
-
-  it("returns false for regular errors", () => {
-    expect(isAbortError(new Error("Something went wrong"))).toBe(false);
-    expect(isAbortError(new TypeError("Cannot read property"))).toBe(false);
-    expect(isAbortError(new RangeError("Invalid array length"))).toBe(false);
-  });
-
-  it("returns false for errors with similar but different messages", () => {
-    expect(isAbortError(new Error("Operation aborted"))).toBe(false);
-    expect(isAbortError(new Error("aborted"))).toBe(false);
-    expect(isAbortError(new Error("Request was aborted"))).toBe(false);
-  });
-
-  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
-    "returns false for non-abort input %#",
-    (value) => {
-      expect(isAbortError(value)).toBe(false);
-    },
-  );
-});
 
 describe("isTransientNetworkError", () => {
   it("returns true for errors with transient network codes", () => {
@@ -407,6 +364,10 @@ describe("isTransientUnhandledRejectionError", () => {
     const wrappedWsPreHandshakeClose = Object.assign(new Error("feishu reconnect failed"), {
       cause: wsPreHandshakeClose,
     });
+    const undiciTerminated = new TypeError("terminated");
+    const wrappedUndiciTerminated = Object.assign(new Error("model fetch failed"), {
+      cause: undiciTerminated,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -423,6 +384,10 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
     expect(isBenignUncaughtExceptionError(wsPreHandshakeClose)).toBe(true);
     expect(isBenignUncaughtExceptionError(wrappedWsPreHandshakeClose)).toBe(true);
+    expect(isBenignUncaughtExceptionError(undiciTerminated)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedUndiciTerminated)).toBe(true);
+    expect(isBenignUncaughtExceptionError(new Error("terminated"))).toBe(false);
+    expect(isBenignUncaughtExceptionError(new TypeError("terminated unexpectedly"))).toBe(false);
     expect(
       isBenignUncaughtExceptionError(
         new Error("WebSocket error: WebSocket was closed before the connection was established"),

@@ -310,6 +310,97 @@ describe("web-provider-runtime-shared", () => {
     expect(mockArg(mocks.loadOpenClawPlugins).onlyPluginIds).toEqual(["brave"]);
   });
 
+  it("uses bundled runtime artifacts before loading a plugin registry", () => {
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["provider"]);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        workspaceDir: "/workspace",
+        env: { FIRECRAWL_API_KEY: "" },
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["firecrawl"],
+        mapRegistryProviders: vi.fn(() => []),
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: "/workspace",
+      env: { FIRECRAWL_API_KEY: "" },
+      onlyPluginIds: ["firecrawl"],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plugin loading when bundled runtime artifacts do not cover the scope", () => {
+    const fallbackRegistry = { source: "fallback" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => null);
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["external-provider"],
+        mapRegistryProviders,
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: fallbackRegistry,
+      onlyPluginIds: ["external-provider"],
+    });
+  });
+
+  it("loads the plugin registry when runtime activation is explicitly requested", () => {
+    const fallbackRegistry = { source: "activated" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["artifact-provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        activate: true,
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["firecrawl"],
+        mapRegistryProviders,
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mockArg(mocks.loadOpenClawPlugins).activate).toBe(true);
+  });
+
   it("falls back to a scoped provider load when the active runtime registry has no web providers", () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };
@@ -362,6 +453,46 @@ describe("web-provider-runtime-shared", () => {
 
     expect(result).toStrictEqual([]);
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an active registry missing declared candidates as authoritative", () => {
+    // Regression: an active registry with SOME web providers used to win even when a
+    // manifest-declared candidate (npm-installed Brave with BRAVE_API_KEY set) was
+    // absent from it, so env-var auto-detect could never see the installed provider.
+    const activeRegistry = { source: "active" };
+    const scopedRegistry = { source: "scoped" };
+    const mapRegistryProviders = vi.fn(({ registry }) =>
+      registry === scopedRegistry ? ["brave", "grok"] : ["grok"],
+    );
+    mocks.getLoadedRuntimePluginRegistry.mockImplementation((args: unknown) => {
+      const requiredPluginIds = (args as { requiredPluginIds?: readonly string[] })
+        ?.requiredPluginIds;
+      // Simulate active-registry coverage: brave never loaded at startup.
+      if (requiredPluginIds?.includes("brave")) {
+        return undefined;
+      }
+      return activeRegistry as never;
+    });
+    mocks.loadOpenClawPlugins.mockReturnValue(scopedRegistry as never);
+
+    const result = resolveRuntimeWebProviders(
+      {
+        config: {},
+        env: { BRAVE_API_KEY: "key" } as never,
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave", "xai"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual(["brave", "grok"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   });
 
   it("falls back when the direct runtime registry has no web providers", () => {

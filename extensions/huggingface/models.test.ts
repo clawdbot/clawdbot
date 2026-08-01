@@ -1,4 +1,5 @@
 // Huggingface tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,7 +8,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
-import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -25,6 +25,15 @@ function stubAbortSignalTimeout() {
   return vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 }
 
+function responseFromReader(reader: ReadableStreamDefaultReader<Uint8Array>): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "Content-Type": "application/json" }),
+    body: { getReader: () => reader },
+  } as Response;
+}
+
 afterEach(() => {
   restoreEnv("VITEST", ORIGINAL_VITEST);
   restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
@@ -34,7 +43,7 @@ afterEach(() => {
 
 describe("huggingface models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {
-    const entry = HUGGINGFACE_MODEL_CATALOG[0];
+    const entry = expectDefined(HUGGINGFACE_MODEL_CATALOG[0], "first Hugging Face catalog model");
     const def = buildHuggingfaceModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
@@ -43,6 +52,12 @@ describe("huggingface models", () => {
     expect(def.cost).toEqual(entry.cost);
     expect(def.contextWindow).toBe(entry.contextWindow);
     expect(def.maxTokens).toBe(entry.maxTokens);
+  });
+
+  it("does not advertise the retired Llama 3.3 Turbo route", () => {
+    expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    );
   });
 
   it("discoverHuggingfaceModels returns static catalog when apiKey is empty", async () => {
@@ -54,7 +69,7 @@ describe("huggingface models", () => {
   it("discoverHuggingfaceModels returns static catalog in test env (VITEST)", async () => {
     const models = await discoverHuggingfaceModels("hf_test_token");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
-    expect(models[0].id).toBe("deepseek-ai/DeepSeek-R1");
+    expect(expectDefined(models[0], "first Hugging Face model").id).toBe("deepseek-ai/DeepSeek-R1");
   });
 
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {
@@ -71,7 +86,7 @@ describe("huggingface models", () => {
 
     await discoverHuggingfaceModels("hf_test_token");
 
-    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("accepts a custom discovery timeout override", async () => {
@@ -106,6 +121,78 @@ describe("huggingface models", () => {
     await discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER);
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("cancels the response body before falling back after an HTTP error", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    stubAbortSignalTimeout();
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map((model) => model.id)).toEqual(
+      HUGGINGFACE_MODEL_CATALOG.map((model) => model.id),
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the static catalog when the discovery response exceeds the byte cap", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const chunk = new Uint8Array(1024 * 1024);
+    const read = vi.fn(async () => ({ done: false as const, value: chunk }));
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const reader = {
+      read,
+      cancel,
+      releaseLock,
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromReader(reader)),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(17);
+  });
+
+  it("parses a valid bounded discovery response", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const modelId = "test-org/test-model";
+    const body = new TextEncoder().encode(JSON.stringify({ data: [{ id: modelId }] }));
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: body })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const reader = {
+      read,
+      cancel,
+      releaseLock,
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromReader(reader)),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.some((model) => model.id === modelId)).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   describe("isHuggingfacePolicyLocked", () => {

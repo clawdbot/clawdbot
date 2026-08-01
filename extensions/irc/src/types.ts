@@ -1,6 +1,6 @@
 // Irc type declarations define plugin contracts.
+import type { ChannelDeliveryStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
 import type {
-  BlockStreamingCoalesceConfig,
   DmConfig,
   DmPolicy,
   GroupPolicy,
@@ -33,6 +33,8 @@ export type IrcNickServConfig = {
 export type IrcAccountConfig = {
   name?: string;
   enabled?: boolean;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /**
    * Break-glass override: allow nick-only allowlist matching.
    * Default behavior requires host/user-qualified identities.
@@ -60,9 +62,7 @@ export type IrcAccountConfig = {
   dmHistoryLimit?: number;
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  streaming?: ChannelDeliveryStreamingConfig;
   responsePrefix?: string;
   mediaMaxMb?: number;
 };

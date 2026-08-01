@@ -5,6 +5,8 @@ export function createGatewayMethodsVitestConfig(env?: Record<string, string | u
   return createScopedVitestConfig(["src/gateway/server-methods/**/*.test.ts"], {
     dir: "src/gateway",
     env,
+    // Gateway child projects share one include file; preserve this project's ownership.
+    intersectIncludeFile: true,
     name: "gateway-methods",
   });
 }

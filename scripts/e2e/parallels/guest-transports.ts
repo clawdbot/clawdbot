@@ -1,22 +1,22 @@
 // Guest Transports script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
 
-export interface GuestExecOptions {
+interface GuestExecOptions {
   check?: boolean;
   input?: string;
   timeoutMs?: number;
 }
 
-export interface WindowsBackgroundPowerShellOptions {
+interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
   label: string;
-  logChunkBytes?: number;
   onLaunchRetry?: (message: string) => void;
   pollIntervalMs?: number;
   runCommand?: typeof run;
@@ -25,8 +25,22 @@ export interface WindowsBackgroundPowerShellOptions {
   vmName: string;
 }
 
+interface PosixBackgroundShellOptions {
+  append?: (chunk: string | Uint8Array) => void;
+  label: string;
+  pollIntervalMs?: number;
+  runCommand?: typeof run;
+  script: string;
+  timeoutMs: number;
+  transportArgs: (args: string[]) => string[];
+}
+
 function guestScriptName(extension: string): string {
   return `openclaw-parallels-${randomUUID()}.${extension}`;
+}
+
+function posixSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function appendOutput(
@@ -45,12 +59,6 @@ function timeoutBefore(deadline: number, fallbackMs: number): number {
   return Math.min(fallbackMs, Math.max(1_000, deadline - Date.now()));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function throwIfFailed(label: string, result: CommandResult, check: boolean | undefined): void {
   if (check === false || result.status === 0) {
     return;
@@ -58,7 +66,32 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+const PARALLELS_GUEST_SESSION_UNAVAILABLE = "Unable to open new session in this virtual machine.";
+const PARALLELS_VM_NOT_STARTED =
+  "This operation can be performed for running virtual machines only.";
+
+function throwIfGuestSessionUnavailable(
+  label: string,
+  result: CommandResult,
+  check: boolean | undefined,
+): void {
+  if (
+    check !== false &&
+    `${result.stdout}\n${result.stderr}`.includes(PARALLELS_GUEST_SESSION_UNAVAILABLE)
+  ) {
+    throw new Error(`${label} failed: Parallels guest session unavailable`);
+  }
+}
+
+function throwIfParallelsVmStopped(label: string, result: CommandResult): void {
+  if (result.status !== 0 && result.stderr.includes(PARALLELS_VM_NOT_STARTED)) {
+    throw new Error(`${label} failed: Parallels VM stopped`);
+  }
+}
+
 const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
+const POSIX_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
+const WINDOWS_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 
 function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stdout);
@@ -80,6 +113,200 @@ function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): 
   }
 }
 
+export async function runPosixBackgroundShell(options: PosixBackgroundShellOptions): Promise<void> {
+  const append = options.append;
+  const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
+  const runCommand = options.runCommand ?? run;
+  const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
+  const nonce = `${safeLabel}-${randomUUID()}`;
+  const runDir = `/tmp/openclaw-parallels/${nonce}`;
+  const scriptPath = `${runDir}/run.sh`;
+  const runnerPath = `${runDir}/runner.sh`;
+  const launcherPath = `${runDir}/launcher.mjs`;
+  const cleanupPath = `${runDir}/cleanup.sh`;
+  const logPath = `${runDir}/run.log`;
+  const donePath = `${runDir}/done`;
+  const exitPath = `${runDir}/exit`;
+  const pidPath = `${runDir}/pid`;
+  const deadline = Date.now() + options.timeoutMs;
+  const transport = (args: string[]) => options.transportArgs(args);
+  const runGuest = (args: string[], timeoutMs: number, input?: string): CommandResult => {
+    const result = runCommand("prlctl", transport(args), {
+      check: false,
+      input,
+      quiet: true,
+      timeoutMs: timeoutBefore(deadline, timeoutMs),
+    });
+    appendOutput(append, result);
+    throwIfParallelsVmStopped(options.label, result);
+    throwIfGuestSessionUnavailable(options.label, result, undefined);
+    return result;
+  };
+  const runner = `#!/bin/bash
+set +e
+run_dir=${posixSingleQuote(runDir)}
+script_path=${posixSingleQuote(scriptPath)}
+log_path=${posixSingleQuote(logPath)}
+done_path=${posixSingleQuote(donePath)}
+exit_path=${posixSingleQuote(exitPath)}
+pid_path=${posixSingleQuote(pidPath)}
+printf '%s\n' "$$" >"$pid_path.tmp"
+/bin/mv -f "$pid_path.tmp" "$pid_path"
+/bin/bash "$script_path" >"$log_path" 2>&1
+status=$?
+printf '%s\n' "$status" >"$exit_path.tmp"
+/bin/mv -f "$exit_path.tmp" "$exit_path"
+printf 'done\n' >"$done_path.tmp"
+/bin/mv -f "$done_path.tmp" "$done_path"
+exit 0
+`;
+  const launcher = `import { spawn } from "node:child_process";
+const child = spawn("/bin/bash", [${JSON.stringify(runnerPath)}], {
+  detached: true,
+  stdio: "ignore",
+});
+await new Promise((resolve, reject) => {
+  child.once("spawn", resolve);
+  child.once("error", reject);
+});
+child.unref();
+process.stdout.write("started\\n");
+`;
+  const cleanup = `#!/bin/bash
+if [ ! -f ${posixSingleQuote(donePath)} ] && [ -f ${posixSingleQuote(pidPath)} ]; then
+  background_pid=$(/bin/cat ${posixSingleQuote(pidPath)} 2>/dev/null || true)
+  case "$background_pid" in
+    ''|*[!0-9]*) ;;
+    *)
+      command=$(/bin/ps -p "$background_pid" -o command= 2>/dev/null || true)
+      case "$command" in
+        *${posixSingleQuote(runnerPath)}*)
+          # The nonce-specific runner path guards against signaling a reused PID.
+          # Descendants must be stopped before the runner can orphan them.
+          stop_tree() {
+            for child in $(/usr/bin/pgrep -P "$1" 2>/dev/null); do
+              stop_tree "$child"
+            done
+            /bin/kill -TERM "$1" 2>/dev/null || true
+            /bin/kill -KILL "$1" 2>/dev/null || true
+          }
+          stop_tree "$background_pid"
+          ;;
+      esac
+      ;;
+  esac
+fi
+if [ -f ${posixSingleQuote(logPath)} ] && [ ! -f ${posixSingleQuote(donePath)} ]; then
+  /usr/bin/tail -c ${POSIX_BACKGROUND_LOG_MAX_BYTES} ${posixSingleQuote(logPath)} 2>/dev/null || true
+fi
+`;
+
+  let launched: boolean;
+  let launchAttempted = false;
+  let doneSeen = false;
+  try {
+    const setup = runGuest(["/bin/mkdir", "-m", "700", "-p", runDir], 30_000);
+    if (setup.status !== 0) {
+      throw new Error(`${options.label} background directory setup failed`);
+    }
+    const secureRunDir = runGuest(["/bin/chmod", "700", runDir], 30_000);
+    if (secureRunDir.status !== 0) {
+      throw new Error(`${options.label} background directory permission setup failed`);
+    }
+    for (const [path, contents] of [
+      [scriptPath, `umask 077\n${options.script}`],
+      [runnerPath, runner],
+      [launcherPath, launcher],
+      [cleanupPath, cleanup],
+    ] as const) {
+      const write = runGuest(["/bin/dd", `of=${path}`, "bs=1048576"], 120_000, contents);
+      if (write.status !== 0) {
+        throw new Error(`${options.label} background script write failed`);
+      }
+      const chmod = runGuest(["/bin/chmod", "700", path], 30_000);
+      if (chmod.status !== 0) {
+        throw new Error(`${options.label} background script permission setup failed`);
+      }
+    }
+
+    launchAttempted = true;
+    const launch = runGuest(["node", launcherPath], 8_000);
+    launched = launch.status === 0 && launch.stdout.includes("started");
+    if (!launched && (launch.status === 0 || launch.status === 124)) {
+      const materializeDeadline = Math.min(Date.now() + 45_000, deadline);
+      while (Date.now() < materializeDeadline) {
+        const materialized = runGuest(["/bin/test", "-f", pidPath], 15_000);
+        if (materialized.status === 0) {
+          launched = true;
+          break;
+        }
+        await sleep(Math.min(pollIntervalMs, Math.max(1, materializeDeadline - Date.now())));
+      }
+    }
+    if (!launched) {
+      throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
+    }
+
+    while (Date.now() < deadline) {
+      const done = runGuest(["/bin/test", "-f", donePath], 5_000);
+      if (done.status !== 0) {
+        await sleep(pollIntervalMs);
+        continue;
+      }
+
+      const log = runGuest(
+        ["/usr/bin/tail", "-c", String(POSIX_BACKGROUND_LOG_MAX_BYTES), logPath],
+        30_000,
+      );
+      if (log.status !== 0 && log.status !== 124) {
+        throw new Error(`${options.label} background log read failed`);
+      }
+      let exitReadAttempted = false;
+      while (!exitReadAttempted || Date.now() < deadline) {
+        exitReadAttempted = true;
+        const exit = runGuest(["/bin/cat", exitPath], 30_000);
+        const backgroundExit = exit.stdout.trim();
+        if (/^\d+$/u.test(backgroundExit)) {
+          doneSeen = true;
+          if (backgroundExit !== "0") {
+            throw new Error(`${options.label} failed`);
+          }
+          return;
+        }
+        if (exit.status !== 0 && exit.status !== 124) {
+          throw new Error(`${options.label} background exit read failed`);
+        }
+        await sleep(Math.min(pollIntervalMs, 100));
+      }
+      throw new Error(`${options.label} completed but exit read timed out`);
+    }
+    throw new Error(`${options.label} timed out`);
+  } finally {
+    let cleanupSucceeded = doneSeen || !launchAttempted;
+    try {
+      if (!doneSeen && launchAttempted) {
+        const result = runCommand("prlctl", transport(["/bin/bash", cleanupPath]), {
+          check: false,
+          quiet: true,
+          timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+        });
+        appendOutput(append, result);
+        cleanupSucceeded = result.status === 0;
+      }
+      if (cleanupSucceeded) {
+        const remove = runCommand("prlctl", transport(["/bin/rm", "-rf", runDir]), {
+          check: false,
+          quiet: true,
+          timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+        });
+        appendOutput(append, remove);
+      }
+    } catch {
+      // Cleanup must not hide the background failure or timeout.
+    }
+  }
+}
+
 export async function runWindowsBackgroundPowerShell(
   options: WindowsBackgroundPowerShellOptions,
 ): Promise<void> {
@@ -88,36 +315,54 @@ export async function runWindowsBackgroundPowerShell(
     1,
     Math.floor(options.completedLogDrainGraceMs ?? 30_000),
   );
-  const logChunkBytes = Math.max(1, Math.floor(options.logChunkBytes ?? 1024 * 1024));
   const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
   const runCommand = options.runCommand ?? run;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
   const nonce = `${safeLabel}-${randomUUID()}`;
-  const fileBase = `openclaw-parallels-${nonce}`;
-  const logLengthPrefix = `__OPENCLAW_LOG_LENGTH__:${nonce}:`;
-  const logOffsetPrefix = `__OPENCLAW_LOG_OFFSET__:${nonce}:`;
+  const guestRunDir = `openclaw-parallels\\${nonce}`;
+  const windowsDonePath = `%WINDIR%\\Temp\\${guestRunDir}\\done`;
+  const windowsLogPath = `%WINDIR%\\Temp\\${guestRunDir}\\run.log`;
   const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
   const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
-  const pathsScript = `$base = Join-Path $env:TEMP ${psSingleQuote(fileBase)}
-$scriptPath = "$base.ps1"
-$logPath = "$base.log"
-$donePath = "$base.done"
-$exitPath = "$base.exit"
-$pidPath = "$base.pid"
+  const deadline = Date.now() + options.timeoutMs;
+  const pathsScript = `$runDir = Join-Path (Join-Path $env:WINDIR 'Temp\\openclaw-parallels') ${psSingleQuote(nonce)}
+$scriptPath = Join-Path $runDir 'run.ps1'
+$logPath = Join-Path $runDir 'run.log'
+$donePath = Join-Path $runDir 'done'
+$exitPath = Join-Path $runDir 'exit'
+$pidPath = Join-Path $runDir 'pid'
 function Write-OpenClawUtf8File([string]$Path, [string]$Value) {
   [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
 }`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
+Write-OpenClawUtf8File $pidPath ([string]$PID)
+$script:OpenClawBackgroundLogBytes = 0
 function Add-OpenClawBackgroundLog {
   param([Parameter(ValueFromPipeline=$true)]$InputObject)
   process {
     $text = $InputObject | Out-String
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $remaining = [int64]${WINDOWS_BACKGROUND_LOG_MAX_BYTES} - $script:OpenClawBackgroundLogBytes
+    if ($remaining -le 0) {
+      return
+    }
+    $count = [int][Math]::Min($remaining, $bytes.Length)
+    $needsBoundaryNewline = $count -eq $remaining -and $count -gt 0 -and $bytes[$count - 1] -ne 10
+    if ($needsBoundaryNewline) {
+      $count--
+    }
     $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
     try {
-      $stream.Write($bytes, 0, $bytes.Length)
+      if ($count -gt 0) {
+        $stream.Write($bytes, 0, $count)
+        $script:OpenClawBackgroundLogBytes += $count
+      }
+      if ($needsBoundaryNewline) {
+        $stream.WriteByte(10)
+        $script:OpenClawBackgroundLogBytes++
+      }
     } finally {
       $stream.Dispose()
     }
@@ -134,25 +379,43 @@ ${options.script}
 } finally {
   Write-OpenClawUtf8File $donePath 'done'
 }`;
-  const writeScript = runCommand(
-    "prlctl",
-    [
-      "exec",
-      options.vmName,
-      "--current-user",
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      encodePowerShell(`${pathsScript}
+  const writeArgs = [
+    "exec",
+    options.vmName,
+    "--current-user",
+    "powershell.exe",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    encodePowerShell(`${pathsScript}
+New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+& icacls.exe $runDir /inheritance:r /grant:r "\${env:USERNAME}:(OI)(CI)(F)" "SYSTEM:(OI)(CI)(F)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "${safeLabel} background directory ACL setup failed" }
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
 if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`),
-    ],
-    { check: false, input: payload, timeoutMs: Math.min(options.timeoutMs, 120_000) },
-  );
+  ];
+  let writeScript = runCommand("prlctl", writeArgs, {
+    check: false,
+    input: payload,
+    timeoutMs: timeoutBefore(deadline, 120_000),
+  });
   appendOutput(append, writeScript);
+  throwIfParallelsVmStopped(options.label, writeScript);
+  if (writeScript.status === 255) {
+    options.onLaunchRetry?.(
+      `${options.label} background script write retry after guest transport rc255`,
+    );
+    options.beforeLaunchAttempt?.();
+    writeScript = runCommand("prlctl", writeArgs, {
+      check: false,
+      input: payload,
+      timeoutMs: timeoutBefore(deadline, 120_000),
+    });
+    appendOutput(append, writeScript);
+    throwIfParallelsVmStopped(options.label, writeScript);
+  }
   if (writeScript.status !== 0) {
     throw new Error(
       `${options.label} background script write failed with exit code ${writeScript.status}`,
@@ -161,7 +424,6 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
 
   let doneSeen = false;
   try {
-    const deadline = Date.now() + options.timeoutMs;
     let launched = false;
     let lastLaunchStatus = 0;
     for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
@@ -178,13 +440,16 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
           "Bypass",
           "-EncodedCommand",
           encodePowerShell(`${pathsScript}
-$process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
-Write-OpenClawUtf8File $pidPath ([string]$process.Id)
+cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$scriptPath" | Out-Null
 'started'`),
         ],
-        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+        // A busy Windows guest can leave one Parallels Tools session wedged.
+        // Keep polls short so a single transport cancellation cannot consume
+        // the entire install timeout while the detached process continues.
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 8_000) },
       );
       appendOutput(append, launch);
+      throwIfParallelsVmStopped(options.label, launch);
       if (launch.status === 0 && launch.stdout.includes("started")) {
         launched = true;
         break;
@@ -221,81 +486,66 @@ Write-OpenClawUtf8File $pidPath ([string]$process.Id)
       );
     }
 
-    let lastLogOffset = 0;
     let completedLogDrainDeadline = 0;
-    const activeDeadline = () => (doneSeen ? completedLogDrainDeadline : deadline);
+    let doneFileSeen = false;
+    const activeDeadline = () => (doneFileSeen ? completedLogDrainDeadline : deadline);
     while (Date.now() < activeDeadline()) {
+      const doneProbe = runCommand(
+        "prlctl",
+        [
+          "exec",
+          options.vmName,
+          "cmd.exe",
+          "/d",
+          "/s",
+          "/c",
+          `if exist "${windowsDonePath}" (echo done) else (echo wait)`,
+        ],
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 5_000) },
+      );
+      appendOutput(append, doneProbe);
+      throwIfParallelsVmStopped(options.label, doneProbe);
+      if (doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "done")) {
+        doneFileSeen = true;
+        completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
+      } else {
+        await sleep(pollIntervalMs);
+        continue;
+      }
+
       const poll = runCommand(
         "prlctl",
         [
           "exec",
           options.vmName,
-          "--current-user",
-          "powershell.exe",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-EncodedCommand",
-          encodePowerShell(`${pathsScript}
-$offset = ${lastLogOffset}
-if (Test-Path $logPath) {
-  $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-  try {
-    $length = $stream.Length
-    ${psSingleQuote(logLengthPrefix)} + $length
-    if ($length -gt $offset) {
-      [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
-      $count = [int][Math]::Min($length - $offset, ${logChunkBytes})
-      $buffer = New-Object byte[] $count
-      $read = $stream.Read($buffer, 0, $count)
-      if ($read -gt 0) {
-        $nextOffset = $offset + $read
-        ${psSingleQuote(logOffsetPrefix)} + $nextOffset
-        [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
-      }
-    }
-  } finally {
-    $stream.Dispose()
-  }
-}
-if (Test-Path $donePath) {
-  $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
-  ${psSingleQuote(backgroundExitPrefix)} + $backgroundExit
-  ${psSingleQuote(backgroundDoneMarker)}
-  if ($backgroundExit -ne '0') { exit 23 }
-  exit 0
-}`),
+          "cmd.exe",
+          "/d",
+          "/s",
+          "/c",
+          `if exist "${windowsDonePath}" (type "%WINDIR%\\Temp\\${guestRunDir}\\run.log" & for /f "usebackq delims=" %A in ("%WINDIR%\\Temp\\${guestRunDir}\\exit") do @echo ${backgroundExitPrefix}%A & echo ${backgroundDoneMarker}) else (echo wait)`,
         ],
-        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+        { check: false, quiet: true, timeoutMs: timeoutBefore(activeDeadline(), 30_000) },
       );
       appendOutput(append, poll);
-      const offsetRaw = findControlValue(poll.stdout, logOffsetPrefix);
-      if (offsetRaw) {
-        lastLogOffset = Number(offsetRaw);
-      }
-      const lengthRaw = findControlValue(poll.stdout, logLengthPrefix);
-      const logLength = lengthRaw ? Number(lengthRaw) : lastLogOffset;
+      throwIfParallelsVmStopped(options.label, poll);
       if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
         doneSeen = true;
-        completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
-        if (lastLogOffset < logLength) {
-          await sleep(Math.min(pollIntervalMs, 100));
-          continue;
-        }
         const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
         if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
           throw new Error(`${options.label} failed`);
         }
         return;
       }
-      await sleep(pollIntervalMs);
+      await sleep(Math.min(pollIntervalMs, 100));
     }
     if (doneSeen) {
       throw new Error(`${options.label} completed but log drain timed out`);
     }
     throw new Error(`${options.label} timed out`);
   } finally {
-    cleanupWindowsBackground(options.vmName, pathsScript, runCommand, {
+    cleanupWindowsBackground(options.vmName, pathsScript, windowsLogPath, runCommand, {
+      append,
+      captureLog: !doneSeen,
       stopProcessTree: !doneSeen,
     });
   }
@@ -325,20 +575,20 @@ async function waitForWindowsBackgroundMaterialized(params: {
       [
         "exec",
         params.vmName,
-        "--current-user",
         "powershell.exe",
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-EncodedCommand",
         encodePowerShell(`${params.pathsScript}
-if ((Test-Path $logPath) -or (Test-Path $donePath)) {
+if ((Test-Path $pidPath) -or (Test-Path $donePath)) {
   'materialized'
 }`),
       ],
       { check: false, quiet: true, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
     );
     appendOutput(params.append, result);
+    throwIfParallelsVmStopped("Windows background launch", result);
     if (result.stdout.includes("materialized")) {
       return true;
     }
@@ -350,8 +600,13 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
 function cleanupWindowsBackground(
   vmName: string,
   pathsScript: string,
+  windowsLogPath: string,
   runCommand: typeof run,
-  options: { stopProcessTree: boolean },
+  options: {
+    append?: (chunk: string | Uint8Array) => void;
+    captureLog: boolean;
+    stopProcessTree: boolean;
+  },
 ): void {
   const stopProcessTree = options.stopProcessTree
     ? `function Stop-OpenClawBackgroundProcessTree([int]$ProcessId) {
@@ -373,15 +628,45 @@ if (Test-Path $pidPath) {
     [
       "exec",
       vmName,
-      "--current-user",
       "powershell.exe",
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
       "-EncodedCommand",
       encodePowerShell(`${pathsScript}
-${stopProcessTree}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue`),
+${stopProcessTree}`),
+    ],
+    { check: false, quiet: true, timeoutMs: 30_000 },
+  );
+  if (options.captureLog) {
+    const log = runCommand(
+      "prlctl",
+      [
+        "exec",
+        vmName,
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `if exist "${windowsLogPath}" type "${windowsLogPath}"`,
+      ],
+      { check: false, quiet: true, timeoutMs: 30_000 },
+    );
+    appendOutput(options.append, log);
+  }
+  runCommand(
+    "prlctl",
+    [
+      "exec",
+      vmName,
+      "powershell.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-EncodedCommand",
+      encodePowerShell(`${pathsScript}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
     ],
     { check: false, quiet: true, timeoutMs: 30_000 },
   );
@@ -428,7 +713,7 @@ export class LinuxGuest {
   }
 }
 
-export interface MacosGuestOptions extends GuestExecOptions {
+interface MacosGuestOptions extends GuestExecOptions {
   env?: Record<string, string>;
 }
 
@@ -480,6 +765,7 @@ export class MacosGuest {
     });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
+    throwIfGuestSessionUnavailable("macOS guest command", result, options.check);
     throwIfFailed("macOS guest command", result, options.check);
     return result;
   }
@@ -494,6 +780,23 @@ export class MacosGuest {
     } finally {
       cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
     }
+  }
+
+  async shBackground(
+    label: string,
+    script: string,
+    env: Record<string, string> = {},
+    timeoutMs?: number,
+  ): Promise<void> {
+    const remainingTimeoutMs = this.phases.remainingTimeoutMs(timeoutMs);
+    await runPosixBackgroundShell({
+      append: (chunk) =>
+        this.phases.append(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
+      label,
+      script,
+      timeoutMs: remainingTimeoutMs ?? timeoutMs ?? 30 * 60_000,
+      transportArgs: (args) => this.transportArgs(args, env),
+    });
   }
 }
 

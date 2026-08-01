@@ -123,7 +123,16 @@ export function repairOAuthProfileIdMismatch(params: {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
+  // Skip repair if destination profile already exists as a separate
+  // user-configured account. Overwriting it would destroy the existing
+  // account's config (displayName, email, etc.) and collapse two distinct
+  // accounts into one. See #97522.
+  if (params.cfg.auth?.profiles?.[toProfileId]) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
   const { email: toEmail, displayName: toDisplayName } = resolveAuthProfileMetadata({
+    cfg: params.cfg,
     store: params.store,
     profileId: toProfileId,
   });

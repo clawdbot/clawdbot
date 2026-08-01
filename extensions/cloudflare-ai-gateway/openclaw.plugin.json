@@ -1,6 +1,6 @@
 {
   "id": "cloudflare-ai-gateway",
-  "icon": "https://cdn.simpleicons.org/cloudflare/111111",
+  "icon": "https://cdn.simpleicons.org/cloudflare",
   "activation": {
     "onStartup": false
   },

@@ -1,17 +1,27 @@
 /** Tests command-control detection and authorization trigger heuristics. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
-import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
+import {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  shouldComputeCommandAuthorized,
+} from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
+import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
+
+afterEach(() => {
+  clearPluginCommands();
+});
 
 describe("resolveCommandAuthorization", () => {
   const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -301,7 +311,7 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
-  it("uses owner allowlist override from context when configured", () => {
+  it("uses context owner candidates for command authorization without granting owner status", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -332,8 +342,9 @@ describe("resolveCommandAuthorization", () => {
       commandAuthorized: true,
     });
 
-    expect(auth.senderIsOwner).toBe(true);
-    expect(auth.ownerList).toEqual(["123"]);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   it("suppresses inherited owner status when the context forbids it", () => {
@@ -501,8 +512,8 @@ describe("resolveCommandAuthorization", () => {
       commandAuthorized: true,
     });
 
-    expect(auth.ownerList).toEqual(["123"]);
-    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.senderIsOwner).toBe(false);
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
@@ -968,7 +979,8 @@ describe("resolveCommandAuthorization", () => {
         commandAuthorized: true,
       });
 
-      expect(auth.ownerList).toEqual(["123"]);
+      expect(auth.ownerList).toEqual([]);
+      expect(auth.senderIsOwner).toBe(false);
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
@@ -1144,9 +1156,30 @@ describe("control command parsing", () => {
   it("detects inline command tokens", () => {
     expect(hasInlineCommandTokens("hello /status")).toBe(true);
     expect(hasInlineCommandTokens("hey /think high")).toBe(true);
+    expect(hasInlineCommandTokens("/ pair qr")).toBe(false);
+    expect(hasInlineCommandTokens("hey / pair qr")).toBe(false);
+    expect(hasInlineCommandTokens("option A / B")).toBe(false);
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
+  });
+
+  it("detects spaced syntax only for active registered plugin commands", () => {
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(false);
+
+    registerPluginCommand("device-pair", {
+      name: "pair",
+      description: "Pair command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(true);
+    expect(shouldComputeCommandAuthorized("@openclaw / pair qr")).toBe(true);
+    expect(shouldComputeCommandAuthorized("hey / pair qr")).toBe(true);
+
+    clearPluginCommands();
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(false);
   });
 
   it("ignores telegram commands addressed to other bots", () => {
@@ -1164,7 +1197,7 @@ describe("control command parsing", () => {
 
   it("detects commands wrapped in inbound metadata blocks", () => {
     const metaWrapped = [
-      "Conversation info (untrusted metadata):",
+      markInboundContextLabel("Conversation info:"),
       "```json",
       '{"message_id":"msg-abc","chat_id":"chat-123"}',
       "```",
@@ -1176,7 +1209,7 @@ describe("control command parsing", () => {
 
   it("detects /new command after metadata prefix", () => {
     const metaWrapped = [
-      "Sender (untrusted metadata):",
+      markInboundContextLabel("Sender:"),
       "```json",
       '{"name":"Alice","id":"user-1"}',
       "```",
@@ -1188,7 +1221,7 @@ describe("control command parsing", () => {
 
   it("detects /status command after timestamp + metadata prefix", () => {
     const metaWrapped = [
-      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      `[Wed 2026-03-11 23:51 PDT] ${markInboundContextLabel("Conversation info:")}`,
       "```json",
       '{"chat_id":"chat-123"}',
       "```",
@@ -1198,3 +1231,4 @@ describe("control command parsing", () => {
     expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

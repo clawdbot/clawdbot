@@ -26,10 +26,14 @@ const agentEventMocks = vi.hoisted(() => {
       }
     }),
     getAgentEventLifecycleGeneration: vi.fn(() => "test-generation"),
+    isAgentEventLifecycleGenerationCurrent: vi.fn(
+      (generation: string) => generation === "test-generation",
+    ),
     onAgentEvent: vi.fn((handler: (event: AgentEvent) => void) => {
       handlers.add(handler);
       return () => handlers.delete(handler);
     }),
+    registerAgentEventLifecycleRotationHandler: vi.fn(),
     registerAgentRunContext: vi.fn(),
     withAgentRunLifecycleGeneration: vi.fn((_generation: string, run: () => unknown) => run()),
   };
@@ -78,6 +82,11 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   };
 
   return {
+    createAcpToolLifecycleTracker: () => ({
+      active: new Map(),
+      terminalToolCallIds: new Set(),
+      saturated: false,
+    }),
     createAcpVisibleTextAccumulator,
     emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
     emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,

@@ -56,7 +56,7 @@ describe("handleDirFetch — fs errors", () => {
 });
 
 describe("handleDirFetch — happy path", () => {
-  it("preflights directory entries without creating a tarball", async () => {
+  it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
     await fs.mkdir(path.join(tmpRoot, ".ssh"));
     await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
@@ -76,6 +76,24 @@ describe("handleDirFetch — happy path", () => {
     expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
     expect(r.fileCount).toBe(r.entries?.length);
   });
+
+  it.runIf(HAS_TAR && process.platform !== "win32")(
+    "preflights symlinks without following their targets",
+    async () => {
+      await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
+      await fs.symlink("missing-target", path.join(tmpRoot, "dangling-link"));
+
+      const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
+      if (!r.ok) {
+        throw new Error(`expected ok, got ${r.code}: ${r.message}`);
+      }
+
+      expect(r.tarBase64).toBe("");
+      expect(r.entries).toContain("a.txt");
+      expect(r.entries).toContain("dangling-link");
+      expect(r.fileCount).toBe(r.entries?.length);
+    },
+  );
 
   it.runIf(HAS_TAR)("returns a gzipped tar with byte count and sha256", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
@@ -113,6 +131,16 @@ describe("handleDirFetch — happy path", () => {
 });
 
 describe("handleDirFetch — size cap", () => {
+  it.runIf(HAS_TAR)("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
+    const largePath = path.join(tmpRoot, "large.bin");
+    await fs.writeFile(largePath, crypto.randomBytes(1024 * 1024));
+
+    await expectDirFetchError(
+      { path: tmpRoot, maxBytes: 64 * 1024, preflightOnly: true },
+      "TREE_TOO_LARGE",
+    );
+  });
+
   it.runIf(HAS_TAR)(
     "returns TREE_TOO_LARGE when content exceeds the cap mid-stream",
     async () => {

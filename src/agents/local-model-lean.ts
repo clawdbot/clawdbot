@@ -3,13 +3,25 @@
  * Removes high-latency or channel-dependent tools for local models while
  * preserving explicitly required delivery tools.
  */
+import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "browser",
+  AUTOMATIONS_TOOL_NAME,
+  "image_generate",
+  "message",
+  "music_generate",
+  "pdf",
+  "tts",
+  "video_generate",
+]);
 const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   enabled: true,
   mode: "tools",
@@ -17,15 +29,14 @@ const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   maxSearchLimit: 10,
 } as const;
 
-function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
+function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>) {
   if (!names) {
-    return new Set();
+    return [];
   }
-  return new Set(
-    expandToolGroups([...names])
-      .map(normalizeToolName)
-      .filter((name) => name && name !== "*"),
-  );
+  return compileGlobPatterns({
+    raw: expandToolGroups([...names]).filter((name) => normalizeToolName(name) !== "*"),
+    normalize: normalizeToolName,
+  });
 }
 
 /** Resolves tool names that must survive local-model lean filtering. */
@@ -35,7 +46,7 @@ export function resolveLocalModelLeanPreserveToolNames(params?: {
   sourceReplyDeliveryMode?: string;
 }): string[] {
   const names = [...(params?.toolNames ?? [])];
-  if (params?.forceMessageTool || params?.sourceReplyDeliveryMode === "message_tool_only") {
+  if (params && messageToolOwnsVisibleReply(params)) {
     names.push("message");
   }
   return [...new Set(names)];
@@ -92,7 +103,7 @@ export function filterLocalModelLeanTools(params: {
   return params.tools.filter((tool) => {
     const normalizedName = normalizeToolName(tool.name);
     return (
-      preservedToolNames.has(normalizedName) ||
+      matchesAnyGlobPattern(normalizedName, preservedToolNames) ||
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });

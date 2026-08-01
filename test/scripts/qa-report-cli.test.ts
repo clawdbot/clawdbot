@@ -43,12 +43,44 @@ describe("QA report source CLIs", () => {
     expectNoNodeStack(result.stderr);
   });
 
+  it("rejects duplicate QA coverage artifact destinations without a Node stack trace", () => {
+    const result = runSourceScript(
+      "scripts/qa-coverage-report.ts",
+      "--output",
+      ".artifacts/first.md",
+      "--output=.artifacts/second.md",
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output was provided more than once");
+    expectNoNodeStack(result.stderr);
+  });
+
   it("reports unknown QA parity options without a Node stack trace", () => {
     const result = runSourceScript("scripts/qa-parity-report.ts", "--wat");
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown qa parity-report option: --wat");
+    expectNoNodeStack(result.stderr);
+  });
+
+  it("rejects duplicate QA parity artifact destinations without a Node stack trace", () => {
+    const result = runSourceScript(
+      "scripts/qa-parity-report.ts",
+      "--candidate-summary",
+      "candidate.json",
+      "--baseline-summary",
+      "baseline.json",
+      "--output-dir",
+      ".artifacts/first",
+      "--output-dir=.artifacts/second",
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output-dir was provided more than once");
     expectNoNodeStack(result.stderr);
   });
 

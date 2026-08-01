@@ -1,0 +1,6 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="accessibility_service_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw UI 제어"</string>
+    <string name="accessibility_service_summary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"개발자 UI 관찰 및 제어"</string>
+    <string name="accessibility_service_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"타사 OpenClaw 빌드가 로컬 개발 중 활성 앱을 검사하고 제어할 수 있도록 합니다."</string>
+    <string name="accessibility_dev_activity_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 접근성 개발자"</string>
+</resources>

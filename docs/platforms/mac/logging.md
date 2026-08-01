@@ -10,25 +10,23 @@ title: "macOS logging"
 
 ## Rolling diagnostics file log (Debug pane)
 
-OpenClaw routes macOS app logs through swift-log (unified logging by default) and can write a local, rotating file log to disk when you need a durable capture.
+The macOS app logs through swift-log (unified logging by default) and can also write a rotating local file log for durable capture (`DiagnosticsFileLog`).
 
-- Verbosity: **Debug pane → Logs → App logging → Verbosity**
-- Enable: **Debug pane → Logs → App logging → "Write rolling diagnostics log (JSONL)"**
-- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
-- Clear: **Debug pane → Logs → App logging → "Clear"**
+- Enable: **Debug pane -> Logs -> App logging -> "Write rolling diagnostics log (JSONL)"** (off by default).
+- Verbosity: **Debug pane -> Logs -> App logging -> Verbosity** picker.
+- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl`.
+- Rotation: rotates at 5 MB; up to 5 backups suffixed `.1`...`.5` (oldest dropped).
+- Clear: **Debug pane -> Logs -> App logging -> "Clear"** deletes the active file and all backups.
 
-Notes:
-
-- This is **off by default**. Enable only while actively debugging.
-- Treat the file as sensitive; don't share it without review.
+Treat the file as sensitive; do not share it without review.
 
 ## Unified logging private data on macOS
 
-Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue.
+Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. This is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue. Background: [macOS logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans).
 
 ## Enable for OpenClaw (`ai.openclaw`)
 
-- Write the plist to a temp file first, then install it atomically as root:
+Write the plist to a temp file first, then install it atomically as root:
 
 ```bash
 cat <<'EOF' >/tmp/ai.openclaw.plist
@@ -47,14 +45,13 @@ EOF
 sudo install -m 644 -o root -g wheel /tmp/ai.openclaw.plist /Library/Preferences/Logging/Subsystems/ai.openclaw.plist
 ```
 
-- No reboot is required; logd notices the file quickly, but only new log lines will include private payloads.
-- View the richer output with the existing helper, e.g. `./scripts/clawlog.sh --category WebChat --last 5m`.
+No reboot required; logd picks up the file quickly, but only new log lines include private payloads. View the richer output with `./scripts/clawlog.sh --category WebChat --last 5m` (`--last`/`-l` sets the time range, default `5m`; `--category`/`-c` filters by category).
 
 ## Disable after debugging
 
 - Remove the override: `sudo rm /Library/Preferences/Logging/Subsystems/ai.openclaw.plist`.
 - Optionally run `sudo log config --reload` to force logd to drop the override immediately.
-- Remember this surface can include phone numbers and message bodies; keep the plist in place only while you actively need the extra detail.
+- This surface can include phone numbers and message bodies; keep the plist in place only while actively needed.
 
 ## Related
 

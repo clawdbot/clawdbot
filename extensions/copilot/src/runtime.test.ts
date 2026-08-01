@@ -124,6 +124,20 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls.length).toBe(1);
   });
 
+  it("keeps hardened empty-mode clients separate from normal clients", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+
+    const normal = await pool.acquire(key, makeOptions());
+    const isolated = await pool.acquire(key, { ...makeOptions(), mode: "empty" });
+
+    expect(normal.client).not.toBe(isolated.client);
+    expect(normal.key.clientMode).toBeUndefined();
+    expect(isolated.key.clientMode).toBe("empty");
+    expect(sdk.ctorCalls.map((options) => options.mode)).toEqual([undefined, "empty"]);
+  });
+
   it("different agentId same copilotHome creates distinct clients", async () => {
     const sdk = makeFake();
     const pool = createCopilotClientPool({ sdkFactory: sdk.fake });

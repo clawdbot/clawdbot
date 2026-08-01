@@ -12,7 +12,7 @@ const InstallSourceSchema = z.union([
 const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
 
 /** Zod object shape for persisted generic install records. */
-export const InstallRecordShape = {
+const InstallRecordShape = {
   source: InstallSourceSchema,
   spec: z.string().optional(),
   sourcePath: z.string().optional(),
@@ -31,6 +31,21 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
+  clawhubTrustDisposition: z
+    .union([
+      z.literal("clean"),
+      z.literal("review-recommended"),
+      z.literal("review-required"),
+      z.literal("blocked"),
+    ])
+    .optional(),
+  clawhubTrustScanStatus: z.string().optional(),
+  clawhubTrustModerationState: z.string().optional(),
+  clawhubTrustReasons: z.array(z.string()).optional(),
+  clawhubTrustPending: z.boolean().optional(),
+  clawhubTrustStale: z.boolean().optional(),
+  clawhubTrustCheckedAt: z.string().optional(),
+  clawhubTrustAcknowledgedAt: z.string().optional(),
   artifactKind: z.union([z.literal("legacy-zip"), z.literal("npm-pack")]).optional(),
   artifactFormat: z.union([z.literal("zip"), z.literal("tgz")]).optional(),
   npmIntegrity: z.string().optional(),

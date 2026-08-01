@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -47,6 +48,12 @@ type DiscoverLmstudioModelsParams = {
   fetchImpl?: typeof fetch;
 };
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
@@ -56,8 +63,10 @@ async function fetchLmstudioEndpoint(params: {
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let response: Response;
+  let release: () => Promise<void>;
   if (params.ssrfPolicy) {
-    return await fetchWithSsrFGuard({
+    const guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: params.init,
       timeoutMs,
@@ -65,22 +74,23 @@ async function fetchLmstudioEndpoint(params: {
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
     });
-  }
-  const fetchFn = params.fetchImpl ?? fetch;
-  return {
-    response: await fetchFn(params.url, {
+    response = guarded.response;
+    release = guarded.release;
+  } else {
+    const fetchFn = params.fetchImpl ?? fetch;
+    response = await fetchFn(params.url, {
       ...params.init,
       signal: AbortSignal.timeout(timeoutMs),
-    }),
-    release: async () => {},
-  };
-}
-
-function asLmstudioModelWire(value: unknown): LmstudioModelWire {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("LM Studio model list: malformed JSON response");
+    });
+    release = async () => undefined;
   }
-  return value as LmstudioModelWire;
+  return {
+    response,
+    release: async () => {
+      await cancelUnreadResponseBody(response);
+      await release();
+    },
+  };
 }
 
 function withResolvedLmstudioModelKey(
@@ -135,10 +145,17 @@ export async function fetchLmstudioModels(params: {
         "LM Studio model list",
         "models",
       );
+      const validModels = models.filter(
+        (model): model is LmstudioModelWire =>
+          typeof model === "object" && model !== null && !Array.isArray(model),
+      );
+      if (models.length > 0 && validModels.length === 0) {
+        throw new Error("LM Studio model list: malformed JSON response");
+      }
       return {
         reachable: true,
         status: response.status,
-        models: models.map(asLmstudioModelWire),
+        models: validModels,
       };
     } finally {
       await release();
@@ -285,12 +302,13 @@ export async function ensureLmstudioModelLoaded(params: {
           `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
         );
       }
-      let payload: LmstudioLoadResponse;
-      try {
-        payload = (await response.json()) as LmstudioLoadResponse;
-      } catch (cause) {
-        throw new Error("LM Studio model load returned malformed JSON", { cause });
-      }
+      // Read the success body through the shared byte-capped reader so a misbehaving
+      // or compromised LM Studio server cannot stream an unbounded JSON payload into
+      // memory before we parse it. Malformed JSON is wrapped with our own label.
+      const payload = await readProviderJsonResponse<LmstudioLoadResponse>(
+        response,
+        "LM Studio model load",
+      );
       if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
         throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
       }

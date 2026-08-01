@@ -14,6 +14,7 @@ import {
 import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
+import pMap from "p-map";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   forwardSignalToVitestProcessGroup,
@@ -24,10 +25,13 @@ import {
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
-const tsgoBin = join(
-  dirname(require.resolve("@typescript/native-preview/package.json")),
-  "bin/tsgo.js",
-);
+const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
+const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
+const nativePreviewBin = nativePreviewPackageJson.bin?.tsgo;
+if (typeof nativePreviewBin !== "string") {
+  throw new Error("@typescript/native-preview does not declare the tsgo binary");
+}
+const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
 const prepareBoundaryArtifactsBin = resolve(
   repoRoot,
   "scripts/prepare-extension-package-boundary-artifacts.mjs",
@@ -628,29 +632,29 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
 export async function runNodeStepsWithConcurrency(steps, concurrency) {
   const abortController = new AbortController();
   let firstFailure = null;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, steps.length) }, async () => {
-    while (true) {
+  await pMap(
+    steps,
+    async (step) => {
       if (abortController.signal.aborted) {
         return;
       }
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= steps.length) {
-        return;
+      try {
+        step.onStart?.();
+        const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+          abortController,
+          onFailure(error) {
+            firstFailure ??= error;
+          },
+        });
+        step.onSuccess?.(result);
+      } catch (error) {
+        // Keep the mapper fulfilled so pMap waits for active process-group cleanup.
+        firstFailure ??= error;
+        abortSiblingSteps(abortController);
       }
-      const step = steps[index];
-      step.onStart?.();
-      const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
-        abortController,
-        onFailure(error) {
-          firstFailure ??= error;
-        },
-      });
-      step.onSuccess?.(result);
-    }
-  });
-  await Promise.allSettled(workers);
+    },
+    { concurrency, stopOnError: false },
+  );
   if (firstFailure) {
     throw toLintErrorObject(firstFailure, "Non-Error thrown");
   }
@@ -671,7 +675,7 @@ export function resolveCanaryArtifactPaths(extensionId, rootDir = repoRoot) {
 /**
  * Removes canary artifacts for one extension.
  */
-export function cleanupCanaryArtifacts(extensionId, rootDir = repoRoot) {
+function cleanupCanaryArtifacts(extensionId, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });

@@ -77,18 +77,6 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
-  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
-    expect(
-      resolveReplyToModeWithConfig({
-        slackConfig: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-        context: { ChatType: "direct" },
-      }),
-    ).toBe("all");
-  });
-
   it("uses all mode when MessageThreadId is present", () => {
     expect(
       resolveReplyToModeWithConfig({
@@ -213,6 +201,28 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("uses CurrentMessageId as a non-explicit anchor when ReplyToId is omitted", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "first",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("first");
+    expect(result.sameChannelThreadRequired).toBe(false);
+  });
+
   it("keeps configured channel behavior when not in a thread", () => {
     const cfg = {
       channels: {
@@ -228,6 +238,26 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "channel", ThreadLabel: "label-only" },
     });
     expect(result.replyToMode).toBe("first");
+  });
+
+  it("prefers the prepared per-channel reply mode over account config", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: { replyToMode: "all" },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        ReplyToMode: "off",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.replyToMode).toBe("off");
   });
 
   it("defaults to off when no replyToMode is configured", () => {
@@ -247,6 +277,16 @@ describe("buildSlackThreadingToolContext", () => {
     });
     expect(result.currentChannelId).toBe("C1234ABC");
     expect(result.currentMessagingTarget).toBe("channel:C1234ABC");
+  });
+
+  it("does not expose the core Channel provider as a Slack room name", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { ChatType: "channel", Channel: "slack", To: "channel:C1234ABC" },
+    });
+    expect(result).not.toHaveProperty("currentChannelName");
+    expect(result.currentChannelId).toBe("C1234ABC");
   });
 
   it("preserves native and routable DM targets", () => {

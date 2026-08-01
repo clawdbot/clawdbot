@@ -48,9 +48,18 @@ function listSupportedImageGenerationModes(provider: ImageGenerationProvider): s
 function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
-    const maxRefs = provider.capabilities.edit.maxInputImages;
+    const modelLimits = Object.values(provider.capabilities.edit.maxInputImagesByModel ?? {})
+      .concat(Object.values(provider.capabilities.edit.maxInputImagesByModelPrefix ?? {}))
+      .filter((value) => Number.isFinite(value));
+    const declaredLimits = [
+      ...(typeof provider.capabilities.edit.maxInputImages === "number"
+        ? [provider.capabilities.edit.maxInputImages]
+        : []),
+      ...modelLimits,
+    ];
+    const maxRefs = declaredLimits.length > 0 ? Math.max(...declaredLimits) : undefined;
     caps.push(
-      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}${modelLimits.length > 0 ? " depending on model" : ""}`,
     );
   }
   if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {

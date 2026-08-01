@@ -1,4 +1,5 @@
 // Qqbot tests cover token plugin behavior.
+import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 
@@ -54,6 +55,7 @@ describe("QQBot token manager", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -74,6 +76,7 @@ describe("QQBot token manager", () => {
         hostnameAllowlist: ["bots.qq.com"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
       init: {
         method: "POST",
         headers: {
@@ -176,5 +179,121 @@ describe("QQBot token manager", () => {
     expect(logger.debug).toHaveBeenCalledWith(
       "[qqbot:token:app-id] Not cached: invalid process clock",
     );
+  });
+
+  it("times out one stalled token fetch for every singleflight waiter and allows retry", async () => {
+    vi.useFakeTimers();
+    const { fetchWithSsrFGuard } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/ssrf-runtime")
+    >("openclaw/plugin-sdk/ssrf-runtime");
+    fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+    let fetchSignal: AbortSignal | undefined;
+    const stalledFetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          fetchSignal = init?.signal ?? undefined;
+          if (!fetchSignal) {
+            reject(new Error("missing guarded fetch signal"));
+            return;
+          }
+          fetchSignal.addEventListener(
+            "abort",
+            () => {
+              const reason = fetchSignal?.reason;
+              const error =
+                reason instanceof Error ? reason : new Error("request aborted", { cause: reason });
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", stalledFetch);
+
+    const manager = new TokenManager();
+    const first = manager.getAccessToken("app-id", "secret");
+    const second = manager.getAccessToken(" app-id ", "secret");
+    const outcomes = Promise.allSettled([first, second]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stalledFetch).toHaveBeenCalledTimes(1);
+    expect(manager.getStatus("app-id").status).toBe("refreshing");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const [firstOutcome, secondOutcome] = await outcomes;
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(firstOutcome.status).toBe("rejected");
+    expect(secondOutcome.status).toBe("rejected");
+    if (firstOutcome.status !== "rejected" || secondOutcome.status !== "rejected") {
+      throw new Error("expected every singleflight waiter to reject");
+    }
+    const timeoutError = firstOutcome.reason as Error;
+    expect(timeoutError).toBe(secondOutcome.reason);
+    expect(timeoutError.message).toBe("Network error getting access_token: request timed out");
+    expect(timeoutError.cause).toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    expect(manager.getStatus("app-id")).toEqual({ status: "none", expiresAt: null });
+
+    stalledFetch.mockResolvedValueOnce(
+      new Response('{"access_token":"token-2","expires_in":7200}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(manager.getAccessToken("app-id", "secret")).resolves.toBe("token-2");
+    expect(stalledFetch).toHaveBeenCalledTimes(2);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("yields and does not grow abort listeners across zero-delay refresh sleeps", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
+
+    const accessTokenField = ["access", "token"].join("_");
+    for (let i = 1; i <= 4; i += 1) {
+      const body = JSON.stringify({ [accessTokenField]: `token-${i}`, expires_in: 0 });
+      mockGuardedTokenResponse(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    const addListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+    const activeAbortListenerCount = () =>
+      [...new Set(addListenerSpy.mock.instances)]
+        .filter((signal): signal is AbortSignal => signal instanceof AbortSignal)
+        .reduce((count, signal) => count + getEventListeners(signal, "abort").length, 0);
+
+    const manager = new TokenManager();
+    try {
+      manager.startBackgroundRefresh("app-id", "secret", {
+        refreshAheadMs: 0,
+        randomOffsetMs: 0,
+        minRefreshIntervalMs: 0,
+        retryDelayMs: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(activeAbortListenerCount()).toBe(1);
+
+      for (let cycle = 2; cycle <= 4; cycle += 1) {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(cycle);
+        expect(activeAbortListenerCount()).toBe(1);
+      }
+    } finally {
+      manager.stopBackgroundRefresh("app-id");
+      await vi.advanceTimersByTimeAsync(0);
+      try {
+        expect(activeAbortListenerCount()).toBe(0);
+      } finally {
+        addListenerSpy.mockRestore();
+      }
+    }
   });
 });

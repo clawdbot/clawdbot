@@ -9,21 +9,46 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
-  resolveNode: vi.fn(async () => ({ nodeId: "node-1", remoteIp: "127.0.0.1" })),
+  resolveNode: vi.fn(async () => ({
+    nodeId: "node-1",
+    remoteIp: "127.0.0.1",
+    platform: undefined as string | undefined,
+  })),
 }));
 
 const nodesCameraMocks = vi.hoisted(() => ({
   cameraTempPath: vi.fn(({ facing }: { facing?: string }) =>
     facing ? `/tmp/camera-${facing}.jpg` : "/tmp/camera.jpg",
   ),
-  parseCameraClipPayload: vi.fn(),
+  parseCameraClipPayload: vi.fn(() => ({
+    base64: "ZmFrZQ==",
+    format: "mp4",
+    durationMs: 3000,
+    hasAudio: true,
+  })),
   parseCameraSnapPayload: vi.fn(() => ({
     base64: "ZmFrZQ==",
     format: "jpg",
     width: 800,
     height: 600,
   })),
-  writeCameraClipPayloadToFile: vi.fn(),
+  resolveCameraClipTarget: vi.fn((params: { facing: "front" | "back"; platform?: string }) =>
+    params.platform === "linux"
+      ? { artifactFacing: "unknown" }
+      : { requestFacing: params.facing, artifactFacing: params.facing },
+  ),
+  resolveCameraSnapTargets: vi.fn(
+    (params: { facing: "front" | "back" | "both"; platform?: string; deviceId?: string }) => {
+      if (params.platform === "linux") {
+        return [{ artifactFacing: "unknown" }];
+      }
+      const facings = params.facing === "both" ? (["front", "back"] as const) : [params.facing];
+      return facings.map((facing) => ({ requestFacing: facing, artifactFacing: facing }));
+    },
+  ),
+  writeCameraClipPayloadToFile: vi.fn(async ({ facing }: { facing?: string }) =>
+    facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
+  ),
   writeCameraPayloadToFile: vi.fn(async () => undefined),
 }));
 
@@ -37,7 +62,9 @@ const screenMocks = vi.hoisted(() => ({
     hasAudio: true,
   })),
   screenRecordTempPath: vi.fn(() => "/tmp/screen-record.mp4"),
-  writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen-record.mp4" })),
+  writeScreenRecordToFile: vi.fn(async (_filePath: string) => ({
+    path: "/tmp/screen-record.mp4",
+  })),
   parseScreenSnapshotPayload: vi.fn(() => ({
     base64: "ZmFrZQ==",
     format: "png",
@@ -45,8 +72,17 @@ const screenMocks = vi.hoisted(() => ({
     width: 1920,
     height: 1080,
   })),
+  // Mirrors nodes-screen's mapping; the real contract is covered in nodes-camera.test.ts.
+  screenSnapshotFormatForPath: vi.fn((filePath: string) => {
+    if (filePath.toLowerCase().endsWith(".png")) {
+      return "png";
+    }
+    return /\.jpe?g$/iu.test(filePath) ? "jpeg" : undefined;
+  }),
   screenSnapshotTempPath: vi.fn(() => "/tmp/screen-snapshot.png"),
-  writeScreenSnapshotToFile: vi.fn(async () => ({ path: "/tmp/screen-snapshot.png" })),
+  writeScreenSnapshotToFile: vi.fn(async (_filePath: string) => ({
+    path: "/tmp/screen-snapshot.png",
+  })),
 }));
 
 vi.mock("./gateway.js", () => ({
@@ -63,6 +99,8 @@ vi.mock("../../cli/nodes-camera.js", () => ({
   cameraTempPath: nodesCameraMocks.cameraTempPath,
   parseCameraClipPayload: nodesCameraMocks.parseCameraClipPayload,
   parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
+  resolveCameraClipTarget: nodesCameraMocks.resolveCameraClipTarget,
+  resolveCameraSnapTargets: nodesCameraMocks.resolveCameraSnapTargets,
   writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
   writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
 }));
@@ -72,6 +110,7 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   screenRecordTempPath: screenMocks.screenRecordTempPath,
   writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
   parseScreenSnapshotPayload: screenMocks.parseScreenSnapshotPayload,
+  screenSnapshotFormatForPath: screenMocks.screenSnapshotFormatForPath,
   screenSnapshotTempPath: screenMocks.screenSnapshotTempPath,
   writeScreenSnapshotToFile: screenMocks.writeScreenSnapshotToFile,
 }));
@@ -134,12 +173,25 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNodeId.mockClear();
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
     screenMocks.parseScreenSnapshotPayload.mockClear();
     screenMocks.screenSnapshotTempPath.mockClear();
     screenMocks.writeScreenSnapshotToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
+    nodesCameraMocks.parseCameraClipPayload.mockReset();
+    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+      base64: "ZmFrZQ==",
+      format: "mp4",
+      durationMs: 3000,
+      hasAudio: true,
+    });
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockReset();
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockImplementation(
+      async ({ facing }: { facing?: string }) =>
+        facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
+    );
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
@@ -209,50 +261,176 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
-  it("clamps screen_record durationMs argument to 300000 before gateway invoke", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+  it("guides node discovery before describe", () => {
     const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: { node?: { description?: string } };
+    };
 
-    await tool.execute("call-1", {
-      action: "screen_record",
-      node: "macbook",
-      durationMs: 900_000,
-    });
-
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
-      | undefined;
-    if (!call) {
-      throw new Error("expected callGatewayTool to be called");
-    }
-    expect(call[0]).toBe("node.invoke");
-    expect(call[1]).toStrictEqual({});
-    expect(call[2].params?.durationMs).toBe(300_000);
+    expect(tool.description).toContain("Paired nodes: status/list");
+    expect(tool.description).toContain("pass node to describe/control");
+    expect(schema.properties?.node?.description).toBe(
+      "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    );
   });
 
-  it("clamps camera_clip durationMs argument to 300000 before gateway invoke", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
-      base64: "ZmFrZQ==",
-      format: "mp4",
-      durationMs: 300_000,
-      hasAudio: true,
+  it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        action?: { enum?: string[] };
+        bins?: {
+          type?: string;
+          minItems?: number;
+          maxItems?: number;
+          items?: { type?: string; minLength?: number };
+          description?: string;
+        };
+      };
+    };
+
+    expect(tool.description).toContain("executable lookup (which + bins)");
+    expect(schema.properties?.action?.enum).toContain("which");
+    expect(schema.properties?.bins).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: { type: "string", minLength: 1 },
+      description: "which: executable names to resolve on the selected node.",
     });
-    nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+  });
+
+  it("requires an explicit node for describe and points to status", async () => {
     const tool = createNodesTool();
 
-    await tool.execute("call-clip", {
-      action: "camera_clip",
+    await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
+      'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+    );
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves and describes the explicit node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
+    const tool = createNodesTool();
+
+    await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
+
+    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.describe",
+      {},
+      {
+        nodeId: "node-1",
+      },
+    );
+  });
+
+  it.each([
+    { name: "title only", input: { title: "Build complete" } },
+    { name: "body only", input: { body: "Deployment finished" } },
+    { name: "both fields", input: { title: "Build complete", body: "Deployment finished" } },
+    { name: "trimmed fields", input: { title: "  Build complete\t", body: "\n done  " } },
+    { name: "whitespace body", input: { title: "  Build complete  ", body: " \t " } },
+    { name: "whitespace title", input: { title: " \n ", body: "  Deployment finished  " } },
+  ])("serializes both required native strings for $name", async ({ input }) => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+
+    await createNodesTool().execute("call-notify", {
+      action: "notify",
+      node: "Office Mac",
+      ...input,
+      sound: "ding.aiff",
+      priority: "timeSensitive",
+      delivery: "overlay",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.notify",
+        params: {
+          title: (input.title ?? "").trim(),
+          body: (input.body ?? "").trim(),
+          sound: "ding.aiff",
+          priority: "timeSensitive",
+          delivery: "overlay",
+        },
+        idempotencyKey: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+      },
+    );
+  });
+
+  it.each([
+    {},
+    { title: "", body: "" },
+    { title: " \t ", body: " \n " },
+    { title: " \t " },
+    { body: " \n " },
+  ] as const)("rejects empty notification %# before gateway invocation", async (input) => {
+    await expect(
+      createNodesTool().execute("call-notify-empty", {
+        action: "notify",
+        node: "Office Mac",
+        ...input,
+      }),
+    ).rejects.toThrow("title or body required");
+
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it.each(["screen_record", "camera_clip"])(
+    "clamps %s to the tool duration limit and budgets both timeout layers",
+    async (action) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+      nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+        base64: "ZmFrZQ==",
+        format: "mp4",
+        durationMs: 300_000,
+        hasAudio: true,
+      });
+      nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+      const tool = createNodesTool();
+
+      await tool.execute(`call-${action}`, {
+        action,
+        node: "macbook",
+        durationMs: 900_000,
+      });
+
+      const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+        | [string, unknown, { params?: { durationMs?: unknown }; timeoutMs?: unknown }]
+        | undefined;
+      expect(call?.[0]).toBe("node.invoke");
+      expect(call?.[1]).toStrictEqual({ timeoutMs: 360_000 });
+      expect(call?.[2].params?.durationMs).toBe(300_000);
+      expect(call?.[2].timeoutMs).toBe(330_000);
+    },
+  );
+
+  it("preserves independent explicit transport and node invoke timeouts", async () => {
+    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-explicit-timeout", {
+      action: "screen_record",
       node: "macbook",
-      durationMs: 900_000,
+      durationMs: 60_000,
+      timeoutMs: 5_000,
+      invokeTimeoutMs: 10_000,
     });
 
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | [string, unknown, { timeoutMs?: unknown }]
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
-    expect(call?.[2].params?.durationMs).toBe(300_000);
+    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+    expect(call?.[2].timeoutMs).toBe(10_000);
   });
 
   it.each([
@@ -294,7 +472,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
     expect(call?.[2].command).toBe("screen.snapshot");
-    expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200 });
+    expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200, format: undefined });
     expect(screenMocks.parseScreenSnapshotPayload).toHaveBeenCalledWith({ ok: true });
     expect(screenMocks.screenSnapshotTempPath).toHaveBeenCalledWith({ ext: "png" });
     expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
@@ -314,6 +492,113 @@ describe("createNodesTool screen_record duration guardrails", () => {
         },
       },
     });
+  });
+
+  it("requests the encoding a caller-supplied outPath already promises", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+      path: filePath,
+    }));
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-snapshot", {
+      action: "screen_snapshot",
+      node: "miniclaw",
+      outPath: "/workspace/miniclaw-screen-2026-07-28.png",
+    });
+
+    // Without this the node falls back to its own default (JPEG on macOS) and a
+    // `.png` request quietly receives JPEG bytes.
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { format?: unknown } }]
+      | undefined;
+    expect(call?.[2].params?.format).toBe("png");
+    // The workspace guard alias-checked this exact path; it is written verbatim.
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/miniclaw-screen-2026-07-28.png",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.screenSnapshotTempPath).not.toHaveBeenCalled();
+    expect(result.content).toEqual([
+      { type: "text", text: "FILE:/workspace/miniclaw-screen-2026-07-28.png" },
+    ]);
+  });
+
+  it("requests jpeg for .jpg and .jpeg output paths", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const outPaths = ["/workspace/shot.jpg", "/workspace/shot.jpeg"];
+    for (const _ of outPaths) {
+      screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+        base64: "ZmFrZQ==",
+        format: "jpeg",
+        screenIndex: 0,
+        width: 1600,
+        height: 1049,
+      });
+      screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+        path: filePath,
+      }));
+    }
+    const tool = createNodesTool();
+
+    for (const outPath of outPaths) {
+      await tool.execute("call-snapshot", {
+        action: "screen_snapshot",
+        node: "miniclaw",
+        outPath,
+      });
+    }
+
+    for (const call of gatewayMocks.callGatewayTool.mock.calls) {
+      expect((call as [string, unknown, { params?: { format?: unknown } }])[2].params?.format).toBe(
+        "jpeg",
+      );
+    }
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/shot.jpg",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/shot.jpeg",
+      "ZmFrZQ==",
+    );
+  });
+
+  it("refuses to write snapshot bytes that contradict the outPath extension", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    // A node that ignores the requested format must not silently mislabel the file.
+    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpeg",
+      screenIndex: 0,
+      width: 1600,
+      height: 1049,
+    });
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-snapshot", {
+        action: "screen_snapshot",
+        node: "miniclaw",
+        outPath: "/workspace/shot.png",
+      }),
+    ).rejects.toThrow("screen.snapshot returned jpg; outPath must use a matching extension");
+    expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses to write recording bytes that contradict the outPath extension", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-record", {
+        action: "screen_record",
+        node: "miniclaw",
+        durationMs: 1000,
+        outPath: "/workspace/clip.mov",
+      }),
+    ).rejects.toThrow("screen.record returned mp4; outPath must use a matching extension");
+    expect(screenMocks.writeScreenRecordToFile).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported screen.snapshot response formats before writing", async () => {
@@ -372,6 +657,58 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
 
+  it("captures one unknown-position snap for Linux facing requests", async () => {
+    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+      nodeId: "linux-node",
+      remoteIp: "127.0.0.1",
+      platform: "linux",
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-linux-camera", {
+      action: "camera_snap",
+      node: "linux-node",
+      facing: "both",
+      deviceId: "/dev/video2",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      command: "camera.snap",
+      params: { facing: undefined, deviceId: "/dev/video2" },
+    });
+    expect(result?.details).toMatchObject({
+      snaps: [{ facing: "unknown", path: "/tmp/camera-unknown.jpg" }],
+    });
+  });
+
+  it("captures an unknown-position clip on Linux without forwarding facing", async () => {
+    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+      nodeId: "linux-node",
+      remoteIp: "127.0.0.1",
+      platform: "linux",
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-linux-clip", {
+      action: "camera_clip",
+      node: "linux-node",
+      facing: "back",
+      deviceId: "/dev/video2",
+    });
+
+    expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      command: "camera.clip",
+      params: { facing: undefined, deviceId: "/dev/video2" },
+    });
+    expect(result?.details).toMatchObject({
+      facing: "unknown",
+      path: "/tmp/camera-unknown.mp4",
+    });
+  });
+
   it("returns latest photos via details.media.mediaUrls", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({
       payload: {
@@ -402,6 +739,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     const result = await tool.execute("call-1", {
       action: "photos_latest",
       node: "macbook",
+      limit: 2,
     });
 
     expect(result?.details).toEqual({
@@ -559,6 +897,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(result.content).toEqual([{ type: "text", text: "null" }]);
   });
 
+  it("forwards typed which bins to system.which", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { bins: ["hostname"], paths: { hostname: "/bin/hostname" } },
+    });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-which", {
+      action: "which",
+      node: "macbook",
+      bins: ["hostname"],
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.which",
+        params: { bins: ["hostname"] },
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(result.details).toEqual({
+      bins: ["hostname"],
+      paths: { hostname: "/bin/hostname" },
+    });
+  });
+
+  it("rejects which without bins before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-which-missing-bins", {
+        action: "which",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("bins required");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
       requiredApproveScopes: ["operator.pairing", "operator.admin"],
@@ -626,6 +1004,57 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
+
+  it("forwards the owning agent session for generic node invokes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({ agentSessionKey: "agent:main:canvas" });
+
+    await tool.execute("call-1", {
+      action: "invoke",
+      node: "macbook",
+      invokeCommand: "device.status",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({
+        command: "device.status",
+        sessionKey: "agent:main:canvas",
+      }),
+    );
+  });
+
+  it("blocks raw computer.act so desktop input uses the dedicated safety contract", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "computer.act",
+        invokeParamsJson: '{"action":"left_click","x":1,"y":1}',
+      }),
+    ).rejects.toThrow("use the dedicated computer tool");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it.each(["mobile.ui.observe", "mobile.ui.act"])(
+    "blocks raw %s so mobile UI uses the dedicated safety contract",
+    async (invokeCommand) => {
+      const tool = createNodesTool();
+
+      await expect(
+        tool.execute("call-1", {
+          action: "invoke",
+          node: "pixel",
+          invokeCommand,
+          invokeParamsJson: "{}",
+        }),
+      ).rejects.toThrow("use the dedicated mobile_ui tool");
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
     const tool = createNodesTool({ allowMediaInvokeCommands: true });

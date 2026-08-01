@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyPluginToolMeta } from "../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../agent-tools.before-tool-call.js";
+import { copyBeforeToolCallHookMarker } from "../before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -20,6 +20,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -62,6 +63,13 @@ function runtimePlanToolContext(params: {
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
+  }
+  const catalogMode = (source as AnyAgentTool).catalogMode;
+  if (catalogMode) {
+    (target as AnyAgentTool).catalogMode = catalogMode;
+  }
+  if (source.outputSchema !== undefined) {
+    target.outputSchema = source.outputSchema;
   }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);
@@ -114,20 +122,25 @@ export function normalizeAgentRuntimeTools<
     TSchemaType,
     TResult
   >[];
+  const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
+  // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
+  // runtime just to return the same empty list; runtime plans still receive their normal callback.
   const normalized =
-    params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
-    normalizeProviderToolSchemas({
-      tools: normalizableTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      runtimeHandle: params.runtimeHandle,
-      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
-    });
+    planNormalized ??
+    (normalizableTools.length === 0
+      ? normalizableTools
+      : normalizeProviderToolSchemas({
+          tools: normalizableTools,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env ?? process.env,
+          modelId: params.modelId,
+          modelApi: params.modelApi,
+          model: params.model,
+          runtimeHandle: params.runtimeHandle,
+          allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+        }));
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }

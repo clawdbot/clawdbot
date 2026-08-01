@@ -2,8 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ensurePlaywrightChromium,
+  installLinuxSystemChromiumPackage,
   resolvePlaywrightInstallRunner,
+  shouldEnsureFfmpegFromArgv,
   shouldInstallPlaywrightSystemDependencies,
+  shouldRequirePlaywrightChromiumFromArgv,
 } from "../../scripts/ensure-playwright-chromium.mjs";
 
 describe("ensurePlaywrightChromium", () => {
@@ -73,6 +76,46 @@ describe("ensurePlaywrightChromium", () => {
       stdio: "ignore",
     });
     expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
+  });
+
+  it("installs Playwright Chromium when the lane requires its pinned browser", () => {
+    let managedChromiumInstalled = false;
+    const spawnSync = vi.fn((command: string, args: string[]) => {
+      if (command === "pnpm" && args.includes("chromium")) {
+        managedChromiumInstalled = true;
+        return { status: 0 };
+      }
+      if (command === "/cache/chromium/chrome") {
+        return { status: managedChromiumInstalled ? 0 : 127 };
+      }
+      if (command === "/usr/bin/chromium-browser") {
+        return { status: 0 };
+      }
+      return { status: 1 };
+    });
+
+    expect(
+      ensurePlaywrightChromium({
+        cwd: "/repo",
+        env: { PATH: "/bin" },
+        executablePath: "/cache/chromium/chrome",
+        existsSync: (path: string) =>
+          path === "/usr/bin/chromium-browser" ||
+          (managedChromiumInstalled && path === "/cache/chromium/chrome"),
+        requirePlaywrightChromium: true,
+        spawnSync,
+        stdio: "pipe",
+        systemExecutablePath: "/usr/bin/chromium-browser",
+      }),
+    ).toBe(0);
+    expect(spawnSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+    expect(spawnSync).not.toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
+      stdio: "ignore",
+    });
   });
 
   it("installs Playwright ffmpeg when recorded UI tests request it", () => {
@@ -276,6 +319,55 @@ describe("ensurePlaywrightChromium", () => {
     expect(logs.join("\n")).toContain("installing Linux system dependencies");
   });
 
+  it("falls back to distro Chromium when Playwright does not support the Linux runner image", () => {
+    const logs: string[] = [];
+    let installedSystemChromium = false;
+    const spawnSync = vi.fn((command: string, args: string[]) => {
+      if (command === "pnpm" && args.includes("chromium")) {
+        return { status: 1 };
+      }
+      if (command === "apt-get" && args.includes("update")) {
+        return { status: 0 };
+      }
+      if (command === "apt-get" && args.includes("chromium-browser")) {
+        installedSystemChromium = true;
+        return { status: 0 };
+      }
+      if (command === "/usr/bin/chromium-browser") {
+        return { status: installedSystemChromium ? 0 : 127 };
+      }
+      return { status: 1 };
+    });
+
+    expect(
+      ensurePlaywrightChromium({
+        cwd: "/repo",
+        env: { CI: "1", PATH: "/bin" },
+        executablePath: "/cache/chromium/chrome",
+        existsSync: (path: string) =>
+          installedSystemChromium && path === "/usr/bin/chromium-browser",
+        getuid: () => 0,
+        log: (line: string) => logs.push(line),
+        platform: "linux",
+        spawnSync,
+        stdio: "pipe",
+        systemExecutablePath: "",
+      }),
+    ).toBe(0);
+    expect(spawnSync).toHaveBeenCalledWith(
+      "apt-get",
+      ["update", "-qq"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+    expect(spawnSync).toHaveBeenCalledWith(
+      "apt-get",
+      ["install", "-y", "chromium-browser"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+    expect(logs.join("\n")).toContain("installing a system Chromium package");
+    expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
+  });
+
   it("does not install Linux system dependencies for an unprivileged local lane", () => {
     const spawnSync = vi
       .fn()
@@ -343,6 +435,7 @@ describe("ensurePlaywrightChromium", () => {
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
         existsSync: () => false,
+        platform: "darwin",
         spawnSync: vi.fn(() => ({ status: 23 })),
         stdio: "pipe",
         systemExecutablePath: "",
@@ -403,5 +496,59 @@ describe("ensurePlaywrightChromium", () => {
         platform: "linux",
       }),
     ).toBe(true);
+  });
+
+  it("installs Linux system Chromium packages with sudo for non-root lanes", () => {
+    const spawnSync = vi.fn(() => ({ status: 0 }));
+
+    expect(
+      installLinuxSystemChromiumPackage({
+        cwd: "/repo",
+        env: { PATH: "/bin" },
+        getuid: () => 501,
+        platform: "linux",
+        spawnSync,
+        stdio: "pipe",
+      }),
+    ).toBe(0);
+    expect(spawnSync).toHaveBeenNthCalledWith(1, "sudo", ["-n", "true"], { stdio: "ignore" });
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      2,
+      "sudo",
+      ["-n", "apt-get", "update", "-qq"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      3,
+      "sudo",
+      ["-n", "apt-get", "install", "-y", "chromium-browser"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+  });
+
+  it("allows QA scenario runners to skip optional Playwright ffmpeg", () => {
+    expect(shouldEnsureFfmpegFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"])).toBe(
+      true,
+    );
+    expect(
+      shouldEnsureFfmpegFromArgv([
+        "node",
+        "scripts/ensure-playwright-chromium.mjs",
+        "--skip-ffmpeg",
+      ]),
+    ).toBe(false);
+  });
+
+  it("parses the pinned Playwright Chromium requirement", () => {
+    expect(
+      shouldRequirePlaywrightChromiumFromArgv([
+        "node",
+        "scripts/ensure-playwright-chromium.mjs",
+        "--require-playwright-chromium",
+      ]),
+    ).toBe(true);
+    expect(
+      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"]),
+    ).toBe(false);
   });
 });

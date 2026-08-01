@@ -129,13 +129,16 @@ export async function fetchCodexUsage(
     });
   }
 
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : (parseStrictFiniteNumber(data.credits.balance) ?? 0);
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
   }
 
   return {
@@ -143,5 +146,6 @@ export async function fetchCodexUsage(
     displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
+    ...(billing ? { billing } : {}),
   };
 }

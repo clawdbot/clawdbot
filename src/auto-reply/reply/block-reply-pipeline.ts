@@ -17,6 +17,8 @@ export type BlockReplyPipeline = {
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
+  /** True only after a final-answer lane payload is sent. */
+  didStreamTerminalReply?: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
   hasSentExactPayload?: (payload: ReplyPayload) => boolean;
@@ -47,13 +49,14 @@ export function createAudioAsVoiceBuffer(params: {
 }
 
 /** Creates a stable duplicate key for a complete outbound payload. */
-export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
     statusNotice: isReplyPayloadStatusNotice(payload),
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
+    presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
     replyToId: payload.replyToId ?? null,
@@ -70,6 +73,7 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
+    presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
   });
@@ -120,11 +124,12 @@ export function createBlockReplyPipeline(params: {
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
-  const streamedTextFragments: string[] = [];
+  const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
   let bufferedAssistantMessageIndex: number | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let didStreamTerminalReply = false;
   let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
@@ -186,10 +191,20 @@ export function createBlockReplyPipeline(params: {
           sentMediaUrls.add(mediaUrl);
         }
         if (!isStatusNotice && reply.trimmedText) {
-          streamedTextFragments.push(reply.trimmedText);
+          const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+          const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
+          fragments.push(reply.trimmedText);
+          streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
         }
         if (!isStatusNotice) {
           didStream = true;
+          if (
+            payload.isReasoning !== true &&
+            payload.isCommentary !== true &&
+            hasOutboundReplyContent(payload, { trimText: true })
+          ) {
+            didStreamTerminalReply = true;
+          }
         }
       })
       .catch((err: unknown) => {
@@ -321,6 +336,7 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
+    didStreamTerminalReply: () => didStreamTerminalReply,
     isAborted: () => aborted,
     hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
@@ -328,7 +344,7 @@ export function createBlockReplyPipeline(params: {
       if (sentContentKeys.has(payloadKey)) {
         return true;
       }
-      if (!didStream || streamedTextFragments.length === 0) {
+      if (!didStream) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
@@ -336,7 +352,13 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const normalize = (text: string) => text.replace(/\s+/g, "");
-      return normalize(streamedTextFragments.join("")) === normalize(reply.trimmedText);
+      const target = normalize(reply.trimmedText);
+      for (const fragments of streamedTextFragmentsByMessage.values()) {
+        if (fragments.length > 0 && normalize(fragments.join("")) === target) {
+          return true;
+        }
+      }
+      return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
   };

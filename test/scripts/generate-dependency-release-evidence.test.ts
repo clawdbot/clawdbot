@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   DEPENDENCY_EVIDENCE_REPORTS,
@@ -139,6 +140,63 @@ describe("generate-dependency-release-evidence", () => {
     ).toThrow("Expected --github-output <value>.");
   });
 
+  it("rejects duplicate dependency evidence CLI options", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
+    const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
+    const duplicateCases = [
+      ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
+      [
+        "--output-dir",
+        ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs],
+      ],
+      [
+        "--release-ref",
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--release-ref",
+          "v2026.5.14",
+          "--npm-dist-tag",
+          "latest",
+        ],
+      ],
+      [
+        "--npm-dist-tag",
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--npm-dist-tag",
+          "latest",
+          "--npm-dist-tag",
+          "beta",
+        ],
+      ],
+      ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
+      [
+        "--github-output",
+        [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"],
+      ],
+      [
+        "--github-step-summary",
+        [
+          ...artifactArgs,
+          "--github-step-summary",
+          "first.md",
+          "--github-step-summary",
+          "second.md",
+        ],
+      ],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args)).toThrow(`${flag} was provided more than once.`);
+    }
+  });
+
   it("prints CLI help without generating evidence", () => {
     const result = runCli("--help");
 
@@ -184,7 +242,12 @@ describe("generate-dependency-release-evidence", () => {
       }),
     ).toBe("v2026.5.1");
     expect(calls.map(({ args }) => args[0])).toEqual(["describe", "fetch", "describe"]);
-    expect(calls[1].args).toEqual(["fetch", "--tags", "--force", "origin"]);
+    expect(expectDefined(calls[1], "release tag fetch call").args).toEqual([
+      "fetch",
+      "--tags",
+      "--force",
+      "origin",
+    ]);
   });
 
   it("collects report counts and renders human summaries", async () => {

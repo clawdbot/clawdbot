@@ -30,7 +30,7 @@ function isHttpsProxyUrl(value: string | undefined): boolean {
 }
 
 /** Resolves the configured managed proxy CA file, with env/CLI override first. */
-export function resolveManagedProxyCaFile(params: {
+function resolveManagedProxyCaFile(params: {
   config?: ProxyConfig;
   caFileOverride?: string;
 }): string | undefined {

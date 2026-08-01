@@ -11,10 +11,10 @@ import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -25,7 +25,6 @@ type AgentStatusLike = {
 
 type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
-type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
@@ -151,7 +150,7 @@ export function buildStatusLastHeartbeatValue(params: {
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
-    memoryPlugin: MemoryPluginLike;
+    memoryPlugin: MemoryPluginStatus;
     ok: (value: string) => string;
     warn: (value: string) => string;
     muted: (value: string) => string;
@@ -287,15 +286,6 @@ export function buildStatusHealthRows(params: {
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
     });
   }
-  if (params.health.modelPricing?.state === "degraded") {
-    rows.push({
-      Item: "Model pricing",
-      Status: params.warn("WARN"),
-      Detail: `optional pricing refresh degraded${
-        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
-      }`,
-    });
-  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -324,7 +314,7 @@ export function buildStatusHealthRows(params: {
 }
 
 /** Formats event-loop latency/utilization health into one table detail string. */
-export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
+function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
     `max ${Math.round(eventLoop.delayMaxMs)}ms`,
@@ -389,14 +379,20 @@ export function buildStatusModelSelectionLines(params: {
     const key = params.shortenText(sess.key, 48);
     const configured = sess.configuredModel ?? "unknown";
     const selected = sess.selectedModel ?? "unknown";
+    const isFallback = sess.modelSelectionReason === "fallback selected";
+    const intro = isFallback
+      ? `Session ${key} is running ${selected} (auto fallback); config primary is ${configured}.`
+      : `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`;
+    const reasonLine = `  Reason: ${sess.modelSelectionReason ?? "session override"}`;
+    const clearLine = isFallback
+      ? "  Action: check provider availability or retry with /model"
+      : "  Clear with: /model default";
     lines.push(
-      params.warn(
-        `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`,
-      ),
+      params.warn(intro),
       `  Configured default: ${configured}`,
       `  Session selected: ${selected}`,
-      `  Reason: ${sess.modelSelectionReason ?? "session override"}`,
-      "  Clear with: /model default",
+      reasonLine,
+      clearLine,
       "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   }

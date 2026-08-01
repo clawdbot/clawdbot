@@ -2,7 +2,7 @@
 import { createServer } from "node:net";
 import { isMainThread, threadId } from "node:worker_threads";
 
-async function isPortFree(port: number): Promise<boolean> {
+export async function isPortFree(port: number): Promise<boolean> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return false;
   }
@@ -15,7 +15,7 @@ async function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-async function getOsFreePort(): Promise<number> {
+export async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
@@ -80,7 +80,7 @@ export async function getDeterministicFreePortBlock(params?: {
 
   // Fallback: let the OS pick a port block (best effort).
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const port = await getOsFreePort();
+    const port = await getFreePort();
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
       Boolean,
     );
