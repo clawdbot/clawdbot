@@ -23,6 +23,13 @@ type StaticExtensionAssetParams = Pick<RuntimePostBuildParams, "rootDir" | "fs" 
 type LegacyCliExitCompatChunk = { dest: string; contents: string };
 
 export function listStaticExtensionAssetOutputs(params?: StaticExtensionAssetParams): string[];
+export function generateExportHtmlVendorAssets(): Readonly<Record<string, string>>;
+export function listExportHtmlTemplateOutputs(
+  params?: Pick<RuntimePostBuildParams, "rootDir" | "fs">,
+): string[];
+export function copyExportHtmlTemplates(
+  params?: Pick<RuntimePostBuildParams, "rootDir" | "fs">,
+): void;
 
 export function listCoreRuntimePostBuildOutputs(
   params?: Pick<RuntimePostBuildParams, "rootDir" | "fs"> & {
