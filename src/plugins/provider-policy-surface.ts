@@ -25,7 +25,7 @@ import {
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
 
-export type ProviderProjectConfiguredModelRowContext = {
+type ProviderProjectConfiguredModelRowContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
