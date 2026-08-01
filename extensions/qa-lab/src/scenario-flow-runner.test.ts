@@ -424,6 +424,7 @@ describe("scenario-flow-runner", () => {
                 sessions: [
                   {
                     key: "agent:qa:main",
+                    hasActiveRun: sessionListCalls.length === 1,
                     goal: { status: "active", objective: artifactFile },
                   },
                 ],
@@ -458,7 +459,7 @@ describe("scenario-flow-runner", () => {
     });
 
     expect(result.status).toBe("pass");
-    expect(sessionListCalls).toEqual(["sessions.list"]);
+    expect(sessionListCalls).toEqual(["sessions.list", "sessions.list"]);
     const start = state
       .getSnapshot()
       .messages.find(
@@ -495,6 +496,7 @@ describe("scenario-flow-runner", () => {
                 sessions: [
                   {
                     key: "agent:qa:main",
+                    hasActiveRun: false,
                     goal: { status: "complete", objective: artifactFile },
                   },
                 ],

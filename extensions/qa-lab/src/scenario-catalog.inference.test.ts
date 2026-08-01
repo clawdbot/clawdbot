@@ -24,6 +24,8 @@ describe("QA inference scenario catalog", () => {
     ]);
     const serializedFlow = JSON.stringify(flow);
     expect(serializedFlow).toContain("sessions.list");
+    expect(serializedFlow).toContain("waitForCondition");
+    expect(serializedFlow).toContain("session.hasActiveRun === false");
     expect(serializedFlow).toContain("goalSession?.goal?.status === 'active'");
     expect(serializedFlow).toContain('"text":"continue"');
   });
