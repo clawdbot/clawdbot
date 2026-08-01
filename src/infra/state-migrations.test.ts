@@ -1451,11 +1451,12 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
     const outsideStorePath = path.join(root, "outside-sessions.json");
+    const pendingKey = "agent:main:task";
     await fs.writeFile(
       outsideStorePath,
       JSON.stringify({
-        "agent:main:task": {
-          sessionId: "canonical-acp",
+        [pendingKey]: {
+          sessionId: pendingKey,
           updatedAt: 10,
           acp: {
             backend: "test",
@@ -1481,9 +1482,17 @@ describe("state migrations", () => {
     expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
       string,
-      { sessionId: string; acp?: unknown }
+      { sessionId?: string; acp?: unknown }
     >;
-    expect(outsideStore["agent:main:task"]?.acp).toBeDefined();
+    expect(outsideStore[pendingKey]?.sessionId).toBe(pendingKey);
+    expect(outsideStore[pendingKey]?.acp).toBeDefined();
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: pendingKey,
+        entry: { sessionId: pendingKey, lifecycleRevision: undefined },
+        env,
+      }),
+    ).toBeUndefined();
     expect(result.warnings).toContain(
       `Deferred ACP metadata migration in final-component symlink store ${configuredStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
     );
@@ -1874,13 +1883,18 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const pendingKey = "agent:main:existing";
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "agent:main:existing": {
-          sessionId: "existing-main",
+        [pendingKey]: {
+          sessionId: pendingKey,
           updatedAt: 20,
+          displayName: "Pending ACP session",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          modelOverrideSource: "user",
           acp: {
             backend: "test",
             agent: "main",
@@ -1901,13 +1915,47 @@ describe("state migrations", () => {
     });
 
     expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    const afterStore = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        initializationPending?: boolean;
+        acp?: unknown;
+        displayName?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+      }
+    >;
+    expect(afterStore[pendingKey]).toMatchObject({
+      initializationPending: true,
+      displayName: "Pending ACP session",
+      providerOverride: "test-provider",
+      modelOverride: "test-model",
+      modelOverrideSource: "user",
+    });
+    expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
+    expect(afterStore[pendingKey]?.acp).toBeUndefined();
     expect(
       readAcpSessionMetaForEntry({
-        sessionKey: "agent:main:existing",
-        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        sessionKey: pendingKey,
+        entry: { lifecycleRevision: undefined },
         env,
       })?.runtimeSessionName,
     ).toBe("existing-runtime");
+
+    const firstBytes = await fs.readFile(storePath, "utf8");
+    closeOpenClawStateDatabaseForTest();
+    resetAutoMigrateLegacyStateForTest();
+    const rerun = await autoMigrateLegacyState({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      env,
+      homedir: () => root,
+    });
+    await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
+    expect(rerun.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
   });
 
   it("migrates existing and imported ACP metadata in one canonical session phase", async () => {
@@ -4262,16 +4310,21 @@ describe("state migrations", () => {
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
 
-  it("preserves key-shaped pending rows during automatic legacy session migration", async () => {
+  it("preserves a readable target store when normalization rejects an existing key", async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
     const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
-    const pendingKey = "agent:worker-1:desk";
-    const targetStore = {
-      [pendingKey]: { sessionId: pendingKey, updatedAt: 50 },
-      "agent:worker-1:desk:other": { sessionId: "other-session", updatedAt: 60 },
-    };
-    await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const targetBytes = `${JSON.stringify(
+      {
+        "agent:worker-1:desk": { sessionId: "valid-session", updatedAt: 50 },
+        "agent:worker-1:desk:invalid": { sessionId: "../invalid", updatedAt: 60 },
+      },
+      null,
+      2,
+    )}\n`;
+    const legacyBytes = await fs.readFile(legacyStorePath, "utf8");
+    await fs.writeFile(targetStorePath, targetBytes, "utf8");
 
     const detected = await detectLegacyStateMigrations({
       cfg,
@@ -4283,16 +4336,198 @@ describe("state migrations", () => {
       now: () => 1234,
     });
 
-    expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(true);
+    await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(targetBytes);
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toBe(legacyBytes);
+    await expect(fs.readFile(path.join(stateDir, "sessions", "trace.jsonl"), "utf8")).resolves.toBe(
+      "{}\n",
+    );
+    expect(result.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(false);
+    expect(result.changes.some((change) => change.startsWith("Moved trace.jsonl"))).toBe(false);
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("normalization rejected 1 existing target session key"),
+    );
+  });
+
+  it("still filters invalid legacy-only rows", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.writeFile(
+      legacyStorePath,
+      `${JSON.stringify(
+        {
+          invalidLegacy: { sessionId: "../invalid", updatedAt: 100 },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
 
     const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
       string,
-      { sessionId?: string; initializationPending?: boolean; updatedAt?: number }
+      { sessionId?: string }
     >;
-    expect(afterStore[pendingKey]).toBeDefined();
-    expect(afterStore[pendingKey]?.initializationPending).toBe(true);
-    expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
-    expect(afterStore["agent:worker-1:desk:other"]?.sessionId).toBe("other-session");
+    expect(afterStore["agent:worker-1:invalidLegacy"]).toBeUndefined();
+    expect(Object.values(afterStore).some((entry) => entry.sessionId === "group-session")).toBe(
+      true,
+    );
+    expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+    expect(result.warnings).toStrictEqual([]);
+    await expectMissingPath(legacyStorePath);
   });
+
+  it("defers when an invalid legacy winner would replace an existing target key", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const conflictKey = "agent:worker-1:desk:conflict";
+    const targetBytes = `${JSON.stringify(
+      {
+        [conflictKey]: { sessionId: "target-session", updatedAt: 50 },
+      },
+      null,
+      2,
+    )}\n`;
+    const legacyBytes = `${JSON.stringify(
+      {
+        [conflictKey]: { sessionId: "../invalid", updatedAt: 100 },
+      },
+      null,
+      2,
+    )}\n`;
+    await fs.writeFile(targetStorePath, targetBytes, "utf8");
+    await fs.writeFile(legacyStorePath, legacyBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(targetBytes);
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toBe(legacyBytes);
+    expect(result.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(false);
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("normalization rejected 1 existing target session key"),
+    );
+  });
+
+  it.each([
+    { phase: "initial merge", transcriptSessionId: "other-session", rewrites: false },
+    { phase: "post-move rewrite", transcriptSessionId: "trace", rewrites: true },
+  ])(
+    "preserves key-shaped pending rows through the $phase",
+    async ({ transcriptSessionId, rewrites }) => {
+      const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+      const targetStorePath = path.join(
+        stateDir,
+        "agents",
+        "worker-1",
+        "sessions",
+        "sessions.json",
+      );
+      const pendingKey = "agent:worker-1:desk";
+      const transcriptKey = "agent:worker-1:desk:transcript";
+      const ordinaryKey = "agent:worker-1:desk:ordinary";
+      const targetStore = {
+        [pendingKey]: {
+          sessionId: pendingKey,
+          updatedAt: 50,
+          displayName: "Pending desk",
+          label: "pending-label",
+          category: "triage",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          modelOverrideSource: "user",
+          groupActivation: "always",
+          delivery: { kind: "none" },
+        },
+        [transcriptKey]: { sessionId: transcriptSessionId, updatedAt: 60 },
+        [ordinaryKey]: { sessionId: "ordinary-session", updatedAt: 70 },
+      };
+      await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+
+      const result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        now: () => 1234,
+      });
+
+      expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+      expect(result.changes).toContain("Moved trace.jsonl → agents/worker-1/sessions");
+      expect(result.changes.includes("Rewrote migrated session transcript paths")).toBe(rewrites);
+      await expect(
+        fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
+      ).resolves.toBe("{}\n");
+
+      const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+        string,
+        {
+          sessionId?: string;
+          sessionFile?: string;
+          initializationPending?: boolean;
+          updatedAt?: number;
+          displayName?: string;
+          label?: string;
+          category?: string;
+          providerOverride?: string;
+          modelOverride?: string;
+          modelOverrideSource?: string;
+          groupActivation?: string;
+          delivery?: { kind?: string };
+        }
+      >;
+      expect(afterStore[pendingKey]).toMatchObject({
+        initializationPending: true,
+        updatedAt: 50,
+        displayName: "Pending desk",
+        label: "pending-label",
+        category: "triage",
+        providerOverride: "test-provider",
+        modelOverride: "test-model",
+        modelOverrideSource: "user",
+        groupActivation: "always",
+        delivery: { kind: "none" },
+      });
+      expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
+      expect(afterStore[transcriptKey]?.sessionId).toBe(transcriptSessionId);
+      expect(afterStore[transcriptKey]?.sessionFile).toBeUndefined();
+      expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
+
+      const firstBytes = await fs.readFile(targetStorePath, "utf8");
+      closeOpenClawStateDatabaseForTest();
+      resetAutoMigrateLegacyStateForTest();
+      const rerun = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        now: () => 1234,
+      });
+      await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
+      expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
+        false,
+      );
+      expect(rerun.changes).not.toContain("Rewrote migrated session transcript paths");
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
