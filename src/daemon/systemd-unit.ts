@@ -104,7 +104,7 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
-export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
+function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
