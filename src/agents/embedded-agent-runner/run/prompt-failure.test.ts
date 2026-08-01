@@ -43,7 +43,9 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     externalAbort: false,
     pluginHarnessOwnsTransport: false,
     timedOutByRunBudget: false,
-    resolveAuthProfileFailureReason: vi.fn(() => "rate_limit"),
+    resolveAuthProfileFailureReason: vi.fn<Params["resolveAuthProfileFailureReason"]>(
+      () => "rate_limit",
+    ),
     maybeEscalateRateLimitProfileFallback: vi.fn(),
     advanceAttemptAuthProfile: vi.fn(async () => true),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),

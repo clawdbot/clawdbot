@@ -83,10 +83,12 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
+  let createSubagentRunRecord: typeof import("./subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
 
   beforeAll(async () => {
     ({ createCanonicalSubagentRunFixture } =
       await import("./subagent-registry.persistence.test-support.js"));
+    ({ createSubagentRunRecord } = await import("./subagent-test-fixtures.test-helpers.js"));
     mod = await import("./subagent-registry.test-helpers.js");
   });
 
@@ -108,7 +110,7 @@ describe("subagent registry archive behavior", () => {
   const addCanonicalSubagentRunForTests = (
     entry: Parameters<typeof mod.addSubagentRunForTests>[0],
   ) => {
-    mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(entry));
+    mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(createSubagentRunRecord(entry)));
   };
 
   const waitForNoRequesterRuns = async () => {
