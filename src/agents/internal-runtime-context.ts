@@ -16,11 +16,14 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Notice for tail context that modifies the immediately preceding user turn. */
+/** Notice for tail context that precedes the active user turn. */
 export const OPENCLAW_CURRENT_TURN_RUNTIME_CONTEXT_NOTICE =
-  "Do not reply to or describe this context. Use it to answer the immediately preceding user message now. Do not wait for another message.";
-/** Header for context attached to the immediately preceding user message. */
+  "Do not reply to or describe this context. Use it to answer the active user message that follows. Do not wait for another message.";
+/** Header for context placed before the active user message. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the active user message that follows.";
+
+const LEGACY_CURRENT_TURN_RUNTIME_CONTEXT_HEADER =
   "OpenClaw runtime context for the immediately preceding user message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
@@ -224,12 +227,16 @@ function isRuntimeContextPromptHeader(line: string): boolean {
   return (
     line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER ||
     line === LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER ||
+    line === LEGACY_CURRENT_TURN_RUNTIME_CONTEXT_HEADER ||
     line === OPENCLAW_RUNTIME_EVENT_HEADER
   );
 }
 
 function isRuntimeContextPromptNotice(header: string, notice: string): boolean {
-  if (header === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER) {
+  if (
+    header === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER ||
+    header === LEGACY_CURRENT_TURN_RUNTIME_CONTEXT_HEADER
+  ) {
     // Keep stripping context copied before current-turn carriers gained a
     // dedicated instruction; historical assistant output can still replay.
     return (
@@ -321,6 +328,9 @@ export function hasInternalRuntimeContext(text: string): boolean {
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
     text.includes(
       `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
+    ) ||
+    text.includes(
+      `${LEGACY_CURRENT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
     ) ||
     text.includes(
       `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_CURRENT_TURN_RUNTIME_CONTEXT_NOTICE}`,
