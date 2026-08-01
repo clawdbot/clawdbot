@@ -111,6 +111,59 @@ describe("SessionManager user idempotency", () => {
     ).toHaveLength(1);
   });
 
+  it("adopts a keyed user persisted after the manager loaded", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-concurrent-ingress",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-concurrent-ingress",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-concurrent-ingress:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntry(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "existing-assistant",
+      message: buildAssistantMessage("previous answer"),
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "ingress-persisted-user",
+      message: userMessage,
+      now: 2,
+      parentId: "existing-assistant",
+    });
+
+    expect(sessionManager.appendMessage(userMessage)).toBe("ingress-persisted-user");
+    expect(sessionManager.getLeafId()).toBe("ingress-persisted-user");
+
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const events = await loadTranscriptEvents(scope);
+    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+      parentId: "ingress-persisted-user",
+    });
+    expect(
+      events.filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("adopts a persisted user across context-free session setup metadata", async () => {
     const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
     const scope = {
