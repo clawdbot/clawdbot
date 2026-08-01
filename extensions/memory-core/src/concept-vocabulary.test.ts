@@ -86,19 +86,17 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("your");
   });
 
-  it("ignores project and recall annotations when deriving concept tags", () => {
+  it("drops structural and numeric compound noise from derived concept tags", () => {
     const tags = deriveConceptTags({
-      path: "memory/2026-07-28.md",
-      snippet:
-        "Alpha ingest workflow. <!-- project: github.com/acme/alpha --> <!-- trigger: kraken deploy ritual --> <!-- importance: 8 -->",
+      path: "memory/2026-04-04.md",
+      snippet: "kept theme 1.00 51-54 gateway",
     });
 
-    expect(tags).toContain("alpha");
-    expect(tags).toContain("ingest");
-    expect(tags).not.toContain("github.com/acme/alpha");
-    expect(tags).not.toContain("acme");
-    expect(tags).not.toContain("kraken");
-    expect(tags).not.toContain("importance");
+    expect(tags).toContain("gateway");
+    expect(tags).not.toContain("kept");
+    expect(tags).not.toContain("theme");
+    expect(tags).not.toContain("1.00");
+    expect(tags).not.toContain("51-54");
   });
 
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {

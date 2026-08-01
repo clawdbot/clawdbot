@@ -39,6 +39,7 @@ const LANGUAGE_STOP_WORDS = {
     "have",
     "into",
     "just",
+    "kept",
     "line",
     "lines",
     "long",
@@ -73,6 +74,7 @@ const LANGUAGE_STOP_WORDS = {
     "their",
     "there",
     "these",
+    "theme",
     "they",
     "this",
     "through",
@@ -281,6 +283,7 @@ const PROTECTED_GLOSSARY = [
 ].map((word) => normalizeLowercaseStringOrEmpty(word.normalize("NFKC")));
 
 const COMPOUND_TOKEN_RE = /[\p{L}\p{N}]+(?:[._/-][\p{L}\p{N}]+)+/gu;
+const NUMERIC_COMPOUND_TOKEN_RE = /^\d+(?:[._/-]\d+)+$/u;
 const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
 const LATIN_RE = /\p{Script=Latin}/u;
 const HAN_RE = /\p{Script=Han}/u;
@@ -342,6 +345,7 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
   }
   if (
     /^\d+$/.test(normalized) ||
+    NUMERIC_COMPOUND_TOKEN_RE.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
