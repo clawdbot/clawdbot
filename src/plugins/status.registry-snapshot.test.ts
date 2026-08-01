@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
-import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
+import {
+  buildPluginDiagnosticsReport,
+  buildPluginRegistrySnapshotReport,
+  buildPluginSnapshotReport,
+} from "./status.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
@@ -306,6 +310,46 @@ describe("buildPluginRegistrySnapshotReport", () => {
       expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
     );
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("preserves the real runtime import error while explaining missing dependencies", () => {
+    const rootDir = makeTempDir();
+    const bundledRoot = makeTempDir();
+    const fixture = createColdPluginFixture({
+      rootDir,
+      pluginId: "failed-runtime-dependency-demo",
+      packageJson: {
+        dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
+        optionalDependencies: { "optional-runtime": "2.0.0" },
+      },
+    });
+    fs.writeFileSync(
+      fixture.runtimeSource,
+      `require("node:fs").writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded");\n` +
+        'require("missing-runtime");\n',
+      "utf8",
+    );
+
+    const report = buildPluginDiagnosticsReport({
+      config: createColdPluginConfig(rootDir, fixture.pluginId),
+      workspaceDir: rootDir,
+      env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+    const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === fixture.pluginId);
+
+    expectFields(plugin, { status: "error" });
+    expect(String(plugin.error)).toContain("Cannot find module");
+    expect(String(plugin.error)).toContain("Install the plugin dependencies");
+    expectFields(requireRecord(plugin.dependencyStatus), {
+      missing: ["missing-runtime"],
+      missingOptional: ["optional-runtime"],
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Cannot find module");
+    expect(diagnostics[0]?.message).toContain("Install the plugin dependencies");
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(true);
   });
 
   it("replays persisted list metadata without importing plugin runtime", async () => {
