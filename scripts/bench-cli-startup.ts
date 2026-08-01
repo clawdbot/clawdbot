@@ -659,6 +659,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "gatewayHealthJsonFirstDevice" &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
   ) {
