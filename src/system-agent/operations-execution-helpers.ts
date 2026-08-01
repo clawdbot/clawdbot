@@ -96,6 +96,11 @@ export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
   surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
+  if (operation === "restart" && surface === "gateway") {
+    const { requestSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
+    // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
+    return requestSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
+  }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -107,8 +112,7 @@ export async function runGatewayLifecycle(
     await lifecycle.runDaemonStop({ force: true });
     return;
   }
-  // Gateway-hosted operations must finish and drain before restarting their owner.
-  return await lifecycle.runDaemonRestart(surface === "gateway" ? { safe: true } : undefined);
+  return await lifecycle.runDaemonRestart();
 }
 
 export async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {

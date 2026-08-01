@@ -144,10 +144,26 @@ const mockConfig = vi.hoisted(() => {
   };
 });
 const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+const mockScheduleGatewayRestart = vi.hoisted(() =>
+  vi.fn(() => ({
+    ok: true,
+    pid: process.pid,
+    signal: "SIGUSR1" as const,
+    delayMs: 0,
+    mode: "emit" as const,
+    coalesced: false,
+    cooldownMsApplied: 0,
+    emitHooksQueued: false,
+  })),
+);
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStart: vi.fn(async () => {}),
   runDaemonStop: vi.fn(async () => {}),
   runDaemonRestart: mockDaemonRestart,
+}));
+vi.mock("../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/restart.js")>()),
+  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
 }));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
@@ -199,6 +215,7 @@ describe("parseSystemAgentOperation", () => {
   beforeEach(() => {
     mockConfig.reset();
     mockDaemonRestart.mockClear();
+    mockScheduleGatewayRestart.mockClear();
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
@@ -463,17 +480,30 @@ describe("parseSystemAgentOperation", () => {
     expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { surface: "gateway" as const, options: { safe: true } },
-    { surface: "cli" as const, options: undefined },
-  ])(
-    "uses the appropriate restart lifecycle for the $surface surface",
-    async ({ surface, options }) => {
-      await runGatewayLifecycle("restart", surface);
+  it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
+    mockConfig.setConfig({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://configured-remote-gateway.example:9443" },
+      },
+    });
 
-      expect(mockDaemonRestart).toHaveBeenCalledWith(options);
-    },
-  );
+    await expect(runGatewayLifecycle("restart", "gateway")).resolves.toBe(true);
+
+    expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
+      reason: "gateway.restart.safe",
+      delayMs: 0,
+    });
+    expect(mockDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("preserves the standalone CLI Gateway restart route", async () => {
+    await runGatewayLifecycle("restart", "cli");
+
+    expect(mockDaemonRestart).toHaveBeenCalledExactlyOnceWith();
+    expect(mockScheduleGatewayRestart).not.toHaveBeenCalled();
+  });
 
   it.each([
     { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
