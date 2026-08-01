@@ -4,9 +4,11 @@ import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 
 export const SLACK_PRESENCE_GREETING_COOLDOWN_MS = 8 * 60 * 60 * 1000;
+export const SLACK_PRESENCE_REQUEST_TIMEOUT_MS = 30_000;
 const SLACK_PRESENCE_POLL_INTERVAL_MS = 60_000;
 const SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS = 8;
 const SLACK_PRESENCE_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -271,7 +273,13 @@ export function createSlackPresenceMonitor(params: {
         return;
       }
       try {
-        const response = await params.client.getPresence({ user: userId });
+        const response = await withTimeout(
+          params.client.getPresence({ user: userId }),
+          SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+          {
+            message: `Slack presence request timed out after ${SLACK_PRESENCE_REQUEST_TIMEOUT_MS}ms`,
+          },
+        );
         if (stopped) {
           return;
         }
