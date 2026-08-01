@@ -1729,6 +1729,93 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: {
+        ok: true,
+        messageId: "message-reply",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "visible reply",
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: {
+        ok: true,
+        pollId: "poll-1",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "preferred default?",
+    },
+  ])("records confirmed current-source $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-current-source-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([testCase.expected]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: { ok: true, messageId: "message-reply" },
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: { ok: true, pollId: "poll-1" },
+    },
+  ])("does not record off-route $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-off-route-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
+  });
+
   it("records conversation creation target evidence", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-thread-create-target";

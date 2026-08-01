@@ -55,6 +55,7 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyText,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -1571,26 +1572,31 @@ export async function handleToolExecutionEnd(
     });
     ctx.trimMessagingToolSent();
   }
-  if (didDeliverMessagingResult && isMessagingSend) {
-    if (committedMediaUrls.length > 0) {
-      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
-      ctx.trimMessagingToolSent();
-    }
-    const deliveredCurrentSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
       sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
       toolName,
       args: startArgs,
       result,
       isError: isToolError,
     });
-    if (deliveredCurrentSourceReply) {
-      ctx.state.messageToolOnlySourceReplyDelivered = true;
-      const normalizedSourceReplyText = messageText ? normalizeTextForComparison(messageText) : "";
-      if (normalizedSourceReplyText) {
-        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
-        ctx.trimMessagingToolSent();
-      }
-      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+  if (deliveredCurrentSourceReply) {
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+    const normalizedSourceReplyText = sourceReplyText
+      ? normalizeTextForComparison(sourceReplyText)
+      : "";
+    if (normalizedSourceReplyText) {
+      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+      ctx.trimMessagingToolSent();
+    }
+    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+  }
+  if (didDeliverMessagingResult && isMessagingSend) {
+    if (committedMediaUrls.length > 0) {
+      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+      ctx.trimMessagingToolSent();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
