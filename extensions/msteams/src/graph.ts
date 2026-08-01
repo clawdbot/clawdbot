@@ -176,10 +176,13 @@ export async function fetchAllGraphPages<T>(params: {
   deadline?: MSTeamsRequestDeadline;
   /** Max pages to fetch before stopping. Default: 50. */
   maxPages?: number;
+  /** Keep only the final N items while pagination continues. */
+  retainLast?: number;
   /** Stop pagination early when this predicate returns true. */
   findOne?: (item: T) => boolean;
 }): Promise<PaginatedResult<T>> {
   const maxPages = params.maxPages ?? 50;
+  const retainLast = params.retainLast;
   const items: T[] = [];
   let nextPath: string | undefined = params.path;
 
@@ -202,6 +205,9 @@ export async function fetchAllGraphPages<T>(params: {
     }
 
     items.push(...pageItems);
+    if (typeof retainLast === "number" && retainLast > 0 && items.length > retainLast) {
+      items.splice(0, items.length - retainLast);
+    }
 
     // @odata.nextLink is an absolute URL; strip the Graph root to get a relative path
     const rawNext: string | undefined = res["@odata.nextLink"];

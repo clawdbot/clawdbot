@@ -120,9 +120,13 @@ export async function fetchThreadReplies(
   const res = await fetchAllGraphPages<GraphThreadMessage>({
     token,
     path,
-    maxPages: 50,
+    maxPages: deadline ? Number.MAX_SAFE_INTEGER : 50,
+    retainLast: requestedLimit,
     ...(deadline ? { deadline } : {}),
   });
+  if (res.truncated) {
+    throw new Error("MS Teams thread replies pagination did not reach the newest replies");
+  }
   return res.items.toSorted(compareThreadMessagesChronologically).slice(-requestedLimit);
 }
 

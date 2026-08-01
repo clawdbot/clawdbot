@@ -638,6 +638,57 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
+    it("retains only the final requested items while continuing pagination", async () => {
+      let callCount = 0;
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(
+              [
+                { id: "1", name: "a" },
+                { id: "2", name: "b" },
+              ],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
+            ),
+          );
+        }
+        if (callCount === 2) {
+          return jsonResponse(
+            pagedResponse(
+              [
+                { id: "3", name: "c" },
+                { id: "4", name: "d" },
+              ],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=page3",
+            ),
+          );
+        }
+        return jsonResponse(
+          pagedResponse([
+            { id: "5", name: "e" },
+            { id: "6", name: "f" },
+          ]),
+        );
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        retainLast: 3,
+      });
+
+      expect(result).toEqual({
+        items: [
+          { id: "4", name: "d" },
+          { id: "5", name: "e" },
+          { id: "6", name: "f" },
+        ],
+        truncated: false,
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    });
+
     it("findOne early exit", async () => {
       const target = { id: "target", name: "found-it" };
       let callCount = 0;

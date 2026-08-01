@@ -173,6 +173,7 @@ describe("fetchThreadReplies", () => {
       token: "tok",
       path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
       maxPages: 50,
+      retainLast: 50,
     });
   });
 
@@ -225,7 +226,22 @@ describe("fetchThreadReplies", () => {
       token: "tok",
       path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
       maxPages: 50,
+      retainLast: 2,
     });
+  });
+
+  it("rejects truncated pagination instead of returning a stale scanned prefix", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [
+        { id: "reply-1", createdDateTime: "2026-07-01T00:00:00Z" },
+        { id: "reply-2", createdDateTime: "2026-07-01T00:01:00Z" },
+      ],
+      truncated: true,
+    } as never);
+
+    await expect(fetchThreadReplies("tok", "g", "c", "m", 2)).rejects.toThrow(
+      "MS Teams thread replies pagination did not reach the newest replies",
+    );
   });
 
   it("forwards a shared deadline to paginated reply fetches", async () => {
@@ -241,7 +257,8 @@ describe("fetchThreadReplies", () => {
     expect(fetchAllGraphPages).toHaveBeenCalledWith({
       token: "tok",
       path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
-      maxPages: 50,
+      maxPages: Number.MAX_SAFE_INTEGER,
+      retainLast: 50,
       deadline,
     });
   });
