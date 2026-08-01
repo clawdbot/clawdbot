@@ -1,11 +1,11 @@
-// Gateway connection auth tests document token/password precedence for local,
+// Gateway credential resolver tests document token/password precedence for local,
 // remote, CLI override, env override, and config-secret connection flows.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveGatewayConnectionAuth } from "./connection-auth.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
 type ResolvedAuth = { token?: string; password?: string };
-type GatewayConnectionAuthOptions = Parameters<typeof resolveGatewayConnectionAuth>[0];
+type GatewayConnectionAuthOptions = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
 
 type ConnectionAuthCase = {
   name: string;
@@ -41,7 +41,7 @@ const DEFAULT_ENV = {
   OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
 } as NodeJS.ProcessEnv;
 
-describe("resolveGatewayConnectionAuth", () => {
+describe("resolveGatewayCredentialsWithSecretInputs", () => {
   const cases: ConnectionAuthCase[] = [
     {
       name: "local mode defaults to config-first token/password",
@@ -161,7 +161,7 @@ describe("resolveGatewayConnectionAuth", () => {
   ];
 
   it.each(cases)("$name", async ({ cfgLocal, env, options, expected }) => {
-    const asyncResolved = await resolveGatewayConnectionAuth({
+    const asyncResolved = await resolveGatewayCredentialsWithSecretInputs({
       config: cfgLocal,
       env,
       ...options,
@@ -187,7 +187,7 @@ describe("resolveGatewayConnectionAuth", () => {
       LOCAL_SECRET_TOKEN: "resolved-from-secretref", // pragma: allowlist secret
     } as NodeJS.ProcessEnv;
 
-    const resolved = await resolveGatewayConnectionAuth({
+    const resolved = await resolveGatewayCredentialsWithSecretInputs({
       config,
       env,
     });
@@ -199,7 +199,7 @@ describe("resolveGatewayConnectionAuth", () => {
 
   it("resolves an env-template local token through the configured auth path", async () => {
     await expect(
-      resolveGatewayConnectionAuth({
+      resolveGatewayCredentialsWithSecretInputs({
         config: cfg({
           gateway: {
             mode: "local",
@@ -230,7 +230,7 @@ describe("resolveGatewayConnectionAuth", () => {
       CONFIG_FIRST_TOKEN: "config-first-token",
     } as NodeJS.ProcessEnv;
 
-    const resolved = await resolveGatewayConnectionAuth({
+    const resolved = await resolveGatewayCredentialsWithSecretInputs({
       config,
       env,
     });
@@ -260,7 +260,7 @@ describe("resolveGatewayConnectionAuth", () => {
       CONFIG_FIRST_PASSWORD: "config-first-password", // pragma: allowlist secret
     } as NodeJS.ProcessEnv;
 
-    const resolved = await resolveGatewayConnectionAuth({
+    const resolved = await resolveGatewayCredentialsWithSecretInputs({
       config,
       env,
     });
@@ -289,7 +289,7 @@ describe("resolveGatewayConnectionAuth", () => {
     } as NodeJS.ProcessEnv;
 
     await expect(
-      resolveGatewayConnectionAuth({
+      resolveGatewayCredentialsWithSecretInputs({
         config,
         env,
       }),
@@ -316,7 +316,7 @@ describe("resolveGatewayConnectionAuth", () => {
     } as NodeJS.ProcessEnv;
 
     await expect(
-      resolveGatewayConnectionAuth({
+      resolveGatewayCredentialsWithSecretInputs({
         config,
         env,
       }),
