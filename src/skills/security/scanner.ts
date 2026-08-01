@@ -629,6 +629,25 @@ function returnsStaticRequireStub(
   return ts.isObjectLiteralExpression(expression) || ts.isClassExpression(expression);
 }
 
+function isAmbientTypeScriptDeclaration(
+  ts: typeof import("typescript"),
+  declaration: import("typescript").Declaration,
+): boolean {
+  if (declaration.getSourceFile().isDeclarationFile) {
+    return true;
+  }
+  for (let current: import("typescript").Node | undefined = declaration; current;) {
+    if (
+      ts.canHaveModifiers(current) &&
+      ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 function isNodeRequireIdentifier(
   ts: typeof import("typescript"),
   checker: import("typescript").TypeChecker,
@@ -640,7 +659,7 @@ function isNodeRequireIdentifier(
   }
   const runtimeDeclarations = symbol.declarations?.filter((declaration) => {
     if (
-      ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Ambient ||
+      isAmbientTypeScriptDeclaration(ts, declaration) ||
       ts.isTypeOnlyImportDeclaration(declaration) ||
       ts.isInterfaceDeclaration(declaration) ||
       ts.isTypeAliasDeclaration(declaration)

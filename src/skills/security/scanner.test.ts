@@ -204,9 +204,14 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
         expectedLine: 4,
       },
       {
-        name: "CommonJS alias with ambient require declaration",
-        source: `\ndeclare function require(id: string): any;\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        name: "CommonJS alias with ambient require variable",
+        source: `\ndeclare const require: (id: string) => any;\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
         expectedLine: 4,
+      },
+      {
+        name: "CommonJS alias with global ambient require",
+        source: `\ndeclare global { function require(id: string): any; }\nexport {};\nconst { exec: run } = require("child_process");\nrun("echo unsafe");\n`,
+        expectedLine: 5,
       },
       {
         name: "CommonJS property extraction through createRequire",
@@ -237,13 +242,7 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
   });
 
   it("detects aliased calls through transparent expression wrappers", () => {
-    const source = `
-import { exec as run } from "node:child_process";
-(run)("echo unsafe");
-new (run)("echo unsafe");
-(run as typeof run)("echo unsafe");
-run!("echo unsafe");
-`;
+    const source = `\nimport { exec as run } from "node:child_process";\n(run)("echo unsafe");\nnew (run)("echo unsafe");\n(run as typeof run)("echo unsafe");\nrun!("echo unsafe");\n`;
 
     const findings = scanSource(source, "plugin.ts").filter(
       (candidate) => candidate.ruleId === "dangerous-exec",
