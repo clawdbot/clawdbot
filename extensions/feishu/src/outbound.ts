@@ -29,7 +29,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { resolveFeishuAccount } from "./accounts.js";
+import { isFeishuSecretRefUnavailableError, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -812,6 +812,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             // The image already reached Feishu; fallback text would duplicate a visible send.
             throw err;
           }
+          // Configuration errors (unresolved SecretRef) must propagate — re-throw
+          // instead of silently degrading to plain text, which would mask the root cause.
+          // See: https://github.com/OpenClaw/openclaw/issues/89338
+          if (isFeishuSecretRefUnavailableError(err)) {
+            throw err;
+          }
           console.error(`[feishu] local image path auto-send failed:`, err);
           return await sendOutboundText({
             cfg,
@@ -981,6 +987,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       } catch (err) {
         if (isChannelPartialDeliveryError(err)) {
           // Accepted media is not an upload failure and must never trigger a second send.
+          throw err;
+        }
+        // Configuration errors (unresolved SecretRef) must propagate — re-throw
+        // instead of silently degrading to a URL link, which would mask the root cause.
+        // See: https://github.com/OpenClaw/openclaw/issues/89338
+        if (isFeishuSecretRefUnavailableError(err)) {
           throw err;
         }
         console.error(`[feishu] sendMediaFeishu failed:`, err);

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { FeishuSecretRefUnavailableError } from "./accounts.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -590,6 +591,29 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expect(onDeliveryResult).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates FeishuSecretRefUnavailableError from local-image path instead of silently falling back", async () => {
+    const { dir, file } = await createTmpImage();
+    const secretRefError = new FeishuSecretRefUnavailableError(
+      "channels.feishu.accounts.main.appSecret",
+      { source: "exec", provider: "keychain_feishu_main", id: "value" },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(secretRefError);
+    try {
+      await expect(
+        sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        }),
+      ).rejects.toBeInstanceOf(FeishuSecretRefUnavailableError);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
