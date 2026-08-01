@@ -1,6 +1,11 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import {
+  listAgentEntriesWithSource,
+  mutateAuthoredAgentRosterEntries,
+  resolveAgentWorkspaceDir,
+  tryResolveDefaultAgentId,
+} from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
@@ -10,7 +15,12 @@ import {
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
 } from "../../../plugins/official-external-plugin-catalog.js";
-import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import {
+  MEMORY_PLUGIN_SLOT_KEYS,
+  PLUGIN_SLOT_KEYS,
+  defaultSlotIdForKey,
+  type PluginSlotKey,
+} from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
 import {
@@ -25,6 +35,7 @@ type StalePluginConfigHit = {
   pathLabel: string;
   surface: StalePluginSurface;
   slotKey?: PluginSlotKey;
+  agentPath?: string;
 };
 
 type StalePluginRegistryState = {
@@ -138,7 +149,11 @@ function scanStalePluginConfigWithState(
       ) {
         continue;
       }
-      hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
+      hits.push({
+        pluginId: rawPluginId,
+        pathLabel: `plugins.${surface}`,
+        surface,
+      });
       staleEvidenceIds.add(pluginId);
     }
   }
@@ -164,9 +179,17 @@ function scanStalePluginConfigWithState(
     }
   }
 
-  const slots = asObjectRecord(plugins?.slots);
-  if (slots) {
-    for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
+  const collectSlotHits = (params: {
+    slots: Record<string, unknown> | null | undefined;
+    pathPrefix: string;
+    slotKeys: readonly PluginSlotKey[];
+    agentPath?: string;
+  }) => {
+    const { slots, pathPrefix, slotKeys, agentPath } = params;
+    if (!slots) {
+      return;
+    }
+    for (const slotKey of slotKeys) {
       const rawPluginId = slots[slotKey];
       if (typeof rawPluginId !== "string") {
         continue;
@@ -183,11 +206,29 @@ function scanStalePluginConfigWithState(
       }
       hits.push({
         pluginId: rawPluginId,
-        pathLabel: `plugins.slots.${slotKey}`,
+        pathLabel: `${pathPrefix}.${slotKey}`,
         surface: "slot",
         slotKey,
+        ...(agentPath ? { agentPath } : {}),
       });
     }
+  };
+
+  collectSlotHits({
+    slots: asObjectRecord(plugins?.slots),
+    pathPrefix: "plugins.slots",
+    slotKeys: PLUGIN_SLOT_KEYS,
+  });
+
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    collectSlotHits({
+      slots: asObjectRecord(agent?.plugins?.slots),
+      pathPrefix: `${agentPath}.plugins.slots`,
+      slotKeys: MEMORY_PLUGIN_SLOT_KEYS,
+      agentPath,
+    });
   }
 
   const staleChannelIds = collectDanglingChannelIds({
@@ -413,11 +454,56 @@ export function maybeRepairStalePluginConfig(
       hit.surface === "slot" && hit.slotKey !== undefined,
   );
   if (slotHits.length > 0) {
+    const rootSlotHits = slotHits.filter((hit) => hit.agentPath === undefined);
     const slots = asObjectRecord(nextPlugins?.slots);
     if (slots) {
-      for (const hit of slotHits) {
+      for (const hit of rootSlotHits) {
         slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
       }
+    }
+    const agentSlotHits = slotHits.filter(
+      (
+        hit,
+      ): hit is StalePluginConfigHit & {
+        slotKey: PluginSlotKey;
+        agentPath: string;
+      } => hit.agentPath !== undefined,
+    );
+    if (agentSlotHits.length > 0) {
+      const hitsByAgentPath = new Map<string, typeof agentSlotHits>();
+      for (const hit of agentSlotHits) {
+        hitsByAgentPath.set(hit.agentPath, [...(hitsByAgentPath.get(hit.agentPath) ?? []), hit]);
+      }
+      const agentMutation = mutateAuthoredAgentRosterEntries(next.agents, (agent, context) => {
+        const hitsForAgent = hitsByAgentPath.get(context.path);
+        if (!hitsForAgent || hitsForAgent.length === 0) {
+          return undefined;
+        }
+        const agentPlugins = asObjectRecord(agent.plugins);
+        const agentSlots = asObjectRecord(agentPlugins?.slots);
+        if (!agentPlugins || !agentSlots) {
+          return undefined;
+        }
+        const nextSlots = { ...agentSlots };
+        for (const hit of hitsForAgent) {
+          delete nextSlots[hit.slotKey];
+        }
+        const updatedPlugins = { ...agentPlugins };
+        if (Object.keys(nextSlots).length > 0) {
+          updatedPlugins.slots = nextSlots;
+        } else {
+          delete updatedPlugins.slots;
+        }
+        const nextAgent = {
+          ...agent,
+          plugins: Object.keys(updatedPlugins).length > 0 ? updatedPlugins : undefined,
+        };
+        if (nextAgent.plugins === undefined) {
+          delete nextAgent.plugins;
+        }
+        return nextAgent;
+      });
+      next.agents = agentMutation.agents;
     }
   }
 
@@ -442,9 +528,16 @@ export function maybeRepairStalePluginConfig(
       `- plugins.entries: removed ${entryIds.length} stale plugin entr${entryIds.length === 1 ? "y" : "ies"} (${entryIds.join(", ")})`,
     );
   }
-  if (slotHits.length > 0) {
+  const rootSlotHits = slotHits.filter((hit) => hit.agentPath === undefined);
+  if (rootSlotHits.length > 0) {
     changes.push(
-      `- plugins.slots: reset ${slotHits.length} stale plugin slot${slotHits.length === 1 ? "" : "s"} (${slotHits.map((hit) => `${hit.slotKey}: ${hit.pluginId} -> ${defaultSlotIdForKey(hit.slotKey)}`).join(", ")})`,
+      `- plugins.slots: reset ${rootSlotHits.length} stale plugin slot${rootSlotHits.length === 1 ? "" : "s"} (${rootSlotHits.map((hit) => `${hit.slotKey}: ${hit.pluginId} -> ${defaultSlotIdForKey(hit.slotKey)}`).join(", ")})`,
+    );
+  }
+  const agentSlotHits = slotHits.filter((hit) => hit.agentPath !== undefined);
+  if (agentSlotHits.length > 0) {
+    changes.push(
+      `- authored agent plugin slots: removed ${agentSlotHits.length} stale plugin slot override${agentSlotHits.length === 1 ? "" : "s"} (${agentSlotHits.map((hit) => `${hit.pathLabel}: ${hit.pluginId}`).join(", ")})`,
     );
   }
   if (channelIds.length > 0) {

@@ -42,7 +42,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
-  "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
+  "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build", "gateway_start"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
@@ -61,7 +61,8 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
-    "resolveMemoryDreamingPluginConfig(startupCfg)",
+    "const runtimeCfg =",
+    "cfg: runtimeCfg",
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
@@ -108,6 +109,10 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
+  "extensions/memory-core/src/dreaming.ts": [
+    "resolveMemoryDreamingPluginConfig(startupCfg)",
+    "resolveMemoryDreamingSelection(startupCfg)",
+  ],
   "extensions/memory-lancedb/index.ts": ["if (cfg.autoRecall)", "if (cfg.autoCapture)"],
 } as const satisfies Record<string, readonly string[]>;
 

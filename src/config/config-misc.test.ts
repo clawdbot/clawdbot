@@ -411,6 +411,59 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("plugins.slots memory roles", () => {
+  it("accepts purpose-specific memory slot ids", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+          "memory.compaction": "lossless-claw",
+          "memory.capture": "hindsight",
+          "memory.dreaming": "memory-core",
+          "memory.userModel": "openclaw-honcho",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts per-agent plugin slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        entries: {
+          nancy: {
+            default: true,
+            plugins: {
+              slots: {
+                "memory.userModel": "openclaw-honcho",
+                "memory.dreaming": "memory-core",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported per-agent contextEngine slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        entries: {
+          nancy: {
+            plugins: {
+              slots: {
+                contextEngine: "legacy",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("models.catalogRefresh", () => {
   it("accepts the refresh toggle and an http(s) override", () => {
     expect(

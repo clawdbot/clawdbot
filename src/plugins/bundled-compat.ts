@@ -92,7 +92,7 @@ export function withBundledPluginVitestCompat(params: {
       },
       slots: {
         ...params.config?.plugins?.slots,
-        memory: "none",
+        "memory.recall": "none",
       },
     },
   };

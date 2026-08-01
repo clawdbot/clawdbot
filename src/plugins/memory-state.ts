@@ -18,12 +18,15 @@ import type {
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
+import { resolveSelectedMemoryRolePluginId } from "./slot-resolution.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
 export type {
+  MemoryCorpusGetResult,
   MemoryCorpusSearchResult,
   MemoryCorpusSupplement,
+  MemoryCorpusSupplementRegistration,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryPluginCapability,
@@ -38,7 +41,22 @@ export type {
 
 export function resolveMemoryCapabilityRegistration(
   registrations: readonly MemoryPluginCapabilityRegistration[],
+  params?: { cfg?: OpenClawConfig; agentId?: string },
 ): MemoryPluginCapabilityRegistration | undefined {
+  if (params?.cfg) {
+    const pluginId = resolveSelectedMemoryRolePluginId({
+      cfg: params.cfg,
+      role: "recall",
+      agentId: params.agentId,
+    });
+    if (!pluginId) {
+      return undefined;
+    }
+    // A plugin may refresh its capability registration during tests or runtime
+    // reconfiguration. Match the registry's existing last-registration-wins
+    // behavior instead of retaining a stale earlier capability.
+    return registrations.findLast((registration) => registration.pluginId === pluginId);
+  }
   let effective: MemoryPluginCapabilityRegistration | undefined;
   for (const registration of registrations) {
     const existing = effective?.capability;
@@ -60,8 +78,8 @@ export function resolveMemoryCapabilityRegistration(
   return effective;
 }
 
-const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+const getMemoryCapability = (params?: { cfg?: OpenClawConfig; agentId?: string }) =>
+  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities, params);
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
@@ -86,8 +104,11 @@ export function registerMemoryCapability(
   registry.memoryCapabilities.push({ pluginId, capability });
 }
 
-export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
-  const capability = getMemoryCapability();
+export function getMemoryCapabilityRegistration(params?: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): MemoryPluginCapabilityRegistration | undefined {
+  const capability = getMemoryCapability(params);
   return capability
     ? {
         pluginId: capability.pluginId,
@@ -127,9 +148,10 @@ function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams):
 } {
   const registry = requireActivePluginRegistry();
   const primary = normalizeMemoryPromptLines(
-    resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.promptBuilder?.(
+    resolveMemoryCapabilityRegistration(
+      registry.memoryCapabilities,
       params,
-    ) ?? [],
+    )?.capability.promptBuilder?.(params) ?? [],
   );
   const supplements = registry.memoryPromptSupplements
     // Keep supplement order stable even if plugin registration order changes.
@@ -259,11 +281,36 @@ export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistrat
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  agentId?: string;
 }): MemoryFlushPlan | null {
-  return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
+  return getMemoryCapability(params)?.capability.flushPlanResolver?.(params) ?? null;
 }
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
+}
+
+export function getMemoryRuntimeForPlugin(pluginId: string): MemoryPluginRuntime | undefined {
+  return requireActivePluginRegistry().memoryCapabilities.find(
+    (registration) => registration.pluginId === pluginId,
+  )?.capability.runtime;
+}
+
+export function listMemoryRuntimeRegistrations(): Array<{
+  pluginId: string;
+  runtime: MemoryPluginRuntime;
+}> {
+  return requireActivePluginRegistry()
+    .memoryCapabilities.filter(
+      (
+        registration,
+      ): registration is MemoryPluginCapabilityRegistration & {
+        capability: MemoryPluginCapability & { runtime: MemoryPluginRuntime };
+      } => Boolean(registration.capability.runtime),
+    )
+    .map((registration) => ({
+      pluginId: registration.pluginId,
+      runtime: registration.capability.runtime,
+    }));
 }
 
 let standaloneMemoryManagerActive = false;
@@ -303,8 +350,14 @@ function isValidMemoryPublicArtifact(
 
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const capability = getMemoryCapability();
+  const selectedCapability = getMemoryCapability(params);
+  const fallbackCapability = getMemoryCapability();
+  const capability =
+    selectedCapability?.capability.publicArtifacts || !fallbackCapability
+      ? selectedCapability
+      : fallbackCapability;
   const pluginId = capability?.pluginId;
   const listed = (await capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
   if (!Array.isArray(listed)) {

@@ -23,12 +23,12 @@ openclaw plugins install @openclaw/memory-lancedb
 
 The plugin is published to npm; it is not bundled into the OpenClaw runtime
 image. Installing it writes the plugin entry, enables it, and switches
-`plugins.slots.memory` to `memory-lancedb`. If another plugin currently owns
-the memory slot, that plugin is disabled with a warning.
+`plugins.slots["memory.recall"]` to `memory-lancedb`. If another plugin currently owns
+the memory recall slot, that plugin is disabled with a warning.
 
 <Note>
 Companion plugins such as `memory-wiki` can run alongside `memory-lancedb`,
-but only one plugin owns the active memory slot at a time.
+but only one plugin owns the active memory recall slot at a time.
 </Note>
 
 <Note>
@@ -46,7 +46,7 @@ with the current memory provider.
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -163,7 +163,7 @@ URL rules as the [Ollama](/providers/ollama) provider.
 {
   plugins: {
     slots: {
-      memory: "memory-lancedb",
+      "memory.recall": "memory-lancedb",
     },
     entries: {
       "memory-lancedb": {
@@ -225,7 +225,7 @@ capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
-(not only when it owns the active memory slot):
+(not only when it owns the active memory recall slot):
 
 ```bash
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
@@ -374,7 +374,7 @@ model, set `embedding.dimensions` to the vector size that model reports.
 
 ### Plugin loads but no memories appear
 
-Confirm `plugins.slots.memory` points at `memory-lancedb`, then run:
+Confirm `plugins.slots["memory.recall"]` points at `memory-lancedb`, then run:
 
 ```bash
 openclaw ltm stats

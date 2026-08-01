@@ -41,6 +41,7 @@ import {
   pushPluginValidationError,
   safeRealpathOrResolve,
   validatePluginConfig,
+  applyMemoryRoleSlotActivation,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
@@ -61,6 +62,7 @@ import {
   findActiveDegradedPlugin,
 } from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
+import { applyMemoryRoleSelectionMetadata } from "./slot-resolution.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
@@ -80,6 +82,9 @@ export function loadRuntimePluginCandidate(params: {
   options: PluginLoadOptions;
   onlyPluginIdSet: ReadonlySet<string> | null;
   dreamingSidecar: AuthorizedDreamingSidecar | null;
+  selectedMemoryRolePluginIds: ReadonlySet<string>;
+  memorySlots: ReadonlyArray<string | null | undefined>;
+  memorySlot: string | null | undefined;
   validateOnly: boolean;
   registryBuilder: PluginRegistryBuilder;
   loadPluginModule: PluginModuleLoader;
@@ -101,34 +106,22 @@ export function loadRuntimePluginCandidate(params: {
   ) {
     return;
   }
-  const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
-    sidecar: params.dreamingSidecar,
-    pluginId,
+  const rawActivationState = resolveEffectivePluginActivationState({
+    id: pluginId,
+    origin: candidate.origin,
+    config: context.normalized,
+    rootConfig: context.cfg,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+    activationSource: context.activationSource,
+    autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
   });
-  const activationState = isDreamingSidecar
-    ? {
-        enabled: true,
-        activated: true,
-        explicitlyEnabled: false,
-        source: "auto" as const,
-        reason: `dreaming sidecar for selected memory slot "${params.dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
-      }
-    : resolveEffectivePluginActivationState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: context.normalized,
-        rootConfig: context.cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource: context.activationSource,
-        autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
-      });
   const existingOrigin = state.seenIds.get(pluginId);
   if (existingOrigin) {
     const duplicate = createManifestPluginRecord({
       candidate,
       manifestRecord,
       enabled: false,
-      activationState,
+      activationState: rawActivationState,
     });
     duplicate.status = "disabled";
     duplicate.error = `overridden by ${existingOrigin} plugin`;
@@ -137,16 +130,22 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
-  const enableState = isDreamingSidecar
-    ? { enabled: true }
-    : resolveEffectiveEnableState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: context.normalized,
-        rootConfig: context.cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource: context.activationSource,
-      });
+  const rawEnableState = resolveEffectiveEnableState({
+    id: pluginId,
+    origin: candidate.origin,
+    config: context.normalized,
+    rootConfig: context.cfg,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+    activationSource: context.activationSource,
+  });
+  const { activationState, enableState } = applyMemoryRoleSlotActivation({
+    pluginId,
+    normalized: context.normalized,
+    dreamingSidecar: params.dreamingSidecar,
+    selectedMemoryRolePluginIds: params.selectedMemoryRolePluginIds,
+    activationState: rawActivationState,
+    enableState: rawEnableState,
+  });
   const entry = context.normalized.entries[policyId];
   const record = createManifestPluginRecord({
     candidate,
@@ -282,19 +281,19 @@ export function loadRuntimePluginCandidate(params: {
     state.seenIds.set(pluginId, candidate.origin);
     return;
   }
-  const memorySlot = context.normalized.slots.memory;
+  const memorySlot = params.memorySlot;
   if (
     registrationPlan.runRuntimeCapabilityPolicy &&
     candidate.origin === "bundled" &&
     hasKind(manifestRecord.kind, "memory") &&
-    !isDreamingSidecar
+    !isAuthorizedDreamingSidecarPlugin({ sidecar: params.dreamingSidecar, pluginId })
   ) {
     // Skip bundled memory modules already disabled by slot policy. The authorized
     // dreaming sidecar remains loadable alongside the selected memory plugin.
     const earlyMemoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: manifestRecord.kind,
-      slot: memorySlot,
+      slot: params.memorySlots,
       selectedId: state.selectedMemoryPluginId,
     });
     if (!earlyMemoryDecision.enabled) {
@@ -315,10 +314,13 @@ export function loadRuntimePluginCandidate(params: {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: params.memorySlots,
       selectedId: state.selectedMemoryPluginId,
     });
-    if (!memoryDecision.enabled && !isDreamingSidecar) {
+    if (
+      !memoryDecision.enabled &&
+      !isAuthorizedDreamingSidecarPlugin({ sidecar: params.dreamingSidecar, pluginId })
+    ) {
       record.enabled = false;
       record.status = "disabled";
       record.error = memoryDecision.reason;
@@ -330,7 +332,7 @@ export function loadRuntimePluginCandidate(params: {
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       state.selectedMemoryPluginId = record.id;
       state.memorySlotMatched = true;
-      record.memorySlotSelected = true;
+      applyMemoryRoleSelectionMetadata({ cfg: context.cfg, record });
     }
   }
   const validatedConfig = validatePluginConfig({
@@ -468,11 +470,14 @@ export function loadRuntimePluginCandidate(params: {
   if (hasKind(record.kind, "memory") && memorySlot === record.id) {
     state.memorySlotMatched = true;
   }
-  if (registrationPlan.runRuntimeCapabilityPolicy && !isDreamingSidecar) {
+  if (
+    registrationPlan.runRuntimeCapabilityPolicy &&
+    !isAuthorizedDreamingSidecarPlugin({ sidecar: params.dreamingSidecar, pluginId })
+  ) {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: params.memorySlots,
       selectedId: state.selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {
@@ -486,7 +491,7 @@ export function loadRuntimePluginCandidate(params: {
     }
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       state.selectedMemoryPluginId = record.id;
-      record.memorySlotSelected = true;
+      applyMemoryRoleSelectionMetadata({ cfg: context.cfg, record });
     }
   }
   if (registrationPlan.runFullActivationOnlyRegistrations) {

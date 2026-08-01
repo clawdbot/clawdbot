@@ -284,6 +284,22 @@ export async function syncMemoryWikiBridgeSources(params: {
     config: params.config,
     artifacts: await listActiveMemoryPublicArtifacts({ cfg: params.appConfig }),
   });
+  // Skip importing and pruning when no selected recall capability is active
+  // (e.g. CLI context) to avoid removing bridge-imported entries or touching
+  // stale exported artifacts. See #68373.
+  const memoryCapability = getMemoryCapabilityRegistration({ cfg: params.appConfig });
+  if (!memoryCapability) {
+    return {
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+      artifactCount: 0,
+      workspaces: 0,
+      pagePaths: [],
+    };
+  }
+
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(
@@ -301,9 +317,18 @@ export async function syncMemoryWikiBridgeSources(params: {
   for (const artifact of publicArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
-  const artifactCount = artifacts.length;
+  let artifactCount = 0;
   for (const artifact of artifacts) {
-    const stats = await fs.stat(artifact.absolutePath);
+    const stats = await fs.stat(artifact.absolutePath).catch((error: unknown) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    });
+    if (!stats) {
+      continue;
+    }
+    artifactCount += 1;
     activeKeys.add(artifact.syncKey);
     results.push(
       await writeBridgeSourcePage({
@@ -318,17 +343,12 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
-  // Skip pruning when memory-core is not loaded (e.g. CLI context) to avoid
-  // removing all bridge-imported entries. See #68373.
-  const memoryCapability = getMemoryCapabilityRegistration();
-  const removedCount = memoryCapability
-    ? await pruneImportedSourceEntries({
-        vaultRoot: params.config.vault.path,
-        group: "bridge",
-        activeKeys,
-        state,
-      })
-    : 0;
+  const removedCount = await pruneImportedSourceEntries({
+    vaultRoot: params.config.vault.path,
+    group: "bridge",
+    activeKeys,
+    state,
+  });
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;
   const updatedCount = results.filter((result) => result.changed && !result.created).length;

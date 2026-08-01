@@ -27,6 +27,7 @@ type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingCon
 export type PreviewRemHarnessOptions = {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   pluginConfig?: Record<string, unknown>;
   grounded?: boolean;
   groundedInputPaths?: string[];
@@ -123,10 +124,12 @@ export async function previewRemHarness(
   const remConfig = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   const deepConfig = resolveMemoryDeepDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   const allRecallEntries = await readShortTermRecallEntries({
     workspaceDir: params.workspaceDir,

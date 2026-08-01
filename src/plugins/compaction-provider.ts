@@ -50,6 +50,23 @@ export function listRegisteredCompactionProviders(): RegisteredCompactionProvide
   return [...getProviders()];
 }
 
+export function resolveCompactionProviderIdForOwnerPlugin(
+  ownerPluginId: string,
+): string | undefined {
+  const ownerEntries = listRegisteredCompactionProviders()
+    .filter((entry) => entry.ownerPluginId === ownerPluginId)
+    .toSorted((left, right) => left.provider.id.localeCompare(right.provider.id));
+  return (
+    ownerEntries.find((entry) => entry.provider.id === ownerPluginId)?.provider.id ??
+    (ownerEntries.length === 1 ? ownerEntries[0]?.provider.id : undefined)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle (clear / restore) — mirrors memory-embedding-providers.ts
+// ---------------------------------------------------------------------------
+
+/** Clear all compaction providers. Used by clearPluginLoaderCache() and reload. */
 export function clearCompactionProviders(): void {
   getProviders().length = 0;
 }

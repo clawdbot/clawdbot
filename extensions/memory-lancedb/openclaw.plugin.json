@@ -56,7 +56,7 @@
     },
     "dreaming": {
       "label": "Dreaming",
-      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+      "help": "Optional dreaming config consumed when this plugin owns the memory.dreaming slot, or when dreaming falls back to this plugin through memory.recall"
     },
     "captureMaxChars": {
       "label": "Capture Max Chars",

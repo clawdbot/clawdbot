@@ -16,6 +16,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { listSelectedMemoryRolePluginIds } from "../../plugins/slot-resolution.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
@@ -54,26 +55,22 @@ function resolveSelectedMemoryPluginIds(params: {
   }
   const registry = loadPluginRegistrySnapshot(params);
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const memorySlot = plugins.slots.memory;
-  if (
-    typeof memorySlot !== "string" ||
-    restrictiveAllowlistOmitsPlugin(params.config, memorySlot)
-  ) {
-    return [];
-  }
-  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
-  if (!plugin?.startup.memory) {
-    return [];
-  }
-  return resolveEffectivePluginActivationState({
-    id: plugin.pluginId,
-    origin: plugin.origin,
-    config: plugins,
-    rootConfig: params.config,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
-  }).activated
-    ? [plugin.pluginId]
-    : [];
+  return listSelectedMemoryRolePluginIds({ cfg: params.config ?? {} }).filter((pluginId) => {
+    if (restrictiveAllowlistOmitsPlugin(params.config, pluginId)) {
+      return false;
+    }
+    const plugin = registry.plugins.find((entry) => entry.pluginId === pluginId);
+    return Boolean(
+      plugin?.startup.memory &&
+      resolveEffectivePluginActivationState({
+        id: plugin.pluginId,
+        origin: plugin.origin,
+        config: plugins,
+        rootConfig: params.config,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      }).activated,
+    );
+  });
 }
 
 /** Resolve manifest owners required by one selected non-core harness runtime. */

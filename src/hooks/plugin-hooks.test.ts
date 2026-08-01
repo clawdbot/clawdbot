@@ -82,6 +82,46 @@ describe("bundle plugin hooks", () => {
     return bundleRoot;
   }
 
+  async function writeMemoryBundleHookFixture(): Promise<string> {
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "agent-memory");
+    const hookDir = path.join(bundleRoot, "hooks", "agent-memory-hook");
+    await fsp.mkdir(path.join(bundleRoot, ".codex-plugin"), { recursive: true });
+    await fsp.mkdir(hookDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(bundleRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify(
+        {
+          name: "Agent Memory",
+          kind: "memory",
+          hooks: "hooks",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fsp.writeFile(
+      path.join(hookDir, "HOOK.md"),
+      [
+        "---",
+        "name: agent-memory-hook",
+        'description: "Agent memory hook"',
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# Agent memory hook",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fsp.writeFile(
+      path.join(hookDir, "handler.js"),
+      'export default async function(event) { event.messages.push("agent-memory-hook-ok"); }\n',
+      "utf-8",
+    );
+    return bundleRoot;
+  }
+
   function createConfig(enabled: boolean): OpenClawConfig {
     return {
       hooks: {
@@ -143,6 +183,37 @@ describe("bundle plugin hooks", () => {
       config: createConfig(false),
     });
     expect(entries).toHaveLength(0);
+  });
+
+  it("exposes memory plugin hooks selected only by per-agent role slots", async () => {
+    const bundleRoot = await writeMemoryBundleHookFixture();
+
+    const entries = loadWorkspaceHookEntries(workspaceDir, {
+      config: {
+        hooks: { internal: { enabled: true } },
+        plugins: {
+          slots: { "memory.recall": "none" },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "agent-memory" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireOnlyHookEntry(entries);
+    expect(entry.hook.name).toBe("agent-memory-hook");
+    expect(entry.hook.source).toBe("openclaw-plugin");
+    expect(entry.hook.pluginId).toBe("agent-memory");
+    expect(entry.hook.baseDir).toBe(
+      fs.realpathSync.native(path.join(bundleRoot, "hooks", "agent-memory-hook")),
+    );
   });
 
   it("does not treat Claude hooks.json bundles as OpenClaw hook packs", async () => {

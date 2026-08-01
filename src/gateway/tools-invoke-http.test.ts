@@ -112,6 +112,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true }),
     },
     {
+      name: "memory_search",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+      execute: async (_toolCallId: string, args: unknown) => ({ ok: true, args }),
+    },
+    {
       name: "agents_list",
       parameters: { type: "object", properties: { action: { type: "string" } } },
       execute: async () => ({ ok: true, result: [] }),
@@ -563,6 +568,46 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("ignores legacy plugins.slots.memory=none for gateway memory tool runtime resolution", async () => {
+    setMainAllowedTools({ allow: ["memory_search"] });
+    cfg = {
+      ...cfg,
+      plugins: { slots: { memory: "none" } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "memory_search",
+      args: { query: "legacy-only selector should disable" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.ok).toBe(true);
+  });
+
+  it("keeps canonical plugins.slots.memory.recall=none disabling gateway memory tools", async () => {
+    setMainAllowedTools({ allow: ["memory_search"] });
+    cfg = {
+      ...cfg,
+      plugins: { slots: { memory: "memory-core", "memory.recall": "none" } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "memory_search",
+      args: { query: "canonical selector should disable" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: expect.stringContaining("plugins.slots.memory.recall"),
+      },
+    });
   });
 
   it("allows the requested plugin tool through Gateway profile filtering", async () => {

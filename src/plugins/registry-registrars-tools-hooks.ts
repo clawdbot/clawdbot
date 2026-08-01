@@ -508,6 +508,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(opts?.memoryRole ? { memoryRole: opts.memoryRole } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

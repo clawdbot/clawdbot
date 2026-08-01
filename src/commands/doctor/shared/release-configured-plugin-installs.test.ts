@@ -187,7 +187,7 @@ describe("configured plugin install release step", () => {
           allow: ["allow-only"],
           deny: ["denied"],
           slots: {
-            memory: "memory-lancedb",
+            "memory.recall": "memory-lancedb",
             contextEngine: "none",
           },
           entries: {
@@ -206,6 +206,45 @@ describe("configured plugin install release step", () => {
       "memory-lancedb",
     ]);
     expect(result.channelIds).toEqual(["wecom"]);
+  });
+
+  it("collects global and agent-scoped memory role slot plugin ids", async () => {
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+      cfg: {
+        plugins: {
+          deny: ["blocked-memory"],
+          slots: {
+            memory: "legacy-recall",
+            "memory.recall": "openclaw-honcho",
+            "memory.compaction": "memory-core",
+            "memory.capture": "none",
+            contextEngine: "lossless-claw",
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "dreamer",
+              plugins: {
+                slots: {
+                  "memory.dreaming": "dreaming-plugin",
+                  "memory.userModel": "blocked-memory",
+                },
+              },
+            },
+          ],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual([
+      "dreaming-plugin",
+      "lossless-claw",
+      "memory-core",
+      "openclaw-honcho",
+    ]);
+    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("collects Codex from the configured agent runtime even without integration discovery", async () => {

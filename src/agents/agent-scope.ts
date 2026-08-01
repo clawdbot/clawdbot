@@ -36,6 +36,7 @@ export {
   listAgentEntries,
   listAgentEntriesWithSource,
   listAgentIds,
+  mutateAuthoredAgentRosterEntries,
   resolveMutableAgentEntry,
   toAgentEntriesRecord,
   resolveAgentConfig,
@@ -45,6 +46,7 @@ export {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   tryResolveDefaultAgentId,
+  type MutableAuthoredAgentRosterEntry,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 

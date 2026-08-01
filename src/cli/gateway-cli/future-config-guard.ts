@@ -21,7 +21,9 @@ type GatewayRunFutureConfigGuardParams = {
 };
 
 function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardParams) {
-  const processServiceMode = Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
+  const mayUseServiceExit = !params.opts.reset && !params.opts.force;
+  const processServiceMode =
+    mayUseServiceExit && Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
   const candidateConfig =
     params.config ??
     (params.snapshot?.valid ? (params.snapshot.sourceConfig ?? params.snapshot.config) : undefined);
@@ -32,14 +34,14 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
         ? createConfigRuntimeEnv(candidateConfig, process.env).OPENCLAW_SERVICE_MARKER?.trim()
         : undefined,
     );
-  const serviceMode = processServiceMode || candidateServiceMode;
+  const serviceMode = processServiceMode || (mayUseServiceExit && candidateServiceMode);
   // Reset runs before service/force startup, while ordinary startup now runs state migrations.
   const futureAction = params.opts.reset
     ? { action: "reset the dev gateway state", exitCode: 1 }
-    : serviceMode
-      ? { action: "start the gateway service", exitCode: 78 }
-      : params.opts.force
-        ? { action: "force-kill gateway port listeners", exitCode: 1 }
+    : params.opts.force
+      ? { action: "force-kill gateway port listeners", exitCode: 1 }
+      : serviceMode
+        ? { action: "start the gateway service", exitCode: 78 }
         : { action: "run automatic gateway startup migrations", exitCode: 1 };
   const guardEnv = serviceMode ? cloneEnvWithPlatformSemantics(process.env) : process.env;
   if (serviceMode) {

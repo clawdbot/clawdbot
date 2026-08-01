@@ -16,7 +16,7 @@ import {
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
-  resolveConfiguredDreaming,
+  resolveConfiguredDreamingFromConfig,
   updateDreamingEnabled,
   type DreamingState,
 } from "./dreaming.ts";
@@ -98,6 +98,14 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
     lookupSchemaPath: vi.fn(async () => null),
     patch: vi.fn(async () => true),
   };
+}
+
+function setDreamingStatus(state: DreamingState, pluginId = "memory-core"): void {
+  state.dreamingStatusAgentId = state.selectedAgentId;
+  state.dreamingStatus = {
+    pluginId,
+    enabled: true,
+  } as NonNullable<DreamingState["dreamingStatus"]>;
 }
 
 function createDeferred<T>() {
@@ -900,6 +908,7 @@ describe("dreaming controller", () => {
 
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
+    setDreamingStatus(state, "memos-local-openclaw-plugin");
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -949,6 +958,7 @@ describe("dreaming controller", () => {
 
   it("does not patch after the caller lifecycle expires during schema lookup", async () => {
     const { state } = createState();
+    setDreamingStatus(state);
     const config = createConfig(state);
     const lookup = createDeferred<unknown>();
     let canDispatch = true;
@@ -968,6 +978,7 @@ describe("dreaming controller", () => {
 
   it("falls back to memory-core when selected memory slot is blank", async () => {
     const { state, request } = createState();
+    setDreamingStatus(state);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -1001,6 +1012,7 @@ describe("dreaming controller", () => {
 
   it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
     const { state } = createState();
+    setDreamingStatus(state, "memory-lancedb");
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -1035,10 +1047,10 @@ describe("dreaming controller", () => {
 
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
     expect(
-      resolveConfiguredDreaming({
+      resolveConfiguredDreamingFromConfig({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            "memory.dreaming": "memos-local-openclaw-plugin",
           },
           entries: {
             "memos-local-openclaw-plugin": {
@@ -1068,10 +1080,10 @@ describe("dreaming controller", () => {
 
   it('falls back to memory-core config but stays operationally off when the slot is "none"', () => {
     expect(
-      resolveConfiguredDreaming({
+      resolveConfiguredDreamingFromConfig({
         plugins: {
           slots: {
-            memory: "none",
+            "memory.dreaming": "none",
           },
           entries: {
             "memory-core": {
@@ -1093,7 +1105,7 @@ describe("dreaming controller", () => {
   });
 
   it("keeps the default enabled while the default engine is active", () => {
-    expect(resolveConfiguredDreaming({ plugins: { slots: {} } })).toEqual({
+    expect(resolveConfiguredDreamingFromConfig({ plugins: { slots: {} } })).toEqual({
       pluginId: "memory-core",
       enabled: true,
       overridden: false,
@@ -1102,7 +1114,7 @@ describe("dreaming controller", () => {
   });
 
   it("uses the runtime enabled default when config omits the override", () => {
-    expect(resolveConfiguredDreaming(null)).toEqual({
+    expect(resolveConfiguredDreamingFromConfig(null)).toEqual({
       pluginId: "memory-core",
       enabled: true,
       overridden: false,

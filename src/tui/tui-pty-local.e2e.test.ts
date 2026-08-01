@@ -469,7 +469,7 @@ function buildLocalModeConfig(params: {
     plugins: {
       enabled: false,
       slots: {
-        memory: "none",
+        "memory.recall": "none",
       },
     },
     agents: {
@@ -1501,7 +1501,7 @@ export default {
             ...config,
             plugins: {
               enabled: true,
-              slots: { memory: "none" },
+              slots: { "memory.recall": "none" },
               load: { paths: [pluginDir] },
               allow: [pluginId],
               entries: { [pluginId]: { enabled: true } },

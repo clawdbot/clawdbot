@@ -236,6 +236,52 @@ describe("resolvePluginLoadCacheContext", () => {
     ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
   });
 
+  it("keys metadata reuse by canonical keyed agent memory slot changes", () => {
+    const { env, workspaceDir } = setLoaderMetadataSnapshot();
+
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: ["demo"],
+        slots: { memory: "none" },
+      },
+      agents: {
+        entries: {
+          main: {
+            plugins: { slots: { "memory.recall": "demo" } },
+          },
+        },
+      },
+    };
+    const sameSlotListFallback: OpenClawConfig = {
+      ...config,
+      agents: {
+        list: [
+          {
+            id: "main",
+            plugins: { slots: { "memory.recall": "demo" } },
+          },
+        ],
+      },
+    };
+    const updatedConfig: OpenClawConfig = {
+      ...config,
+      agents: {
+        entries: {
+          main: {
+            plugins: { slots: { "memory.recall": "other-memory" } },
+          },
+        },
+      },
+    };
+
+    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).cacheKey).not.toBe(
+      resolvePluginLoadCacheContext({ config: updatedConfig, env, workspaceDir }).cacheKey,
+    );
+    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).cacheKey).toBe(
+      resolvePluginLoadCacheContext({ config: sameSlotListFallback, env, workspaceDir }).cacheKey,
+    );
+  });
+
   it("does not reuse install records for an unrelated explicit manifest registry", () => {
     const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
 

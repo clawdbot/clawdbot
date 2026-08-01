@@ -372,7 +372,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
   it("renders explicit engine Off as unavailable while preserving latent override reset", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: {
-        slots: { memory: "none" },
+        slots: { "memory.dreaming": "none" },
         entries: {
           "memory-core": { config: { dreaming: { enabled: false } } },
         },
@@ -397,7 +397,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
   it("does not present cached runtime status after the memory engine switches Off", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: { slots: { memory: "none" } },
+      plugins: { slots: { "memory.dreaming": "none" } },
     });
     const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
     page.context = context;
@@ -448,7 +448,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
   it("omits default provenance and reset when engine Off has no latent override", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: { slots: { memory: "none" } },
+      plugins: { slots: { "memory.dreaming": "none" } },
     });
     const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
     page.context = context;

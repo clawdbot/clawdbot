@@ -7,7 +7,10 @@
 // from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import {
+  defaultSlotIdForKey,
+  resolveSlotSelection,
+} from "../../../../src/plugins/slot-defaults.ts";
 import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
 
 export type MemoryTab = MemoryRouteTab;
@@ -19,7 +22,7 @@ export type MemoryBackendSelection =
   | { kind: "invalid"; backend: null; value: unknown };
 
 /**
- * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
+ * How `plugins.slots["memory.recall"]` reads today, mirroring resolveSlotSelection in
  * src/plugins/slots.ts. `off` is the explicit `none` sentinel; `auto` is an
  * unset slot, which always resolves to the slot's default owner rather than to
  * whichever memory plugin happens to be enabled.
@@ -29,7 +32,7 @@ export type MemoryEngineSelection =
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
-export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
+export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory.recall");
 
 /** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
@@ -126,7 +129,7 @@ export function resolveMemoryEngineSelection(
   configObject: Record<string, unknown>,
 ): MemoryEngineSelection {
   const slots = asConfigRecord(asConfigRecord(configObject.plugins)?.slots);
-  const selection = resolveSlotSelection("memory", slots?.memory);
+  const selection = resolveSlotSelection("memory.recall", slots?.["memory.recall"]);
   switch (selection.kind) {
     case "off":
       return { kind: "off" };

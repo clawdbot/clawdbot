@@ -169,7 +169,7 @@ The common plugin config shape is:
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
     load: { paths: ["~/Projects/oss/voice-call-plugin"] },
-    slots: { memory: "memory-core" },
+    slots: { "memory.recall": "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -194,11 +194,18 @@ Key policy rules:
   allowlist them before using local workspace code.
 - Bundled plugins follow their built-in default-on/default-off metadata
   unless config explicitly overrides it.
-- `plugins.slots.<slot>` (`memory` or `contextEngine`) picks one plugin for an
-  exclusive category. Slot selection counts as explicit activation and
+- `plugins.slots.<slot>` chooses one plugin for an exclusive category such as
+  memory and context engines. Slot selection counts as explicit activation and
   force-enables the selected plugin for that slot, even if it would otherwise
   be opt-in. `plugins.deny` and `plugins.entries.<id>.enabled: false` still
   block it.
+- Memory also supports purpose-specific role slots: `memory.recall`,
+  `memory.compaction`, `memory.capture`, `memory.dreaming`, and
+  `memory.userModel`. The legacy `memory` slot is removed from runtime
+  routing: run `openclaw doctor --fix` after upgrading to migrate
+  legacy-only selectors to `memory.recall` and remove the old key. Use role slots when composing
+  complementary memory providers. Per-agent overrides can set the same role
+  slots under `agents.list[].plugins.slots`.
 - Bundled opt-in plugins can auto-activate when config names one of their
   owned surfaces, such as a provider/model ref, channel config, CLI backend,
   or agent harness runtime.

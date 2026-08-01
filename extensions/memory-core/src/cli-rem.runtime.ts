@@ -45,8 +45,9 @@ export async function runMemorySessionBackfill(
         return;
       }
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, { agentId }),
         cfg,
+        agentId,
       });
       let result;
       try {
@@ -124,7 +125,7 @@ export async function runMemoryRemHarness(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
       if (!managerWorkspaceDir && !opts.path) {
         defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -133,6 +134,7 @@ export async function runMemoryRemHarness(
       const remConfig = resolveMemoryRemDreamingConfig({
         pluginConfig,
         cfg,
+        agentId,
       });
       const nowMs = Date.now();
       let workspaceDir = managerWorkspaceDir ?? "";
@@ -174,6 +176,7 @@ export async function runMemoryRemHarness(
         const preview = await previewRemHarness({
           workspaceDir,
           cfg,
+          agentId,
           pluginConfig,
           grounded: Boolean(opts.grounded),
           groundedInputPaths,
@@ -289,10 +292,11 @@ export async function runMemoryRemBackfill(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
       const remConfig = resolveMemoryRemDreamingConfig({
         pluginConfig,
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory rem-backfill requires a resolvable workspace directory.");

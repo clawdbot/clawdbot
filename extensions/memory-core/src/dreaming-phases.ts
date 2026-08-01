@@ -1525,6 +1525,7 @@ export async function runDreamingSweepPhases(params: {
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
+    agentId: params.agentId,
   });
   if (light.enabled && light.limit > 0) {
     try {
@@ -1556,6 +1557,7 @@ export async function runDreamingSweepPhases(params: {
   const rem = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
+    agentId: params.agentId,
   });
   if (rem.enabled && rem.limit > 0) {
     try {

@@ -593,14 +593,16 @@ export function createMemorySearchTool(options: {
               mode: citationsMode,
               sessionKey: options.agentSessionKey,
             });
-            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg);
+            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg, { agentId });
             const dreamingEnabled = resolveMemoryDreamingConfig({
               pluginConfig,
               cfg,
+              agentId,
             }).enabled;
             const dreaming = resolveMemoryDeepDreamingConfig({
               pluginConfig,
               cfg,
+              agentId,
             });
             const searchStartedAt = Date.now();
             let rawResults: MemorySearchResult[] = [];

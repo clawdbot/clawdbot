@@ -139,6 +139,7 @@ export type RegisteredMemoryEmbeddingProvider = {
 
 export type MemoryPromptSectionParams = {
   availableTools: Set<string>;
+  cfg?: OpenClawConfig;
   citationsMode?: MemoryCitationsMode;
   agentId?: string;
   agentSessionKey?: string;
@@ -180,7 +181,7 @@ export type MemoryCorpusSearchResult = {
   updatedAt?: string;
 };
 
-type MemoryCorpusGetResult = {
+export type MemoryCorpusGetResult = {
   corpus: string;
   path: string;
   title?: string;
@@ -250,6 +251,7 @@ export type MemoryFlushPlan = {
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  agentId?: string;
 }) => MemoryFlushPlan | null;
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
@@ -314,7 +316,10 @@ export type MemoryPluginPublicArtifact = {
 };
 
 export type MemoryPluginPublicArtifactsProvider = {
-  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
+  listArtifacts(params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  }): Promise<MemoryPluginPublicArtifact[]>;
 };
 
 export type MemoryPluginCapability = {

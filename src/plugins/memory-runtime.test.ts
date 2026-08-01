@@ -9,12 +9,17 @@ type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"
 
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
+  getMemoryRuntimeForPlugin: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentConfig: (
+    cfg: { agents?: { entries?: Record<string, unknown>; list?: Array<{ id?: string }> } },
+    agentId: string,
+  ) => cfg.agents?.entries?.[agentId] ?? cfg.agents?.list?.find((entry) => entry.id === agentId),
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
@@ -25,7 +30,11 @@ vi.mock("./loader.js", () => ({
 
 vi.mock("./memory-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./memory-state.js")>();
-  return { ...actual, getMemoryRuntime: mocks.getMemoryRuntime };
+  return {
+    ...actual,
+    getMemoryRuntime: mocks.getMemoryRuntime,
+    getMemoryRuntimeForPlugin: mocks.getMemoryRuntimeForPlugin,
+  };
 });
 
 import {
@@ -64,13 +73,14 @@ function createRegistry(
 }
 
 const memoryConfig = {
-  plugins: { slots: { memory: "memory-core" } },
+  plugins: { slots: { "memory.recall": "memory-core" } },
 } as never;
 
 describe("memory runtime handles", () => {
   beforeEach(() => {
     resetStandaloneMemoryRegistrySlot();
     mocks.getMemoryRuntime.mockReset().mockReturnValue(undefined);
+    mocks.getMemoryRuntimeForPlugin.mockReset().mockReturnValue(undefined);
     mocks.loadPluginRegistryHandle.mockReset();
     mocks.resolvePluginRegistryLoadCacheKey.mockClear();
     mocks.resolveAgentWorkspaceDir
@@ -202,11 +212,11 @@ describe("memory runtime handles", () => {
 
   it.each([
     { plugins: { enabled: false } },
-    { plugins: { slots: { memory: "none" } } },
-    { plugins: { slots: { memory: "memory-core" }, deny: ["memory-core"] } },
+    { plugins: { slots: { "memory.recall": "none" } } },
+    { plugins: { slots: { "memory.recall": "memory-core" }, deny: ["memory-core"] } },
     {
       plugins: {
-        slots: { memory: "memory-core" },
+        slots: { "memory.recall": "memory-core" },
         entries: { "memory-core": { enabled: false } },
       },
     },
@@ -219,7 +229,7 @@ describe("memory runtime handles", () => {
 
   it("prefers an already-registered runtime", () => {
     const runtime = createRuntime();
-    mocks.getMemoryRuntime.mockReturnValue(runtime);
+    mocks.getMemoryRuntimeForPlugin.mockReturnValue(runtime);
 
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",

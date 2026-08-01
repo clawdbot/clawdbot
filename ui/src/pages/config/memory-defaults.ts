@@ -7,7 +7,7 @@ export function resetMemoryEngine(config: ConfigRemover, disabled = false): bool
   if (disabled) {
     return false;
   }
-  config.removeFormValue(["plugins", "slots", "memory"]);
+  config.removeFormValue(["plugins", "slots", "memory.recall"]);
   return true;
 }
 

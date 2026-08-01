@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Builds deterministic metadata scopes for startup and config validation.
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { addRequiredAgentHarnessPluginIds } from "./gateway-startup-plugin-activation.js";
@@ -15,7 +16,7 @@ import {
   normalizePluginsConfigForInstalledIndex,
   readStartupBundledDiscoveryMode,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
-  resolveMemorySlotStartupPluginId,
+  resolveGatewayStartupMemorySlotReferences,
 } from "./gateway-startup-plugin-config.js";
 import { sortUniquePluginIds } from "./gateway-startup-plugin-contracts.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
@@ -24,6 +25,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshotPluginIdScope } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import { MEMORY_PLUGIN_SLOT_KEYS } from "./slots.js";
 import {
   collectConfiguredWorkerProviderIds,
   normalizeWorkerProviderIds,
@@ -62,29 +64,34 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   addPluginConfigEntryIds(scope, pluginsConfig);
   addPluginConfigEntryIds(scope, activationSourcePlugins);
 
-  const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
+  const metadataMemorySlotReferences = resolveGatewayStartupMemorySlotReferences({
     activationSourceConfig,
     activationSourcePlugins,
     normalizePluginId: lookup.normalizePluginId,
+    includeDefaultRecallSlot: false,
   });
   addConfiguredSlotPluginIds(scope, {
     activationSourceConfig,
     activationSourcePlugins,
     lookup,
+    memorySlotReferences: metadataMemorySlotReferences,
   });
-  for (const pluginId of resolveAuthorizedGatewayStartupDreamingPluginIds({
-    config: params.config,
-    pluginsConfig,
-    activationSource: {
-      plugins: activationSourcePlugins,
-      rootConfig: activationSourceConfig,
-    },
-    activationSourcePlugins,
-    selectedMemoryPluginId: memorySlotStartupPluginId,
-    index: params.index,
-    platform: params.platform,
-  })) {
-    scope.add(pluginId);
+  for (const selection of metadataMemorySlotReferences.dreamingSelections) {
+    for (const pluginId of resolveAuthorizedGatewayStartupDreamingPluginIds({
+      config: params.config,
+      pluginsConfig,
+      activationSource: {
+        plugins: activationSourcePlugins,
+        rootConfig: activationSourceConfig,
+      },
+      activationSourcePlugins,
+      selectedMemoryPluginId: selection.pluginId,
+      agentId: selection.agentId,
+      index: params.index,
+      platform: params.platform,
+    })) {
+      scope.add(pluginId);
+    }
   }
   if (!lookup.hasCompleteConfigPathActivationMetadata()) {
     return undefined;
@@ -227,11 +234,32 @@ function addValidationPluginConfigReferences(
   for (const pluginId of Object.keys(params.pluginsConfig.entries)) {
     target.add(pluginId);
   }
+  const addSlotReference = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = params.normalizePluginId(value);
+    if (!normalized || normalized.toLowerCase() === "none") {
+      return;
+    }
+    target.add(normalized);
+  };
+  const addMemorySlotReferences = (slots: unknown) => {
+    if (!isRecord(slots)) {
+      return;
+    }
+    for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+      if (Object.hasOwn(slots, slotKey)) {
+        addSlotReference(slots[slotKey]);
+      }
+    }
+  };
+
   const rawSlots = isRecord(params.config.plugins?.slots) ? params.config.plugins.slots : {};
-  const hasExplicitMemorySlot = Object.hasOwn(rawSlots, "memory");
-  const memorySlot = hasExplicitMemorySlot ? params.pluginsConfig.slots.memory : undefined;
-  if (typeof memorySlot === "string") {
-    target.add(params.normalizePluginId(memorySlot));
+  addMemorySlotReferences(rawSlots);
+
+  for (const agent of listAgentEntries(params.config)) {
+    addMemorySlotReferences(agent?.plugins?.slots);
   }
   const hasExplicitContextEngineSlot = Object.hasOwn(rawSlots, "contextEngine");
   const contextEngineSlot = hasExplicitContextEngineSlot

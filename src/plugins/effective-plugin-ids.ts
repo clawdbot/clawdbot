@@ -18,6 +18,7 @@ import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { listSelectedMemoryRolePluginIds } from "./slot-resolution.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
@@ -147,6 +148,12 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
   return [pluginId];
 }
 
+function collectSelectedMemoryRolePluginIds(config: OpenClawConfig): string[] {
+  return listSelectedMemoryRolePluginIds({ cfg: config }).filter(
+    (pluginId) => pluginId !== defaultSlotIdForKey("memory.recall"),
+  );
+}
+
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
@@ -172,6 +179,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedMemoryRolePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
     ids.add(pluginId);
   }

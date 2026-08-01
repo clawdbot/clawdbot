@@ -3,6 +3,12 @@ import { registerMemoryCapability, type MemoryPromptSectionBuilder } from "./mem
 
 export * from "./memory-state.js";
 
+const TEST_MEMORY_PLUGIN_ID = "memory-core";
+
+function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
+  registerMemoryCapability(TEST_MEMORY_PLUGIN_ID, { promptBuilder: builder });
+}
+
 export function registerTestMemoryPromptBuilder(builder: MemoryPromptSectionBuilder): void {
-  registerMemoryCapability("test-memory", { promptBuilder: builder });
+  registerMemoryPromptSection(builder);
 }

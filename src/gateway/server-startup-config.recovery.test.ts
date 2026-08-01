@@ -484,6 +484,63 @@ describe("gateway startup config validation", () => {
     );
   });
 
+  it("rejects legacy-only memory slot selectors before runtime plugin planning", async () => {
+    const sourceConfig = {
+      gateway: { mode: "local" },
+      plugins: { slots: { memory: "memory-lancedb" } },
+    } as OpenClawConfig;
+    const snapshot = buildRuntimeSnapshot(sourceConfig);
+    mockStartupSnapshot(snapshot);
+
+    await expect(loadTestStartup({ minimalTestGateway: false })).rejects.toThrow(
+      `Invalid config at ${configPath}:\nplugins.slots.memory: legacy memory slot selector is ignored by runtime routing; use plugins.slots["memory.recall"] for factual recall provider selection or run "openclaw doctor --fix".\nRun "openclaw doctor --fix" to repair, then retry.`,
+    );
+    expect(applyPluginAutoEnable).not.toHaveBeenCalled();
+  });
+
+  it("rejects legacy memory=none before it can silently fall back to memory-core", async () => {
+    const sourceConfig = {
+      gateway: { mode: "local" },
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            plugins: { slots: { memory: "none" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mockStartupSnapshot(buildRuntimeSnapshot(sourceConfig));
+
+    await expect(loadTestStartup({ minimalTestGateway: false })).rejects.toThrow(
+      "agents.entries.main.plugins.slots.memory: legacy memory slot selector is ignored by runtime routing",
+    );
+    expect(applyPluginAutoEnable).not.toHaveBeenCalled();
+  });
+
+  it("allows redundant or conflicting legacy memory slots when same-scope memory.recall is canonical", async () => {
+    const sourceConfig = {
+      gateway: { mode: "local" },
+      plugins: {
+        slots: { memory: "legacy-memory", "memory.recall": "canonical-memory" },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            plugins: { slots: { memory: "agent-memory", "memory.recall": "agent-memory" } },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const snapshot = buildRuntimeSnapshot(sourceConfig);
+    mockStartupSnapshot(snapshot);
+
+    await expectStartupResult({ snapshot, log: testStartupLog() });
+    expectPluginAutoEnableFor(sourceConfig);
+  });
+
   it("does not suggest doctor repair for plugin packaging compiled-output failures", async () => {
     const rawConfig = pluginSlotRawConfig("local");
     const invalidSnapshot = buildInvalidConfigSnapshot({

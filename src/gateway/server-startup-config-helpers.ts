@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { scanLegacyMemorySlotConfig } from "../config/legacy-memory-slot.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -64,6 +65,28 @@ export function assertValidGatewayStartupConfigSnapshot(
   });
 }
 
+function assertNoStartupBlockingLegacyMemorySlots(
+  snapshot: ConfigFileSnapshot,
+  options: { includeDoctorHint?: boolean } = {},
+): void {
+  const blockingHits = scanLegacyMemorySlotConfig(snapshot.sourceConfig).filter(
+    (hit) => hit.legacyValue && hit.recallValue === undefined,
+  );
+  if (blockingHits.length === 0) {
+    return;
+  }
+  const issues = blockingHits.map((hit) => ({
+    path: hit.pathLabel,
+    message:
+      'legacy memory slot selector is ignored by runtime routing; use plugins.slots["memory.recall"] for factual recall provider selection or run "openclaw doctor --fix".',
+  }));
+  const details = formatConfigIssueLines(issues, "", { normalizeRoot: true }).join("\n");
+  const recoveryHint = options.includeDoctorHint ? `\n${formatInvalidConfigRecoveryHint()}` : "";
+  throw createInvalidConfigError(snapshot.path, `${details}${recoveryHint}`, {
+    recovery: "doctor",
+  });
+}
+
 function withRuntimeConfig(
   snapshot: ConfigFileSnapshot,
   runtimeConfig: OpenClawConfig,
@@ -100,6 +123,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   }
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
+    assertNoStartupBlockingLegacyMemorySlots(configSnapshot, { includeDoctorHint: true });
   }
 
   const autoEnable = params.minimalTestGateway

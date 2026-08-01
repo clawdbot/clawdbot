@@ -5,12 +5,14 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isMemoryRoleSelectedSlotActivationAllowed } from "../../plugins/config-activation-shared.js";
 import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolveMemoryRoleLoadScope } from "../../plugins/slot-resolution.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -51,7 +53,10 @@ export function resolvePluginSkillDirs(params: {
     metadataSnapshot.normalizePluginId,
   );
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
-  const memorySlot = normalizedPlugins.slots.memory;
+  const { selectedMemoryRolePluginIds, memorySlots } = resolveMemoryRoleLoadScope({
+    cfg: config,
+    normalizedPlugins,
+  });
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: string[] = [];
@@ -68,7 +73,15 @@ export function resolvePluginSkillDirs(params: {
       enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
-      continue;
+      if (
+        !selectedMemoryRolePluginIds.has(record.id) ||
+        !isMemoryRoleSelectedSlotActivationAllowed({
+          pluginId: record.id,
+          config: normalizedPlugins,
+        })
+      ) {
+        continue;
+      }
     }
     // ACP router skills should not be attached unless ACP can actually spawn.
     if (!acpRuntimeAvailable && record.id === "acpx") {
@@ -77,7 +90,7 @@ export function resolvePluginSkillDirs(params: {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

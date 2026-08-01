@@ -48,13 +48,14 @@ function formatPhaseGuide(): string {
   ].join("\n");
 }
 
-function formatStatus(cfg: OpenClawConfig): string {
+function formatStatus(cfg: OpenClawConfig, agentId?: string): string {
   const pluginConfig = resolveDreamingPluginConfig(cfg);
   const dreaming = resolveMemoryDreamingConfig({
     pluginConfig,
     cfg,
+    agentId,
   });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg, agentId });
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
 
   return [
@@ -96,11 +97,11 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
   const currentConfig = api.runtime.config.current() as OpenClawConfig;
 
   if (!firstToken || firstToken === "help" || firstToken === "options" || firstToken === "phases") {
-    return { text: formatUsage(formatStatus(currentConfig)) };
+    return { text: formatUsage(formatStatus(currentConfig, ctx.agentId)) };
   }
 
   if (firstToken === "status") {
-    return { text: formatStatus(currentConfig) };
+    return { text: formatStatus(currentConfig, ctx.agentId) };
   }
 
   if (firstToken === "on" || firstToken === "off") {
@@ -126,10 +127,10 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
       text: [
         `Dreaming ${enabled ? "enabled" : "disabled"}.`,
         "",
-        formatStatus(committed.nextConfig),
+        formatStatus(committed.nextConfig, ctx.agentId),
       ].join("\n"),
     };
   }
 
-  return { text: formatUsage(formatStatus(currentConfig)) };
+  return { text: formatUsage(formatStatus(currentConfig, ctx.agentId)) };
 }

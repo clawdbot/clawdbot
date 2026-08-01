@@ -482,7 +482,14 @@ export const OpenClawSchemaShape = {
         .optional(),
       slots: z
         .strictObject({
+          // Legacy-only: accepted so `openclaw doctor --fix` can migrate it to
+          // `memory.recall`; runtime slot routing ignores this key.
           memory: z.string().optional(),
+          "memory.recall": z.string().optional(),
+          "memory.compaction": z.string().optional(),
+          "memory.capture": z.string().optional(),
+          "memory.dreaming": z.string().optional(),
+          "memory.userModel": z.string().optional(),
           contextEngine: z.string().optional(),
         })
         .optional(),

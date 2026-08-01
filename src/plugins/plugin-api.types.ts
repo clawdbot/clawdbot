@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -76,8 +75,6 @@ import type {
 import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
-  ContextEngineFactory,
-  MemoryCorpusSupplement,
   MemoryEmbeddingProviderAdapter,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
@@ -97,12 +94,12 @@ type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
 
-type OpenClawPluginSessionStateApi = {
+export type OpenClawPluginSessionStateApi = {
   /** Register plugin-owned session state projected into Gateway session rows. */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
 };
 
-type OpenClawPluginSessionWorkflowApi = {
+export type OpenClawPluginSessionWorkflowApi = {
   /** Queue one plugin-owned context injection for the next agent turn in a session. */
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
@@ -132,31 +129,31 @@ type OpenClawPluginSessionWorkflowApi = {
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
 };
 
-type OpenClawPluginSessionControlsApi = {
+export type OpenClawPluginSessionControlsApi = {
   /** Register a typed session action that clients can dispatch through the Gateway. */
   registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /** Register a generic Control UI contribution descriptor. */
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
 };
 
-type OpenClawPluginSessionApi = {
+export type OpenClawPluginSessionApi = {
   state: OpenClawPluginSessionStateApi;
   workflow: OpenClawPluginSessionWorkflowApi;
   controls: OpenClawPluginSessionControlsApi;
 };
 
-type OpenClawPluginAgentEventsApi = {
+export type OpenClawPluginAgentEventsApi = {
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
   /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
   emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
 };
 
-type OpenClawPluginAgentApi = {
+export type OpenClawPluginAgentApi = {
   events: OpenClawPluginAgentEventsApi;
 };
 
-type OpenClawPluginRunContextApi = {
+export type OpenClawPluginRunContextApi = {
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
@@ -165,7 +162,7 @@ type OpenClawPluginRunContextApi = {
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
-type OpenClawPluginLifecycleApi = {
+export type OpenClawPluginLifecycleApi = {
   /** Register cleanup hooks for plugin-owned host state and background work. */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
@@ -303,7 +300,12 @@ export type OpenClawPluginApi = {
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
-  registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
+  registerContextEngine: (
+    id: string,
+    factory: Parameters<
+      typeof import("../context-engine/registry.js").registerContextEngineForOwner
+    >[1],
+  ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,
@@ -430,7 +432,9 @@ export type OpenClawPluginApi = {
     params: PluginSessionTurnUnscheduleByTagParams,
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
-  registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
+  registerDetachedTaskRuntime: (
+    runtime: import("../tasks/detached-task-runtime-contract.js").DetachedTaskLifecycleRuntime,
+  ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
@@ -440,7 +444,9 @@ export type OpenClawPluginApi = {
     prepare: (params: MemoryPromptSectionParams) => Promise<readonly string[]>,
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
-  registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
+  registerMemoryCorpusSupplement: (
+    supplement: import("./memory-state.js").MemoryCorpusSupplement,
+  ) => void;
   /**
    * Register a memory embedding provider adapter. Multiple adapters may coexist.
    * @deprecated New embedding providers should use `registerEmbeddingProvider`

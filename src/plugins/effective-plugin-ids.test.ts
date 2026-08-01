@@ -115,6 +115,23 @@ describe("resolveEffectivePluginIds", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps disabled default memory role slots out of plugin preload ids", () => {
+    expect(resolve({ plugins: {} })).toStrictEqual([]);
+    expect(
+      resolve({
+        plugins: {
+          slots: {
+            "memory.recall": "none",
+            "memory.compaction": "none",
+            "memory.capture": "none",
+            "memory.dreaming": "none",
+            "memory.userModel": "none",
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
   it.each([
     {
       name: "plugins disabled",

@@ -27,6 +27,7 @@ async function writePluginFixture(params: {
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
+  kind?: string | string[];
 }) {
   await mkdirSafe(params.dir);
   await fs.writeFile(
@@ -40,6 +41,9 @@ async function writePluginFixture(params: {
   };
   if (params.channels) {
     manifest.channels = params.channels;
+  }
+  if (params.kind) {
+    manifest.kind = params.kind;
   }
   await fs.writeFile(
     path.join(params.dir, "openclaw.plugin.json"),
@@ -88,7 +92,7 @@ function expectRemovedPluginWarnings(
     expectPathMessage(result.warnings, `plugins.entries.${removedId}`, message);
     expectPathMessage(result.warnings, "plugins.allow", message);
     expectPathMessage(result.warnings, "plugins.deny", message);
-    expectPathMessage(result.warnings, "plugins.slots.memory", message);
+    expectNoPath(result.warnings, "plugins.slots.memory");
   }
 }
 
@@ -295,7 +299,7 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
+      expectNoPath(res.issues, "plugins.slots.memory");
       expect(res.warnings).toEqual(
         expect.arrayContaining([
           {
@@ -1245,7 +1249,7 @@ describe("config plugin validation", () => {
       {
         agents: { list: [{ id: "openclaw" }] },
         plugins: {
-          slots: { memory: "memory-lancedb" },
+          slots: { "memory.recall": "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
         },
       },
@@ -1265,8 +1269,152 @@ describe("config plugin validation", () => {
       "plugin not installed: memory-lancedb — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
     const entryMessage =
       "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
-    expectPathMessage(res.warnings, "plugins.slots.memory", slotMessage);
+    expectPathMessage(res.warnings, "plugins.slots.memory.recall", slotMessage);
     expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", entryMessage);
+  });
+
+  it("reports missing purpose-specific memory slot plugin refs", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        slots: {
+          "memory.recall": "missing-recall",
+          "memory.compaction": "missing-compactor",
+          "memory.capture": "missing-capture",
+          "memory.dreaming": "missing-dreaming",
+          "memory.userModel": "missing-user-model",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      for (const [role, pluginId] of [
+        ["recall", "missing-recall"],
+        ["compaction", "missing-compactor"],
+        ["capture", "missing-capture"],
+        ["dreaming", "missing-dreaming"],
+        ["userModel", "missing-user-model"],
+      ] as const) {
+        expectPathMessage(
+          res.issues,
+          `plugins.slots.memory.${role}`,
+          `plugin not found: ${pluginId}`,
+        );
+      }
+    }
+  });
+
+  it("reports missing per-agent memory role slot plugin refs", () => {
+    const res = validateInSuite({
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.capture": "missing-agent-capture" },
+            },
+          },
+        ],
+      },
+      plugins: {
+        enabled: true,
+        slots: { "memory.recall": "none" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessage(
+        res.issues,
+        "agents.entries.research.plugins.slots.memory.capture",
+        "plugin not found: missing-agent-capture",
+      );
+    }
+  });
+
+  it("validates memory plugins selected only by non-recall role slots", async () => {
+    const capturePluginDir = path.join(suiteHome, "capture-plugin");
+    await writePluginFixture({
+      dir: capturePluginDir,
+      id: "capture-plugin",
+      kind: "memory",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+        },
+        required: ["enabled"],
+      },
+    });
+
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [capturePluginDir] },
+        allow: ["capture-plugin"],
+        slots: {
+          "memory.recall": "none",
+          "memory.capture": "capture-plugin",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.capture-plugin.config.enabled",
+        "must have required property 'enabled'",
+      );
+    }
+  });
+
+  it("validates memory plugins selected only by per-agent role slots", async () => {
+    const capturePluginDir = path.join(suiteHome, "agent-capture-plugin");
+    await writePluginFixture({
+      dir: capturePluginDir,
+      id: "agent-capture-plugin",
+      kind: "memory",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+        },
+        required: ["enabled"],
+      },
+    });
+
+    const res = validateInSuite({
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.capture": "agent-capture-plugin" },
+            },
+          },
+        ],
+      },
+      plugins: {
+        enabled: true,
+        load: { paths: [capturePluginDir] },
+        slots: { "memory.recall": "none" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.agent-capture-plugin.config.enabled",
+        "must have required property 'enabled'",
+      );
+    }
   });
 
   it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
@@ -1334,7 +1482,7 @@ describe("config plugin validation", () => {
       {
         agents: { list: [{ id: "openclaw" }] },
         plugins: {
-          slots: { memory: "brave" },
+          slots: { "memory.recall": "brave" },
           entries: { brave: { enabled: true } },
         },
       },
@@ -1353,7 +1501,7 @@ describe("config plugin validation", () => {
     if (res.ok) {
       return;
     }
-    expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: brave");
+    expectPathMessage(res.issues, "plugins.slots.memory.recall", "plugin not found: brave");
     expectPathMessage(
       res.warnings,
       "plugins.entries.brave",
@@ -1366,7 +1514,7 @@ describe("config plugin validation", () => {
       {
         agents: { list: [{ id: "openclaw" }] },
         plugins: {
-          slots: { memory: "memory-lancedb" },
+          slots: { "memory.recall": "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
         },
       },
@@ -1393,7 +1541,7 @@ describe("config plugin validation", () => {
     }
     expectPathMessageIncludes(
       res.issues,
-      "plugins.slots.memory",
+      "plugins.slots.memory.recall",
       "plugin present but blocked: memory-lancedb",
     );
     expectPathMessageIncludes(
@@ -1849,7 +1997,7 @@ describe("config plugin validation", () => {
     expectPathMessage(res.warnings, `plugins.entries.${removedId}`, message);
     expectPathMessage(res.warnings, "plugins.allow", message);
     expectPathMessage(res.warnings, "plugins.deny", message);
-    expectPathMessage(res.warnings, "plugins.slots.memory", message);
+    expectNoPath(res.warnings, "plugins.slots.memory");
   });
 
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {

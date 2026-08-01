@@ -15,6 +15,7 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
@@ -89,6 +90,7 @@ type DoctorMemoryDreamingEntryPayload = {
 };
 
 type DoctorMemoryDreamingPayload = {
+  pluginId: string;
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
@@ -294,6 +296,7 @@ async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
 
 function resolveDreamingConfig(
   cfg: OpenClawConfig,
+  agentId?: string,
 ): Omit<
   DoctorMemoryDreamingPayload,
   | "shortTermCount"
@@ -312,23 +315,30 @@ function resolveDreamingConfig(
   | "storeError"
   | "phaseSignalError"
 > {
+  const pluginId = resolveMemoryDreamingPluginId(cfg, agentId ? { agentId } : {});
+  const pluginConfig = resolveMemoryDreamingPluginConfig(cfg, agentId ? { agentId } : {});
   const resolved = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    pluginConfig,
     cfg,
+    agentId,
   });
   const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    pluginConfig,
     cfg,
+    agentId,
   });
   const deep = resolveMemoryDeepDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    pluginConfig,
     cfg,
+    agentId,
   });
   const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    pluginConfig,
     cfg,
+    agentId,
   });
   return {
+    pluginId: pluginId ?? "none",
     enabled: resolved.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
@@ -812,7 +822,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         embedding = { ok: false, error: "memory embeddings unavailable" };
       }
       const nowMs = Date.now();
-      const dreamingConfig = resolveDreamingConfig(cfg);
+      const dreamingConfig = resolveDreamingConfig(cfg, agentId);
       const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
       const configuredWorkspaces = requestedAgentId
         ? workspaceDir
@@ -929,8 +939,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       inputPaths: sourceFiles,
     });
     const remConfig = resolveMemoryRemDreamingConfig({
-      pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+      pluginConfig: resolveMemoryDreamingPluginConfig(cfg, { agentId }),
       cfg,
+      agentId,
     });
     const entries = grounded.files
       .map((file) => {
@@ -1047,7 +1058,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
       const preview = await previewRemHarness({
         workspaceDir,
         cfg,
-        pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+        agentId,
+        pluginConfig: resolveMemoryDreamingPluginConfig(cfg, { agentId }),
         grounded,
         includePromoted,
         candidateLimit,

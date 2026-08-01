@@ -127,7 +127,7 @@ describe("MemorySettingsPage engine slot", () => {
     const patchForm = vi.fn();
     const setEnabled = vi.fn(() => Promise.resolve({}));
     const { element } = createPage({
-      configObject: { plugins: { slots: { memory: "memory-lancedb" } } },
+      configObject: { plugins: { slots: { "memory.recall": "memory-lancedb" } } },
       catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
       patchForm,
       waitForPendingWrites: () => pendingWrites.promise,
@@ -140,11 +140,11 @@ describe("MemorySettingsPage engine slot", () => {
       selectEngine(element, "");
       // Disabling the plugin would leave the slot pinned; only the explicit
       // sentinel makes Off outlive a reload.
-      expect(patchForm).toHaveBeenCalledWith(["plugins", "slots", "memory"], "none");
+      expect(patchForm).toHaveBeenCalledWith(["plugins", "slots", "memory.recall"], "none");
       expect(setEnabled).not.toHaveBeenCalled();
 
       // Round-trip: the reloaded config carries the write back into the page.
-      element.configObject = { plugins: { slots: { memory: "none" } } };
+      element.configObject = { plugins: { slots: { "memory.recall": "none" } } };
       await element.updateComplete;
       expect(activeEngine(element)).toBe("");
       expect(element.textContent).toContain("switched off");
@@ -795,7 +795,7 @@ describe("MemorySettingsPage tab routing", () => {
       Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
     );
     const { element } = createPage({
-      configObject: { plugins: { slots: { memory: "engine-a" } } },
+      configObject: { plugins: { slots: { "memory.recall": "engine-a" } } },
       catalog: [engine("engine-a", true), engine("engine-b", true)],
       memoryStatus,
     });
@@ -804,7 +804,7 @@ describe("MemorySettingsPage tab routing", () => {
     try {
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
 
-      element.configObject = { plugins: { slots: { memory: "engine-b" } } };
+      element.configObject = { plugins: { slots: { "memory.recall": "engine-b" } } };
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
       expect(element.textContent).toContain("engine-b");
     } finally {

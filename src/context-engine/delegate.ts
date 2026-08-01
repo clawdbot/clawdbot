@@ -4,6 +4,8 @@ import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMemoryPromptSection,
   getActivePreparedMemoryPromptSection,
@@ -227,10 +229,20 @@ export async function delegateCompactionToRuntime(
  * assembly, without reimplementing memory prompt formatting.
  */
 function renderMemorySystemPromptAddition(
-  params: MemoryPromptSectionParams,
+  params: MemoryPromptSectionParams & { cfg?: OpenClawConfig },
   prepared?: PreparedMemoryPromptSection,
 ): string | undefined {
-  const lines = buildMemoryPromptSection(params, prepared);
+  const lines = buildMemoryPromptSection(
+    {
+      availableTools: params.availableTools,
+      citationsMode: params.citationsMode,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
+    },
+    prepared,
+  );
   if (lines.length === 0) {
     return undefined;
   }
@@ -238,16 +250,22 @@ function renderMemorySystemPromptAddition(
   return normalized || undefined;
 }
 
-export function buildMemorySystemPromptAddition(
-  params: MemoryPromptSectionParams,
-): string | undefined {
+export function buildMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): string | undefined {
   const prepared = getActivePreparedMemoryPromptSection();
   if (!prepared) {
     return renderMemorySystemPromptAddition(params);
   }
-  const contextParams: MemoryPromptSectionParams = {
+  const contextParams: MemoryPromptSectionParams & { cfg?: OpenClawConfig } = {
     availableTools: params.availableTools,
     citationsMode: params.citationsMode ?? prepared.context.citationsMode,
+    cfg: params.cfg,
     agentId: params.agentId ?? prepared.context.agentId,
     agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
     sandboxed: params.sandboxed ?? prepared.context.sandboxed,

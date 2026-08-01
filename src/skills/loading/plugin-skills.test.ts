@@ -9,6 +9,7 @@ import {
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type { PluginKind } from "../../plugins/plugin-kind.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hoisted = vi.hoisted(() => {
@@ -100,6 +101,7 @@ function createSinglePluginRegistry(params: {
   format?: "openclaw" | "bundle";
   bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   legacyPluginIds?: string[];
+  kind?: PluginKind | PluginKind[];
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -112,6 +114,7 @@ function createSinglePluginRegistry(params: {
         channels: [],
         providers: [],
         cliBackends: [],
+        kind: params.kind,
         legacyPluginIds: params.legacyPluginIds,
         skills: params.skills,
         hooks: [],
@@ -422,6 +425,70 @@ describe("resolvePluginSkillDirs", () => {
           entries: {
             "helper-legacy": { enabled: true },
           },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("resolves memory plugin skills selected by non-recall role slots", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-memory-plugin-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        skills: ["./skills"],
+        kind: "memory",
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          allow: ["helper"],
+          slots: {
+            "memory.recall": "none",
+            "memory.capture": "helper",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("resolves memory plugin skills selected by per-agent role slots", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-agent-memory-plugin-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        skills: ["./skills"],
+        kind: "memory",
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          slots: { "memory.recall": "none" },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "helper" },
+              },
+            },
+          ],
         },
       } as OpenClawConfig,
     });

@@ -13,6 +13,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { isMemoryRoleSelectedSlotActivationAllowed } from "./config-activation-shared.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -42,6 +43,52 @@ import { validateJsonSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
+
+export function applyMemoryRoleSlotActivation(params: {
+  pluginId: string;
+  normalized: NormalizedPluginsConfig;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+  selectedMemoryRolePluginIds: ReadonlySet<string>;
+  activationState: PluginActivationState;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+}): {
+  activationState: PluginActivationState;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+} {
+  if (
+    isAuthorizedDreamingSidecarPlugin({
+      sidecar: params.dreamingSidecar,
+      pluginId: params.pluginId,
+    })
+  ) {
+    const state = {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto" as const,
+      reason: `dreaming sidecar for selected memory slot "${params.dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+    };
+    return { activationState: state, enableState: state };
+  }
+  if (
+    params.enableState.enabled ||
+    !params.selectedMemoryRolePluginIds.has(params.pluginId) ||
+    !isMemoryRoleSelectedSlotActivationAllowed({
+      pluginId: params.pluginId,
+      config: params.normalized,
+    })
+  ) {
+    return { activationState: params.activationState, enableState: params.enableState };
+  }
+  const state = {
+    enabled: true,
+    activated: true,
+    explicitlyEnabled: true,
+    source: "explicit" as const,
+    reason: "selected memory slot",
+  };
+  return { activationState: state, enableState: state };
+}
 
 export function createPluginLoaderLogger(): PluginLogger {
   return createSubsystemLogger("plugins");

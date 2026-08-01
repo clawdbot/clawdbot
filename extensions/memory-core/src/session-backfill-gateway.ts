@@ -6,9 +6,11 @@ import {
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listAgentIds,
+  resolveMemoryDreamingPluginConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { SessionBackfillResult } from "./session-backfill-contract.js";
@@ -100,7 +102,8 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
   const remConfig = resolveMemoryRemDreamingConfig({
     cfg: config,
-    pluginConfig: resolvePluginConfigObject(config, "memory-core"),
+    pluginConfig: resolveMemoryDreamingPluginConfig(config, { agentId }),
+    agentId,
   });
   return {
     workspaceDir,

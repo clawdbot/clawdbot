@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { resolveMemoryRoleSlot } from "../../../plugins/slot-resolution.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -111,8 +112,25 @@ describe("doctor stale plugin config helpers", () => {
       plugins: {
         slots: {
           memory: "acpx",
+          "memory.recall": "missing-recall",
+          "memory.capture": "missing-capture",
+          "memory.dreaming": "none",
           contextEngine: "missing-engine",
         },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                "memory.recall": "missing-agent-recall",
+                "memory.compaction": "missing-agent-compaction",
+                "memory.capture": "none",
+              },
+            },
+          },
+        ],
       },
     } as OpenClawConfig;
 
@@ -125,22 +143,142 @@ describe("doctor stale plugin config helpers", () => {
         slotKey: "memory",
       },
       {
+        pluginId: "missing-recall",
+        pathLabel: "plugins.slots.memory.recall",
+        surface: "slot",
+        slotKey: "memory.recall",
+      },
+      {
+        pluginId: "missing-capture",
+        pathLabel: "plugins.slots.memory.capture",
+        surface: "slot",
+        slotKey: "memory.capture",
+      },
+      {
         pluginId: "missing-engine",
         pathLabel: "plugins.slots.contextEngine",
         surface: "slot",
         slotKey: "contextEngine",
+      },
+      {
+        pluginId: "missing-agent-recall",
+        pathLabel: "agents.list.0.plugins.slots.memory.recall",
+        surface: "slot",
+        slotKey: "memory.recall",
+        agentPath: "agents.list.0",
+      },
+      {
+        pluginId: "missing-agent-compaction",
+        pathLabel: "agents.list.0.plugins.slots.memory.compaction",
+        surface: "slot",
+        slotKey: "memory.compaction",
+        agentPath: "agents.list.0",
       },
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
 
     expect(result.changes).toEqual([
-      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
+      "- plugins.slots: reset 4 stale plugin slots (memory: acpx -> memory-core, memory.recall: missing-recall -> memory-core, memory.capture: missing-capture -> none, contextEngine: missing-engine -> legacy)",
+      "- authored agent plugin slots: removed 2 stale plugin slot overrides (agents.list.0.plugins.slots.memory.recall: missing-agent-recall, agents.list.0.plugins.slots.memory.compaction: missing-agent-compaction)",
     ]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
+      "memory.recall": "memory-core",
+      "memory.capture": "none",
+      "memory.dreaming": "none",
       contextEngine: "legacy",
     });
+    expect(result.config.agents?.list?.[0]?.plugins?.slots).toEqual({
+      "memory.capture": "none",
+    });
+  });
+
+  it("removes stale per-agent memory recall overrides so agents inherit global recall", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [manifest("memory-lancedb"), manifest("memory-core")],
+      diagnostics: [],
+    });
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-lancedb",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                "memory.recall": "missing-agent-recall",
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryRoleSlot({ cfg, role: "recall", agentId: "research" })).toBe(
+      "missing-agent-recall",
+    );
+
+    const result = maybeRepairStalePluginConfig(cfg);
+
+    expect(result.changes).toEqual([
+      "- authored agent plugin slots: removed 1 stale plugin slot override (agents.list.0.plugins.slots.memory.recall: missing-agent-recall)",
+    ]);
+    expect(result.config.agents?.list?.[0]?.plugins).toBeUndefined();
+    expect(resolveMemoryRoleSlot({ cfg: result.config, role: "recall", agentId: "research" })).toBe(
+      "memory-lancedb",
+    );
+  });
+
+  it("scans and repairs stale authored agents.entries memory slot overrides", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [manifest("memory-lancedb"), manifest("memory-core")],
+      diagnostics: [],
+    });
+    const cfg = {
+      plugins: {
+        slots: { "memory.recall": "memory-lancedb" },
+      },
+      agents: {
+        entries: {
+          research: {
+            plugins: {
+              slots: {
+                "memory.recall": "missing-agent-recall",
+                "memory.capture": "memory-core",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "missing-agent-recall",
+        pathLabel: "agents.entries.research.plugins.slots.memory.recall",
+        surface: "slot",
+        slotKey: "memory.recall",
+        agentPath: "agents.entries.research",
+      },
+    ]);
+
+    const result = maybeRepairStalePluginConfig(cfg);
+
+    expect(result.changes).toEqual([
+      "- authored agent plugin slots: removed 1 stale plugin slot override (agents.entries.research.plugins.slots.memory.recall: missing-agent-recall)",
+    ]);
+    expect(result.config.agents?.entries?.research?.plugins?.slots).toEqual({
+      "memory.capture": "memory-core",
+    });
+    expect(result.config.agents?.list).toBeUndefined();
+    expect(resolveMemoryRoleSlot({ cfg: result.config, role: "recall", agentId: "research" })).toBe(
+      "memory-lancedb",
+    );
   });
 
   it("preserves official external plugin config before installation", () => {
@@ -229,6 +367,8 @@ describe("doctor stale plugin config helpers", () => {
         plugins: {
           slots: {
             memory: "none",
+            "memory.recall": "memory-core",
+            "memory.capture": "none",
             contextEngine: "legacy",
           },
         },

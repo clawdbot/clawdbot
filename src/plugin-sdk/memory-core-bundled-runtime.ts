@@ -275,6 +275,7 @@ type ApiFacadeModule = {
   previewRemHarness: (params: {
     workspaceDir: string;
     cfg?: unknown;
+    agentId?: string;
     pluginConfig?: Record<string, unknown>;
     grounded?: boolean;
     groundedInputPaths?: string[];
