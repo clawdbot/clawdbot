@@ -1815,9 +1815,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("marks startup main-session orphans before channel startup", async () => {
+  it("marks startup main-session orphans before model runtime and channel startup", async () => {
     const events: string[] = [];
     let releaseMarking: (() => void) | undefined;
+    const prewarmPrimaryModel = vi.fn(async () => {
+      events.push("model-runtime");
+    });
     const startChannels = vi.fn(async () => {
       events.push("channels");
     });
@@ -1838,6 +1841,7 @@ describe("startGatewayPostAttachRuntime", () => {
       defaultWorkspaceDir: "/tmp/openclaw-workspace",
       deps: {} as never,
       startChannels,
+      prewarmPrimaryModel,
       log: { warn: vi.fn() },
       logHooks: {
         info: vi.fn(),
@@ -1861,7 +1865,13 @@ describe("startGatewayPostAttachRuntime", () => {
     releaseMarking();
     await sidecars;
 
-    expect(events).toEqual(["main-session-mark:start", "main-session-mark:done", "channels"]);
+    expect(events).toEqual([
+      "main-session-mark:start",
+      "main-session-mark:done",
+      "model-runtime",
+      "channels",
+    ]);
+    expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
     expect(startChannels).toHaveBeenCalledTimes(1);
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
   });
