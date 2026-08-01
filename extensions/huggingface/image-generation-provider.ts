@@ -35,7 +35,7 @@ function buildEndpointUrl(baseUrl: string, model: string): string {
 function inferImageMimeType(response: Response): string {
   const contentType = response.headers.get("content-type")?.trim().toLowerCase();
   if (contentType?.startsWith("image/")) {
-    return contentType.split(";")[0].trim();
+    return contentType.split(";")[0]?.trim() ?? DEFAULT_OUTPUT_MIME;
   }
   return DEFAULT_OUTPUT_MIME;
 }
