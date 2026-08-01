@@ -847,6 +847,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ harnessId: "codex" });
     const cause = (error as Error).cause;
     expect(isCodexAppServerRequestTimeoutError(cause)).toBe(true);
     expect((cause as Error).message).toBe("plugin/list timed out");

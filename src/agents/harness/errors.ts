@@ -28,15 +28,18 @@ export class AgentHarnessSessionSupersededError extends Error {
   }
 }
 
-/** A model-independent harness preflight failed before an attempt could start. */
+/** A harness preflight failed before an attempt could start. */
 export class AgentHarnessPreflightError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly harnessId?: string;
+
+  constructor(message: string, options?: ErrorOptions & { harnessId?: string }) {
     super(message, options);
     this.name = "AgentHarnessPreflightError";
+    this.harnessId = options?.harnessId;
   }
 }
 
-/** Returns whether fallback would only repeat the same harness preflight failure. */
+/** Returns whether a harness preflight failed before an attempt could start. */
 export function isAgentHarnessPreflightError(err: unknown): err is AgentHarnessPreflightError {
   return err instanceof AgentHarnessPreflightError;
 }

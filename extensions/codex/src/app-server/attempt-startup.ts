@@ -331,7 +331,7 @@ export async function startCodexAttemptThread(params: {
               }
               throw new AgentHarnessPreflightError(
                 `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
-                { cause: error },
+                { cause: error, harnessId: "codex" },
               );
             }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();

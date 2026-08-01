@@ -215,6 +215,20 @@ let authTempRoot = "";
 let authTempCounter = 0;
 const emptyManifestPlugins = [] as const;
 
+function registerFallbackHarness(id: string): void {
+  registerAgentHarness(
+    {
+      id,
+      label: id,
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+        throw new Error("fallback test should not invoke the registered harness directly");
+      }),
+    },
+    { ownerPluginId: `${id}-test` },
+  );
+}
+
 const runWithModelFallback: typeof runWithModelFallbackBase = (params) =>
   runWithModelFallbackBase({ manifestPlugins: emptyManifestPlugins, ...params });
 
@@ -1831,6 +1845,83 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toBe(preflightError);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a scoped preflight unchanged when every remaining candidate uses that harness", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
+      harnessId: "codex",
+    });
+    const run = vi.fn().mockRejectedValue(preflightError);
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-5.5",
+        fallbacksOverride: ["openai/gpt-5.4", "openai/gpt-5.3"],
+        resolveAgentHarnessRuntimeOverride: () => "codex",
+        onFallbackStep,
+        run,
+      }),
+    ).rejects.toBe(preflightError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it("skips only same-runtime candidates after a scoped preflight", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
+      harnessId: "codex",
+    });
+    const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("openclaw-ok");
+    const onFallbackStep = vi.fn();
+
+    const result = await runWithModelFallback({
+      cfg: makeCfg(),
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbacksOverride: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      resolveAgentHarnessRuntimeOverride: (provider) =>
+        provider === "openai" ? "codex" : "openclaw",
+      onFallbackStep,
+      run,
+    });
+
+    expect(result.result).toBe("openclaw-ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(onFallbackStep).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        fallbackStepFromModel: "openai/gpt-5.5",
+        fallbackStepToModel: "anthropic/claude-sonnet-4-6",
+        fallbackStepFinalOutcome: "next_fallback",
+      }),
+    );
+  });
+
+  it("keeps an unresolved runtime eligible after a scoped preflight", async () => {
+    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
+      harnessId: "codex",
+    });
+    const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("unknown-ok");
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbacksOverride: ["anthropic/claude-sonnet-4-6"],
+      resolveAgentHarnessRuntimeOverride: (provider) =>
+        provider === "openai" ? "codex" : undefined,
+      run,
+    });
+
+    expect(result.result).toBe("unknown-ok");
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("does not spend model fallbacks on sandbox provisioning failures", async () => {
