@@ -551,4 +551,73 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       await context.close();
     }
   });
+
+  it("keeps a newer server-applied theme authoritative over a delayed import", async () => {
+    const replacementPayload = createTweakcnThemePayload();
+    let releaseImport!: () => void;
+    const importGate = new Promise<void>((resolve) => {
+      releaseImport = resolve;
+    });
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": configResponse({ theme: "claw" }, "custom-theme-server-race-1"),
+        "config.patch": { ok: true },
+      },
+    });
+    await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
+      await importGate;
+      await route.fulfill({ json: replacementPayload });
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      expect(response?.status()).toBe(200);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("config.get");
+
+      const themeSection = page.locator("#settings-appearance-theme");
+      await themeSection.locator(".settings-theme-card--custom").click();
+      const importer = page.locator(".settings-theme-import");
+      await importer.locator("input").fill("replacement");
+      await importer.locator("button.primary").click();
+      const replacementResponse = page.waitForResponse("https://tweakcn.com/r/themes/replacement");
+      await expect.poll(() => importer.locator("button.primary").isDisabled()).toBe(true);
+
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse({ theme: "knot" }, "custom-theme-server-race-2"),
+      );
+      await gateway.emitGatewayEvent("config.changed", {
+        hash: "custom-theme-server-race-2",
+        path: "/tmp/openclaw.json",
+        ts: Date.now(),
+      });
+      await waitForRequestCount(gateway, "config.get", configGetCount + 1);
+      await expect
+        .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
+        .toBe("true");
+
+      releaseImport();
+      await replacementResponse;
+      await expect
+        .poll(async () => {
+          const settings = await readPersistedSettings(page);
+          return { customTheme: settings.customTheme, theme: settings.theme };
+        })
+        .toEqual({ customTheme: undefined, theme: "knot" });
+      await expect.poll(() => importer.locator(".settings-theme-import__message").count()).toBe(0);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+    } finally {
+      releaseImport();
+      await context.close();
+    }
+  });
 });

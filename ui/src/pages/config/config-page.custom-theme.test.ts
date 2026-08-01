@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import * as customTheme from "../../app/custom-theme.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
-import { loadSettings, type UiSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -26,10 +26,13 @@ type CustomThemeImportState = {
   customThemeImportUrl: string;
   customThemeImportBusy: boolean;
   customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  pageId: string;
+  adoptThemeSettings: () => void;
   importCustomTheme: () => Promise<void>;
   clearCustomTheme: () => void;
   setCustomThemeImportUrl: (next: string) => void;
   setTheme: (theme: ThemeName) => void;
+  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
 };
 
 function createCustomThemePage(settings: Partial<UiSettings> = {}) {
@@ -153,6 +156,45 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.customThemeImportMessage).toBe(successMessage);
     expect(state.settings.theme).toBe("custom");
     expect(state.settings.customTheme).toBe(secondTheme);
+  });
+
+  it("preserves a newer server-applied theme when an older import settles", async () => {
+    const pending = deferred<ImportedCustomTheme>();
+    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
+    const { state } = createCustomThemePage();
+    state.setCustomThemeImportUrl("first");
+    const pendingImport = state.importCustomTheme();
+
+    patchSettings({ theme: "knot" });
+    state.adoptThemeSettings();
+    pending.resolve(customThemeFixture("First", "first"));
+    await pendingImport;
+
+    expect(state.customThemeImportBusy).toBe(false);
+    expect(state.customThemeImportUrl).toBe("first");
+    expect(state.customThemeImportMessage).toBeNull();
+    expect(state.settings.theme).toBe("knot");
+    expect(state.settings.customTheme).toBeUndefined();
+  });
+
+  it("retires an import when navigation leaves Appearance", async () => {
+    const pending = deferred<ImportedCustomTheme>();
+    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
+    const { state } = createCustomThemePage();
+    state.pageId = "appearance";
+    state.setCustomThemeImportUrl("first");
+    const pendingImport = state.importCustomTheme();
+
+    state.pageId = "security";
+    state.willUpdate(new Map([["pageId", "appearance"]]));
+    pending.resolve(customThemeFixture("First", "first"));
+    await pendingImport;
+
+    expect(state.customThemeImportBusy).toBe(false);
+    expect(state.customThemeImportUrl).toBe("first");
+    expect(state.customThemeImportMessage).toBeNull();
+    expect(state.settings.theme).toBe("claw");
+    expect(state.settings.customTheme).toBeUndefined();
   });
 
   it("preserves a built-in selection made after the first import starts", async () => {
