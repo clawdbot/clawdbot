@@ -1,5 +1,5 @@
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, parse, resolve } from "node:path";
+import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName } from "./schema-portability.js";
@@ -78,6 +78,36 @@ async function isFile(path: string): Promise<boolean> {
     .catch(() => false);
 }
 
+async function isConfinedManifestFile(root: string): Promise<boolean> {
+  const manifestPath = resolve(root, "CLAW.md");
+  const entry = await lstat(manifestPath).catch(() => undefined);
+  if (entry?.isFile()) {
+    return true;
+  }
+  if (!entry?.isSymbolicLink()) {
+    return false;
+  }
+  const [rootReal, targetReal] = await Promise.all([
+    realpath(root).catch(() => undefined),
+    realpath(manifestPath).catch(() => undefined),
+  ]);
+  if (!rootReal || !targetReal) {
+    return false;
+  }
+  const targetRelative = relative(rootReal, targetReal);
+  if (
+    targetRelative === "" ||
+    targetRelative === ".." ||
+    targetRelative.startsWith(`..${sep}`) ||
+    isAbsolute(targetRelative)
+  ) {
+    return false;
+  }
+  return lstat(targetReal)
+    .then((target) => target.isFile())
+    .catch(() => false);
+}
+
 async function discoverClawProjectRoot(projectPath: string): Promise<string> {
   const input = resolve(projectPath);
   const inputStat = await lstat(input).catch(() => undefined);
@@ -93,7 +123,7 @@ async function discoverClawProjectRoot(projectPath: string): Promise<string> {
   while (true) {
     if (
       (await isFile(resolve(current, "package.json"))) &&
-      (await isFile(resolve(current, "CLAW.md")))
+      (await isConfinedManifestFile(current))
     ) {
       roots.push(await realpath(current));
     }
@@ -192,15 +222,18 @@ export async function createClawProject(
 
   const packageJsonPath = resolve(root, "package.json");
   const clawMarkdownPath = resolve(root, "CLAW.md");
+  const createdPaths: string[] = [];
   await mkdir(root, { recursive: true });
   try {
     await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
     });
+    createdPaths.push(packageJsonPath);
     await writeFile(clawMarkdownPath, clawMarkdown, { encoding: "utf8", flag: "wx" });
+    createdPaths.push(clawMarkdownPath);
   } catch (error) {
-    await Promise.allSettled([unlink(packageJsonPath), unlink(clawMarkdownPath)]);
+    await Promise.allSettled(createdPaths.map((path) => unlink(path)));
     if (initialState === "missing") {
       await rmdir(root).catch(() => undefined);
     }

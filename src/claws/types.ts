@@ -218,7 +218,14 @@ export type ClawWorkspaceSourceSnapshot = {
   digest: string;
 };
 
+export type ClawSourceFileSnapshot = {
+  byteLength: number;
+  digest: string;
+};
+
 type ClawSourceSnapshot = {
+  manifest: ClawSourceFileSnapshot;
+  openClawProfile?: ClawSourceFileSnapshot;
   workspaceSources: ClawWorkspaceSourceSnapshot[];
   packageBootstrap?: ClawWorkspaceSourceSnapshot;
 };

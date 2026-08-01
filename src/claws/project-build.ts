@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   constants,
   copyFile,
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -24,6 +25,8 @@ import { isSafeClawRelativePath } from "./schema-portability.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const;
+
+const HARD_LINK_UNSUPPORTED_CODES = new Set(["ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"]);
 
 export type ClawBuildResult = {
   schemaVersion: typeof CLAW_BUILD_RESULT_SCHEMA_VERSION;
@@ -54,9 +57,23 @@ async function readSelectedProjectFile(projectRoot: string, path: string): Promi
     hardlinks: "reject",
     maxBytes: MAX_MANAGED_FILE_BYTES,
     nonBlockingRead: true,
-    symlinks: "reject",
+    symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
+}
+
+function assertValidatedBytes(
+  path: string,
+  bytes: Buffer,
+  expected: { byteLength: number; digest: string },
+): void {
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  if (bytes.byteLength !== expected.byteLength || digest !== expected.digest) {
+    throw new ClawProjectError(
+      "project_changed_during_build",
+      `Claw project input ${JSON.stringify(path)} changed after validation; retry the build from a stable snapshot.`,
+    );
+  }
 }
 
 export async function extractBuiltClawArtifact(artifact: string): Promise<{
@@ -116,25 +133,37 @@ export async function buildClawProject(
     );
   }
 
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "openclaw-claw-build-"));
+  const temporaryDirectory = await mkdtemp(join(dirname(artifact), ".openclaw-claw-build-"));
   const stagingRoot = join(temporaryDirectory, "staging");
   const temporaryArtifact = join(temporaryDirectory, "claw.tgz");
   try {
     await mkdir(stagingRoot, { mode: 0o755 });
     const files = new Map<string, Buffer | string>();
     files.set("package.json", `${JSON.stringify(project.packageJson, null, 2)}\n`);
-    files.set("CLAW.md", await readSelectedProjectFile(project.root, "CLAW.md"));
+    const clawMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
+    assertValidatedBytes("CLAW.md", clawMarkdown, project.claw.snapshot.manifest);
+    files.set("CLAW.md", clawMarkdown);
     if (project.claw.packageBootstrap) {
-      files.set("BOOTSTRAP.md", await readSelectedProjectFile(project.root, "BOOTSTRAP.md"));
+      const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
+      assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.claw.packageBootstrap);
+      files.set("BOOTSTRAP.md", bootstrap);
     }
     if (project.claw.openClawProfile) {
-      files.set(
-        "profiles/openclaw.yml",
-        await readSelectedProjectFile(project.root, "profiles/openclaw.yml"),
-      );
+      const profileSnapshot = project.claw.snapshot.openClawProfile;
+      if (!profileSnapshot) {
+        throw new ClawProjectError(
+          "project_invalid",
+          "Validated OpenClaw profile is missing its source snapshot.",
+        );
+      }
+      const profile = await readSelectedProjectFile(project.root, "profiles/openclaw.yml");
+      assertValidatedBytes("profiles/openclaw.yml", profile, profileSnapshot);
+      files.set("profiles/openclaw.yml", profile);
     }
     for (const source of project.claw.snapshot.workspaceSources) {
-      files.set(source.sourcePath, await readSelectedProjectFile(project.root, source.sourcePath));
+      const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
+      assertValidatedBytes(source.sourcePath, bytes, source);
+      files.set(source.sourcePath, bytes);
     }
 
     const fileNames = [...files.keys()].toSorted((left, right) =>
@@ -194,7 +223,31 @@ export async function buildClawProject(
       await extracted.dispose();
     }
 
-    await copyFile(temporaryArtifact, artifact, constants.COPYFILE_EXCL);
+    try {
+      await link(temporaryArtifact, artifact);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        throw new ClawProjectError(
+          "artifact_exists",
+          `Refusing to overwrite existing artifact ${JSON.stringify(artifact)}.`,
+        );
+      }
+      if (!code || !HARD_LINK_UNSUPPORTED_CODES.has(code)) {
+        throw error;
+      }
+      try {
+        await copyFile(temporaryArtifact, artifact, constants.COPYFILE_EXCL);
+      } catch (copyError) {
+        if ((copyError as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new ClawProjectError(
+            "artifact_exists",
+            `Refusing to overwrite existing artifact ${JSON.stringify(artifact)}.`,
+          );
+        }
+        throw copyError;
+      }
+    }
     return {
       schemaVersion: CLAW_BUILD_RESULT_SCHEMA_VERSION,
       projectSchemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,

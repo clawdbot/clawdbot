@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -73,6 +73,17 @@ describe("Claw projects", () => {
     }
   });
 
+  it("keeps one concurrent creator's completed project", async () => {
+    const root = join(tempDirs.make("openclaw-claw-create-race-"), "shared");
+    await mkdir(root);
+
+    const results = await Promise.allSettled([createClawProject(root), createClawProject(root)]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(validateClawProject(root)).resolves.toMatchObject({ ok: true });
+  });
+
   it("refuses occupied targets and package lifecycle scripts", async () => {
     const occupied = tempDirs.make("openclaw-claw-occupied-");
     await writeFile(join(occupied, "keep.txt"), "keep\n");
@@ -123,6 +134,50 @@ describe("Claw projects", () => {
       "package/workspace/reference.md",
     ]);
     expect(entries).not.toContain("package/not-packed.txt");
+  });
+
+  it("dereferences only a confined CLAW.md symlink into the artifact", async () => {
+    const project = tempDirs.make("openclaw-claw-manifest-link-");
+    const output = join(tempDirs.make("openclaw-claw-manifest-link-output-"), "linked.tgz");
+    const unpacked = tempDirs.make("openclaw-claw-manifest-link-unpacked-");
+    await writeRichProject(project);
+    await mkdir(join(project, "manifest"));
+    await rename(join(project, "CLAW.md"), join(project, "manifest", "source.md"));
+    await symlink("manifest/source.md", join(project, "CLAW.md"), "file");
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({ ok: true });
+    await buildClawProject(project, output);
+    await tar.x({ cwd: unpacked, file: output, strict: true });
+
+    expect((await lstat(join(unpacked, "package", "CLAW.md"))).isFile()).toBe(true);
+    expect(await readFile(join(unpacked, "package", "CLAW.md"), "utf8")).toContain(
+      "You are the demo Claw.",
+    );
+  });
+
+  it("rejects a CLAW.md symlink that escapes the project", async () => {
+    const project = tempDirs.make("openclaw-claw-manifest-escape-");
+    const outside = tempDirs.make("openclaw-claw-manifest-outside-");
+    await writeRichProject(project);
+    await rename(join(project, "CLAW.md"), join(outside, "CLAW.md"));
+    await symlink(join(outside, "CLAW.md"), join(project, "CLAW.md"), "file");
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_not_found" })],
+    });
+  });
+
+  it("preserves an existing build destination", async () => {
+    const project = tempDirs.make("openclaw-claw-build-existing-");
+    const output = join(tempDirs.make("openclaw-claw-output-existing-"), "existing.tgz");
+    await writeRichProject(project);
+    await writeFile(output, "keep this artifact\n");
+
+    await expect(buildClawProject(project, output)).rejects.toMatchObject({
+      code: "artifact_exists",
+    } satisfies Partial<ClawProjectError>);
+    expect(await readFile(output, "utf8")).toBe("keep this artifact\n");
   });
 
   it("rejects ambiguous nested project discovery", async () => {

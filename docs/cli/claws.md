@@ -283,10 +283,12 @@ appear as blockers instead of weakening that boundary. Use `--agent-id` or
 
 `build` writes a deterministic npm-compatible `.tgz` with a `package/` root.
 Only package metadata, `CLAW.md`, optional `BOOTSTRAP.md`, the OpenClaw profile,
-and sources selected by the manifest are included. Tests, caches, credentials,
-unselected files, prior artifacts, and source-control state remain outside the
-package. Build refuses to overwrite an existing artifact, reports its SHA-256
-integrity, and re-opens it through the canonical Claw reader before success.
+and sources selected by the manifest are included. Tests, caches, ambient or
+unselected credentials, unselected files, prior artifacts, and source-control
+state remain outside the package. Selected source bytes are package content, so
+authors must not select secret-bearing files. Build refuses to overwrite an
+existing artifact, reports its SHA-256 integrity, and re-opens it through the
+canonical Claw reader before success.
 
 ## Inspect and preview
 
