@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { measureAgentStartup } from "../agents/startup-timing.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -917,7 +918,9 @@ export async function agentCliCommand(
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await embeddedAgentCommandLoader.load();
+      const agentCommand = await measureAgentStartup("command-import", () =>
+        embeddedAgentCommandLoader.load(),
+      );
       const result = await agentCommand(
         {
           ...gatewayDispatchOpts,
