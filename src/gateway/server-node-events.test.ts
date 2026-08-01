@@ -108,6 +108,7 @@ const runtimeMocks = vi.hoisted(() => ({
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
+  resolveChatAttachmentMaxImageBytes: vi.fn(() => 6 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
       loadGatewayModelCatalog,

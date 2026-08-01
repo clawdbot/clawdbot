@@ -184,6 +184,27 @@ export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   return Math.floor(mb * 1024 * 1024);
 }
 
+/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
+export function resolveChatAttachmentMaxImageBytes(cfg: OpenClawConfig): number {
+  const configuredImageBytes = cfg.tools?.media?.image?.maxBytes;
+  if (
+    typeof configuredImageBytes === "number" &&
+    Number.isFinite(configuredImageBytes) &&
+    configuredImageBytes > 0
+  ) {
+    return Math.floor(configuredImageBytes);
+  }
+  const configuredMediaMb = cfg.agents?.defaults?.mediaMaxMb;
+  if (
+    typeof configuredMediaMb === "number" &&
+    Number.isFinite(configuredMediaMb) &&
+    configuredMediaMb > 0
+  ) {
+    return Math.floor(configuredMediaMb * 1024 * 1024);
+  }
+  return MAX_IMAGE_BYTES;
+}
+
 type UnsupportedAttachmentReason =
   | "empty-payload"
   | "text-only-image"
@@ -368,6 +389,7 @@ export async function parseMessageWithAttachments(
   attachments: ChatAttachment[] | undefined,
   opts?: {
     maxBytes?: number;
+    maxImageBytes?: number;
     log?: AttachmentLog;
     supportsImages?: boolean;
     supportsInlineImages?: boolean;
@@ -375,6 +397,7 @@ export async function parseMessageWithAttachments(
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;
+  const maxImageBytes = opts?.maxImageBytes ?? MAX_IMAGE_BYTES;
   const log = opts?.log;
   const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
@@ -465,15 +488,15 @@ export async function parseMessageWithAttachments(
         );
       }
       // Agent-side hydration (loadImageFromRef via optimizeAndClampImage / GIF
-      // direct compare) caps at MAX_IMAGE_BYTES. Accepting images above that
+      // direct compare) caps at maxImageBytes. Accepting images above that
       // would offload a file the runner later drops to null — a successful
       // response with a silently missing image. Reject here so the client
       // sees an explicit 4xx. Non-image attachments keep the full maxBytes
       // ceiling because their host path (media facts → Read/Bash) doesn't
       // load into the model.
-      if (isImage && sizeBytes > MAX_IMAGE_BYTES) {
+      if (isImage && sizeBytes > maxImageBytes) {
         throw new Error(
-          `attachment ${label}: image exceeds size limit (${sizeBytes} > ${MAX_IMAGE_BYTES} bytes)`,
+          `attachment ${label}: image exceeds size limit (${sizeBytes} > ${maxImageBytes} bytes)`,
         );
       }
 

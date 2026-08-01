@@ -34,6 +34,7 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentMaxImageBytes,
   type ChatAttachment,
 } from "../chat-attachments.js";
 import {
@@ -129,6 +130,7 @@ export async function prepareAgentContentPhase(params: {
     try {
       const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
         maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
+        maxImageBytes: resolveChatAttachmentMaxImageBytes(params.cfg),
         log: params.context.logGateway,
         supportsInlineImages,
         acceptNonImage: false,

@@ -38,6 +38,7 @@ import {
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentMaxImageBytes,
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
@@ -649,6 +650,23 @@ describe("resolveChatAttachmentMaxBytes", () => {
   });
 });
 
+describe("resolveChatAttachmentMaxImageBytes", () => {
+  const MB = 1024 * 1024;
+
+  it("prioritises tools.media.image.maxBytes when configured", () => {
+    const cfg = {
+      tools: { media: { image: { maxBytes: 12 * MB } } },
+      agents: { defaults: { mediaMaxMb: 50 } },
+    } as unknown as OpenClawConfig;
+    expect(resolveChatAttachmentMaxImageBytes(cfg)).toBe(12 * MB);
+  });
+
+  it("falls back to agents.defaults.mediaMaxMb when image maxBytes is unset", () => {
+    const cfg = { agents: { defaults: { mediaMaxMb: 15 } } } as unknown as OpenClawConfig;
+    expect(resolveChatAttachmentMaxImageBytes(cfg)).toBe(15 * MB);
+  });
+});
+
 describe("attachment validation", () => {
   it("rejects invalid base64 content", async () => {
     const bad: ChatAttachment = {
@@ -682,5 +700,50 @@ describe("attachment validation", () => {
     } finally {
       fromSpy.mockRestore();
     }
+  });
+
+  it("respects configured maxImageBytes over default 6MB limit", async () => {
+    const customMaxImageBytes = 10 * 1024 * 1024; // 10MB
+    let base64Len = Math.ceil((7 * 1024 * 1024 * 4) / 3);
+    base64Len += (4 - (base64Len % 4)) % 4;
+    const pngHeader = PNG_1x1.slice(0, 64);
+    const sevenMbImageB64 = `${pngHeader}${"A".repeat(base64Len - pngHeader.length)}`;
+    const att: ChatAttachment = {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "7mb.png",
+      content: sevenMbImageB64,
+    };
+
+    const parsed = await parseMessageWithAttachments("hello", [att], {
+      maxBytes: 20 * 1024 * 1024,
+      maxImageBytes: customMaxImageBytes,
+      log: { warn: () => {} },
+    });
+
+    try {
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+
+    let overLimitLen = Math.ceil((12 * 1024 * 1024 * 4) / 3);
+    overLimitLen += (4 - (overLimitLen % 4)) % 4;
+    const twelveMbImageB64 = `${pngHeader}${"A".repeat(overLimitLen - pngHeader.length)}`;
+    const overAtt: ChatAttachment = {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "12mb.png",
+      content: twelveMbImageB64,
+    };
+
+    await expect(
+      parseMessageWithAttachments("hello", [overAtt], {
+        maxBytes: 20 * 1024 * 1024,
+        maxImageBytes: customMaxImageBytes,
+        log: { warn: () => {} },
+      }),
+    ).rejects.toThrow(/image exceeds size limit/i);
   });
 });
