@@ -656,22 +656,25 @@ describe("web outbound", () => {
     });
   });
 
-  it("keeps explicit document kind for prehydrated image payloads", async () => {
-    const buf = Buffer.from("image-as-document");
+  it.each([
+    { contentType: "image/png", fileName: "photo.png" },
+    { contentType: "video/mp4", fileName: "clip.mp4" },
+  ])("keeps explicit document delivery for prehydrated $contentType payloads", async (media) => {
+    const buf = Buffer.from("visual-as-document");
 
     await sendMessageWhatsApp("+1555", "doc", {
       verbose: false,
       cfg: WHATSAPP_TEST_CFG,
       mediaPayload: {
         buffer: buf,
-        contentType: "image/png",
+        ...media,
         kind: "document",
-        fileName: "photo.png",
       },
     });
 
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "image/png", {
-      fileName: "photo.png",
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, media.contentType, {
+      asDocument: true,
+      fileName: media.fileName,
     });
   });
 
@@ -833,6 +836,32 @@ describe("web outbound", () => {
       maxSelections: 2,
       durationSeconds: undefined,
       durationHours: undefined,
+    });
+  });
+
+  it("returns the actual outbound poll key when Baileys resolves a LID target", async () => {
+    sendPoll.mockResolvedValueOnce({
+      kind: "poll",
+      messageId: "poll-lid",
+      keys: [
+        {
+          id: "poll-lid",
+          remoteJid: "123456789@lid",
+          fromMe: true,
+        },
+      ],
+      providerAccepted: true,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).resolves.toEqual({
+      messageId: "poll-lid",
+      toJid: "123456789@lid",
     });
   });
 

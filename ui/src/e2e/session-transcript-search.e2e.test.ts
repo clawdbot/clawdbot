@@ -188,6 +188,71 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await captureUiProof("04-matching-chat.png");
   });
 
+  it("finds a transcript when updated session order moves across a paged roster", async () => {
+    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
+    const first = { key: "agent:main:first", kind: "direct", updatedAt: timestamp };
+    const moved = { key: "agent:main:moved", kind: "direct", updatedAt: timestamp + 1 };
+    const missed = { key: "agent:main:missed", kind: "direct", updatedAt: timestamp - 1 };
+    const defaults = { contextTokens: null, model: null, modelProvider: null };
+    const result = (sessions: (typeof first)[], offset: number, hasMore: boolean) => ({
+      count: sessions.length,
+      defaults,
+      hasMore,
+      nextOffset: hasMore ? offset + sessions.length : null,
+      offset,
+      path: "",
+      sessions,
+      totalCount: 3,
+      ts: timestamp,
+    });
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 800, width: 1200 },
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      methodResponses: {
+        "sessions.list": result([first, moved], 0, true),
+        "sessions.search": {
+          results: [
+            {
+              messageId: "message-missed",
+              role: "assistant",
+              score: 1,
+              sessionId: "missed",
+              sessionKey: missed.key,
+              snippet: "the recovered launch code",
+              timestamp,
+            },
+          ],
+        },
+      },
+    });
+
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const input = page.getByRole("searchbox", { name: "Search thread transcripts" });
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    await gateway.setMethodResponse("sessions.list", {
+      cases: [
+        { match: { offset: 2 }, response: result([moved], 2, false) },
+        { response: result([first, missed], 0, true) },
+      ],
+    });
+    await input.fill("launch code");
+    await input.press("Enter");
+
+    await page.getByText("the recovered launch code").waitFor({ state: "visible" });
+    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
+    expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
+      agentId: "main",
+      limit: 25,
+      query: "launch code",
+      sessionKeys: [first.key, moved.key, missed.key],
+    });
+  });
+
   it.each([
     {
       label: "a later session page cannot be loaded",

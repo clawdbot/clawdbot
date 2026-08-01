@@ -1410,6 +1410,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             (contentViewController as? NSHostingController<MacChatSurface>)?
                 .sceneBridgingOptions = [.toolbars]
             window.isReleasedWhenClosed = false
+            window.isRestorable = false
             // Keep the SwiftUI toolbar controls, but merge their unified row
             // with the traffic lights instead of stacking it below a title band.
             window.titleVisibility = .hidden

@@ -739,7 +739,8 @@ export async function handleTelegramAction(
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
       readStringParam(params, "message", { allowEmpty: false });
-    const caption = readStringParam(params, "caption", { allowEmpty: false });
+    // Telegram treats an explicit empty caption as a request to remove it.
+    const caption = readStringParam(params, "caption", { allowEmpty: true });
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
     });

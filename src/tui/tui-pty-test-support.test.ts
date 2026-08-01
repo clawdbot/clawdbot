@@ -4,9 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const nodePtyMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+const processTreeMocks = vi.hoisted(() => ({
+  signalProcessTree: vi.fn((_pid: number, _signal: string, opts?: { onComplete?: () => void }) =>
+    opts?.onComplete?.(),
+  ),
+}));
 
 vi.mock("@lydell/node-pty", () => ({
   spawn: nodePtyMocks.spawn,
+}));
+vi.mock("../process/kill-tree.js", () => ({
+  signalProcessTree: processTreeMocks.signalProcessTree,
 }));
 
 import { startPty } from "./tui-pty-test-support.js";
@@ -23,6 +31,7 @@ function createMockPty(overrides: Partial<IPty> = {}): IPty {
 describe("TUI PTY test support", () => {
   beforeEach(() => {
     nodePtyMocks.spawn.mockReset();
+    processTreeMocks.signalProcessTree.mockClear();
   });
 
   it("applies fixture-specific terminal dimensions", () => {
@@ -197,5 +206,46 @@ describe("TUI PTY test support", () => {
 
     expect(order).toEqual(["data-dispose", "kill", "exit", "exit-dispose"]);
     expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("force-kills the PTY and waits for its exit event", async () => {
+    const order: string[] = [];
+    let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
+      order.push("kill");
+      opts?.onComplete?.();
+    });
+    nodePtyMocks.spawn.mockReturnValue(
+      createMockPty({
+        pid: 4242,
+        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
+        onExit: vi.fn((listener: typeof exitListener) => {
+          exitListener = listener;
+          return { dispose: () => order.push("exit-dispose") };
+        }),
+      }),
+    );
+
+    const run = startPty("node", [], {
+      cwd: process.cwd(),
+      env: {},
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    const forcedExit = run.forceKill();
+    expect(run.forceKill()).toBe(forcedExit);
+    expect(order).toEqual(["kill"]);
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledWith(4242, "SIGKILL", {
+      onComplete: expect.any(Function),
+    });
+
+    order.push("exit");
+    exitListener?.({ exitCode: 0, signal: 9 });
+    await forcedExit;
+    expect(run.dispose()).toBe(forcedExit);
+
+    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
   });
 });

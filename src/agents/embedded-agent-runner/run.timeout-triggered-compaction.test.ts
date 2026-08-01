@@ -611,7 +611,7 @@ describe("timeout-triggered compaction", () => {
       messageCount: -1,
       sessionFile: overflowBaseRunParams.sessionKey,
     });
-    expect(beforeContext.sessionKey).toBe("test-key");
+    expect(beforeContext.sessionKey).toBe(overflowBaseRunParams.sessionKey);
     const [afterEvent, afterContext] = hookCallAt(0, "after");
     expect(afterEvent).toEqual({
       messageCount: -1,
@@ -621,7 +621,7 @@ describe("timeout-triggered compaction", () => {
       previousSessionId: "test-session",
     });
     expect(afterContext.sessionId).toBe("rotated-timeout-session");
-    expect(afterContext.sessionKey).toBe("test-key");
+    expect(afterContext.sessionKey).toBe(overflowBaseRunParams.sessionKey);
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 

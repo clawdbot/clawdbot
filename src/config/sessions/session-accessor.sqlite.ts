@@ -22,6 +22,13 @@ export {
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
 export {
+  copySqliteSessionOwnedStateForCanonicalRepair,
+  listSqliteSessionEntriesForCanonicalRepair,
+  listSqliteSessionGenerationIdsForCanonicalRepair,
+  rehomeSqliteSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch,
+} from "./session-accessor.sqlite-canonical-repair.js";
+export {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,

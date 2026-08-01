@@ -492,18 +492,6 @@ describe("worker live events", () => {
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
   });
 
-  it("moves without losing state", async () => {
-    const moved = `${KEY}-moved`;
-    ack(msg(1, "first"));
-    ack(msg(3, "third", 1), 1);
-    await sessions.patchSessionEntryTarget(
-      { agentId: "main", storePath: store, target: { canonicalKey: moved, storeKeys: [KEY] } },
-      () => ({ updatedAt: 20 }),
-    );
-    ack(msg(2, "second", 1), 3);
-    expect(getAgentRunContext(RUN)?.sessionKey).toBe(moved);
-  });
-
   it("fences a committed reset", async () => {
     ack(msg(1, "before"));
     await sessions.resetSessionEntryLifecycle({

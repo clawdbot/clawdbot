@@ -1,7 +1,10 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+} from "../lib/sessions/session-key.ts";
 export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 
 const MAX_SESSION_LINEAGE_DEPTH = 16;
@@ -57,7 +60,7 @@ export async function fetchSessionLineage(params: {
         params.knownRows.set(row.key, row);
       }
       topmostRow = row;
-      const parentKey = (row.spawnedBy ?? row.parentSessionKey)?.trim();
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       if (!parentKey) {
         break;
       }

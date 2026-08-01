@@ -29,10 +29,11 @@ import {
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
 import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
+import { readScriptProducerEvidence } from "./test-file-scenario-script-evidence.js";
 import {
-  readJsonFileIfExists,
-  readScriptProducerEvidence,
-} from "./test-file-scenario-script-evidence.js";
+  readNativeVitestExecutionFailure,
+  resolveNativeVitestReportPath,
+} from "./test-file-scenario-vitest-report.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -99,10 +100,6 @@ export function isQaTestFileScenario(
     scenario.execution.kind === "playwright" ||
     scenario.execution.kind === "script"
   );
-}
-
-function resolveNativeVitestReportPath(scenario: QaTestFileScenario, outputDir: string): string {
-  return path.join(outputDir, `${scenario.id}.vitest-report.json`);
 }
 
 function vitestReporterArgs(
@@ -239,32 +236,6 @@ function withScenarioCoverage(
   scenario: QaTestFileScenario,
 ) {
   return { ...entry, coverage: coverageForScenario(scenario) };
-}
-
-async function readNativeVitestExecutionFailure(params: {
-  outputDir: string;
-  scenario: QaTestFileScenario;
-}): Promise<string | undefined> {
-  const reportPath = resolveNativeVitestReportPath(params.scenario, params.outputDir);
-  const report = await readJsonFileIfExists(reportPath);
-  if (!report || typeof report !== "object") {
-    return `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`;
-  }
-  const { numFailedTests, numPassedTests, success } = report as {
-    numFailedTests?: unknown;
-    numPassedTests?: unknown;
-    success?: unknown;
-  };
-  if (
-    success !== true ||
-    typeof numPassedTests !== "number" ||
-    !Number.isSafeInteger(numPassedTests) ||
-    numPassedTests < 1 ||
-    numFailedTests !== 0
-  ) {
-    return "Vitest exited successfully without reporting a successfully executed test.";
-  }
-  return undefined;
 }
 
 async function runScenarioCommandSteps(params: {

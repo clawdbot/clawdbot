@@ -114,6 +114,7 @@ function createHarness(initialScopeId: string) {
     ensureLoaded: vi.fn(async (): Promise<void> => undefined),
     patch: vi.fn(async () => true),
     patchForm: vi.fn(),
+    removeFormValue: vi.fn(),
     refresh: vi.fn(async () => undefined),
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
@@ -204,6 +205,61 @@ describe("ModelProvidersPage agent scope", () => {
       ["agents", "defaults", "fastModeDefault"],
       false,
     );
+  });
+
+  it("removes thinking and fast overrides through the shared config draft", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
+
+    const groups = page.querySelectorAll<HTMLElement & { value: string }>(
+      "#settings-model-behavior wa-radio-group",
+    );
+    expect(groups).toHaveLength(2);
+    groups[0]!.value = "";
+    groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    groups[1]!.value = "";
+    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
+      "agents",
+      "defaults",
+      "thinkingDefault",
+    ]);
+    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
+      "agents",
+      "defaults",
+      "fastModeDefault",
+    ]);
+  });
+
+  it("keeps invalid explicit thinking and fast values resettable", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    runtimeConfig.state.configForm = {
+      agents: { defaults: { thinkingDefault: 42, fastModeDefault: "bogus" } },
+    } as unknown as typeof runtimeConfig.state.configForm;
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
+
+    const behavior = page.querySelector("#settings-model-behavior")!;
+    const groups = behavior.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
+    expect([...groups].map((group) => group.value)).toEqual(["", ""]);
+    const resetButtons = behavior.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Reset to default"]',
+    );
+    expect(resetButtons).toHaveLength(2);
+    resetButtons.forEach((button) => button.click());
+
+    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
+      "agents",
+      "defaults",
+      "thinkingDefault",
+    ]);
+    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
+      "agents",
+      "defaults",
+      "fastModeDefault",
+    ]);
   });
 
   it("keeps a committed provider-key save successful when config refresh fails", async () => {

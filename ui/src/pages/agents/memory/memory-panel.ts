@@ -7,6 +7,7 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import { renderSettingsDefaultState } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
 import { currentConfigObject } from "../../../lib/config/index.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
@@ -368,6 +369,63 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     }
   }
 
+  private async removeEnabledOverride(
+    scope: DreamingTaskScope,
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+  ): Promise<boolean> {
+    const { pluginId } = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state));
+    this.dreaming.dreamingModeSaving = true;
+    try {
+      const saved = await runtimeConfig.patch({
+        raw: {
+          plugins: {
+            entries: {
+              [pluginId]: { config: { dreaming: { enabled: null } } },
+            },
+          },
+        },
+        note: "Dreaming settings reset to the plugin default.",
+      });
+      return saved;
+    } catch (error) {
+      if (this.isTaskScopeCurrent(scope) && this.context.runtimeConfig === runtimeConfig) {
+        this.dreaming.dreamingStatusError =
+          error instanceof Error ? error.message : t("dreaming.actions.updateFailed");
+      }
+      return false;
+    } finally {
+      if (this.isTaskScopeCurrent(scope)) {
+        this.dreaming.dreamingModeSaving = false;
+      }
+    }
+  }
+
+  private async resetEnabledOverride(configured: ReturnType<typeof resolveConfiguredDreaming>) {
+    if (!configured.overridden || this.dreaming.dreamingModeSaving || this.toggleConfirmOpen) {
+      return;
+    }
+    this.dreaming.dreamingStatusError = null;
+    const scope = this.captureTaskScope();
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!scope) {
+      return;
+    }
+    const updated = await this.removeEnabledOverride(scope, runtimeConfig);
+    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (!updated) {
+      this.dreaming.dreamingStatusError ??= t("dreaming.actions.updateFailed");
+      return;
+    }
+    await runtimeConfig.refresh();
+    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    this.syncConfigSnapshot();
+    await this.runDreamingTask(loadDreamingStatus, scope);
+  }
+
   private async openWikiPage(lookup: string): Promise<WikiPagePreview | null> {
     const scope = this.captureTaskScope();
     const client = scope?.state.client;
@@ -407,10 +465,18 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   override render() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
-    const dreamingOn =
-      dreaming.dreamingStatus?.enabled ??
-      resolveConfiguredDreaming(currentConfigObject(configState)).enabled;
+    const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
+    // The status RPC can complete after config switches the engine Off. Keep the
+    // cached payload for a future refresh, but never present it as current runtime state.
+    const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
+    const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
+    const defaultState = renderSettingsDefaultState({
+      value: t("common.enabled"),
+      overridden: configuredDreaming.overridden,
+      disabled: loading,
+      onReset: () => void this.resetEnabledOverride(configuredDreaming),
+    });
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
     const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
 
@@ -425,9 +491,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             >
               ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
             </button>
+            <span class="muted">
+              ${configuredDreaming.engineOff
+                ? t("dreaming.header.engineOff")
+                : defaultState.description}
+            </span>
+            ${defaultState.action}
             <button
               class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"
-              ?disabled=${loading}
+              ?disabled=${loading || configuredDreaming.engineOff}
               @click=${() => this.setEnabled(!dreamingOn, dreamingOn)}
             >
               <span class="dreams__phase-toggle-dot"></span>
@@ -442,16 +514,16 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         viewState: this.viewState,
         active: dreamingOn,
         selectedAgentId,
-        shortTermCount: dreaming.dreamingStatus?.shortTermCount ?? 0,
-        groundedSignalCount: dreaming.dreamingStatus?.groundedSignalCount ?? 0,
-        totalSignalCount: dreaming.dreamingStatus?.totalSignalCount ?? 0,
-        promotedCount: dreaming.dreamingStatus?.promotedToday ?? 0,
-        phases: dreaming.dreamingStatus?.phases ?? undefined,
-        shortTermEntries: dreaming.dreamingStatus?.shortTermEntries ?? [],
-        promotedEntries: dreaming.dreamingStatus?.promotedEntries ?? [],
+        shortTermCount: dreamingStatus?.shortTermCount ?? 0,
+        groundedSignalCount: dreamingStatus?.groundedSignalCount ?? 0,
+        totalSignalCount: dreamingStatus?.totalSignalCount ?? 0,
+        promotedCount: dreamingStatus?.promotedToday ?? 0,
+        phases: dreamingStatus?.phases ?? undefined,
+        shortTermEntries: dreamingStatus?.shortTermEntries ?? [],
+        promotedEntries: dreamingStatus?.promotedEntries ?? [],
         dreamingOf: null,
-        nextCycle: resolveDreamingNextCycle(dreaming.dreamingStatus),
-        timezone: dreaming.dreamingStatus?.timezone ?? null,
+        nextCycle: resolveDreamingNextCycle(dreamingStatus),
+        timezone: dreamingStatus?.timezone ?? null,
         statusLoading: dreaming.dreamingStatusLoading,
         statusError: dreaming.dreamingStatusError,
         modeSaving: dreaming.dreamingModeSaving,

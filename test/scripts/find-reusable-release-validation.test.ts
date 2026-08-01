@@ -8,6 +8,9 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = join(process.cwd(), "scripts/github/find-reusable-release-validation.sh");
+// Homebrew Bash 5.3 can deadlock in nested command substitutions under Node's
+// synchronous child runner on macOS; CI executes this script with system Bash.
+const BASH_PATH = process.platform === "darwin" ? "/bin/bash" : "bash";
 const tempDirs = createTempDirTracker();
 const sharedTempDirs = createTempDirTracker();
 
@@ -472,7 +475,7 @@ function runResolver(args: {
     );
   }
   return spawnSync(
-    "bash",
+    BASH_PATH,
     [
       SCRIPT_PATH,
       "--target-sha",

@@ -58,6 +58,7 @@ struct CanvasWindowSmokeTests {
             root: root,
             presentation: .window)
 
+        #expect(controller.window?.isRestorable == false)
         controller.showCanvas(path: "/")
         controller.windowWillClose(Notification(name: NSWindow.willCloseNotification))
         controller.hideCanvas()

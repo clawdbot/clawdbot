@@ -147,7 +147,6 @@ export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrSetupAccount> = {
   },
   reload: { configPrefixes: ["channels.nostr"] },
   configSchema: buildChannelConfigSchema(NostrConfigSchema),
-  setup: nostrSetupAdapter,
   setupContract: nostrSetupContract,
   setupWizard: nostrSetupWizard,
   config: {

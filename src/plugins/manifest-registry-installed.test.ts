@@ -450,6 +450,29 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("reuses a prepared manifest graph without reopening plugin manifests", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const env = { OPENCLAW_VERSION: "2026.4.25", VITEST: "true" };
+    const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
+
+    const reused = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      manifestRegistry,
+      includeDisabled: true,
+    });
+
+    expect(reused.plugins).toEqual(manifestRegistry.plugins);
+    expect(reused.diagnostics).toEqual([]);
+  });
+
   it("reconstructs bundle candidates with their bundle manifest format", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
@@ -503,6 +526,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
           channel: {
             id: "installed",
             label: "Installed",
+            approvalFlags: ["native", "unsupported"],
             commands: {
               nativeCommandsAutoEnabled: true,
               nativeSkillsAutoEnabled: false,
@@ -582,6 +606,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: false,
     });
+    expect(registry.plugins[0]?.packageChannel?.approvalFlags).toEqual(["native"]);
     expect(registry.plugins[0]?.packageManifest?.channel?.setup).toEqual({
       fields: [
         {

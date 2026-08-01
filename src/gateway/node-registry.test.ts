@@ -7,6 +7,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
@@ -20,6 +21,35 @@ let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
 const activeTestRegistries = new Set<NodeRegistry>();
+
+type TestNodeSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  send: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+};
+
+const NON_OPEN_NODE_SOCKET_STATES = [
+  { state: "connecting", readyState: WebSocket.CONNECTING },
+  { state: "closing", readyState: WebSocket.CLOSING },
+  { state: "closed", readyState: WebSocket.CLOSED },
+];
+
+function createTestNodeSocket(
+  sent: string[] = [],
+  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
+): TestNodeSocket {
+  return {
+    readyState,
+    bufferedAmount: 0,
+    send: vi.fn((frame: unknown) => {
+      if (typeof frame === "string") {
+        sent.push(frame);
+      }
+    }),
+    close: vi.fn(),
+  };
+}
 
 function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
   const registry = new NodeRegistry(options);
@@ -61,15 +91,7 @@ function makeClient(
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket:
-      opts.socket ??
-      ({
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            sent.push(frame);
-          }
-        },
-      } as unknown as GatewayWsClient["socket"]),
+    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -106,6 +128,19 @@ function registerNodeSession(
 ) {
   const { pairingIdentity = "identity-a", ...registration } = opts;
   return registry.register(client, { ...registration, pairingIdentity });
+}
+
+function registerTestNodeSocket(
+  registry: NodeRegistry,
+  socket: TestNodeSocket,
+  sent: string[] = [],
+) {
+  return registerNodeSession(
+    registry,
+    makeClient("conn-1", "node-1", sent, {
+      socket: socket as unknown as GatewayWsClient["socket"],
+    }),
+  );
 }
 
 function registerDemoNodePluginTool(params: {
@@ -588,6 +623,44 @@ describe("gateway/node-registry", () => {
     expect(() => registry.sendInvokeInput("missing", { kind: "data", data: "x" })).toThrow(
       "node invoke is not pending",
     );
+
+    controller.abort();
+    await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
+  });
+
+  it("does not advance streamed input sequence when the node websocket is closing", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames);
+    registerTestNodeSocket(registry, socket, frames);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+      onProgress: () => {},
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    socket.readyState = WebSocket.CLOSING;
+    expect(() => registry.sendInvokeInput(invokeId, { kind: "data", data: "lost" })).toThrow(
+      "failed to send node invoke input",
+    );
+    expect(frames).toHaveLength(1);
+
+    socket.readyState = WebSocket.OPEN;
+    registry.sendInvokeInput(invokeId, { kind: "data", data: "delivered" });
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.input",
+      payload: {
+        id: invokeId,
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: JSON.stringify({ kind: "data", data: "delivered" }),
+      },
+    });
 
     controller.abort();
     await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
@@ -1158,6 +1231,28 @@ describe("gateway/node-registry", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("returns unavailable without dispatching an invoke to a closing node websocket", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames, WebSocket.CLOSING);
+    registerTestNodeSocket(registry, socket, frames);
+    const onDispatchReady = vi.fn();
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+        onDispatchReady,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
   it("forwards the agent session that owns a stateful node invoke", async () => {
@@ -1918,6 +2013,32 @@ describe("gateway/node-registry", () => {
     ]);
   });
 
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects normal event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(registry.sendEvent("node-1", "node.test", { ok: true })).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects raw event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(
+        registry.sendEventRaw("node-1", "node.test", serializeEventPayload({ ok: true })),
+      ).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops a delayed voice-wake snapshot after persistent generation changes", async () => {
     let resolveCurrent!: (state: { identity: string; generation?: string } | undefined) => void;
     const currentPairingState = new Promise<{ identity: string; generation?: string } | undefined>(
@@ -1978,17 +2099,12 @@ describe("gateway/node-registry", () => {
     const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     const registry = createTestNodeRegistry();
     const socket = {
+      readyState: WebSocket.OPEN,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
     };
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        socket: socket as unknown as GatewayWsClient["socket"],
-      }),
-      {},
-    );
+    registerTestNodeSocket(registry, socket);
     const payload = serializeEventPayload({ foo: "bar" });
 
     try {

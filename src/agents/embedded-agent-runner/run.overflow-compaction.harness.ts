@@ -420,7 +420,7 @@ const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",
-  sessionKey: "test-key",
+  sessionKey: "agent:main:test-key",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,

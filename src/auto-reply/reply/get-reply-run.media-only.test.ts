@@ -477,6 +477,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(call.followupRun.run.thinkingCatalog).toEqual([
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
   });
 
   it("reports unsupported explicit one-turn thinking overrides", async () => {

@@ -271,6 +271,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       snapshot: index,
       source: "provided",
       diagnostics: [],
+      manifestRegistry: snapshot.manifestRegistry,
     });
   });
 

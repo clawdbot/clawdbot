@@ -1150,6 +1150,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       }),
     );
+    expect(
+      generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery,
+    ).not.toHaveBeenCalled();
     if (expectsMessageToolMode) {
       expectGatewayAgentParams(callGateway, {
         deliver: false,
@@ -2606,6 +2609,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
       }),
     );
+    expect(generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:dm:U123",
+        mediaLabel: "music",
+        status: "ok",
+        contextKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
   });
 
   it("allows visible direct delivery for media generation failure summaries without generated media", async () => {
@@ -3893,6 +3904,50 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+
+  it("directly delivers settle synthesis even when a direct-message requester turn is active", async () => {
+    const callGateway = createGatewayMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const origin = {
+      channel: "discord",
+      to: "dm:U123",
+      accountId: "acct-1",
+    };
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "all spawned subagents settled",
+      steerMessage: "all spawned subagents settled",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      requireDirectDelivery: true,
+      directIdempotencyKey: "announce-requester-settle-direct",
+      sourceTool: "subagent_announce",
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    const agentParams = expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+    });
+    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("does not retry session-file-changed failures with send evidence", async () => {

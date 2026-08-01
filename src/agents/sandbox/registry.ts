@@ -22,10 +22,12 @@ import {
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;
+  backendTarget?: SandboxContainerEngineTarget;
   runtimeLabel?: string;
   sessionKey: string;
   createdAtMs: number;
@@ -174,6 +176,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
   const next: SandboxRegistryEntry = {
     ...entry,
     backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
     runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,

@@ -3102,12 +3102,14 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({
+      expect(
+        loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })?.entry,
+      ).toMatchObject({
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,

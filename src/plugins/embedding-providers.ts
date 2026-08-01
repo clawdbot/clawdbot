@@ -1,4 +1,5 @@
 /** Registry for plugin-contributed embedding providers. */
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type {
   EmbeddingProviderAdapter,
   RegisteredEmbeddingProvider,
@@ -27,14 +28,7 @@ const CORE_EMBEDDING_PROVIDERS: RegisteredEmbeddingProvider[] = [
 
 function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
   // The registry is global so tests and lazy-loaded plugin modules share one provider table.
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[EMBEDDING_PROVIDERS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, RegisteredEmbeddingProvider>;
-  }
-  const created = new Map<string, RegisteredEmbeddingProvider>();
-  globalStore[EMBEDDING_PROVIDERS_KEY] = created;
-  return created;
+  return resolveGlobalMap(EMBEDDING_PROVIDERS_KEY);
 }
 
 function getCoreEmbeddingProvider(id: string): RegisteredEmbeddingProvider | undefined {

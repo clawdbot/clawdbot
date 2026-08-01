@@ -17,6 +17,7 @@ import {
   releaseAgentRunContext,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
@@ -64,6 +65,7 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
   emitAgentEvents,
@@ -1960,6 +1962,38 @@ describe("agent event handler", () => {
     const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
     expect(persistEvent.runId).toBe("run-finished");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
+  });
+
+  it("publishes run lifecycle changes to plugins without websocket subscribers", async () => {
+    const sessionKey = "agent:main:headless-run";
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const publisher = createGatewayBroadcaster({ clients: new Set() });
+    const { broadcastToConnIds, handler } = createHarness({
+      resolveSessionKeyForRun: () => sessionKey,
+    });
+    broadcastToConnIds.mockImplementation(publisher.broadcastToConnIds);
+    registerAgentRunContext("run-headless", { sessionKey, verboseLevel: "off" });
+
+    try {
+      emitAgentEvent(handler, "run-headless", "lifecycle", { phase: "start", startedAt: 900 });
+      await waitForFast(() => {
+        expect(received).toHaveBeenCalledWith({ sessionKey, phase: "start" });
+      });
+
+      emitAgentEvent(
+        handler,
+        "run-headless",
+        "lifecycle",
+        { phase: "end", startedAt: 900, endedAt: 1_700 },
+        { seq: 2, ts: 1_800 },
+      );
+      await waitForFast(() => {
+        expect(received.mock.calls.map(([event]) => event.phase)).toEqual(["start", "end"]);
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("does not project stale pre-reset lifecycle events into session subscriber snapshots", async () => {

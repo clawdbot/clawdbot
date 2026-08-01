@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { nothing } from "lit";
+import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
@@ -23,6 +23,12 @@ type TestMemoryPanel = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
+  resetEnabledOverride: (configured: {
+    pluginId: string;
+    enabled: boolean;
+    overridden: boolean;
+    engineOff: boolean;
+  }) => Promise<void>;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -60,7 +66,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function contextWithGateway(client: GatewayBrowserClient, connected: boolean): ApplicationContext {
+function contextWithGateway(
+  client: GatewayBrowserClient,
+  connected: boolean,
+  configForm: Record<string, unknown> | null = null,
+): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
@@ -80,8 +90,12 @@ function contextWithGateway(client: GatewayBrowserClient, connected: boolean): A
       subscribe,
     },
     runtimeConfig: {
-      state: { configSnapshot: null },
+      state: { configForm, configSnapshot: null },
       refresh: vi.fn(async () => undefined),
+      removeFormValue: vi.fn(),
+      waitForPendingWrites: vi.fn(async () => undefined),
+      save: vi.fn(async () => true),
+      patch: vi.fn(async () => true),
       subscribe,
     },
   } as unknown as ApplicationContext;
@@ -231,6 +245,195 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
       lineCount: 5000,
       agentId: "support",
     });
+  });
+
+  it("resets the config-only dreaming override to the enabled runtime default", async () => {
+    const client = {
+      request: vi.fn(async () => ({ dreaming: { enabled: true } })),
+    } as unknown as GatewayBrowserClient;
+    const context = contextWithGateway(client, true, {
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+        },
+      },
+    });
+    const page = createPage(context);
+    document.body.append(page);
+    await page.updateComplete;
+
+    await page.resetEnabledOverride({
+      pluginId: "memory-core",
+      enabled: false,
+      overridden: true,
+      engineOff: false,
+    });
+
+    expect(context.runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: null } } },
+          },
+        },
+      },
+      note: "Dreaming settings reset to the plugin default.",
+    });
+    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
+    expect(context.runtimeConfig.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("does not refresh the stale override when the minimal reset patch fails", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const context = contextWithGateway(client, true, {
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+        },
+      },
+    });
+    vi.mocked(context.runtimeConfig.patch).mockResolvedValue(false);
+    const page = createPage(context);
+    document.body.append(page);
+    await page.updateComplete;
+
+    await page.resetEnabledOverride({
+      pluginId: "memory-core",
+      enabled: false,
+      overridden: true,
+      engineOff: false,
+    });
+
+    expect(context.runtimeConfig.patch).toHaveBeenCalledOnce();
+    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
+    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
+  });
+
+  it("drops a successful reset completion after the agent scope changes", async () => {
+    const pending = deferred<boolean>();
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+        },
+      },
+    });
+    vi.mocked(context.runtimeConfig.patch).mockReturnValue(pending.promise);
+    const page = createPage(context);
+    document.body.append(page);
+    await page.updateComplete;
+
+    const reset = page.resetEnabledOverride({
+      pluginId: "memory-core",
+      enabled: false,
+      overridden: true,
+      engineOff: false,
+    });
+    page.agentId = "support";
+    await page.updateComplete;
+    pending.resolve(true);
+    await reset;
+
+    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
+    expect(page.dreaming.dreamingStatusError).toBeNull();
+  });
+
+  it("renders explicit engine Off as unavailable while preserving latent override reset", () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+        },
+      },
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = context;
+    page.agentId = "main";
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    expect(container.textContent).toContain(
+      "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+    );
+    expect(container.textContent).not.toContain("Using default: Enabled");
+    expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
+      true,
+    );
+    expect(container.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
+  });
+
+  it("does not present cached runtime status after the memory engine switches Off", () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: { slots: { memory: "none" } },
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+      promotedToday: 7,
+      timezone: "Mars/Base",
+      phases: {
+        light: { enabled: true, cron: "* * * * *", managedCronPresent: true },
+        deep: {
+          enabled: true,
+          cron: "* * * * *",
+          managedCronPresent: true,
+          limit: 1,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          recencyHalfLifeDays: 1,
+        },
+        rem: {
+          enabled: true,
+          cron: "* * * * *",
+          managedCronPresent: true,
+          lookbackDays: 1,
+          limit: 1,
+          minPatternStrength: 0,
+        },
+      },
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.textContent).toContain("Off");
+    expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(false);
+    expect(container.querySelector(".dreams__status-label")?.textContent).toContain("Idle");
+    expect(container.textContent).toContain("0 promoted");
+    expect(container.textContent).not.toContain("7 promoted");
+    expect(container.textContent).not.toContain("Mars/Base");
+    expect(
+      [...container.querySelectorAll(".dreams__phase-next")].every(
+        (phase) => phase.textContent?.trim() === "—",
+      ),
+    ).toBe(true);
+  });
+
+  it("omits default provenance and reset when engine Off has no latent override", () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: { slots: { memory: "none" } },
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = context;
+    page.agentId = "main";
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    expect(container.textContent).not.toContain("Using default: Enabled");
+    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.disabled).toBe(true);
+    toggle?.click();
+    expect(page.pendingEnabled).toBeNull();
   });
 
   it("uses localized empty content for wiki previews", async () => {

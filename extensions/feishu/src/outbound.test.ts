@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   adaptMessagePresentationForChannel,
@@ -453,27 +454,30 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
   });
 
-  it("sends an absolute existing local image path as media", async () => {
-    const { dir, file } = await createTmpImage();
-    try {
-      const result = await sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: file,
-        accountId: "main",
-        mediaLocalRoots: [dir],
-      });
+  it.each([".png", ".heic", ".tif", ".tiff"])(
+    "sends an existing absolute %s image path as media instead of leaking it",
+    async (extension) => {
+      const { dir, file } = await createTmpImage(extension);
+      try {
+        const result = await sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        });
 
-      expect(sendMediaCall()?.to).toBe("chat_1");
-      expect(sendMediaCall()?.mediaUrl).toBe(file);
-      expect(sendMediaCall()?.accountId).toBe("main");
-      expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
-      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-      expectFeishuResult(result, "media_msg");
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
+        expect(sendMediaCall()?.to).toBe("chat_1");
+        expect(sendMediaCall()?.mediaUrl).toBe(file);
+        expect(sendMediaCall()?.accountId).toBe("main");
+        expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expectFeishuResult(result, "media_msg");
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps non-path text on the text-send path", async () => {
     await sendText({
@@ -533,6 +537,31 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       expect(sendMessageCall()?.text).toBe("Media upload failed. Please try again.");
       expect(sendMessageCall()?.text).not.toContain(file);
       expect(sendMessageCall()?.accountId).toBe("main");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not send fallback text after an accepted local-image send loses its receipt", async () => {
+    const { dir, file } = await createTmpImage();
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("Feishu image reply failed: no message_id returned"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(acceptedError);
+
+    try {
+      await expect(
+        sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        }),
+      ).rejects.toBe(acceptedError);
+      expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -2508,6 +2537,27 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
       "fallback_msg",
     ]);
     expectFeishuResult(result, "fallback_msg");
+  });
+
+  it("does not send fallback text after an accepted media send loses its receipt", async () => {
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("Feishu image send failed: no message_id returned"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(acceptedError);
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+      }),
+    ).rejects.toBe(acceptedError);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
   it("does not resend successful media when delivery progress persistence fails", async () => {

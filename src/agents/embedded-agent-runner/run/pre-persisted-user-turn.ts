@@ -11,8 +11,9 @@ export function sessionMessagesContainIdempotencyKey(
   );
 }
 
-export function detachPrePersistedCurrentUserTurn(params: {
+export function reconcilePrePersistedCurrentUserTurn(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  durableUserTurnMessage: AgentMessage | undefined;
   preparedUserTurnMessage: AgentMessage | undefined;
   userTurnAlreadyPersisted: boolean;
 }): boolean {
@@ -25,13 +26,19 @@ export function detachPrePersistedCurrentUserTurn(params: {
   if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
     return false;
   }
+  const durableIdempotencyKey = (
+    params.durableUserTurnMessage as { idempotencyKey?: unknown } | undefined
+  )?.idempotencyKey;
   const messages = params.activeSession.agent.state.messages;
   const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
-  if (tail?.role !== "user" || tail.idempotencyKey !== idempotencyKey) {
+  const activeTailMatches = tail?.role === "user" && tail.idempotencyKey === idempotencyKey;
+  if (!activeTailMatches && durableIdempotencyKey !== idempotencyKey) {
     return false;
   }
-  // The durable transcript remains authoritative. Remove only its exact active
-  // tail copy so Agent.prompt() submits the current user turn once to the model.
-  params.activeSession.agent.state.messages = messages.slice(0, -1);
+  if (activeTailMatches) {
+    // Persistence is recorder-owned; either synchronized representation can
+    // prove identity. Remove the active copy when present so the model sees it once.
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
   return true;
 }

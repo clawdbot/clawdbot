@@ -1084,6 +1084,7 @@ export const en: TranslationMap = {
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
+    usingDefault: "Using default: {value}",
     resetToDefault: "Reset to default",
     select: "Select...",
     nullValue: "null",
@@ -1241,6 +1242,8 @@ export const en: TranslationMap = {
       model: "Model",
       thinking: "Thinking",
       fastMode: "Fast mode",
+      default: "Default",
+      modelPolicy: "Model policy",
       thinkingLevels: {
         off: "Off",
         low: "Low",
@@ -1409,6 +1412,7 @@ export const en: TranslationMap = {
       xxl: "XXL",
     },
     syncedHint: "Synced across your devices through the gateway.",
+    syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
@@ -2444,8 +2448,11 @@ export const en: TranslationMap = {
       rowTitle: "Retrieval backend",
       builtin: "Built-in",
       qmd: "QMD",
+      invalid: "Invalid configured value",
       builtinHint: "Memory files are indexed and searched by OpenClaw itself.",
       qmdHint: "Retrieval is delegated to QMD. Its settings appear below.",
+      invalidHint:
+        "The configured memory.backend value is invalid. Choose a backend or reset it to use the default.",
     },
     addons: {
       title: "Add-ons",
@@ -2487,11 +2494,13 @@ export const en: TranslationMap = {
         label: "Timezone",
         help: "IANA timezone used to interpret the cron cadence.",
         placeholder: "Europe/Vienna",
+        default: "Gateway local timezone",
       },
       model: {
         label: "Dreaming model",
         help: "Provider/model override for dream diary narration. Requires subagent model overrides to be allowed.",
         placeholder: "anthropic/claude-sonnet-4-6",
+        default: "Agent model",
       },
       verboseLogging: {
         label: "Verbose logging",
@@ -3632,6 +3641,7 @@ export const en: TranslationMap = {
       refreshing: "Refreshing…",
       on: "Dreaming On",
       off: "Dreaming Off",
+      engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
     },
     toggleConfirmation: {
       subtitle: "Dreaming is a global setting; it is not scoped to this agent.",

@@ -453,7 +453,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         operation.staleExpiryReason === "stuck_recovery");
     const queuedFinal = droppedBeforeOutput
       ? dispatcher.sendFinalReply({
-          text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
+          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
           isError: true,
         })
       : false;

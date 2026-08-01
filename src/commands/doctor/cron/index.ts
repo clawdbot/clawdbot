@@ -2,7 +2,7 @@
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
+import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -133,33 +133,45 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   const findings: HealthFinding[] = [];
   const {
     storePath,
-    quarantinePath,
     legacyStoreDetected,
     legacyRunLogDetected,
+    legacyQuarantine,
     legacyImportCount,
     sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
 
   try {
-    const quarantine = await loadCronQuarantineFile(quarantinePath);
-    if (quarantine.jobs.length > 0) {
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    if (quarantine.length > 0) {
       findings.push(
         legacyCronStoreFinding({
-          message: `${pluralize(quarantine.jobs.length, "quarantined cron job row")} found at ${shortenHomePath(quarantinePath)}.`,
-          path: quarantinePath,
+          message: `${pluralize(quarantine.length, "quarantined cron job row")} found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+          path: sqliteStorePath,
           requirement: "quarantined-cron-rows",
-          fixHint: `Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+          fixHint:
+            "Review or repair quarantined rows before restoring any job to the active cron store.",
         }),
       );
     }
   } catch (err) {
     findings.push(
       legacyCronStoreFinding({
-        message: `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
-        path: quarantinePath,
+        message: `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+        path: sqliteStorePath,
         requirement: "cron-quarantine-readable",
-        fixHint: `Fix the quarantine file's permissions or contents. Details: ${errorMessage(err)}`,
+        fixHint: `Check the shared state database permissions and contents. Details: ${errorMessage(err)}`,
+      }),
+    );
+  }
+
+  if (legacyQuarantine) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy JSON cron quarantine will be imported into SQLite from ${shortenHomePath(legacyQuarantine.path)}.`,
+        path: legacyQuarantine.path,
+        requirement: "legacy-cron-quarantine",
       }),
     );
   }
@@ -190,7 +202,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
-  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
@@ -296,21 +307,23 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   const {
     storePath,
-    quarantinePath,
     legacyStoreDetected,
     legacyRunLogDetected,
+    legacyQuarantine,
     legacyImportCount,
     sqliteProjectionBackfillCount,
+    invalidConfigRows,
     rawJobs,
   } = state;
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
-    const quarantine = await loadCronQuarantineFile(quarantinePath);
-    if (quarantine.jobs.length > 0) {
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    if (quarantine.length > 0) {
       note(
         [
-          `Quarantined cron job rows found at ${shortenHomePath(quarantinePath)}.`,
-          `- ${pluralize(quarantine.jobs.length, "row")} was removed from the active cron store after runtime validation failed.`,
-          `- Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+          `Quarantined cron job rows found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+          `- ${pluralize(quarantine.length, "row")} was removed from the active cron store after runtime validation failed.`,
+          "- Review or repair quarantined rows before restoring any job to the active cron store.",
         ].join("\n"),
         "Cron",
       );
@@ -319,14 +332,19 @@ export async function maybeRepairLegacyCronStore(params: {
     const reason = err instanceof Error ? err.message : String(err);
     note(
       [
-        `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
         `- ${reason}`,
       ].join("\n"),
       "Cron",
     );
   }
   if (rawJobs.length === 0) {
-    if (!legacyStoreDetected && !legacyRunLogDetected) {
+    if (
+      !legacyStoreDetected &&
+      !legacyRunLogDetected &&
+      !legacyQuarantine &&
+      invalidConfigRows.length === 0
+    ) {
       return;
     }
     const previewLines: string[] = [];
@@ -335,6 +353,14 @@ export async function maybeRepairLegacyCronStore(params: {
     }
     if (legacyRunLogDetected) {
       previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+    }
+    if (legacyQuarantine) {
+      previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+    }
+    if (invalidConfigRows.length > 0) {
+      previewLines.push(
+        `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+      );
     }
     note(
       [
@@ -416,6 +442,14 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   if (legacyRunLogDetected) {
     previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (legacyQuarantine) {
+    previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+  }
+  if (invalidConfigRows.length > 0) {
+    previewLines.push(
+      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
   }
   if (sqliteProjectionBackfillCount > 0) {
     previewLines.push(

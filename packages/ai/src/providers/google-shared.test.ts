@@ -56,6 +56,50 @@ function createOutput(): AssistantMessage {
 }
 
 describe("buildGoogleSimpleThinking", () => {
+  it.each([
+    { id: "gemini-pro-latest", expectedLevel: "LOW" },
+    { id: "gemini-flash-latest", expectedLevel: "LOW" },
+  ])("recognizes the supported $id Gemini 3 alias", ({ id, expectedLevel }) => {
+    const aliasModel = { ...model, id };
+
+    expect(buildGoogleSimpleThinking(aliasModel, { reasoning: "low" })).toEqual({
+      enabled: true,
+      level: expectedLevel,
+    });
+    expect(
+      buildGoogleGenerateContentParams(
+        aliasModel,
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { thinking: { enabled: false } },
+      ).config?.thinkingConfig,
+    ).not.toHaveProperty("thinkingBudget");
+  });
+
+  it.each([
+    { id: "gemini-2.5-pro", expected: { enabled: true, budgetTokens: -1 } },
+    { id: "gemini-2.5-flash", expected: { enabled: true, budgetTokens: -1 } },
+    { id: "gemini-3.1-pro-preview", expected: { enabled: true } },
+    { id: "gemini-3-flash-preview", expected: { enabled: true } },
+    { id: "gemma-4-26b-a4b-it", expected: { enabled: true, level: "HIGH" } },
+  ])("keeps Google's dynamic adaptive thinking for $id", ({ id, expected }) => {
+    expect(buildGoogleSimpleThinking({ ...model, id }, { reasoning: "adaptive" } as never)).toEqual(
+      expected,
+    );
+  });
+
+  it.each(["gemini-2.5-pro", "gemma-4-26b-a4b-it"])(
+    "omits unsupported disabled-thinking config for %s",
+    (id) => {
+      const params = buildGoogleGenerateContentParams(
+        { ...model, id },
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { thinking: { enabled: false } },
+      );
+
+      expect(params.config).not.toHaveProperty("thinkingConfig");
+    },
+  );
+
   it("keeps thinking disabled when a non-reasoning model clamps low to off", () => {
     const nonReasoningModel = { ...model, reasoning: false };
 
@@ -218,6 +262,53 @@ describe("consumeGoogleGenerateContentStream", () => {
       totalTokens: expectedTotal,
       cost: { input: expectedInput / 1_000_000 },
     });
+  });
+
+  it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          usageMetadata: {
+            promptTokenCount: 100,
+            cachedContentTokenCount: 40,
+            toolUsePromptTokenCount: 6,
+            candidatesTokenCount: 1,
+            totalTokenCount: 107,
+          },
+        } as GenerateContentResponse,
+        {
+          candidates: [{ finishReason: FinishReason.STOP }],
+          usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "call_1",
+    });
+
+    expect(output.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
+  });
+
+  it("never reports negative input when Google only provides sparse cached-token facts", async () => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [{ finishReason: FinishReason.STOP }],
+          usageMetadata: { cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 },
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "call_1",
+    });
+
+    expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
   });
 
   it("preserves MAX_TOKENS when the partial response contains a function call", async () => {

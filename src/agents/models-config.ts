@@ -88,6 +88,7 @@ async function readFileMtimeMs(pathname: string): Promise<number | null> {
 
 async function buildModelsJsonFingerprint(params: {
   config: OpenClawConfig;
+  discoveryAuthConfig: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
@@ -110,6 +111,7 @@ async function buildModelsJsonFingerprint(params: {
     : undefined;
   return stableStringify({
     config: params.config,
+    discoveryAuthConfigHash: hashRuntimeConfigValue(params.discoveryAuthConfig),
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape: params.env ? hashRuntimeConfigValue(envShape) : envShape,
     authProfilesMtimeMs,
@@ -250,6 +252,7 @@ function writePluginCatalogsForModelsJson(params: {
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {
   config: OpenClawConfig;
+  discoveryAuthConfig: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
 } {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
@@ -257,18 +260,21 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
     const loaded = getRuntimeConfig();
     return {
       config: runtimeSource ?? loaded,
+      discoveryAuthConfig: loaded,
       sourceConfigForSecrets: runtimeSource ?? loaded,
     };
   }
   if (!runtimeSource) {
     return {
       config,
+      discoveryAuthConfig: config,
       sourceConfigForSecrets: config,
     };
   }
   const projected = projectConfigOntoRuntimeSourceSnapshot(config);
   return {
     config: projected,
+    discoveryAuthConfig: config,
     // If projection is skipped (for example incompatible top-level shape),
     // keep managed secret persistence anchored to the active source snapshot.
     sourceConfigForSecrets: projected === config ? runtimeSource : projected,
@@ -307,6 +313,7 @@ async function buildModelsJsonSourceFingerprint(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,
+    discoveryAuthConfig: resolved.discoveryAuthConfig,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
@@ -382,6 +389,7 @@ async function prepareOpenClawModelsJsonSource(
     });
     const plan = await planOpenClawModelsJson({
       cfg,
+      discoveryAuthConfig: resolved.discoveryAuthConfig,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
       agentDir,
       env,
@@ -438,6 +446,7 @@ async function prepareOpenClawModelsJsonSource(
     const settled = await pending;
     const refreshedFingerprint = await buildModelsJsonFingerprint({
       config: cfg,
+      discoveryAuthConfig: resolved.discoveryAuthConfig,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
       agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -511,6 +520,7 @@ export async function planOpenClawModelsJsonSource(
   const env = createConfigRuntimeEnv(cfg, options.env);
   const plan = await planOpenClawModelsJson({
     cfg,
+    discoveryAuthConfig: resolved.discoveryAuthConfig,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
     env,

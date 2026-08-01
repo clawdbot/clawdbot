@@ -113,34 +113,12 @@ export function extractContextInfo(
 }
 
 export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
+  // Context ownership already follows Baileys envelopes without entering quoted messages.
+  const mentionedJids = extractContextInfo(rawMessage)?.mentionedJid?.filter(Boolean);
+  if (!mentionedJids?.length) {
     return undefined;
   }
-
-  const candidates: Array<string[] | null | undefined> = [
-    message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.imageMessage?.contextInfo?.mentionedJid,
-    message.videoMessage?.contextInfo?.mentionedJid,
-    message.ptvMessage?.contextInfo?.mentionedJid,
-    message.documentMessage?.contextInfo?.mentionedJid,
-    message.audioMessage?.contextInfo?.mentionedJid,
-    message.stickerMessage?.contextInfo?.mentionedJid,
-    message.buttonsResponseMessage?.contextInfo?.mentionedJid,
-    message.listResponseMessage?.contextInfo?.mentionedJid,
-    message.templateButtonReplyMessage?.contextInfo?.mentionedJid,
-    message.interactiveResponseMessage?.contextInfo?.mentionedJid,
-    message.pollCreationMessage?.contextInfo?.mentionedJid,
-    message.pollCreationMessageV2?.contextInfo?.mentionedJid,
-    message.pollCreationMessageV3?.contextInfo?.mentionedJid,
-    message.pollCreationMessageV5?.contextInfo?.mentionedJid,
-  ];
-
-  const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
-  if (flattened.length === 0) {
-    return undefined;
-  }
-  return uniqueStrings(flattened);
+  return uniqueStrings(mentionedJids);
 }
 
 function extractNativeFlowResponseText(

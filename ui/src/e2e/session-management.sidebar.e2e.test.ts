@@ -26,6 +26,8 @@ suite.define(() => {
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
     const childTwoKey = "agent:main:verify-tests";
+    const staleRunningChildKey = "agent:main:stale-running";
+    const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -52,12 +54,34 @@ suite.define(() => {
                   startedAt: baseTime - 62_000,
                   status: "done",
                 }),
+                {
+                  ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
+                    hasActiveRun: false,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "running",
+                  }),
+                  runtimeMs: 61_000,
+                  runtimeSampledAt: baseTime,
+                },
+                {
+                  ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
+                    endedAt: baseTime - 4_000,
+                    hasActiveRun: true,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "failed",
+                  }),
+                  lastReadAt: baseTime,
+                  runtimeMs: 60_000,
+                  runtimeSampledAt: baseTime,
+                },
               ]),
             },
             {
               response: sessionsListResponse([
                 sessionRow(parentKey, "Plan release", baseTime, {
-                  childSessions: [childOneKey, childTwoKey],
+                  childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
                 }),
               ]),
             },
@@ -74,9 +98,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 2 child threads for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 4 child threads for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Failed checks", { exact: true }).waitFor({ state: "visible" });
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -86,11 +112,28 @@ suite.define(() => {
         .toBe(true);
 
       const childRows = page.locator(".sidebar-recent-session--child");
-      await expect.poll(() => childRows.count()).toBe(2);
+      await expect.poll(() => childRows.count()).toBe(4);
       expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+
+      const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
+      const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
+      expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
+
+      const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
+      expect(await childToggle.getAttribute("class")).toContain(
+        "sidebar-child-session-toggle--running",
+      );
+      for (const child of [staleRunningChild, failedChild]) {
+        expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+      }
       await captureUiProof(page, "child-sessions-expanded.png");
+      await captureUiProof(page, "child-sessions-run-state-precedence.png");
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
@@ -312,6 +355,87 @@ suite.define(() => {
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
       await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retains the selected session and one observer while reconnecting across route changes", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const firstKey = "agent:main:reconnect-first";
+    const selectedKey = "agent:main:reconnect-selected";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(selectedKey, "Selected session", Date.parse("2026-07-01T15:59:00.000Z")),
+        ]),
+      },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
+      const firstRow = page.locator(`.sidebar-recent-session[data-session-key="${firstKey}"]`);
+      const selectedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${selectedKey}"]`,
+      );
+      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible" });
+      await gateway.waitForRequest("sessions.subscribe");
+
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+
+      await gateway.deferNext("sessions.subscribe");
+      await gateway.deferNext("sessions.list");
+      await gateway.closeLatest(1006, "session route reconnect");
+      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {
+          timeout: 15_000,
+        })
+        .toBe(initialObserverCount + 1);
+
+      await firstRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+
+      await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
+        .toBeGreaterThan(initialListCount);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            selectedKey,
+            "Selected session recovered",
+            Date.parse("2026-07-01T16:01:00.000Z"),
+          ),
+        ]),
+      );
+      await expect.poll(() => selectedRow.textContent()).toContain("Selected session recovered");
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+      await captureUiProof(page, "sidebar-selected-session-route-reconnect.png");
     } finally {
       await context.close();
     }

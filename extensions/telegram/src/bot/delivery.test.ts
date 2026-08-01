@@ -69,7 +69,7 @@ vi.mock("grammy", () => ({
   InputFile: class {
     constructor(
       public buffer: Buffer,
-      public fileName?: string,
+      public filename?: string,
     ) {}
   },
   GrammyError: class GrammyError extends Error {
@@ -932,6 +932,32 @@ describe("deliverReplies", () => {
     });
   });
 
+  it.each([
+    { contentType: "image/png", filename: "image.png", method: "sendPhoto" },
+    { contentType: "video/quicktime", filename: "video.mov", method: "sendVideo" },
+    { contentType: "audio/mpeg", filename: "audio.mp3", method: "sendAudio" },
+    { contentType: "application/pdf", filename: "file.pdf", method: "sendDocument" },
+    { contentType: "image/gif", filename: "animation.gif", method: "sendAnimation" },
+    { contentType: "application/x-custom", filename: "file.bin", method: "sendDocument" },
+  ])("preserves MIME-derived filenames for streaming $contentType", async (testCase) => {
+    const sendMedia = vi.fn().mockResolvedValue({
+      message_id: 2,
+      chat: { id: "123" },
+    });
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("media"),
+      contentType: testCase.contentType,
+    });
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/media", text: "caption" }],
+      runtime: createRuntime(),
+      bot: createBot({ [testCase.method]: sendMedia }),
+    });
+
+    expect(firstMockCallArg(sendMedia, 1)).toMatchObject({ filename: testCase.filename });
+  });
+
   it("keeps formatted media replies within Telegram's parsed-caption limit", async () => {
     const runtime = createRuntime();
     const visibleCaption = "x".repeat(1022);
@@ -999,6 +1025,116 @@ describe("deliverReplies", () => {
       expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
     },
   );
+
+  it.each(["PHOTO_INVALID_DIMENSIONS", "PHOTO_TOO_BIG"])(
+    "falls back to a document when Telegram rejects a photo with %s",
+    async (providerReason) => {
+      const runtime = createRuntime();
+      const sendPhoto = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error(
+            `GrammyError: Call to 'sendPhoto' failed! (400: Bad Request: ${providerReason})`,
+          ),
+        );
+      const sendDocument = vi.fn().mockResolvedValue({
+        message_id: 9,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendPhoto, sendDocument });
+      const records: unknown[] = [];
+      const promptContextSequence = createObservedPromptContextSequence((record) =>
+        records.push(record),
+      );
+
+      mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrl: "https://example.com/photo.jpg",
+            text: "hi **boss**",
+            replyToId: "512",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "Retry", callback_data: "retry" }]],
+              },
+            },
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "all",
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+      await promptContextSequence.finish();
+
+      expect(sendPhoto).toHaveBeenCalledOnce();
+      expect(sendDocument).toHaveBeenCalledOnce();
+      expectRecordFields(mockCallArg(sendDocument, 0, 2), {
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+        message_thread_id: 42,
+        reply_to_message_id: 512,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]],
+        },
+      });
+      expect(records).toEqual([expect.objectContaining({ messageId: 9, text: "hi **boss**" })]);
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps recovered photo-limit failures quiet after a plain-caption retry", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+      .mockRejectedValueOnce(
+        new Error(
+          "GrammyError: Call to 'sendPhoto' failed! (400: Bad Request: PHOTO_INVALID_DIMENSIONS)",
+        ),
+      );
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      runtime,
+      bot: createBot({ sendPhoto, sendDocument }),
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(sendPhoto, 1, 2), { caption: "hi **boss**" });
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
+    expect(sendDocument).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a document for unrelated Telegram photo failures", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"));
+    const sendDocument = vi.fn();
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
+        runtime,
+        bot: createBot({ sendPhoto, sendDocument }),
+        thread: { id: 42, scope: "forum" },
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(sendDocument).not.toHaveBeenCalled();
+  });
 
   it("passes probed dimensions to video reply sends", async () => {
     const runtime = createRuntime();

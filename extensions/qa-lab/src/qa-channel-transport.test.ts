@@ -84,6 +84,19 @@ describe("qa channel transport", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
+  it("does not report another running account as the default account", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockResolvedValue({
+      channelAccounts: {
+        "qa-channel": [{ accountId: "other", running: true, restartPending: false }],
+      },
+    });
+
+    await expect(
+      transport.waitReady({ gateway: { call }, timeoutMs: 5, pollIntervalMs: 1 }),
+    ).rejects.toThrow('qa-channel account "default" not reported; available accounts: other');
+  });
+
   it("surfaces the last reported qa-channel account status on timeout", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockResolvedValue({
