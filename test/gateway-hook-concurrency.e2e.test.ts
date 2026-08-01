@@ -24,6 +24,7 @@ type HookResponse = {
 type HeldModelServer = {
   active: () => number;
   close: () => Promise<void>;
+  hold: () => void;
   peak: () => number;
   releaseAll: () => void;
   requestCount: () => number;
@@ -53,6 +54,11 @@ describe("Gateway hook concurrency", () => {
       instances.push(instance);
       await instance.startGateway();
 
+      // Pay the one-time plugin, session, and model-runtime preparation cost
+      // before measuring steady-state lane admission.
+      await warmGatewayHook(instance, modelServer);
+      modelServer.hold();
+
       const responses: Array<HookResponse | undefined> = Array.from({
         length: SHARED_BUDGET + 1,
       });
@@ -76,16 +82,15 @@ describe("Gateway hook concurrency", () => {
 
       expect(responses.filter((response) => response?.status === 200)).toHaveLength(SHARED_BUDGET);
       const timedOut = responses.find((response) => response?.status === 503);
-      expect(timedOut).toEqual({
-        status: 503,
-        body: JSON.stringify({
-          ok: false,
-          error: "hook agent run did not start before admission timeout",
-        }),
+      expect(timedOut?.status).toBe(503);
+      expect(JSON.parse(timedOut?.body ?? "{}")).toMatchObject({
+        ok: false,
+        error: "hook agent run did not start before admission timeout",
+        runId: expect.any(String),
       });
       expect(modelServer.active(), instance.logs()).toBeGreaterThan(0);
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
-      expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
+      expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET + 1);
 
       // Completing the admitted work frees shared capacity. A fresh request
       // must then cross the same real Gateway admission fence.
@@ -150,6 +155,33 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
   };
 }
 
+async function warmGatewayHook(
+  instance: OpenClawTestInstance,
+  modelServer: HeldModelServer,
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const requestCountBefore = modelServer.requestCount();
+    const response = await postHook(instance, -(attempt + 1));
+    if (response.status === 200) {
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBefore),
+        { interval: 20, timeout: 30_000 },
+      );
+      await vi.waitFor(() => expect(modelServer.active()).toBe(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
+      return;
+    }
+    expect(response.status, response.body).toBe(503);
+    expect(JSON.parse(response.body)).toMatchObject({
+      ok: false,
+      error: "hook agent run did not start before admission timeout",
+    });
+  }
+  throw new Error("Gateway hook warmup did not reach the model after three attempts");
+}
+
 async function postHook(instance: OpenClawTestInstance, index: number): Promise<HookResponse> {
   const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
     method: "POST",
@@ -182,7 +214,7 @@ function createDeferred(): Deferred {
 
 async function startHeldModelServer(): Promise<HeldModelServer> {
   const releases: Deferred[] = [];
-  let releaseFutureRequests = false;
+  let holdRequests = false;
   let active = 0;
   let peak = 0;
   let requestCount = 0;
@@ -216,7 +248,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     requestCount += 1;
     const release = createDeferred();
     releases[index] = release;
-    if (releaseFutureRequests) {
+    if (!holdRequests) {
       release.resolve();
     }
     active += 1;
@@ -241,13 +273,16 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   }
 
   const releaseAll = () => {
-    releaseFutureRequests = true;
+    holdRequests = false;
     for (const release of releases) {
       release?.resolve();
     }
   };
   return {
     active: () => active,
+    hold: () => {
+      holdRequests = true;
+    },
     peak: () => peak,
     releaseAll,
     requestCount: () => requestCount,
