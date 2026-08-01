@@ -8,6 +8,7 @@ import {
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
+  resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -49,8 +50,7 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   beforeEach(() => {
-    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
-    mockedRunEmbeddedAttempt.mockReset();
+    resetRunOverflowCompactionHarnessMocks();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
