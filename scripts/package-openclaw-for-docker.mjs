@@ -837,7 +837,10 @@ async function main() {
   process.stdout.write(`${tarball}\n`);
 }
 
-if (process.argv[1] && (await fs.realpath(process.argv[1])) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  (await fs.realpath(process.argv[1])) === (await fs.realpath(fileURLToPath(import.meta.url)))
+) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));
