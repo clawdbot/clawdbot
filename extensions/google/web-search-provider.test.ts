@@ -162,10 +162,11 @@ describe("google web search provider", () => {
     );
   });
 
-  it("merges operator headers while keeping provider-owned headers authoritative", async () => {
+  it("sends operator headers while keeping provider-owned headers authoritative", async () => {
     const mockFetch = installGeminiFetch();
     const tool = createGeminiToolWithHeaders({
       "X-Routing-Target": "staging",
+      "X-Gateway-Token": "resolved-gateway-token",
       "X-Goog-Api-Key": "operator-value",
     });
 
@@ -173,6 +174,7 @@ describe("google web search provider", () => {
 
     expect(getFetchHeaders(mockFetch)).toMatchObject({
       "content-type": "application/json",
+      "x-gateway-token": "resolved-gateway-token",
       "x-goog-api-key": "AIza-plugin-test",
       "x-routing-target": "staging",
     });
