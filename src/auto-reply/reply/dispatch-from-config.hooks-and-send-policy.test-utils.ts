@@ -586,6 +586,31 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
+  it("keeps heartbeat turns silent when the model acknowledges with HEARTBEAT_OK", async () => {
+    setNoAbort();
+    // Heartbeats are scheduler-driven, not a user asking and getting nothing.
+    // A HEARTBEAT_OK acknowledgement strips to an empty final, so the turn looks
+    // empty here even though nobody was waiting on a reply. Observed in
+    // production: a heartbeat delivered an iMessage poll through the message
+    // tool, acknowledged HEARTBEAT_OK, and the fallback landed in the owner DM
+    // right under the visible poll.
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({ ChatType: "direct" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { isHeartbeat: true },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
   it("does not treat an active-run accepted turn as an empty completion", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

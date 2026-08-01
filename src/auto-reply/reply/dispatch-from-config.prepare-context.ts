@@ -349,10 +349,15 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   // failure notice, even when silence policy is disallow. A command turn is the
   // one directed room_event (mirrors the room_event source-reply suppression
   // bypass below); every other room_event stays undirected regardless of a
-  // stray WasMentioned/direct classification.
+  // stray WasMentioned/direct classification. Heartbeats are scheduler-driven,
+  // so no one is waiting on the turn: a HEARTBEAT_OK acknowledgement strips to
+  // an empty final and must stay silent, matching the isHeartbeat exemption in
+  // buildSilentFallbackFailurePayload.
   const noVisibleReplyFallbackDirected =
-    explicitCommandTurnCtx ||
-    (ctx.InboundEventKind !== "room_event" && (chatType === "direct" || ctx.WasMentioned === true));
+    params.replyOptions?.isHeartbeat !== true &&
+    (explicitCommandTurnCtx ||
+      (ctx.InboundEventKind !== "room_event" &&
+        (chatType === "direct" || ctx.WasMentioned === true)));
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
