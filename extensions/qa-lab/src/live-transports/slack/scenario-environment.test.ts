@@ -9,6 +9,7 @@ function createEnvironment() {
     channelId: "C123456789",
     driverBotUserId: "U123456789",
     driverClient: {} as never,
+    readNativeTaskUpdates: () => [],
     sutAppToken: "xapp-test",
     sutBotToken: "xoxb-test",
     sutIdentity: { userId: "U987654321" },
