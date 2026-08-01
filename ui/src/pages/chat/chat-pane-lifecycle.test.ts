@@ -814,6 +814,41 @@ describe("chat pane connection lifecycle", () => {
     expect(state.realtimeTalkCameraError).toBe(false);
   });
 
+  it("advances session ownership once per same-client connection transition", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const initialGeneration = pane.connectionGeneration;
+    const snapshot = { ...pane.context.gateway.snapshot, client };
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(false);
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(true);
+
+    pane.connectedClient = client;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    expect(state.chatLoading).toBe(false);
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    expect(state.chatLoading).toBe(true);
+  });
+
   it("rehydrates secondary session state after a same-client logical reconnect", () => {
     const client = {
       request: vi.fn(() => new Promise<never>(() => {})),

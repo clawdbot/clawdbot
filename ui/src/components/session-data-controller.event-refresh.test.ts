@@ -230,6 +230,39 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostDisconnected();
   });
 
+  it("retires an in-flight child snapshot when the status filter changes", async () => {
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    await Promise.resolve();
+    await Promise.resolve();
+    let resolveChildPage!: (value: Awaited<ReturnType<typeof list>>) => void;
+    const childPage = new Promise<Awaited<ReturnType<typeof list>>>((resolve) => {
+      resolveChildPage = resolve;
+    });
+    list.mockImplementationOnce(async () => await childPage);
+
+    const pendingChildren = controller.loadChildSessions("agent:main:parent");
+    expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true);
+
+    selectStatusFilter("all");
+    resolveChildPage({
+      ts: 2,
+      path: "",
+      count: 1,
+      totalCount: 1,
+      nextOffset: null,
+      hasMore: false,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:stale-child", kind: "direct", updatedAt: 2 }],
+    });
+    await pendingChildren;
+
+    expect(controller.childSessionRowsByParent).toEqual({});
+    expect(controller.loadedChildSessionKeys.has("agent:main:parent")).toBe(false);
+    expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(false);
+    controller.hostDisconnected();
+  });
+
   it("bounds refresh latency while same-agent events continue arriving", async () => {
     vi.useFakeTimers();
     const { controller, list, publishSessionChanged } = createFilteredSessionController("all");

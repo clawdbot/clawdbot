@@ -18,7 +18,7 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.j
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   legacyMigrationPathMayExist as pathMayExist,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
@@ -45,8 +45,6 @@ import type {
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 async function readBoundedRegularFile(params: {
@@ -652,63 +650,32 @@ export async function migrateLegacyWorkspaceState(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  if (!params.detected?.hasLegacy) {
+  const detected = params.detected;
+  if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : formatErrorMessage(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy workspace state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy workspace state: exclusive state ownership unavailable."],
-    };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  let releaseError: unknown;
-  try {
-    for (const source of params.detected.sources) {
-      const result = await migrateOneSource({
-        source,
-        env,
-        ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
-        ...(params.removeSource ? { removeSource: params.removeSource } : {}),
-      });
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    warnings.push(`Workspace migration lock release failed: ${formatErrorMessage(releaseError)}`);
-  }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy workspace state",
+    releaseLabel: "Workspace",
+    formatAcquireError: formatErrorMessage,
+    run: async (env) => {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      for (const source of detected.sources) {
+        const result = await migrateOneSource({
+          source,
+          env,
+          ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
+          ...(params.removeSource ? { removeSource: params.removeSource } : {}),
+        });
+        changes.push(...result.changes);
+        warnings.push(...result.warnings);
+        notices.push(...(result.notices ?? []));
+      }
+      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+    },
+  });
 }

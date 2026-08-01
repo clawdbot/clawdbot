@@ -673,7 +673,9 @@ export async function prepareAgentCatalogSource(
           providerDiscoveryEntriesOnly: true as const,
           providerDiscoveryProviderIds: providerIds,
         }
-      : { providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS }),
+      : {
+          providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
+        }),
   };
   if (!persist) {
     const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, options);

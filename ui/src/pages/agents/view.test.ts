@@ -314,7 +314,7 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -327,6 +327,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -349,6 +350,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -378,7 +380,7 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -391,6 +393,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
           modelCatalog: [
             {
@@ -449,12 +452,13 @@ describe("renderAgents", () => {
                 defaults: {
                   model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
                 },
-                list: [{ id: "alpha" }, { id: "beta", model }],
+                entries: { alpha: {}, beta: { model } },
               },
             },
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -477,10 +481,10 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [
-          { id: "alpha", model: { primary: "anthropic/claude-sonnet-4-6" } },
-          { id: "beta", model: { primary: "openai/gpt-5.4" } },
-        ],
+        entries: {
+          alpha: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          beta: { model: { primary: "openai/gpt-5.4" } },
+        },
       },
     };
 
@@ -493,6 +497,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -516,6 +521,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),

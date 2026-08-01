@@ -431,6 +431,8 @@ export function createSessionActions(context: SessionActionContext) {
     if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
       return false;
     }
+    // Invalidate same-key history/session-info readers before adopting the replacement epoch.
+    historyLoadGeneration += 1;
     state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     reduceTuiSessionProjection(state, {
       type: "sessionReset",

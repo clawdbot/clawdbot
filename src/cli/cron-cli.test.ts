@@ -989,6 +989,13 @@ describe("cron cli", () => {
     });
   });
 
+  it.each(["", "   "])("rejects a blank cron list agent filter %j", async (agent) => {
+    await expectCronCommandExit(["cron", "list", "--agent", agent]);
+
+    expectRuntimeErrorContaining("--agent must not be blank");
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
+  });
+
   it("routes cron get to cron.get with the provided id", async () => {
     await runCronCommand(["cron", "get", "job-1"]);
 
@@ -1005,6 +1012,13 @@ describe("cron cli", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it.each(["", "   "])("rejects a blank cron run history filter %j", async (runId) => {
+    await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--run-id", runId]);
+
+    expectRuntimeErrorContaining("--run-id must not be blank");
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.runs")).toBe(false);
   });
 
   it("paginates cron show lookups", async () => {

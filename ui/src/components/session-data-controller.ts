@@ -399,24 +399,28 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
   }
 
+  private resetChildSessionState(): void {
+    this.childSessionGeneration += 1;
+    this.childSessionRowsByParent = {};
+    this.loadedChildSessionKeys = new Set();
+    this.failedChildSessionKeys = new Set();
+    this.loadingChildSessionKeys = new Set();
+    this.activeSessionLineageRoot = null;
+    this.activeSessionLineageRouteKey = null;
+    this.activeSessionLineageLoaded = false;
+    this.activeSessionLineageRequestToken = null;
+    if (this.activeSessionLineageRetryTimer) {
+      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+      this.activeSessionLineageRetryTimer = null;
+    }
+  }
+
   private readonly updateSessions = (sessions: SessionCapability) => {
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
       // The canonical root list advances after session events, but excludes hidden children.
       // Drop child snapshots so expanded parents refetch live terminal state.
-      this.childSessionGeneration += 1;
-      this.childSessionRowsByParent = {};
-      this.loadedChildSessionKeys = new Set();
-      this.failedChildSessionKeys = new Set();
-      this.loadingChildSessionKeys = new Set();
-      this.activeSessionLineageRoot = null;
-      this.activeSessionLineageRouteKey = null;
-      this.activeSessionLineageLoaded = false;
-      this.activeSessionLineageRequestToken = null;
-      if (this.activeSessionLineageRetryTimer) {
-        globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
-        this.activeSessionLineageRetryTimer = null;
-      }
+      this.resetChildSessionState();
       this.notify();
     }
     const snapshot = sessions.state;
@@ -512,24 +516,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   private clearSessionCache(): void {
-    this.childSessionGeneration += 1;
     this.childSessionCanonicalListRevision = null;
     this.reconnectListRevision = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
     this.sessionRowsByAgent = {};
-    this.childSessionRowsByParent = {};
-    this.loadedChildSessionKeys = new Set();
-    this.failedChildSessionKeys = new Set();
-    this.loadingChildSessionKeys = new Set();
-    this.activeSessionLineageRoot = null;
-    this.activeSessionLineageRouteKey = null;
-    this.activeSessionLineageLoaded = false;
-    this.activeSessionLineageRequestToken = null;
-    if (this.activeSessionLineageRetryTimer) {
-      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
-      this.activeSessionLineageRetryTimer = null;
-    }
+    this.resetChildSessionState();
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimits.clear();
     this.notify();
@@ -680,10 +672,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sidebarSessionPaginationState.loadedScope = undefined;
     this.sessionsLoading = false;
     this.visibleSessionLimits.clear();
-    this.childSessionRowsByParent = {};
-    this.loadedChildSessionKeys = new Set();
-    this.failedChildSessionKeys = new Set();
-    this.loadingChildSessionKeys = new Set();
+    // A filter transition owns a new child/lineage generation; otherwise a
+    // pending request from the retired view can repopulate its cleared rows.
+    this.resetChildSessionState();
     this.sessionRowsByAgent = {};
     if (statusFilter === "active" && this.context) {
       this.sessionsResult = this.context.sessions.state.result;

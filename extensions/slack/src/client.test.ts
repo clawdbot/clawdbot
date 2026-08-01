@@ -234,7 +234,7 @@ describe("slack web client config", () => {
     expect(WebClient).toHaveBeenCalledWith("xoxb-startup", {
       fetch: customFetch,
       rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
+      retryConfig: { retries: 2, minTimeout: 0 },
       slackApiUrl: "https://slack.test/api/",
       timeout: 10_000,
     });

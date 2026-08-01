@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
   createSolidPngBuffer,
@@ -21,6 +21,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
@@ -217,7 +218,7 @@ async function requestManagedImage(params: {
   scopes?: string[];
   denyAuth?: boolean;
   authResponse?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: http.ClientRequestArgs["headers"];
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
   resolvedTranscriptPath?: string | null;
@@ -416,6 +417,89 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf8")).toBe("image");
   });
 
+  it("resumes managed media only for an exact If-Range HTTP-date", async () => {
+    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+    const modified = new Date("2025-07-08T18:40:00.789Z");
+    await fs.utimes(originalPath, modified, modified);
+    const lastModified = (await fs.stat(originalPath)).mtime.toUTCString();
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+
+    const initial = await requestManagedImage({ ...request, method: "HEAD" });
+    expect(initial.result.statusCode).toBe(200);
+    expect(initial.result.headers["last-modified"]).toBe(lastModified);
+    expect(initial.result.body).toHaveLength(0);
+
+    const partial = await requestManagedImage({
+      ...request,
+      headers: { range: "bytes=9-13", "if-range": lastModified },
+    });
+    expect(partial.result.statusCode).toBe(206);
+    expect(partial.result.headers["last-modified"]).toBe(lastModified);
+    expect(partial.result.body.toString("utf8")).toBe("image");
+
+    const future = await requestManagedImage({
+      ...request,
+      headers: {
+        range: "bytes=9-13",
+        "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
+      },
+    });
+    expect(future.result.statusCode).toBe(200);
+    expect(future.result.headers["last-modified"]).toBe(lastModified);
+    expect(future.result.body.toString("utf8")).toBe("original-image");
+  });
+
+  it("bounds future managed-media validators to the actual HTTP response date", async () => {
+    const nowMs = Math.floor(Date.now() / 1000) * 1000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+      const future = new Date(nowMs + 60_000);
+      await fs.utimes(originalPath, future, future);
+      const futureLastModified = (await fs.stat(originalPath)).mtime.toUTCString();
+      const expectedLastModified = new Date(nowMs).toUTCString();
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      expect(initial.result.statusCode).toBe(200);
+      expect(initial.result.headers["last-modified"]).toBe(expectedLastModified);
+      expect(Date.parse(initial.result.headers.date ?? "")).toBeGreaterThanOrEqual(
+        Date.parse(expectedLastModified),
+      );
+
+      const partial = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=0-4", "if-range": expectedLastModified },
+      });
+      expect(partial.result.statusCode).toBe(206);
+      expect(partial.result.headers["last-modified"]).toBe(expectedLastModified);
+
+      const stale = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=0-4", "if-range": futureLastModified },
+      });
+      expect(stale.result.statusCode).toBe(200);
+
+      const unchanged = await requestManagedImage({
+        ...request,
+        headers: { "if-none-match": String(initial.result.headers.etag) },
+      });
+      expect(unchanged.result.statusCode).toBe(304);
+      expect(unchanged.result.headers["last-modified"]).toBe(expectedLastModified);
+
+      const unsatisfiable = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=999-" },
+      });
+      expect(unsatisfiable.result.statusCode).toBe(416);
+      expect(unsatisfiable.result.headers["last-modified"]).toBe(expectedLastModified);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it.each(["GET", "HEAD"])(
     "revalidates managed media ETags before ranges for %s",
     async (method) => {
@@ -446,6 +530,61 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       expect(result.headers["content-length"]).toBeUndefined();
       expect(result.headers["content-range"]).toBeUndefined();
       expect(result.body).toHaveLength(0);
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates managed media with If-Modified-Since before ranges for %s",
+    async (method) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      const lastModified = initial.result.headers["last-modified"];
+      expect(lastModified).toEqual(expect.any(String));
+
+      const unchanged = await requestManagedImage({
+        ...request,
+        method,
+        headers: {
+          "if-modified-since": String(lastModified),
+          range: "bytes=0-3",
+          "if-range": '"stale"',
+        },
+      });
+
+      expect(unchanged.result.statusCode).toBe(304);
+      expect(unchanged.result.headers["last-modified"]).toBe(lastModified);
+      expect(unchanged.result.headers["content-length"]).toBeUndefined();
+      expect(unchanged.result.headers["content-range"]).toBeUndefined();
+      expect(unchanged.result.body).toHaveLength(0);
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "ignores duplicate managed-media dates discarded by normalized Node headers for %s",
+    async (method) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      const lastModified = String(initial.result.headers["last-modified"]);
+
+      const duplicate = await requestManagedImage({
+        ...request,
+        method,
+        headers: [
+          "Host",
+          "127.0.0.1",
+          "If-Modified-Since",
+          lastModified,
+          "iF-mOdIfIeD-sInCe",
+          "not-an-http-date",
+        ],
+      });
+
+      expect(duplicate.result.statusCode).toBe(200);
+      expect(duplicate.result.headers["last-modified"]).toBe(lastModified);
     },
   );
 
@@ -533,6 +672,62 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("audio/x-caf");
     expect(result.body).toEqual(body);
+  });
+
+  it("closes the opened managed-media descriptor when playback resolution rejects", async () => {
+    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir, {
+      filename: "voice.caf",
+      contentType: "audio/x-caf",
+      body: Buffer.from("caff-original"),
+    });
+    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ ok: true, authMethod: "token" });
+    resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+    resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+          },
+        ],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+    resolvePlaybackTranscodeMock.mockRejectedValueOnce(new Error("playback inspection failed"));
+    const originalOpen = fs.open;
+    let closeOpenedHandle: MockInstance<() => Promise<void>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]) === originalPath) {
+        closeOpenedHandle = vi.spyOn(handle, "close");
+      }
+      return handle;
+    });
+    const { res } = makeMockHttpResponse();
+
+    try {
+      await expect(
+        handleManagedOutgoingImageHttpRequest(
+          {
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+            method: "GET",
+            headers: {},
+          } as http.IncomingMessage,
+          res,
+          { auth: { mode: "test" } as never, stateDir },
+        ),
+      ).rejects.toThrow("playback inspection failed");
+      expect(closeOpenedHandle).toHaveBeenCalledOnce();
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("passes native managed playback bytes through unchanged", async () => {

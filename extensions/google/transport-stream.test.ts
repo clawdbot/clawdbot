@@ -587,6 +587,30 @@ describe("google transport stream", () => {
     });
   });
 
+  it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          usageMetadata: {
+            promptTokenCount: 100,
+            cachedContentTokenCount: 40,
+            toolUsePromptTokenCount: 6,
+            candidatesTokenCount: 1,
+            totalTokenCount: 107,
+          },
+        },
+        {
+          candidates: [{ finishReason: "STOP" }],
+          usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
+        },
+      ]),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
+  });
+
   it.each([
     {
       provider: "google",
@@ -931,7 +955,7 @@ describe("google transport stream", () => {
     ]);
   });
 
-  it("keeps duplicate tool-call ids distinct while retaining the first signature", async () => {
+  it("keeps duplicate tool-call ids and their own thought signatures distinct", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
         {
@@ -982,8 +1006,8 @@ describe("google transport stream", () => {
     expect(toolCalls[1]).toMatchObject({
       name: "second",
       arguments: { value: 2 },
-      thoughtSignature: "first_signature",
     });
+    expect(toolCalls[1]).not.toHaveProperty("thoughtSignature", "first_signature");
     expect(toolCalls[1]?.id).not.toBe("call_1");
   });
 
@@ -1058,6 +1082,88 @@ describe("google transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
+  });
+
+  it("rejects an incomplete SSE frame after an otherwise terminal Google response", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse(
+        'data: {"candidates":[{"finishReason":"STOP"}]}\n\ndata: {"candidates":[',
+      ),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("incomplete");
+  });
+
+  it.each([
+    { label: "keepalive comment", tail: ": keepalive\n" },
+    { label: "control fields", tail: "event: ping\nid: heartbeat" },
+    { label: "empty data field", tail: "data:\n" },
+  ])("ignores trailing $label when the Google SSE connection closes", async ({ tail }) => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse(`data: {"candidates":[{"finishReason":"STOP"}]}\n\r${tail}`),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("surfaces a framed provider error arriving after a terminal Google response", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse(
+        'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
+          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}\n\n',
+      ),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "RESOURCE_EXHAUSTED",
+      errorMessage: expect.stringContaining("quota exceeded"),
+    });
+  });
+
+  it.each([
+    { label: "carriage-return-only", delimiter: "\r\r" },
+    { label: "line-feed then carriage-return", delimiter: "\n\r" },
+    { label: "line-feed then CRLF", delimiter: "\n\r\n" },
+    { label: "CRLF then carriage-return", delimiter: "\r\n\r" },
+    { label: "CRLF then line-feed", delimiter: "\r\n\n" },
+    { label: "carriage-return then CRLF", delimiter: "\r\r\n" },
+  ])("accepts $label SSE frame delimiters", async ({ delimiter }) => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse(`data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("does not mistake one CRLF for an SSE frame delimiter", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\r\n'),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("incomplete");
+  });
+
+  it("keeps CRLF-separated data lines in the same SSE event", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse('data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n'),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("stop");
   });
 
   it("cancels open Gemini SSE bodies when parsing fails", async () => {

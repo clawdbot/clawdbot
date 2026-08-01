@@ -8,6 +8,7 @@ import {
   listSessionGenerationIdsForCanonicalRepair,
   loadTranscriptEvents,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryLifecycleRemoval } from "../config/sessions/session-accessor.lifecycle-types.js";
 import { writeSqliteTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
@@ -28,7 +29,10 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../gateway/session-store-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  type OpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 type CanonicalSessionCandidate = {
@@ -67,10 +71,18 @@ function createCanonicalRepairRemoval(
 export type CanonicalSessionKeyRepairReport = {
   archivedTranscriptDirectories: string[];
   foundGroups: number;
+  repairBatches: number;
   removedRows: number;
   repairedGroups: number;
   scannedStores: number;
 };
+
+type CanonicalSessionRepairGroup = {
+  candidates: CanonicalSessionCandidate[];
+  removedRows: number;
+};
+
+const CANONICAL_SESSION_REPAIR_BATCH_GROUP_LIMIT = 64;
 
 type CanonicalSessionStore = {
   agentId: string;
@@ -305,7 +317,7 @@ function selectCanonicalSessionCandidate(
 function groupRepairCandidates(
   candidates: readonly CanonicalSessionCandidate[],
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
-) {
+): CanonicalSessionRepairGroup[] {
   const byCanonicalKey = new Map<string, CanonicalSessionCandidate[]>();
   for (const candidate of candidates) {
     const sentinelOwner =
@@ -347,6 +359,139 @@ function groupRepairCandidates(
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];
   });
+}
+
+type SingleDatabaseCanonicalRepairGroup = {
+  candidates: readonly CanonicalSessionCandidate[];
+  selected: NonNullable<ReturnType<typeof selectCanonicalSessionCandidate>>;
+};
+
+function resolveSingleDatabaseCanonicalRepairGroup(
+  candidates: readonly CanonicalSessionCandidate[],
+  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
+): SingleDatabaseCanonicalRepairGroup | undefined {
+  const selected = selectCanonicalSessionCandidate(candidates, params);
+  if (
+    !selected ||
+    selected.winner.sqlitePath !== selected.destination.sqlitePath ||
+    candidates.some((candidate) => candidate.sqlitePath !== selected.destination.sqlitePath)
+  ) {
+    return undefined;
+  }
+  return { candidates, selected };
+}
+
+function createCanonicalDestinationRemovals(
+  candidates: readonly CanonicalSessionCandidate[],
+  selected: NonNullable<ReturnType<typeof selectCanonicalSessionCandidate>>,
+): SessionEntryLifecycleRemoval[] {
+  const relatedSessionIds = new Set(
+    [selected.entry.sessionId, selected.entry.previousSessionId].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    ),
+  );
+  return candidates
+    .filter(
+      (candidate) =>
+        candidate.sessionKey !== selected.winner.canonicalKey ||
+        candidate.rawEntryJson !== undefined,
+    )
+    .map((candidate) =>
+      createCanonicalRepairRemoval(candidate, {
+        archiveRemovedTranscript: !relatedSessionIds.has(candidate.entry.sessionId),
+        deleteOwnedWindows: false,
+      }),
+    );
+}
+
+function listCanonicalDestinationAliasKeys(
+  destinationStore: readonly CanonicalSessionCandidate[],
+  winner: CanonicalSessionCandidate,
+): string[] {
+  return destinationStore
+    .map((candidate) => candidate.sessionKey)
+    .filter((sessionKey) => sessionKey !== winner.canonicalKey);
+}
+
+function applyCanonicalDestinationArtifacts(params: {
+  copyWinnerAlias: boolean;
+  database: OpenClawAgentDatabase;
+  destinationStore: readonly CanonicalSessionCandidate[];
+  rehomeDeliveries: boolean;
+  winner: CanonicalSessionCandidate;
+}): void {
+  const destinationAliasKeys = listCanonicalDestinationAliasKeys(
+    params.destinationStore,
+    params.winner,
+  );
+  if (destinationAliasKeys.length > 0) {
+    if (params.rehomeDeliveries) {
+      rehomeSessionDeliveryReferencesForCanonicalRepair(
+        params.database,
+        params.winner.canonicalKey,
+        destinationAliasKeys,
+      );
+    }
+    copySessionNodeArtifactsForRepair(
+      params.database,
+      params.database,
+      destinationAliasKeys,
+      params.winner.canonicalKey,
+      { includeMembers: false },
+    );
+  }
+  if (!params.copyWinnerAlias || params.winner.sessionKey === params.winner.canonicalKey) {
+    return;
+  }
+  deleteSessionMembersForRepair(params.database, params.winner.canonicalKey);
+  copySessionNodeArtifactsForRepair(
+    params.database,
+    params.database,
+    [params.winner.sessionKey],
+    params.winner.canonicalKey,
+  );
+}
+
+async function repairCanonicalSessionGroupsInSingleDatabase(
+  groups: readonly SingleDatabaseCanonicalRepairGroup[],
+): Promise<string[]> {
+  const first = groups[0];
+  if (!first) {
+    return [];
+  }
+  const destination = first.selected.destination;
+  const result = await applySessionEntryLifecycleMutation({
+    agentId: destination.agentId,
+    allowCanonicalRepair: true,
+    afterUpsertsInTransaction: (database) => {
+      rehomeSessionDeliveryReferencesForCanonicalRepairBatch(
+        database,
+        groups.map((group) => ({
+          canonicalKey: group.selected.winner.canonicalKey,
+          previousKeys: listCanonicalDestinationAliasKeys(group.candidates, group.selected.winner),
+        })),
+      );
+      for (const group of groups) {
+        applyCanonicalDestinationArtifacts({
+          copyWinnerAlias: true,
+          database,
+          destinationStore: group.candidates,
+          rehomeDeliveries: false,
+          winner: group.selected.winner,
+        });
+      }
+    },
+    removals: groups.flatMap((group) =>
+      createCanonicalDestinationRemovals(group.candidates, group.selected),
+    ),
+    skipMaintenance: true,
+    storePath: destination.storePath,
+    upserts: groups.map((group) => ({
+      entry: group.selected.entry,
+      sessionKey: group.selected.winner.canonicalKey,
+    })),
+  });
+  return result.archivedTranscriptDirectories;
 }
 
 async function repairCanonicalSessionGroup(
@@ -422,11 +567,6 @@ async function repairCanonicalSessionGroup(
       }
     }
   }
-  const relatedSessionIds = new Set(
-    [selected.entry.sessionId, selected.entry.previousSessionId].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    ),
-  );
   setCanonicalSqliteSessionMainKey(
     openOpenClawAgentDatabase({ agentId: destination.agentId, path: destination.sqlitePath }),
     params.cfg.session?.mainKey,
@@ -435,35 +575,13 @@ async function repairCanonicalSessionGroup(
     agentId: destination.agentId,
     allowCanonicalRepair: true,
     afterUpsertsInTransaction: (destinationDatabase) => {
-      const destinationAliasKeys = destinationStore
-        .map((candidate) => candidate.sessionKey)
-        .filter((sessionKey) => sessionKey !== winner.canonicalKey);
-      if (destinationAliasKeys.length > 0) {
-        rehomeSessionDeliveryReferencesForCanonicalRepair(
-          destinationDatabase,
-          winner.canonicalKey,
-          destinationAliasKeys,
-        );
-        copySessionNodeArtifactsForRepair(
-          destinationDatabase,
-          destinationDatabase,
-          destinationAliasKeys,
-          winner.canonicalKey,
-          { includeMembers: false },
-        );
-      }
-      if (
-        winner.sqlitePath === destination.sqlitePath &&
-        winner.sessionKey !== winner.canonicalKey
-      ) {
-        deleteSessionMembersForRepair(destinationDatabase, winner.canonicalKey);
-        copySessionNodeArtifactsForRepair(
-          destinationDatabase,
-          destinationDatabase,
-          [winner.sessionKey],
-          winner.canonicalKey,
-        );
-      }
+      applyCanonicalDestinationArtifacts({
+        copyWinnerAlias: winner.sqlitePath === destination.sqlitePath,
+        database: destinationDatabase,
+        destinationStore,
+        rehomeDeliveries: true,
+        winner,
+      });
       if (winner.sqlitePath !== destination.sqlitePath) {
         copySessionOwnedStateForCanonicalRepair({
           canonicalKey: winner.canonicalKey,
@@ -476,17 +594,7 @@ async function repairCanonicalSessionGroup(
         });
       }
     },
-    removals: destinationStore
-      .filter(
-        (candidate) =>
-          candidate.sessionKey !== winner.canonicalKey || candidate.rawEntryJson !== undefined,
-      )
-      .map((candidate) =>
-        createCanonicalRepairRemoval(candidate, {
-          archiveRemovedTranscript: !relatedSessionIds.has(candidate.entry.sessionId),
-          deleteOwnedWindows: false,
-        }),
-      ),
+    removals: createCanonicalDestinationRemovals(destinationStore, selected),
     skipMaintenance: true,
     storePath: destination.storePath,
     upserts: [{ entry: selected.entry, sessionKey: winner.canonicalKey }],
@@ -538,6 +646,7 @@ export async function repairCanonicalSessionKeys(params: {
     env,
   });
   const archivedTranscriptDirectories = new Set<string>();
+  let repairBatches = 0;
   let repairedGroups = 0;
   if (params.apply) {
     for (const store of stores) {
@@ -550,19 +659,65 @@ export async function repairCanonicalSessionKeys(params: {
   const candidates = collectCanonicalSessionCandidates({ cfg: params.cfg, env }, stores);
   const repairGroups = groupRepairCandidates(candidates, { cfg: params.cfg, env });
   if (params.apply) {
-    for (const group of repairGroups) {
-      for (const directory of await repairCanonicalSessionGroup(group.candidates, {
+    let index = 0;
+    while (index < repairGroups.length) {
+      const group = repairGroups[index];
+      if (!group) {
+        break;
+      }
+      const singleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(group.candidates, {
         cfg: params.cfg,
         env,
-      })) {
+      });
+      if (!singleDatabaseGroup) {
+        for (const directory of await repairCanonicalSessionGroup(group.candidates, {
+          cfg: params.cfg,
+          env,
+        })) {
+          archivedTranscriptDirectories.add(directory);
+        }
+        index += 1;
+        repairBatches += 1;
+        repairedGroups += 1;
+        continue;
+      }
+      const batch = [singleDatabaseGroup];
+      index += 1;
+      // Keep commits bounded and preserve the original order around cross-store moves, while
+      // collapsing the repeated whole-store projections for the common same-database path.
+      while (
+        index < repairGroups.length &&
+        batch.length < CANONICAL_SESSION_REPAIR_BATCH_GROUP_LIMIT
+      ) {
+        const nextGroup = repairGroups[index];
+        if (!nextGroup) {
+          break;
+        }
+        const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(
+          nextGroup.candidates,
+          { cfg: params.cfg, env },
+        );
+        if (
+          !nextSingleDatabaseGroup ||
+          nextSingleDatabaseGroup.selected.destination.sqlitePath !==
+            singleDatabaseGroup.selected.destination.sqlitePath
+        ) {
+          break;
+        }
+        batch.push(nextSingleDatabaseGroup);
+        index += 1;
+      }
+      for (const directory of await repairCanonicalSessionGroupsInSingleDatabase(batch)) {
         archivedTranscriptDirectories.add(directory);
       }
-      repairedGroups += 1;
+      repairBatches += 1;
+      repairedGroups += batch.length;
     }
   }
   return {
     archivedTranscriptDirectories: [...archivedTranscriptDirectories].toSorted(),
     foundGroups: repairGroups.length,
+    repairBatches,
     removedRows: repairGroups.reduce((total, group) => total + group.removedRows, 0),
     repairedGroups,
     scannedStores: stores.length,

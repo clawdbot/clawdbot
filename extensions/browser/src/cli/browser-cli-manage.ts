@@ -837,6 +837,13 @@ export function registerBrowserManageCommands(
       ) => {
         const parent = parentOpts(cmd);
         await runBrowserCommand(async () => {
+          if (
+            opts.driver !== undefined &&
+            opts.driver !== "openclaw" &&
+            opts.driver !== "existing-session"
+          ) {
+            throw new Error("--driver must be openclaw or existing-session");
+          }
           const result = await callBrowserRequest<BrowserCreateProfileResult>(
             parent,
             {

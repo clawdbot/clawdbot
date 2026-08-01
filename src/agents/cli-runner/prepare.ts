@@ -4,6 +4,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -89,6 +90,10 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../embedded-agent-helpers.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  mergeForcedEmbeddedAttemptToolsAllow,
+} from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import {
   prependSystemPromptAddition,
@@ -712,6 +717,57 @@ export async function prepareCliRunContext(
     params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  let openClawHistoryMessages: unknown[] | undefined;
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    return openClawHistoryMessages;
+  };
+  const promptBuildHookResult = await (async () => {
+    if (isSideQuestion) {
+      return undefined;
+    }
+    const hookRunner = getGlobalHookRunner();
+    try {
+      return await resolvePromptBuildHookResult({
+        config: params.config ?? getRuntimeConfig(),
+        prompt: params.prompt,
+        messages: await loadOpenClawHistoryMessages(),
+        hookCtx: {
+          runId: params.runId,
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir,
+          modelProviderId: params.provider,
+          modelId,
+          trigger: params.trigger,
+          ...buildAgentHookContextChannelFields(params),
+        },
+        hookRunner,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+      return undefined;
+    }
+  })();
+  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+    promptBuildHookResult?.toolsAllow,
+    {
+      forceMessageTool: messageToolOwnsVisibleReply({
+        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+      }),
+    },
+  );
+  const promptBuildRestrictsTools =
+    promptBuildToolsAllow !== undefined &&
+    !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
   const isClaudeCli = isClaudeCliProvider(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -900,20 +956,67 @@ export async function prepareCliRunContext(
     runtimeToolsAllowPolicy !== undefined
       ? prepareDeps.resolveMcpLoopbackPolicyTools
       : prepareDeps.resolveMcpLoopbackScopedTools;
-  const projectedTools =
+  const projectedToolsBeforePromptBuild =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy) && mcpProjectionContext
       ? resolveProjectedTools({ cfg: runtimeConfig, ...mcpProjectionContext }).tools
       : [];
+  const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
+    projectedToolsBeforePromptBuild,
+    promptBuildToolsAllow,
+  );
+  if (
+    promptBuildRestrictsTools &&
+    (backendResolved.nativeToolMode === "always-on" ||
+      (backendResolved.nativeToolMode === "selectable" && !canEnforceExactToolAvailability))
+  ) {
+    throw new Error(
+      `CLI backend "${backendResolved.id}" cannot enforce before_prompt_build tool restrictions. Use a backend with exact tool availability or remove the hook restriction. OpenClaw did not start the run.`,
+    );
+  }
+  if (promptBuildRestrictsTools && params.cliToolAvailability === undefined) {
+    if (backendResolved.nativeToolMode === "selectable") {
+      params = {
+        ...params,
+        cliToolAvailability: {
+          native: [],
+          openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
+        },
+      };
+    }
+  }
   if (runtimeToolsAllowPolicy !== undefined && shouldMaterializeRuntimePolicy) {
     params = {
       ...params,
       cliToolAvailability: {
         native: [],
-        openClaw: projectedTools.map((tool) => tool.name),
+        openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
       },
     };
   }
+  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
+    const filterToolNames = (names: string[]) =>
+      applyEmbeddedAttemptToolsAllow(
+        names.map((name) => ({ name })),
+        promptBuildToolsAllow,
+      ).map((tool) => tool.name);
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: filterToolNames(params.cliToolAvailability.native),
+        openClaw: filterToolNames(params.cliToolAvailability.openClaw),
+      },
+    };
+  }
+  const projectedTools = params.cliToolAvailability
+    ? applyEmbeddedAttemptToolsAllow(
+        hookFilteredProjectedTools,
+        params.cliToolAvailability.openClaw,
+      )
+    : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const messageToolAvailable = promptTools.some(
+    (tool) => normalizeToolName(tool.name) === "message",
+  );
   const resultContentSourceByToolName = new Map(
     promptTools.flatMap((tool) =>
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
@@ -924,7 +1027,9 @@ export async function prepareCliRunContext(
   // user/plugin MCP servers must not be merged into the run's config at all.
   // The loopback server (scoped by the grant allowlist) becomes the complete
   // tool universe for the run.
-  const restrictedLoopbackToolsAllow = params.cliToolAvailability?.openClaw;
+  const restrictedLoopbackToolsAllow =
+    params.cliToolAvailability?.openClaw ??
+    (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
   const mcpGrantContext =
     mcpContextBase && restrictedLoopbackToolsAllow !== undefined
       ? { ...mcpContextBase, toolsAllow: [...restrictedLoopbackToolsAllow] }
@@ -1259,17 +1364,6 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    let openClawHistoryMessages: unknown[] | undefined;
-    const loadOpenClawHistoryMessages = async () => {
-      openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
-      });
-      return openClawHistoryMessages;
-    };
     const heartbeatPrompt =
       isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
         ? undefined
@@ -1345,43 +1439,33 @@ export async function prepareCliRunContext(
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
     let systemPrompt = transformedSystemPrompt;
-    let preparedPrompt = params.prompt;
+    const finalizedTranscriptPrompt =
+      params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
+        ? params.prompt
+        : params.transcriptPrompt;
+    let preparedPrompt =
+      params.finalizePromptForResolvedTools?.({
+        prompt: params.prompt,
+        messageToolAvailable,
+      }) ?? params.prompt;
     if (!isSideQuestion) {
-      const hookRunner = getGlobalHookRunner();
       try {
-        const hookResult = await resolvePromptBuildHookResult({
-          config: params.config ?? getRuntimeConfig(),
-          prompt: params.prompt,
-          messages: await loadOpenClawHistoryMessages(),
-          hookCtx: {
-            runId: params.runId,
-            agentId: sessionAgentId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            workspaceDir,
-            modelProviderId: params.provider,
-            modelId,
-            trigger: params.trigger,
-            ...buildAgentHookContextChannelFields(params),
-          },
-          hookRunner,
-          bootstrapContextRunKind: params.bootstrapContextRunKind,
-        });
-        if (hookResult.prependContext) {
+        const hookResult = promptBuildHookResult;
+        if (hookResult?.prependContext) {
           preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
         }
-        if (hookResult.appendContext) {
+        if (hookResult?.appendContext) {
           preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
         }
-        const hookSystemPrompt = hookResult.systemPrompt?.trim();
+        const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {
           systemPrompt = hookSystemPrompt;
         }
         systemPrompt =
           composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPrompt,
-            prependSystemContext: hookResult.prependSystemContext,
-            appendSystemContext: hookResult.appendSystemContext,
+            prependSystemContext: hookResult?.prependSystemContext,
+            appendSystemContext: hookResult?.appendSystemContext,
           }) ?? systemPrompt;
         const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
           sessionKey: params.sessionKey,
@@ -1496,6 +1580,7 @@ export async function prepareCliRunContext(
         ...params,
         config: contextEngineConfig,
         prompt: preparedPrompt,
+        transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       };
 
@@ -1567,6 +1652,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 

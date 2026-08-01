@@ -79,6 +79,7 @@ describe("doctor canonical session-key repair", () => {
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 2,
+        repairBatches: 1,
         removedRows: 1,
         repairedGroups: 2,
       });
@@ -112,6 +113,48 @@ describe("doctor canonical session-key repair", () => {
       ]);
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 0,
+        repairedGroups: 0,
+      });
+    });
+  });
+
+  it("bounds same-database repair batches while collapsing whole-store projections", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-batches-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storeTemplate },
+      } as OpenClawConfig;
+      for (let index = 0; index < 65; index += 1) {
+        const target = `!BatchRoom${index}:example.org`;
+        const canonicalKey = `agent:main:matrix:channel:${target}`;
+        insertLegacySession({
+          agentId: "main",
+          entry: {
+            chatType: "channel",
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "matrix", to: target },
+            }),
+            sessionId: `batch-session-${index}`,
+            updatedAt: index,
+          },
+          env,
+          sessionKey: canonicalKey.toLowerCase(),
+          storePath,
+        });
+      }
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 65,
+        repairBatches: 2,
+        removedRows: 65,
+        repairedGroups: 65,
+      });
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 0,
+        repairBatches: 0,
         repairedGroups: 0,
       });
     });

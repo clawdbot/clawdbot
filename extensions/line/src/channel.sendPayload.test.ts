@@ -1,5 +1,6 @@
 // Line tests cover channel.sendPayload plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
@@ -138,6 +139,59 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 }
 
 describe("line outbound sendPayload", () => {
+  it.each([
+    { name: "empty", text: "" },
+    { name: "whitespace-only", text: "   " },
+  ])("rejects a $name payload instead of fabricating a delivery", async ({ text }) => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text,
+        payload: { text },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow("Message must be non-empty for LINE sends");
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("preserves the finalized receipt when its delivery observer rejects", async () => {
+    const { runtime } = createRuntime();
+    setLineRuntime(runtime);
+    const onDeliveryResult = vi.fn(async () => {
+      throw new Error("delivery observer unavailable");
+    });
+
+    let caught: unknown;
+    try {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "Hello",
+        payload: { text: "Hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["m-text"],
+      receipt: { primaryPlatformMessageId: "m-text" },
+      visibleReplySent: true,
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+  });
+
   it("returns the provider receipt for a Flex-only legacy text send", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

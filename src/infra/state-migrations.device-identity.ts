@@ -19,7 +19,6 @@ import {
 } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -30,6 +29,7 @@ import {
   repairInvalidCanonicalIdentity,
 } from "./state-migrations.device-identity-repair.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
@@ -40,8 +40,6 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 const IDENTITY_KEY = "primary";
 const MIGRATION_KIND = "legacy-device-identity-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const MAX_LEGACY_IDENTITY_BYTES = 128 * 1024;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -584,81 +582,38 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy device identity: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy device identity: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
   let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
-  try {
-    try {
-      identityCoordinator = acquireDeviceIdentityCoordinator({
-        databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
-      });
-    } catch (error) {
-      result.warnings.push(
-        `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
-      );
-    }
-    if (identityCoordinator) {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy device identity",
+    releaseLabel: "Device identity",
+    errorLabel: "Failed reading legacy device identity state",
+    beforeRelease: () => identityCoordinator?.release(),
+    run: async (env) => {
       try {
-        const hasLegacyNow = hasLegacyDeviceIdentityPath(params.detected);
-        if (hasLegacyNow) {
-          const stateRoot = await root(params.stateDir, {
-            hardlinks: "reject",
-            maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-            symlinks: "reject",
-          });
-          result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
-        } else if (params.detected.hasInvalidCanonical) {
-          result = repairInvalidCanonicalIdentity(env);
-        }
+        identityCoordinator = acquireDeviceIdentityCoordinator({
+          databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
+        });
       } catch (error) {
-        result.warnings.push(`Failed reading legacy device identity state: ${String(error)}`);
+        return {
+          changes: [],
+          warnings: [
+            `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
+          ],
+        };
       }
-    }
-  } finally {
-    try {
-      identityCoordinator?.release();
-    } catch (error) {
-      releaseError = error;
-    }
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError ??= error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Device identity migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+      if (hasLegacyDeviceIdentityPath(params.detected)) {
+        const stateRoot = await root(params.stateDir, {
+          hardlinks: "reject",
+          maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+          symlinks: "reject",
+        });
+        return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      }
+      return params.detected.hasInvalidCanonical
+        ? repairInvalidCanonicalIdentity(env)
+        : { changes: [], warnings: [] };
+    },
+  });
 }

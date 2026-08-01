@@ -20,10 +20,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
+  assertNoSystemLaunchDaemonOwnership,
   classifyActions,
   findExactMacTarget,
   inspectBuildState,
   isOwnedGatewayEntrypoint,
+  isGatewayProbeResponse,
   maintainMain,
   originMatches,
   parseGatewayLogAudit,
@@ -31,6 +33,7 @@ import {
   prepareGatewaySuspension,
   replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
+  resolveLaunchAgentExitTimeoutSeconds,
   resolveManagedGatewaySourceRoot,
   resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
@@ -83,9 +86,20 @@ function maintainFixture(
       errors: [],
       warnings: [],
     }),
+    armEnvironmentRestore: () => ({ disarm() {} }),
+    assertNoSystemLaunchDaemonOwnership: () => {},
     prepareGatewaySuspension: () => ({
       status: "ready",
       suspensionId: "fixture-suspension",
+    }),
+    prepareGatewayEntrypointReplacement: () => ({
+      install() {},
+      discard() {},
+    }),
+    probeGatewayMilestones: () => ({
+      listenerReady: true,
+      healthzReady: true,
+      readyzReady: true,
     }),
     proveGatewayStopped: () => ({
       runtimeStatus: "stopped",
@@ -93,6 +107,8 @@ function maintainFixture(
       portStatus: "free",
       proofSource: "fixture",
     }),
+    readLaunchdEnvironment: () => null,
+    waitForGatewayProcess: () => {},
     ...dependencies,
   });
 }
@@ -190,6 +206,19 @@ function fakeCommands(mirror: string) {
   };
 }
 
+function passGatewayRestartVerification({ timing }: { timing: Record<string, unknown> }) {
+  return {
+    audit: {
+      entries: 0,
+      errorCount: 0,
+      warningCount: 0,
+      errors: [],
+      warnings: [],
+    },
+    timing,
+  };
+}
+
 describe("openclaw live updater", () => {
   beforeAll(() => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-template-")));
@@ -250,6 +279,27 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("captures bounded one-shot Gateway startup trace records", () => {
+    const output = JSON.stringify({
+      type: "log",
+      time: "2026-07-31T18:00:01.000Z",
+      level: "info",
+      subsystem: "gateway",
+      message: "startup trace: channels.start 120.0ms total=900.0ms",
+    });
+
+    expect(parseGatewayLogAudit(output, Date.parse("2026-07-31T18:00:00.000Z"))).toMatchObject({
+      startupTrace: [
+        {
+          time: "2026-07-31T18:00:01.000Z",
+          level: "info",
+          subsystem: "gateway",
+          message: "startup trace: channels.start 120.0ms total=900.0ms",
+        },
+      ],
+    });
+  });
+
   test("parses the loaded launchd ProgramArguments block", () => {
     expect(
       parseLaunchctlArguments(`gui/501/ai.openclaw.gateway = {
@@ -276,6 +326,53 @@ describe("openclaw live updater", () => {
       "--port",
       "18789",
     ]);
+  });
+
+  test("bounds launchd ExitTimeOut before maintenance", () => {
+    expect(resolveLaunchAgentExitTimeoutSeconds(20)).toBe(20);
+    expect(resolveLaunchAgentExitTimeoutSeconds(300)).toBe(300);
+    expect(resolveLaunchAgentExitTimeoutSeconds(undefined)).toBe(20);
+    expect(() => resolveLaunchAgentExitTimeoutSeconds(0)).toThrow(
+      "ExitTimeOut=0 prevents bounded stopped proof",
+    );
+    expect(() => resolveLaunchAgentExitTimeoutSeconds(301)).toThrow(
+      "ExitTimeOut=301 prevents bounded stopped proof",
+    );
+  });
+
+  test("fails closed on same-label system LaunchDaemon ownership", () => {
+    const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.example.other.plist", "openclaw-system.plist"],
+        spawnSync: (command: string, args: string[]) => {
+          if (command === "/bin/launchctl") {
+            return missing;
+          }
+          return {
+            status: 0,
+            stdout: args.at(-1)?.endsWith("openclaw-system.plist")
+              ? "ai.openclaw.gateway\n"
+              : "com.example.other\n",
+            stderr: "",
+          };
+        },
+      }),
+    ).toThrow("openclaw-system.plist already owns the managed Gateway label");
+
+    const calls: string[] = [];
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => [],
+        spawnSync: (command: string, args: string[]) => {
+          calls.push([command, ...args].join(" "));
+          return calls.length === 1
+            ? missing
+            : { status: 0, stdout: "system/ai.openclaw.gateway", stderr: "" };
+        },
+      }),
+    ).toThrow("system/ai.openclaw.gateway already owns the managed Gateway label");
+    expect(calls).toHaveLength(2);
   });
 
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
@@ -528,7 +625,7 @@ describe("openclaw live updater", () => {
       (command: string, args: string[]) => {
         const call = [command, ...args].join(" ");
         calls.push(call);
-        if (call.includes("gateway status") && ++statusAttempts < 3) {
+        if (call.includes("gateway status") && ++statusAttempts < 7) {
           throw new Error("RPC warming up");
         }
       },
@@ -537,12 +634,227 @@ describe("openclaw live updater", () => {
       (ms: number) => delays.push(ms),
     );
 
-    expect(delays).toEqual([5_000, 5_000]);
+    expect(delays).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000]);
     expect(calls).toEqual([
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
+    ]);
+  });
+
+  test("records listener, probe, RPC, and channel readiness timestamps", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(
+      entrypoint,
+      `const command = process.argv[2];
+console.log(JSON.stringify(command === "health" ? {
+  ok: true,
+  channels: {
+    discord: { connected: true },
+    telegram: { accounts: { default: { connected: true } } }
+  }
+} : { ok: true }));
+`,
+    );
+    const configPath = path.join(root, "openclaw.json");
+    writeFileSync(configPath, "{}\n");
+    const timing = verifyGatewayReadiness(
+      () => {},
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      () => {},
+      {
+        configPath,
+        entrypoint,
+        executable: process.execPath,
+        invocationPrefix: [entrypoint],
+        port: 18789,
+        runtime: process.execPath,
+        serviceEnvironment: {},
+      },
+      {
+        now: () => Date.parse("2026-07-31T18:00:00.000Z"),
+        probeMilestones: () => ({
+          listenerReady: true,
+          healthzReady: true,
+          readyzReady: true,
+        }),
+      },
+    );
+
+    expect(timing).toMatchObject({
+      listenerReadyAt: "2026-07-31T18:00:00.000Z",
+      healthzReadyAt: "2026-07-31T18:00:00.000Z",
+      readyzReadyAt: "2026-07-31T18:00:00.000Z",
+      deepRpcReadyAt: "2026-07-31T18:00:00.000Z",
+      discordConnectedAt: "2026-07-31T18:00:00.000Z",
+      telegramConnectedAt: "2026-07-31T18:00:00.000Z",
+    });
+  });
+
+  test("accepts the distinct healthz and readyz response contracts", () => {
+    expect(isGatewayProbeResponse("/healthz", { ok: true, status: "live" })).toBe(true);
+    expect(isGatewayProbeResponse("/readyz", { ready: true, failing: [], uptimeMs: 123 })).toBe(
+      true,
+    );
+    expect(isGatewayProbeResponse("/readyz", { ok: true, status: "ready" })).toBe(false);
+  });
+
+  test("bounds milestones first observed during the deep RPC probe", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(
+      entrypoint,
+      `const command = process.argv[2];
+console.log(JSON.stringify(command === "health" ? { ok: true, channels: {} } : { ok: true }));
+`,
+    );
+    const configPath = path.join(root, "openclaw.json");
+    writeFileSync(configPath, "{}\n");
+    const times = [
+      "2026-07-31T18:00:00.000Z",
+      "2026-07-31T18:00:05.000Z",
+      "2026-07-31T18:00:06.000Z",
+    ].map(Date.parse);
+    let probeCalls = 0;
+
+    const timing = verifyGatewayReadiness(
+      () => {},
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      () => {},
+      {
+        configPath,
+        entrypoint,
+        executable: process.execPath,
+        invocationPrefix: [entrypoint],
+        port: 18789,
+        runtime: process.execPath,
+        serviceEnvironment: {},
+      },
+      {
+        now: () => times.shift() ?? Date.parse("2026-07-31T18:00:06.000Z"),
+        probeMilestones: () => {
+          probeCalls += 1;
+          return {
+            listenerReady: probeCalls > 1,
+            healthzReady: probeCalls > 1,
+            readyzReady: probeCalls > 1,
+          };
+        },
+      },
+    );
+
+    expect(timing).toMatchObject({
+      listenerReadyAt: "2026-07-31T18:00:05.000Z",
+      healthzReadyAt: "2026-07-31T18:00:05.000Z",
+      readyzReadyAt: "2026-07-31T18:00:06.000Z",
+      deepRpcReadyAt: "2026-07-31T18:00:05.000Z",
+      timestampSemantics: {
+        listenerReadyAt: "no-later-than",
+        healthzReadyAt: "no-later-than",
+        readyzReadyAt: "observed",
+        deepRpcReadyAt: "observed",
+      },
+    });
+  });
+
+  test("does not fail readiness for a present but disconnected channel record", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(
+      entrypoint,
+      `const command = process.argv[2];
+console.log(JSON.stringify(command === "health" ? {
+  ok: true,
+  channels: { discord: { configured: false, connected: false } }
+} : { ok: true }));
+`,
+    );
+    const configPath = path.join(root, "openclaw.json");
+    writeFileSync(configPath, "{}\n");
+
+    expect(
+      verifyGatewayReadiness(
+        () => {},
+        mirror,
+        git(mirror, "rev-parse", "HEAD"),
+        () => {},
+        {
+          configPath,
+          entrypoint,
+          executable: process.execPath,
+          invocationPrefix: [entrypoint],
+          port: 18789,
+          runtime: process.execPath,
+          serviceEnvironment: {},
+        },
+        {
+          probeMilestones: () => ({
+            listenerReady: true,
+            healthzReady: true,
+            readyzReady: true,
+          }),
+        },
+      ),
+    ).toMatchObject({ discordConnectedAt: null });
+  });
+
+  test("routes managed Gateway health through the injected port", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    const callsPath = path.join(root, "managed-probe-calls.jsonl");
+    writeFileSync(
+      entrypoint,
+      `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
+  args,
+  port: process.env.OPENCLAW_GATEWAY_PORT,
+}) + "\\n");
+if (args.includes("--port")) process.exit(2);
+console.log(JSON.stringify({ ok: true, channels: {} }));
+`,
+    );
+
+    verifyGatewayReadiness(
+      () => {
+        throw new Error("managed probes must use the exact built Gateway CLI");
+      },
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      () => {},
+      {
+        configPath: path.join(root, "openclaw.json"),
+        entrypoint,
+        executable: process.execPath,
+        invocationPrefix: [entrypoint],
+        port: 18789,
+        runtime: process.execPath,
+      },
+    );
+
+    expect(
+      readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+        port: "18789",
+      },
+      { args: ["health", "--verbose", "--json"], port: "18789" },
     ]);
   });
 
@@ -1161,9 +1473,44 @@ describe("openclaw live updater", () => {
         },
       ),
     ).toThrow("native stopped proof did not converge");
-    expect(proofAttempts).toBe(100);
-    expect(sleepAttempts).toBe(99);
+    expect(proofAttempts).toBe(141);
+    expect(sleepAttempts).toBe(140);
     expect(resumed).toEqual(["fixture-suspension"]);
+  });
+
+  test("allows launchd teardown to converge after the old ten-second proof window", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+    let elapsedMs = 0;
+    let proofAttempts = 0;
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        proveGatewayStopped: () => {
+          proofAttempts += 1;
+          if (elapsedMs < 12_000) {
+            throw new Error("launchd is still releasing the stopped job");
+          }
+          return {
+            runtimeStatus: "stopped",
+            port: 18789,
+            portStatus: "free",
+            proofSource: "fixture",
+          };
+        },
+        sleep: (ms: number) => {
+          elapsedMs += ms;
+        },
+        resumeGatewaySuspension: () => {},
+      },
+    );
+
+    expect(output.ok).toBe(true);
+    expect(elapsedMs).toBe(12_000);
+    expect(proofAttempts).toBe(49);
   });
 
   test("recovers a stale build only after proving an unavailable Gateway is stopped", () => {
@@ -1362,6 +1709,7 @@ describe("openclaw live updater", () => {
     writeFileSync(plistPath, "plist\n", { mode: 0o600 });
     let deployedEntrypoint = snapshot;
     let controlEntrypoint: string | undefined;
+    const restartObservedAt = Date.parse("2026-07-31T18:00:00.000Z");
     const inspectGatewayDeployment = () => ({
       configPath,
       entrypoint: deployedEntrypoint,
@@ -1392,6 +1740,29 @@ describe("openclaw live updater", () => {
     expect(deferred).toMatchObject({ deferred: true, reason: "gateway_active_work" });
     expect(commands.calls).toEqual([]);
 
+    const resumedSuspensions: string[] = [];
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand: commands.runCommand,
+          inspectGatewayDeployment,
+          prepareGatewaySuspension: () => ({
+            status: "ready",
+            suspensionId: "failed-preparation",
+          }),
+          prepareGatewayEntrypointReplacement: () => {
+            throw new Error("replacement plist lint failed");
+          },
+          resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+            resumedSuspensions.push(suspensionId);
+          },
+        },
+      ),
+    ).toThrow("replacement plist lint failed");
+    expect(resumedSuspensions).toEqual(["failed-preparation"]);
+    expect(commands.calls).toEqual([]);
+
     const output = maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
@@ -1400,11 +1771,35 @@ describe("openclaw live updater", () => {
           controlEntrypoint = deployment.entrypoint;
           return { status: "ready", suspensionId: "fixture-suspension" };
         },
+        prepareGatewayEntrypointReplacement: () => {
+          commands.calls.push("prepare replacement plist");
+          return {
+            install() {
+              commands.calls.push("install replacement plist");
+            },
+            discard() {},
+          };
+        },
         inspectGatewayDeployment,
+        now: () => restartObservedAt,
+        verifyAndAuditGateway: ({ timing }: { timing: Record<string, unknown> }) => ({
+          ...passGatewayRestartVerification({ timing }),
+          timing: {
+            ...timing,
+            listenerReadyAt: "2026-07-31T18:00:01.000Z",
+            healthzReadyAt: "2026-07-31T18:00:02.000Z",
+            readyzReadyAt: "2026-07-31T18:00:03.000Z",
+            deepRpcReadyAt: "2026-07-31T18:00:05.000Z",
+            discordConnectedAt: "2026-07-31T18:00:06.000Z",
+            telegramConnectedAt: "2026-07-31T18:00:07.000Z",
+          },
+        }),
         repointGatewayDeployment: (
           _checkout: string,
           deployment: { entrypoint: string; label: string; port: number },
+          replaceEntrypoint: (deployment: unknown, entrypoint: string) => void,
         ) => {
+          replaceEntrypoint(deployment, source);
           deployedEntrypoint = source;
           return {
             changed: true,
@@ -1443,16 +1838,186 @@ describe("openclaw live updater", () => {
       previousEntrypoint: snapshot,
     });
     expect(output.gatewayRuntime).toMatchObject({ entrypoint: source, pid: 123 });
+    expect(output.gatewayTiming).toMatchObject({
+      bootoutStartedAt: "2026-07-31T18:00:00.000Z",
+      processExitedAt: "2026-07-31T18:00:00.000Z",
+      listenerClosedAt: "2026-07-31T18:00:00.000Z",
+      healthzReadyAt: "2026-07-31T18:00:02.000Z",
+      readyzReadyAt: "2026-07-31T18:00:03.000Z",
+      deepRpcReadyAt: "2026-07-31T18:00:05.000Z",
+      discordConnectedAt: "2026-07-31T18:00:06.000Z",
+      telegramConnectedAt: "2026-07-31T18:00:07.000Z",
+      totalOutageMs: 5_000,
+      coldStartMs: 5_000,
+      durationSemantics: {
+        totalOutageMs: "observed-estimate",
+        coldStartMs: "observed-estimate",
+      },
+    });
     expect(JSON.stringify(output)).not.toContain("not-serialized");
     expect(controlEntrypoint).toBe(source);
     const uid = process.getuid?.() ?? 501;
     expect(commands.calls).toEqual([
+      "prepare replacement plist",
       `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
       "prove gateway stopped",
       "pnpm build",
+      "install replacement plist",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
+    ]);
+  });
+
+  test("restores the previous LaunchAgent after replacement readiness fails", () => {
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "replacement failure update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "replacement failure update");
+    git(seed, "push");
+    const commands = fakeCommands(mirror);
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let deployedEntrypoint = snapshot;
+
+    const inspectGatewayDeployment = () => ({
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint: deployedEntrypoint,
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [deployedEntrypoint],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    });
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand: commands.runCommand,
+          assertNoSystemLaunchDaemonOwnership: () => {
+            commands.calls.push("assert system ownership");
+          },
+          inspectGatewayDeployment,
+          isGatewayLoaded: () => true,
+          prepareGatewayEntrypointReplacement: () => {
+            commands.calls.push("prepare replacement plist");
+            return {
+              install() {
+                commands.calls.push("install replacement plist");
+                deployedEntrypoint = source;
+              },
+              restore() {
+                commands.calls.push("restore previous plist");
+                deployedEntrypoint = snapshot;
+              },
+              discard() {},
+            };
+          },
+          proveGatewayStopped: () => {
+            commands.calls.push("prove gateway stopped");
+            return {
+              runtimeStatus: "stopped",
+              port: 18789,
+              portStatus: "free",
+              proofSource: "fixture",
+            };
+          },
+          repointGatewayDeployment: (
+            _checkout: string,
+            deployment: { entrypoint: string; invocationPrefix: string[] },
+            replaceEntrypoint: (deployment: unknown, entrypoint: string) => void,
+          ) => {
+            replaceEntrypoint(deployment, source);
+            return {
+              changed: true,
+              ...deployment,
+              entrypoint: source,
+              invocationPrefix: [source],
+              previousEntrypoint: deployment.entrypoint,
+            };
+          },
+          verifyAndAuditGateway: () => {
+            commands.calls.push("verify replacement readiness");
+            throw new Error("replacement readiness failed");
+          },
+        },
+      ),
+    ).toThrow("replacement readiness failed");
+
+    const uid = process.getuid?.() ?? 501;
+    expect(deployedEntrypoint).toBe(snapshot);
+    expect(commands.calls).toEqual([
+      "assert system ownership",
+      "prepare replacement plist",
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "pnpm build",
+      "assert system ownership",
+      "install replacement plist",
+      "assert system ownership",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
+      "verify replacement readiness",
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "restore previous plist",
+      "assert system ownership",
       `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
     ]);
+  });
+
+  test("resumes suspension when system ownership appears before bootout", () => {
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "ownership conflict update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "ownership conflict update");
+    git(seed, "push");
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const resumed: string[] = [];
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          assertNoSystemLaunchDaemonOwnership: () => {
+            throw new Error("same-label system owner");
+          },
+          inspectGatewayDeployment: () => ({
+            configPath: path.join(root, "openclaw.json"),
+            entrypoint: snapshot,
+            entrypointIndex: 1,
+            executable: process.execPath,
+            invocationPrefix: [snapshot],
+            label: "ai.openclaw.gateway",
+            plistPath,
+            port: 18789,
+            runtime: process.execPath,
+          }),
+          prepareGatewayEntrypointReplacement: () => {
+            throw new Error("replacement preparation must not run");
+          },
+          resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+            resumed.push(suspensionId);
+          },
+        },
+      ),
+    ).toThrow("same-label system owner");
+    expect(resumed).toEqual(["fixture-suspension"]);
   });
 
   test("builds a trusted source control client while a snapshot is still running", () => {
@@ -1488,6 +2053,7 @@ describe("openclaw live updater", () => {
           port: 18789,
           runtime: process.execPath,
         }),
+        verifyAndAuditGateway: passGatewayRestartVerification,
         proveGatewayStopped: () => {
           stoppedProofAttempts += 1;
           commands.calls.push("prove gateway stopped");
@@ -1540,10 +2106,12 @@ describe("openclaw live updater", () => {
       "pnpm build",
       `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
       "prove gateway stopped",
-      "sleep 100",
+      "sleep 250",
       "prove gateway stopped",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
       `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
     ]);
   });
 
@@ -1579,6 +2147,7 @@ describe("openclaw live updater", () => {
           port: 18789,
           runtime: process.execPath,
         }),
+        verifyAndAuditGateway: passGatewayRestartVerification,
         proveGatewayStopped: () => ({
           runtimeStatus: "stopped",
           port: 18789,
@@ -1617,8 +2186,10 @@ describe("openclaw live updater", () => {
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
       "pnpm build",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
       `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
     ]);
   });
 
@@ -1673,6 +2244,10 @@ describe("openclaw live updater", () => {
       gatewayRestart: true,
       gatewaySelfHeal: true,
     });
+    expect(output.gatewayTiming).toMatchObject({
+      processStartedAt: null,
+      coldStartMs: null,
+    });
     expect(calls).toEqual([
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway restart",
@@ -1706,8 +2281,17 @@ describe("openclaw live updater", () => {
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
+        armEnvironmentRestore: () => {
+          commands.calls.push("arm launchd environment restore");
+          return {
+            disarm() {
+              commands.calls.push("disarm launchd environment restore");
+            },
+          };
+        },
         inspectGatewayDeployment: () => deployment,
         isGatewayLoaded: () => false,
+        readLaunchdEnvironment: () => "already-enabled",
         verifyGateway: () => {
           throw new Error("managed job is unloaded");
         },
@@ -1728,8 +2312,12 @@ describe("openclaw live updater", () => {
       gatewaySelfHeal: true,
     });
     expect(commands.calls).toEqual([
+      "arm launchd environment restore",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
       `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE already-enabled`,
+      "disarm launchd environment restore",
     ]);
   });
 
@@ -1809,7 +2397,7 @@ describe("openclaw live updater", () => {
         },
       ),
     ).toThrow("RPC unavailable");
-    expect(statusCalls).toBe(4);
+    expect(statusCalls).toBe(8);
     expect(auditCalls).toBe(1);
   });
 

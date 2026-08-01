@@ -32,7 +32,7 @@ import {
   type AgentsState,
 } from "../../lib/agents/index.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
-import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
+import { currentConfigObject } from "../../lib/config/index.ts";
 import {
   createInitialCronState,
   loadCronJobsPage,
@@ -753,20 +753,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     });
   }
 
-  private findAgentIndex(agentId: string) {
-    return findAgentConfigEntryIndex(
-      currentConfigObject(this.context.runtimeConfig.state),
-      agentId,
-    );
-  }
-
-  private ensureAgentIndex(agentId: string) {
-    return this.context.runtimeConfig.ensureAgentEntry(agentId);
-  }
-
   private toolsPath(agentId: string, ensure: boolean) {
-    const index = ensure ? this.ensureAgentIndex(agentId) : this.findAgentIndex(agentId);
-    return index >= 0 ? (["agents", "list", index, "tools"] as Array<string | number>) : null;
+    const target = this.context.runtimeConfig.agentEntry(agentId, { ensure });
+    return target ? ([...target.path, "tools"] as Array<string | number>) : null;
   }
 
   private loadEffectiveToolsForAgent(agentId: string) {
@@ -810,7 +799,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
     const selectedBefore = this.agentsSelectedId;
     void (async () => {
-      await this.context.runtimeConfig.save();
+      if (!(await this.context.runtimeConfig.save())) {
+        return;
+      }
       await agents.refreshList();
       if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
         return;
@@ -876,6 +867,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             loading: configState.configLoading,
             saving: configState.configSaving,
             dirty: configState.configFormDirty,
+            error:
+              configState.configAutoSaveStatus === "error" ||
+              configState.configAutoSaveStatus === "conflict"
+                ? configState.lastError
+                : null,
           },
           channels: {
             snapshot: this.context.channels.state.channelsSnapshot,
@@ -1015,20 +1011,12 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
           },
           onAgentSkillToggle: (agentId, skillName, enabled) => {
-            const index = this.ensureAgentIndex(agentId);
-            if (index < 0 || !skillName.trim()) {
+            const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
+            if (!target || !skillName.trim()) {
               return;
             }
-            const list = (
-              currentConfigObject(configState) as {
-                agents?: { list?: unknown[] };
-              } | null
-            )?.agents?.list;
-            const entry = Array.isArray(list)
-              ? (list[index] as { skills?: unknown } | undefined)
-              : undefined;
-            const base = Array.isArray(entry?.skills)
-              ? normalizeStringEntries(entry.skills)
+            const base = Array.isArray(target.entry.skills)
+              ? normalizeStringEntries(target.entry.skills)
               : (this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ?? []);
             const next = new Set(base);
             if (enabled) {
@@ -1036,18 +1024,18 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             } else {
               next.delete(skillName.trim());
             }
-            this.context.runtimeConfig.patchForm(["agents", "list", index, "skills"], [...next]);
+            this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
           },
           onAgentSkillsClear: (agentId) => {
-            const index = this.findAgentIndex(agentId);
-            if (index >= 0) {
-              this.context.runtimeConfig.removeFormValue(["agents", "list", index, "skills"]);
+            const target = this.context.runtimeConfig.agentEntry(agentId);
+            if (target) {
+              this.context.runtimeConfig.removeFormValue([...target.path, "skills"]);
             }
           },
           onAgentSkillsDisableAll: (agentId) => {
-            const index = this.ensureAgentIndex(agentId);
-            if (index >= 0) {
-              this.context.runtimeConfig.patchForm(["agents", "list", index, "skills"], []);
+            const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
+            if (target) {
+              this.context.runtimeConfig.patchForm([...target.path, "skills"], []);
             }
           },
           onModelChange: (agentId, modelId) => {

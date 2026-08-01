@@ -50,6 +50,7 @@ type TestAgentsPage = HTMLElement & {
   runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
+  saveAgentConfig: () => void;
 };
 
 function deferred<T>() {
@@ -160,6 +161,26 @@ function pageContext(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("does not refresh the agent roster after a rejected config save", async () => {
+    const client = {} as GatewayBrowserClient;
+    const refreshList = vi.fn(async () => agentsList);
+    const save = vi.fn(async () => false);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.client = client;
+    page.agentsSelectedId = "main";
+    page.context = {
+      agents: {
+        state: { agentsLoading: false, agentsError: null, agentsList },
+        refreshList,
+      },
+      runtimeConfig: { save },
+    } as unknown as ApplicationContext;
+
+    page.saveAgentConfig();
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(refreshList).not.toHaveBeenCalled();
+  });
+
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
     const models = [
       {

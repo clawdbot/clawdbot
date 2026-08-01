@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
   nextcloudTalkDmPolicy,
-  nextcloudTalkSetupAdapter,
+  nextcloudTalkSetupContract,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
@@ -213,8 +213,8 @@ describe("nextcloud talk setup", () => {
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
-    const validateInput = nextcloudTalkSetupAdapter.validateInput;
-    const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
+    const validateInput = nextcloudTalkSetupContract.validateInput;
+    const applyAccountConfig = nextcloudTalkSetupContract.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
     if (!validateInput) {
@@ -304,7 +304,7 @@ describe("nextcloud talk setup", () => {
   });
 
   it("normalizes legacy CLI aliases before applying account config", async () => {
-    const prepareInput = nextcloudTalkSetupAdapter.prepareAccountConfigInput;
+    const prepareInput = nextcloudTalkSetupContract.prepareAccountConfigInput;
     expect(prepareInput).toBeTypeOf("function");
     if (!prepareInput) {
       throw new Error("Expected Nextcloud Talk setup prepareAccountConfigInput");
@@ -340,10 +340,10 @@ describe("nextcloud talk setup", () => {
 
   it("clears stored bot secret fields when switching the default account to env", () => {
     type ApplyAccountConfigContext = Parameters<
-      typeof nextcloudTalkSetupAdapter.applyAccountConfig
+      typeof nextcloudTalkSetupContract.applyAccountConfig
     >[0];
 
-    const next = nextcloudTalkSetupAdapter.applyAccountConfig({
+    const next = nextcloudTalkSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           "nextcloud-talk": {

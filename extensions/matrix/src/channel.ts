@@ -80,11 +80,7 @@ import {
   resolveSingleAccountPromotionTarget,
   singleAccountKeysToMove,
 } from "./setup-contract.js";
-import {
-  createMatrixSetupWizardProxy,
-  matrixSetupAdapter,
-  matrixSetupContract,
-} from "./setup-core.js";
+import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
@@ -543,12 +539,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
-      },
-      setup: {
-        ...matrixSetupAdapter,
-        singleAccountKeysToMove,
-        namedAccountPromotionKeys,
-        resolveSingleAccountPromotionTarget,
       },
       setupContract: {
         ...matrixSetupContract,

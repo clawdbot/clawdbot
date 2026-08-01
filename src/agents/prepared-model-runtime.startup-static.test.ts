@@ -49,11 +49,13 @@ const mocks = vi.hoisted(() => {
         wrote: false,
       }),
     ),
-    planOpenClawModelsJsonSource: vi.fn(async (_config: unknown, agentDir: unknown) => ({
-      agentDir: String(agentDir),
-      modelsJsonContents: null,
-      pluginCatalogs: [],
-    })),
+    planOpenClawModelsJsonSource: vi.fn(
+      async (_config: unknown, agentDir: unknown, _options?: unknown) => ({
+        agentDir: String(agentDir),
+        modelsJsonContents: null,
+        pluginCatalogs: [],
+      }),
+    ),
     buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     ensureRuntimePluginsLoaded: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
@@ -298,6 +300,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
         providerDiscoveryTimeoutMs: 5_000,
       }),
     );
+    const fullCatalogOptions = mocks.planOpenClawModelsJsonSource.mock.calls[0]?.[2];
+    expect(fullCatalogOptions).not.toHaveProperty("providerDiscoveryProviderIds");
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeProviderPluginAugmentation: true }),
     );

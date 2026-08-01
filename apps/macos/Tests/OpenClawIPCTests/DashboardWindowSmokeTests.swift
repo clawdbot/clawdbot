@@ -55,6 +55,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
         // The empty unified toolbar is what grows the titlebar to 52pt so the

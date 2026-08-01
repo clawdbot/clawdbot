@@ -95,12 +95,30 @@ function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): 
   return `[ -f "${cachePath}" ] && source "${cachePath}"`;
 }
 
+function appendCompletionProfilePath(
+  directory: string,
+  pathApi: typeof path.posix,
+  ...segments: string[]
+): string {
+  // Shell startup resolves symlinks before `..`; path.join would select a different profile.
+  const nativeDirectory = pathApi.sep === "\\" ? directory.replaceAll("/", pathApi.sep) : directory;
+  const separator = nativeDirectory.endsWith(pathApi.sep) ? "" : pathApi.sep;
+  return `${nativeDirectory}${separator}${segments.join(pathApi.sep)}`;
+}
+
 /** Formats the command users can run to reload the shell profile after installation. */
 export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
   }
-  return `source ${profilePath}`;
+  if (/^[a-zA-Z0-9_./~+-]+$/u.test(profilePath)) {
+    return `source ${profilePath}`;
+  }
+  const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
+  const value = profilePath.slice(homePrefix.length);
+  const escapedPath =
+    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
+  return `source ${homePrefix}'${escapedPath}'`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -265,30 +283,64 @@ export function resolveCompletionProfilePath(
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir;
   const platform = options.platform ?? process.platform;
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   const home = env.HOME || homeDir();
   if (shell === "zsh") {
-    return path.join(home, ".zshrc");
+    const profileDirectory = env.ZDOTDIR === undefined ? home : env.ZDOTDIR || pathApi.sep;
+    return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
   }
   if (shell === "bash") {
     // Installation, status, and repairs must inspect the same real Bash profile.
-    const bashrc = path.join(home, ".bashrc");
-    return existsSync(bashrc) ? bashrc : path.join(home, ".bash_profile");
+    const bashrc = appendCompletionProfilePath(home, pathApi, ".bashrc");
+    return existsSync(bashrc)
+      ? bashrc
+      : appendCompletionProfilePath(home, pathApi, ".bash_profile");
   }
   if (shell === "fish") {
-    return path.join(home, ".config", "fish", "config.fish");
+    const configuredHome = env.XDG_CONFIG_HOME;
+    const configHome =
+      configuredHome && pathApi.isAbsolute(configuredHome)
+        ? configuredHome
+        : appendCompletionProfilePath(home, pathApi, ".config");
+    return appendCompletionProfilePath(configHome, pathApi, "fish", "config.fish");
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
     const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
     const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
-    return path.win32.join(
+    return appendCompletionProfilePath(
       env.USERPROFILE || home,
+      pathApi,
       "Documents",
       profileDirectory,
       "Microsoft.PowerShell_profile.ps1",
     );
   }
-  return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+  return appendCompletionProfilePath(
+    home,
+    pathApi,
+    ".config",
+    "powershell",
+    "Microsoft.PowerShell_profile.ps1",
+  );
+}
+
+/** Formats the resolved startup profile relative to HOME when that preserves its actual location. */
+export function resolveCompletionProfileHint(shell: CompletionShell): string {
+  const profilePath = resolveCompletionProfilePath(shell);
+  if (shell === "powershell") {
+    return profilePath;
+  }
+  if (!path.isAbsolute(profilePath)) {
+    return profilePath.startsWith(`.${path.sep}`) || profilePath.startsWith(`..${path.sep}`)
+      ? profilePath
+      : `.${path.sep}${profilePath}`;
+  }
+  const home = process.env.HOME;
+  // Keep lexical parent components so reload follows the same symlink path as installation.
+  return home && profilePath.startsWith(`${home}${path.sep}`)
+    ? `~/${profilePath.slice(home.length + 1)}`
+    : profilePath;
 }
 
 /** Returns whether a shell profile already contains an OpenClaw completion block or source line. */
@@ -348,26 +400,8 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     );
   }
 
-  let profilePath: string;
-  let sourceLine: string;
-  switch (shell) {
-    case "zsh":
-      profilePath = resolveCompletionProfilePath("zsh");
-      sourceLine = formatCompletionSourceLine("zsh", cachePath);
-      break;
-    case "bash":
-      profilePath = resolveCompletionProfilePath("bash");
-      sourceLine = formatCompletionSourceLine("bash", cachePath);
-      break;
-    case "fish":
-      profilePath = resolveCompletionProfilePath("fish");
-      sourceLine = formatCompletionSourceLine("fish", cachePath);
-      break;
-    case "powershell":
-      profilePath = resolveCompletionProfilePath("powershell");
-      sourceLine = formatCompletionSourceLine("powershell", cachePath);
-      break;
-  }
+  const profilePath = resolveCompletionProfilePath(shell);
+  const sourceLine = formatCompletionSourceLine(shell, cachePath);
 
   try {
     try {
@@ -397,7 +431,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
       console.log(
-        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`,
+        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
       );
     }
   } catch (err) {

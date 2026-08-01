@@ -1,7 +1,7 @@
 /** Verifies transport disconnect cancels only its own paired-node invocation. */
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -37,6 +37,7 @@ function createPairedNode() {
       connId: "paired-node-connection",
       usesSharedGatewayAuth: false,
       socket: {
+        readyState: WebSocket.OPEN,
         send(frame: unknown) {
           if (typeof frame === "string") {
             frames.push(frame);

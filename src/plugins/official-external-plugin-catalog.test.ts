@@ -1960,6 +1960,48 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists OpenCode Zen with its model and media install surfaces", () => {
+    const opencode = expectCatalogEntry("opencode");
+    const manifest = getOfficialExternalPluginCatalogManifest(opencode);
+
+    expect(resolveOfficialExternalPluginId(opencode)).toBe("opencode");
+    expect(resolveOfficialExternalPluginInstall(opencode)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/opencode-provider",
+      npmSpec: "@openclaw/opencode-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["opencode"]);
+    expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode"]);
+    expect(manifest?.providerEndpoints).toEqual([
+      {
+        endpointClass: "opencode-native",
+        hostSuffixes: ["opencode.ai"],
+      },
+    ]);
+  });
+
+  it("lists OpenCode Go with its provider and media-understanding contracts", () => {
+    const opencodeGo = expectCatalogEntry("opencode-go");
+    const manifest = getOfficialExternalPluginCatalogManifest(opencodeGo);
+
+    expect(resolveOfficialExternalPluginId(opencodeGo)).toBe("opencode-go");
+    expect(resolveOfficialExternalPluginInstall(opencodeGo)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/opencode-go-provider",
+      npmSpec: "@openclaw/opencode-go-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["opencode-go"]);
+    expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode-go"]);
+    expect(manifest?.providerEndpoints).toEqual([
+      {
+        endpointClass: "opencode-native",
+        hostSuffixes: ["opencode.ai"],
+      },
+    ]);
+  });
+
   it("lists Synthetic as an official external provider", () => {
     const synthetic = expectCatalogEntry("synthetic");
 
@@ -2182,6 +2224,25 @@ describe("official external plugin catalog", () => {
         NOVITA_API_KEY: "novita-key",
       }),
     ).toEqual(["novita"]);
+  });
+
+  it("lists iMessage as an official external channel", () => {
+    const imessage = expectCatalogEntry("imessage");
+    const channel = getOfficialExternalPluginCatalogManifest(imessage)?.channel;
+
+    expect(resolveOfficialExternalPluginId(imessage)).toBe("imessage");
+    expect(channel).toMatchObject({
+      id: "imessage",
+      aliases: ["imsg"],
+      docsPath: "/channels/imessage",
+    });
+    expect(resolveOfficialExternalPluginInstall(imessage)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/imessage",
+      npmSpec: "@openclaw/imessage",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+      allowInvalidConfigRecovery: true,
+    });
   });
 
   it.each([

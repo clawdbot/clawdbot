@@ -212,6 +212,94 @@ describe("buildSubagentList", () => {
     expect(list.recent).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "a killed parent with a provider failure",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      pendingChildren: 1,
+      expectedStatus: "killed (waiting on 1 child)",
+    },
+    {
+      name: "a killed parent with an earlier successful provider outcome",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "killed (waiting on 2 children)",
+    },
+    {
+      name: "a failed parent",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      pendingChildren: 1,
+      expectedStatus: "failed (waiting on 1 child)",
+    },
+    {
+      name: "a timed-out parent",
+      outcome: { status: "timeout" } as const,
+      pendingChildren: 2,
+      expectedStatus: "timeout (waiting on 2 children)",
+    },
+    {
+      name: "a successfully completed parent",
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "active (waiting on 2 children)",
+    },
+    {
+      name: "a still-running parent",
+      ended: false,
+      pendingChildren: 1,
+      expectedStatus: "active (waiting on 1 child)",
+    },
+  ])(
+    "preserves the status of $name while descendants remain pending",
+    ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
+      const now = Date.now();
+      const parentRun = {
+        runId: `run-parent-${expectedStatus.replaceAll(" ", "-")}`,
+        childSessionKey: `agent:main:subagent:parent-${expectedStatus.replaceAll(" ", "-")}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "orchestrate child workers",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        startedAt: now - 120_000,
+        ...(ended === false ? {} : { endedAt: now - 60_000 }),
+        ...(endedReason ? { endedReason } : {}),
+        ...(outcome ? { outcome } : {}),
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(parentRun);
+      for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
+        addSubagentRunForTests({
+          runId: `${parentRun.runId}-child-${childIndex}`,
+          childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
+          requesterSessionKey: parentRun.childSessionKey,
+          requesterDisplayKey: "subagent:parent",
+          task: "child worker still running",
+          cleanup: "keep",
+          createdAt: now - 30_000,
+          startedAt: now - 30_000,
+        });
+      }
+
+      const list = buildSubagentList({
+        cfg: {} as OpenClawConfig,
+        runs: [parentRun],
+        recentMinutes: 30,
+      });
+
+      expect(list.active).toHaveLength(1);
+      expect(list.active[0]).toMatchObject({
+        runId: parentRun.runId,
+        status: expectedStatus,
+        pendingDescendants: pendingChildren,
+      });
+      expect(list.active[0]?.line).toContain(` ${expectedStatus}`);
+      expect(list.active[0]?.childSessions).toHaveLength(pendingChildren);
+      expect(list.recent).toStrictEqual([]);
+    },
+  );
+
   it("omits old ended descendants from child session summaries", () => {
     const now = Date.now();
     const parentRun = {

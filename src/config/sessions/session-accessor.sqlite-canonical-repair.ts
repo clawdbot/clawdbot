@@ -140,31 +140,64 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepair(
   canonicalKey: string,
   previousKeys: readonly string[],
 ): void {
-  const ownedKeys = new Set([canonicalKey, ...previousKeys]);
-  const db = getSessionKysely(database.db);
-  const competingIdentities = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("session_nodes").select("session_key"),
-    ).rows.flatMap((row) =>
-      ownedKeys.has(row.session_key) ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
-    ),
-  );
-  const aliases = resolveSqliteCanonicalRepairLookupKeys(canonicalKey, previousKeys).filter(
-    (key) =>
-      key !== canonicalKey &&
-      (ownedKeys.has(key) || !competingIdentities.has(normalizeStoreSessionKey(key.trim()))),
-  );
-  if (aliases.length === 0) {
+  rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(database, [
+    { canonicalKey, previousKeys },
+  ]);
+}
+
+/** Doctor-only batched delivery rewrite with one session identity inventory per database. */
+export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
+  database: OpenClawAgentDatabase,
+  repairs: readonly { canonicalKey: string; previousKeys: readonly string[] }[],
+): void {
+  if (repairs.length === 0) {
     return;
   }
-  executeSqliteQuerySync(
+  const db = getSessionKysely(database.db);
+  const storedSessionKeys = executeSqliteQuerySync(
     database.db,
-    db
-      .updateTable("conversation_deliveries")
-      .set({ source_session_key: canonicalKey })
-      .where("source_session_key", "in", aliases),
-  );
+    db.selectFrom("session_nodes").select("session_key"),
+  ).rows.map((row) => row.session_key);
+  const storedSessionKeySet = new Set(storedSessionKeys);
+  const identityCounts = new Map<string, number>();
+  for (const sessionKey of storedSessionKeys) {
+    const identity = normalizeStoreSessionKey(sessionKey.trim());
+    identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
+  }
+  for (const repair of repairs) {
+    const ownedKeys = new Set([repair.canonicalKey, ...repair.previousKeys]);
+    const ownedIdentityCounts = new Map<string, number>();
+    for (const sessionKey of ownedKeys) {
+      if (!storedSessionKeySet.has(sessionKey)) {
+        continue;
+      }
+      const identity = normalizeStoreSessionKey(sessionKey.trim());
+      ownedIdentityCounts.set(identity, (ownedIdentityCounts.get(identity) ?? 0) + 1);
+    }
+    const aliases = resolveSqliteCanonicalRepairLookupKeys(
+      repair.canonicalKey,
+      repair.previousKeys,
+    ).filter((key) => {
+      if (key === repair.canonicalKey) {
+        return false;
+      }
+      if (ownedKeys.has(key)) {
+        return true;
+      }
+      const identity = normalizeStoreSessionKey(key.trim());
+      return (identityCounts.get(identity) ?? 0) <= (ownedIdentityCounts.get(identity) ?? 0);
+    });
+    if (aliases.length === 0) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("conversation_deliveries")
+        .set({ source_session_key: repair.canonicalKey })
+        .where("source_session_key", "in", aliases),
+    );
+  }
 }
 
 type CanonicalRepairRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]> & {

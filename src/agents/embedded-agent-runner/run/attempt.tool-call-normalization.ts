@@ -14,6 +14,7 @@ import {
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
+import { findCodeRegions } from "../../../shared/text/code-regions.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -901,6 +902,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       matcher,
       message: params.message,
       preserveEmptyTextBlocks: params.preserveEmptyTextBlocks,
+      resolveProtectedRanges: findCodeRegions,
       requireAssistantRole: true,
     });
     if (scrubbed) {
@@ -936,6 +938,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       isRetainableNonTextBlock: isRetainableNonVisibleBlock,
       message: params.message,
       requireAssistantRole: true,
+      resolveProtectedRanges: findCodeRegions,
       resolveToolName: resolveExactAllowedToolName,
     });
     return promoted ? { kind: "promoted", ...promoted } : undefined;
@@ -965,6 +968,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
       matcher,
       normalizeTerminalMessage,
+      resolveProtectedRanges: findCodeRegions,
     });
   };
 

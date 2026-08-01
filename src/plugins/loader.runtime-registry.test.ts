@@ -16,7 +16,7 @@ import {
 } from "./loader.js";
 import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
-  getMemoryEmbeddingProvider,
+  getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getMemoryEmbeddingProvider(providerId);
+  const provider = getRegisteredMemoryEmbeddingProvider(providerId)?.adapter;
   if (!provider) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }

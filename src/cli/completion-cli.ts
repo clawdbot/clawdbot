@@ -26,6 +26,7 @@ import {
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis-core.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   if (shell === "zsh") {
@@ -304,9 +305,7 @@ function generateZshArgs(cmd: Command): string {
       const name = preferredCompletionFlag(opt);
       const alternate = flags.find((flag) => flag !== name);
       const desc = escapeZshDoubleQuotedDescription(opt.description);
-      const choices = opt.argChoices
-        ?.map((choice) => escapeZshDoubleQuotedDescription(`'${choice.replaceAll("'", "'\\''")}'`))
-        .join(" ");
+      const choices = opt.argChoices?.map(escapeZshCompletionChoice).join(" ");
       const argument =
         opt.required || opt.optional
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
@@ -317,6 +316,11 @@ function generateZshArgs(cmd: Command): string {
       return `"${name}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
+}
+
+function escapeZshCompletionChoice(choice: string): string {
+  // `_arguments` parses this list after zsh parses the surrounding double-quoted spec.
+  return escapeZshDoubleQuotedDescription(choice.replace(/([\\\s:()[\]{}*?!|&;<>"'$`])/g, "\\$1"));
 }
 
 function generateZshSubcmdList(cmd: Command): string {
@@ -431,7 +435,7 @@ ${commandPathUpdate}
     choice_flag="\${COMP_WORDS[COMP_CWORD-1]}"
     choice_prefix="\${cur}"
     choice_completion_prefix=""
-    if [[ "\${cur}" == --*=* ]]; then
+    if [[ "\${cur}" == -*=* ]]; then
         choice_flag="\${cur%%=*}"
         choice_prefix="\${cur#*=}"
         choice_completion_prefix="\${choice_flag}="
@@ -450,7 +454,7 @@ ${commandPathUpdate}
             fi
         done
     fi
-    if [[ "\${cur}" == -??* && "\${cur}" != --* ]]; then
+    if [[ "\${cur}" == -??* && "\${cur}" != --* && "\${cur}" != *=* ]]; then
         short_group="\${cur#-}"
         for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
             short_flag="-\${short_group:short_index:1}"
@@ -464,7 +468,7 @@ ${commandPathUpdate}
     fi
 
 ${choiceCompletion}
-    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+    COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
 }
 
 complete -F _${rootCmd}_completion ${rootCmd}
@@ -479,21 +483,19 @@ function generateBashOptionChoiceCompletion(contexts: ShellCompletionContext[]):
       const optionCases = valueChoices
         .map(({ flags, choices, requiresValue }) => {
           const optionFlags = flags.map((flag) => `"${flag}"`).join("|");
-          const escapedChoices = choices
-            .map((choice) => `'${choice.replaceAll("'", "'\\''")}'`)
-            .join(" ");
-          const shouldComplete = requiresValue
+          const escapedChoices = choices.map(quoteCliArg).join(" ");
+          const shouldReturn = requiresValue
             ? "true"
-            : `[[ -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
+            : `[[ \${#COMPREPLY[@]} -gt 0 || -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
           return `            ${optionFlags})
-                if ${shouldComplete}; then
-                    local -a choice_values=(${escapedChoices})
-                    local choice
-                    for choice in "\${choice_values[@]}"; do
-                        if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
-                            COMPREPLY+=("\${choice_completion_prefix}\${choice}")
-                        fi
-                    done
+                local -a choice_values=(${escapedChoices})
+                local choice
+                for choice in "\${choice_values[@]}"; do
+                    if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
+                        COMPREPLY+=("\${choice_completion_prefix}\${choice}")
+                    fi
+                done
+                if ${shouldReturn}; then
                     return
                 fi
                 ;;`;
@@ -596,16 +598,22 @@ ${commandPathCases}
               flags,
               choices,
               requiresValue,
-            }) => `        if ($choiceFlag -in ${formatPowerShellArray(flags)} -and (${requiresValue ? "$true" : "$choiceCompletionPrefix -ne '' -or $choicePrefix -notlike '-*'"})) {
-            $escapedChoicePrefix = [WildcardPattern]::Escape($choicePrefix)
-            ${formatPowerShellArray(choices)} | Where-Object { $_ -like "$escapedChoicePrefix*" } | ForEach-Object {
-                $completionText = "$choiceCompletionPrefix$_"
-                if ($completionText -notmatch '^[\\p{L}\\p{N}_./:=+-]+$') {
-                    $completionText = "'" + $completionText.Replace("'", "''") + "'"
+            }) => `        if ($choiceFlag -in ${formatPowerShellArray(flags)}) {
+            $matchingChoices = @(${formatPowerShellArray(choices)} | Where-Object {
+                $_.StartsWith($choicePrefix, [StringComparison]::OrdinalIgnoreCase)
+            })
+            $matchingChoices | ForEach-Object {
+                $choiceValue = if ($_ -match '^[A-Za-z0-9_./:+-]+$') {
+                    $_
+                } else {
+                    "'" + $_.Replace("'", "''") + "'"
                 }
+                $completionText = "$choiceCompletionPrefix$choiceValue"
                 [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
             }
-            return
+            if (${requiresValue ? "$true" : "$matchingChoices.Count -gt 0 -or $choiceCompletionPrefix -ne '' -or $choicePrefix -notlike '-*'"}) {
+                return
+            }
         }`,
           )
           .join("\n");
