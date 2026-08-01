@@ -170,7 +170,8 @@ export default definePluginEntry({
 
 Wraps `definePluginEntry` with channel-specific wiring: it automatically
 calls `api.registerChannel({ plugin })`, exposes an optional root-help CLI
-metadata seam, and gates `registerFull` on registration mode.
+metadata seam, and gates capability and full-runtime callbacks on registration
+mode.
 
 ```typescript
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
@@ -187,19 +188,23 @@ export default defineChannelPluginEntry({
   registerFull(api) {
     api.registerGatewayMethod(/* ... */);
   },
+  registerCapabilities(api) {
+    api.registerTranscriptSourceProvider(/* ... */);
+  },
 });
 ```
 
-| Field                 | Type                                                             | Required | Default             |
-| --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                  | `string`                                                         | Yes      | -                   |
-| `name`                | `string`                                                         | Yes      | -                   |
-| `description`         | `string`                                                         | Yes      | -                   |
-| `plugin`              | `ChannelPlugin`                                                  | Yes      | -                   |
-| `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | -                   |
-| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
-| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| Field                  | Type                                                             | Required | Default             |
+| ---------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`                   | `string`                                                         | Yes      | -                   |
+| `name`                 | `string`                                                         | Yes      | -                   |
+| `description`          | `string`                                                         | Yes      | -                   |
+| `plugin`               | `ChannelPlugin`                                                  | Yes      | -                   |
+| `configSchema`         | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `setRuntime`           | `(runtime: PluginRuntime) => void`                               | No       | -                   |
+| `registerCliMetadata`  | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerFull`         | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerCapabilities` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
 
 Callbacks run per registration mode (full table under
 [Registration mode](#registration-mode)):
@@ -214,10 +219,13 @@ Callbacks run per registration mode (full table under
   plugin loads.
 - `registerFull` runs only for `"full"` and `"tool-discovery"`. For
   `"tool-discovery"` it runs _instead of_ channel registration: OpenClaw
-  skips `registerChannel`/`setRuntime` entirely and calls only
-  `registerFull`, so any provider/tool registration your channel needs for
-  standalone tool discovery or execution must live there, not behind normal
-  channel setup.
+  skips `registerChannel`/`setRuntime` entirely and calls the full-runtime
+  callback followed by the capability callback. Keep tool registration in
+  `registerFull` and capability providers in `registerCapabilities`.
+- `registerCapabilities` runs for `"discovery"`, `"full"`, and
+  `"tool-discovery"`. Register inert advertised providers here so read-only
+  capability discovery can find them without starting sockets, clients,
+  workers, or services.
 - Discovery registration is non-activating, not import-free: OpenClaw may
   evaluate the trusted plugin entry and channel plugin module to build the
   snapshot. Keep top-level imports side-effect-free and put sockets,
@@ -327,14 +335,14 @@ full activation.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                        |
-| ------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                              |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration plus static CLI descriptors; entry code may load, but skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                                |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                               |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed before the full entry loads                               |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                                    |
+| Mode               | When                                               | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed before the full entry loads                       |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember

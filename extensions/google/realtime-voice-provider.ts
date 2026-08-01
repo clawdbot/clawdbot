@@ -468,6 +468,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private session: Session | null = null;
   private connected = false;
+  private setupCompleteReceived = false;
   private sessionConfigured = false;
   private intentionallyClosed = false;
   private pendingAudio: Buffer[] = [];
@@ -538,6 +539,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.intentionallyClosed = false;
     this.closeNotified = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
@@ -570,6 +572,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
               return;
             }
             this.connected = true;
+            this.maybeActivateSession();
           },
           onmessage: (message) => {
             if (this.connectionOwner !== attempt) {
@@ -596,6 +599,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             this.connectionOwner = undefined;
             this.cancelConnectAttempt(attempt);
             this.connected = false;
+            this.setupCompleteReceived = false;
             this.sessionConfigured = false;
             this.pendingFunctionNames.clear();
             this.session = null;
@@ -627,11 +631,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       this.session = session;
       this.hasConnectedSession = true;
+      this.maybeActivateSession();
     } catch (error) {
       if (this.connectionOwner === attempt) {
         this.connectionOwner = undefined;
         this.connected = false;
+        this.setupCompleteReceived = false;
         this.sessionConfigured = false;
+        const session = this.session;
+        this.session = null;
+        session?.close();
       }
       throw error;
     }
@@ -769,6 +778,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     );
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -851,6 +861,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleSetupComplete(): void {
+    this.setupCompleteReceived = true;
+    this.maybeActivateSession();
+  }
+
+  private maybeActivateSession(): void {
+    // The SDK delivers setupComplete before Live.connect() returns its Session.
+    // Readiness requires both facts or queued audio can be drained without a transport.
+    if (this.sessionConfigured || !this.connected || !this.setupCompleteReceived || !this.session) {
+      return;
+    }
     this.sessionConfigured = true;
     this.reconnectAttempts = 0;
     for (const chunk of this.pendingAudio.splice(0)) {
@@ -963,6 +983,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.terminalError = error;
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
