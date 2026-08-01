@@ -99,9 +99,18 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const chunks = processed.text
-      ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
-      : [];
+    const orderedMessages = processed.segments?.flatMap((segment) =>
+      segment.type === "flex"
+        ? [segment.message]
+        : runtime.channel.text
+            .chunkMarkdownText(segment.text, chunkLimit)
+            .map((text) => ({ type: "text" as const, text })),
+    );
+    const chunks = orderedMessages
+      ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
+      : processed.text
+        ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
+        : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const mediaOptions = {
@@ -179,15 +188,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         );
       }
 
-      for (const flexMsg of processed.flexMessages) {
-        const flexContents = flexMsg.contents;
-        await recordResult(
-          sendFlex(to, flexMsg.altText, flexContents, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+      if (!orderedMessages) {
+        for (const flexMsg of processed.flexMessages) {
+          await recordResult(
+            sendFlex(to, flexMsg.altText, flexMsg.contents, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        }
       }
     }
 
@@ -196,7 +206,40 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (chunks.length > 0) {
+    if (orderedMessages) {
+      for (const [index, message] of orderedMessages.entries()) {
+        const isLast = index === orderedMessages.length - 1;
+        if (message.type === "flex") {
+          if (isLast && quickReply) {
+            await sendMessageBatch([{ ...message, quickReply }]);
+          } else {
+            await recordResult(
+              sendFlex(to, message.altText, message.contents, {
+                verbose: false,
+                cfg,
+                accountId: accountId ?? undefined,
+              }),
+            );
+          }
+        } else if (isLast && hasQuickReplies) {
+          await recordResult(
+            sendQuickReplies(to, message.text, quickReplies, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        } else {
+          await recordResult(
+            sendText(to, message.text, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        }
+      }
+    } else if (chunks.length > 0) {
       for (const [i, chunk] of chunks.entries()) {
         const isLast = i === chunks.length - 1;
         if (isLast && hasQuickReplies) {
