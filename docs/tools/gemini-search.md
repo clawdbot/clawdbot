@@ -41,7 +41,7 @@ citations.
           webSearch: {
             apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // optional; falls back to models.providers.google.baseUrl
-            model: "gemini-2.5-flash", // default
+            model: "gemini-flash-latest", // default
           },
         },
       },
@@ -94,7 +94,7 @@ query instead of a hard 24-hour range. `week`, `month`, `year`, and explicit
 
 ## Model selection
 
-The default model is `gemini-2.5-flash` (fast and cost-effective). Any Gemini
+The default model is `gemini-flash-latest` (fast and cost-effective). Any Gemini
 model that supports grounding can be used via
 `plugins.entries.google.config.webSearch.model`.
 

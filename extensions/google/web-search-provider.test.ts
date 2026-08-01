@@ -138,7 +138,7 @@ describe("google web search provider", () => {
     await tool?.execute({ query: "OpenClaw docs" });
 
     expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
+      "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-flash-latest:generateContent",
     );
   });
 
@@ -184,7 +184,7 @@ describe("google web search provider", () => {
 
     expect(result).toMatchObject({
       citations: [],
-      model: "gemini-2.5-flash",
+      model: "gemini-flash-latest",
       provider: "gemini",
     });
     expect(String(result?.content)).toContain("Today's date is Sunday, June 7, 2026.");
@@ -387,7 +387,7 @@ describe("google web search provider", () => {
     await tool?.execute({ query: "OpenClaw provider baseUrl fallback" });
 
     expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/provider/v1beta/models/gemini-2.5-flash:generateContent",
+      "https://generativelanguage.googleapis.com/provider/v1beta/models/gemini-flash-latest:generateContent",
     );
   });
 
@@ -422,7 +422,7 @@ describe("google web search provider", () => {
     await tool?.execute({ query: "OpenClaw plugin baseUrl precedence" });
 
     expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/plugin/v1beta/models/gemini-2.5-flash:generateContent",
+      "https://generativelanguage.googleapis.com/plugin/v1beta/models/gemini-flash-latest:generateContent",
     );
   });
 
