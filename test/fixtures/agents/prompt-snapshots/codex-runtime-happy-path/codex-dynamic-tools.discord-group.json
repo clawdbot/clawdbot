@@ -12,6 +12,7 @@
             "description": "Attachment mount hint; unavailable with visible=true.",
             "properties": {
               "mountPath": {
+                "maxLength": 1024,
                 "type": "string"
               }
             },
@@ -29,6 +30,7 @@
                   "type": "string"
                 },
                 "mimeType": {
+                  "maxLength": 256,
                   "type": "string"
                 },
                 "name": {
