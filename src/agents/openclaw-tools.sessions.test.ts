@@ -39,7 +39,11 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import {
+  isSessionsSendTargetBlockedForActiveRun,
+  retainSessionsSendTargetBlockForActiveRun,
+  setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
@@ -1639,9 +1643,14 @@ describe("sessions tools", () => {
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
       waitForTranscriptCommit: true,
-      sessionsSendCallerSessionKey: requesterKey,
       sourceReplyDeliveryMode: "message_tool_only",
     });
+    expect(
+      isSessionsSendTargetBlockedForActiveRun({
+        sessionId: "caller-active-session",
+        targetSessionKey: requesterKey,
+      }),
+    ).toBe(false);
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
@@ -1654,11 +1663,15 @@ describe("sessions tools", () => {
         queueMessage: async () => {},
         isStreaming: () => true,
         isCompacting: () => false,
-        blockedSessionsSendTargetSessionKeys: new Set([requesterKey]),
         abort: () => {},
       },
       targetKey,
     );
+    const releaseTargetBlock = retainSessionsSendTargetBlockForActiveRun({
+      sessionId: "target-active-session",
+      targetSessionKey: requesterKey,
+    });
+    expect(releaseTargetBlock).toBeTypeOf("function");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -1698,6 +1711,13 @@ describe("sessions tools", () => {
         ([request]) => (request as { method?: string }).method === "agent",
       ),
     ).toHaveLength(0);
+    releaseTargetBlock?.();
+    expect(
+      isSessionsSendTargetBlockedForActiveRun({
+        sessionId: "target-active-session",
+        targetSessionKey: requesterKey,
+      }),
+    ).toBe(false);
   });
 
   it("sessions_send reports source reply delivery mode mismatch without durable-session fallback", async () => {
@@ -2007,9 +2027,14 @@ describe("sessions tools", () => {
       steeringMode: "all",
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
-      sessionsSendCallerSessionKey: "agent:re-portal:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
+    expect(
+      isSessionsSendTargetBlockedForActiveRun({
+        sessionId: "caller-active-session",
+        targetSessionKey: "agent:re-portal:main",
+      }),
+    ).toBe(true);
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 

@@ -47,6 +47,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   isSessionsSendTargetBlockedForActiveRun,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  retainSessionsSendTargetBlockForActiveRun,
   resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -370,28 +371,38 @@ async function startAgentRun(params: {
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
-        ...(params.sessionsSendCallerSessionKey
-          ? { sessionsSendCallerSessionKey: params.sessionsSendCallerSessionKey }
-          : {}),
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
-      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
-        const bestEffortQueueOptions = { ...queueOptions };
-        delete bestEffortQueueOptions.waitForTranscriptCommit;
+      const releaseTargetBlock = params.sessionsSendCallerSessionKey
+        ? retainSessionsSendTargetBlockForActiveRun({
+            sessionId: activeRunSessionId,
+            targetSessionKey: params.sessionsSendCallerSessionKey,
+          })
+        : undefined;
+      let queueOutcome: EmbeddedAgentQueueMessageOutcome;
+      try {
         queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
           activeRunSessionId,
           messageText,
-          bestEffortQueueOptions,
+          queueOptions,
         );
+        if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+          const bestEffortQueueOptions = { ...queueOptions };
+          delete bestEffortQueueOptions.waitForTranscriptCommit;
+          queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            bestEffortQueueOptions,
+          );
+        }
+      } catch (error) {
+        releaseTargetBlock?.();
+        throw error;
       }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
+      releaseTargetBlock?.();
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
         const response = await params.callGateway<{ runId: string }>({

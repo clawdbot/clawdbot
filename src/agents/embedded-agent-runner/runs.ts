@@ -51,6 +51,7 @@ import {
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
+  SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER,
   setActiveEmbeddedRunLifecycleGeneration,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
@@ -139,11 +140,43 @@ export function isSessionsSendTargetBlockedForActiveRun(params: {
   if (!sessionId || !targetSessionKey) {
     return false;
   }
-  return (
-    ACTIVE_EMBEDDED_RUNS.get(sessionId)?.blockedSessionsSendTargetSessionKeys?.has(
-      targetSessionKey,
-    ) === true
+  const owner =
+    ACTIVE_EMBEDDED_RUNS.get(sessionId) ?? resolveActiveReplyOperationForSessionId(sessionId);
+  return Boolean(
+    owner && SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner)?.get(targetSessionKey),
   );
+}
+
+export function retainSessionsSendTargetBlockForActiveRun(params: {
+  sessionId: string;
+  targetSessionKey: string;
+}): (() => void) | undefined {
+  const sessionId = params.sessionId.trim();
+  const targetSessionKey = params.targetSessionKey.trim();
+  if (!sessionId || !targetSessionKey) {
+    return undefined;
+  }
+  const owner =
+    ACTIVE_EMBEDDED_RUNS.get(sessionId) ?? resolveActiveReplyOperationForSessionId(sessionId);
+  if (!owner) {
+    return undefined;
+  }
+  const targetBlocks = SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner) ?? new Map();
+  targetBlocks.set(targetSessionKey, (targetBlocks.get(targetSessionKey) ?? 0) + 1);
+  SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.set(owner, targetBlocks);
+  let retained = true;
+  return () => {
+    if (!retained) {
+      return;
+    }
+    retained = false;
+    const currentCount = targetBlocks.get(targetSessionKey) ?? 0;
+    if (currentCount <= 1) {
+      targetBlocks.delete(targetSessionKey);
+      return;
+    }
+    targetBlocks.set(targetSessionKey, currentCount - 1);
+  };
 }
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
