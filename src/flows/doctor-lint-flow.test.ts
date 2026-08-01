@@ -2,6 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
+import {
+  clearHealthChecksForTest,
+  listHealthChecks,
+  registerHealthCheck,
+} from "./health-check-registry.js";
 import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
@@ -37,6 +42,87 @@ describe("runDoctorLintChecks", () => {
     expect(result.checksRun).toBe(1);
     expect(result.checksSkipped).toBe(1);
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
+  });
+
+  it.each(["array", "set"] as const)(
+    "reports conflicting selectors for a registered health check (%s)",
+    async (selectorShape) => {
+      const checkId = "plugin/example/critical";
+      let detections = 0;
+      const existingChecks = listHealthChecks();
+      registerHealthCheck(
+        check(checkId, async () => {
+          detections += 1;
+          return [{ checkId, severity: "error", message: "critical failure" }];
+        }),
+      );
+
+      try {
+        const selectors = selectorShape === "set" ? new Set([checkId]) : [checkId];
+        const result = await runDoctorLintChecks(ctx, {
+          onlyIds: selectors,
+          skipIds: selectors,
+        });
+
+        expect(detections).toBe(0);
+        expect(result.checksRun).toBe(0);
+        expect(result.checksSkipped).toBe(1);
+        expect(result.findings).toEqual([
+          {
+            checkId: "core/doctor/lint-selection",
+            severity: "error",
+            message: `Health check ${checkId} cannot be selected by --only and excluded by --skip.`,
+            path: checkId,
+          },
+        ]);
+        expect(exitCodeFromFindings(result.findings)).toBe(1);
+      } finally {
+        clearHealthChecksForTest();
+        for (const existingCheck of existingChecks) {
+          registerHealthCheck(existingCheck);
+        }
+      }
+    },
+  );
+
+  it("keeps non-conflicting selection and exclusion filters independent", async () => {
+    let selectedDetections = 0;
+    let skippedDetections = 0;
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("plugin/example/selected", async () => {
+          selectedDetections += 1;
+          return [];
+        }),
+        check("plugin/example/skipped", async () => {
+          skippedDetections += 1;
+          return [];
+        }),
+      ],
+      onlyIds: ["plugin/example/selected"],
+      skipIds: ["plugin/example/skipped"],
+    });
+
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 1 });
+    expect(selectedDetections).toBe(1);
+    expect(skippedDetections).toBe(0);
+  });
+
+  it("preserves forward-compatible skips for unregistered plugin checks", async () => {
+    let detections = 0;
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("plugin/example/available", async () => {
+          detections += 1;
+          return [];
+        }),
+      ],
+      skipIds: ["plugin/future/not-loaded"],
+    });
+
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
+    expect(detections).toBe(1);
+    expect(exitCodeFromFindings(result.findings)).toBe(0);
   });
 
   it("skips default-disabled checks unless explicitly selected", async () => {
