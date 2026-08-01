@@ -127,6 +127,7 @@ describe("telegramMessageActions", () => {
       {
         name: "configured telegram enables poll",
         cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
+        expectSend: true,
         expectPoll: true,
         expectTopicEdit: true,
       },
@@ -140,6 +141,7 @@ describe("telegramMessageActions", () => {
             },
           },
         } as OpenClawConfig,
+        expectSend: false,
         expectPoll: false,
         expectTopicEdit: true,
       },
@@ -153,6 +155,7 @@ describe("telegramMessageActions", () => {
             },
           },
         } as OpenClawConfig,
+        expectSend: true,
         expectPoll: false,
         expectTopicEdit: true,
       },
@@ -180,6 +183,29 @@ describe("telegramMessageActions", () => {
             },
           },
         } as OpenClawConfig,
+        expectSend: true,
+        expectPoll: false,
+        expectTopicEdit: true,
+      },
+      {
+        name: "all account send gates disabled hide send",
+        cfg: {
+          channels: {
+            telegram: {
+              accounts: {
+                first: {
+                  botToken: "tok-first",
+                  actions: { sendMessage: false },
+                },
+                second: {
+                  botToken: "tok-second",
+                  actions: { sendMessage: false },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectSend: false,
         expectPoll: false,
         expectTopicEdit: true,
       },
@@ -190,6 +216,11 @@ describe("telegramMessageActions", () => {
         telegramMessageActions.describeMessageTool?.({
           cfg: testCase.cfg,
         })?.actions ?? [];
+      if (testCase.expectSend) {
+        expect(actions, testCase.name).toContain("send");
+      } else {
+        expect(actions, testCase.name).not.toContain("send");
+      }
       if (testCase.expectPoll) {
         expect(actions, testCase.name).toContain("poll");
       } else {
@@ -267,6 +298,7 @@ describe("telegramMessageActions", () => {
             work: {
               botToken: "tok-work",
               actions: {
+                sendMessage: false,
                 reactions: true,
                 poll: false,
               },
@@ -287,8 +319,10 @@ describe("telegramMessageActions", () => {
         accountId: "work",
       })?.actions ?? [];
 
+    expect(defaultActions).toContain("send");
     expect(defaultActions).toContain("poll");
     expect(defaultActions).not.toContain("react");
+    expect(workActions).not.toContain("send");
     expect(workActions).toContain("react");
     expect(workActions).not.toContain("poll");
   });
