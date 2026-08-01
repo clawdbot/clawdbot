@@ -226,4 +226,29 @@ describe("azure speech tts", () => {
       },
     ]);
   });
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty audio", contentType: "audio/mpeg", body: "" },
+  ])("rejects a successful $name response as synthesized audio", async ({ contentType, body }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(body, { status: 200, headers: { "content-type": contentType } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      azureSpeechTTS({
+        text: "hello",
+        apiKey: "fixture-value",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
+  });
 });
