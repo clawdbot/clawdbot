@@ -14,6 +14,9 @@ export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
 const M_POLL_END = "m.poll.end" as const;
 
+// MSC3381 caps poll answers at 20 options.
+const MATRIX_POLL_MAX_OPTIONS = 20;
+
 const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
 const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
 const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
@@ -386,7 +389,13 @@ function buildPollFallbackText(question: string, answers: string[]): string {
 }
 
 export function buildPollStartContent(poll: PollInput): PollStartContent {
-  const normalized = normalizePollInput(poll);
+  // Truncate to the Matrix MSC3381 cap so existing callers with more
+  // than 20 options still produce a valid poll event instead of throwing.
+  const capped: PollInput =
+    poll.options && poll.options.length > MATRIX_POLL_MAX_OPTIONS
+      ? { ...poll, options: poll.options.slice(0, MATRIX_POLL_MAX_OPTIONS) }
+      : poll;
+  const normalized = normalizePollInput(capped);
   const answers = normalized.options.map((option, idx) => ({
     id: `answer${idx + 1}`,
     ...buildTextContent(option),

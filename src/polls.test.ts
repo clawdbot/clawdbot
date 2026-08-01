@@ -25,6 +25,12 @@ describe("polls", () => {
     ).toThrow(/at most 2/);
   });
 
+  it("does not limit options when maxOptions is omitted", () => {
+    const manyOptions = Array.from({ length: 50 }, (_, i) => `Option ${i + 1}`);
+    const result = normalizePollInput({ question: "Q", options: manyOptions });
+    expect(result.options).toHaveLength(50);
+  });
+
   it.each([
     { durationHours: undefined, expected: 24 },
     { durationHours: 999, expected: 48 },
