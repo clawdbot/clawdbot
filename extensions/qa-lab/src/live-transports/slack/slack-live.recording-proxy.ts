@@ -1,6 +1,9 @@
 // QA Lab Slack proxy records native stream task chunks that Slack history does not preserve.
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import type { Socket } from "node:net";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import type { SlackQaNativeTaskUpdate } from "./slack-live.contracts.js";
 
 const SLACK_QA_API_PATH_PREFIX = "/api/";
@@ -123,7 +126,6 @@ export async function startSlackQaRecordingProxy(
 ): Promise<SlackQaRecordingProxy> {
   const targetApiUrl = params.targetApiUrl ?? SLACK_QA_OFFICIAL_API_URL;
   const taskUpdates: SlackQaNativeTaskUpdate[] = [];
-  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     void (async () => {
       const requestUrl = request.url ?? "/";
@@ -147,32 +149,43 @@ export async function startSlackQaRecordingProxy(
           upstreamAbort.abort();
         }
       });
-      const upstream = await fetch(
-        new URL(method, targetApiUrl.endsWith("/") ? targetApiUrl : `${targetApiUrl}/`),
-        {
+      const targetUrl = new URL(
+        method,
+        targetApiUrl.endsWith("/") ? targetApiUrl : `${targetApiUrl}/`,
+      );
+      const { response: upstream, release } = await fetchWithSsrFGuard({
+        url: targetUrl.toString(),
+        init: {
           body: body.byteLength > 0 ? body : undefined,
           headers,
           method: request.method,
           redirect: "manual",
           signal: upstreamAbort.signal,
         },
-      );
-      const upstreamBody = Buffer.from(await upstream.arrayBuffer());
-      if (isSuccessfulSlackResponse(upstream, upstreamBody)) {
-        taskUpdates.push(...candidateTaskUpdates);
-      }
-      response.statusCode = upstream.status;
-      for (const [name, value] of upstream.headers) {
-        const normalized = name.toLowerCase();
-        if (
-          !HOP_BY_HOP_HEADERS.has(normalized) &&
-          normalized !== "content-encoding" &&
-          normalized !== "content-length"
-        ) {
-          response.setHeader(name, value);
+        policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(targetApiUrl),
+        maxRedirects: 0,
+        auditContext: "qa-lab-slack-recording-proxy",
+      });
+      try {
+        const upstreamBody = Buffer.from(await upstream.arrayBuffer());
+        if (isSuccessfulSlackResponse(upstream, upstreamBody)) {
+          taskUpdates.push(...candidateTaskUpdates);
         }
+        response.statusCode = upstream.status;
+        for (const [name, value] of upstream.headers) {
+          const normalized = name.toLowerCase();
+          if (
+            !HOP_BY_HOP_HEADERS.has(normalized) &&
+            normalized !== "content-encoding" &&
+            normalized !== "content-length"
+          ) {
+            response.setHeader(name, value);
+          }
+        }
+        response.end(upstreamBody);
+      } finally {
+        await release();
       }
-      response.end(upstreamBody);
     })().catch((error: unknown) => {
       if (response.destroyed) {
         return;
@@ -188,10 +201,6 @@ export async function startSlackQaRecordingProxy(
         }),
       );
     });
-  });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -214,9 +223,7 @@ export async function startSlackQaRecordingProxy(
         return;
       }
       stopped = true;
-      for (const socket of sockets) {
-        socket.destroy();
-      }
+      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

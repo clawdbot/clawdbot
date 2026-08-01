@@ -286,7 +286,7 @@ export async function createSlackQaTransportAdapter(
       sutIdentity,
       sutReadClient: sutClient,
       sutWriteClient,
-      readNativeTaskUpdates: recordingProxy.nativeTaskUpdates,
+      readNativeTaskUpdates: () => recordingProxy.nativeTaskUpdates(),
     }).prepareFlow,
     waitReady: async ({ gateway }) =>
       await waitForSlackChannelStable(gateway as never, accountId, "connected"),
