@@ -16,12 +16,12 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Notice for tail context that precedes the active user turn. */
+/** Notice for context carried across calls in the active user turn. */
 export const OPENCLAW_CURRENT_TURN_RUNTIME_CONTEXT_NOTICE =
-  "Do not reply to or describe this context. Use it to answer the active user message that follows. Do not wait for another message.";
-/** Header for context placed before the active user message. */
+  "Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
+/** Header for context carried across calls in the active user turn. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the active user message that follows.";
+  "OpenClaw runtime context for the active user request in this turn.";
 
 const LEGACY_CURRENT_TURN_RUNTIME_CONTEXT_HEADER =
   "OpenClaw runtime context for the immediately preceding user message.";
