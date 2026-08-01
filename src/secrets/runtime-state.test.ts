@@ -65,7 +65,7 @@ function preparedSnapshot(
 function preparedGatewayAuthSnapshot(
   agentDir: string,
   port: number,
-  store: AuthProfileStore,
+  store: PreparedSecretsRuntimeSnapshot["authStores"][number]["store"],
 ): PreparedSecretsRuntimeSnapshot {
   return preparedSnapshot({
     config: { gateway: { port } },
