@@ -489,6 +489,7 @@ function addSubagentRun(childSessionKey: string, overrides: Partial<SubagentRunR
     task: overrides.task ?? "delegated task",
     cleanup: overrides.cleanup ?? "keep",
     createdAt: overrides.createdAt ?? Date.now(),
+    execution: overrides.execution ?? { status: "running" },
     ...overrides,
   });
 }
@@ -647,7 +648,7 @@ describe("durable continuation_work dispatch", () => {
       const sessionKey = "agent:main:same-session";
       enqueueDelegateBusyFlow(sessionKey); // no parentRunId
       // Even a confident-terminal record for the key cannot reap — the gate fires first.
-      addSubagentRun(sessionKey, { endedAt: Date.now() - 1 });
+      addSubagentRun(sessionKey, { execution: { status: "terminal", endedAt: Date.now() - 1 } });
       const result = await dispatchPendingContinuationWork({ sessionKey });
       expect(result.reaped).toBe(0);
       const flow = flowFor(sessionKey);
@@ -658,7 +659,7 @@ describe("durable continuation_work dispatch", () => {
     it("delegate-flow + parent-CONFIDENT-terminal → reap", async () => {
       const sessionKey = "agent:main:child-terminal";
       enqueueDelegateBusyFlow(sessionKey, { parentRunId: "run-parent" });
-      addSubagentRun(sessionKey, { endedAt: Date.now() - 1 }); // explicit termination
+      addSubagentRun(sessionKey, { execution: { status: "terminal", endedAt: Date.now() - 1 } }); // explicit termination
       const result = await dispatchPendingContinuationWork({ sessionKey });
       expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 1 });
       const flow = flowFor(sessionKey);
@@ -731,7 +732,7 @@ describe("durable continuation_work dispatch", () => {
       // Parent dies AFTER the first classify. The next dispatch re-reads live.
       const record = subagentRuns.get(run);
       if (record) {
-        record.endedAt = REALISTIC_NOW;
+        record.execution = { ...record.execution, status: "terminal", endedAt: REALISTIC_NOW };
       }
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await dispatchPendingContinuationWork({ sessionKey });
@@ -749,7 +750,7 @@ describe("durable continuation_work dispatch", () => {
       resetContinuationWorkDispatchForTests();
       const record = subagentRuns.get(run);
       if (record) {
-        record.endedAt = REALISTIC_NOW; // parent dies between reads
+        record.execution = { ...record.execution, status: "terminal", endedAt: REALISTIC_NOW }; // parent dies between reads
       }
       await vi.advanceTimersByTimeAsync(60_000);
       const second = await dispatchPendingContinuationWork({ sessionKey });
@@ -852,7 +853,7 @@ describe("durable continuation_work dispatch", () => {
       const sessionKey = "agent:main:subagent:s952-ownturn";
       mockSessionStore[sessionKey] = { sessionKey };
       // The subagent's electing run has finished — confident-terminal in the registry.
-      addSubagentRun(sessionKey, { endedAt: Date.now() - 1 });
+      addSubagentRun(sessionKey, { execution: { status: "terminal", endedAt: Date.now() - 1 } });
       activeSessions.add(sessionKey); // own session still mid-turn → drive busy-skips
       enqueuePendingWork({
         sessionKey,

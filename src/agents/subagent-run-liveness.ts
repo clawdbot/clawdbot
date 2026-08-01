@@ -53,10 +53,7 @@ export function isStaleUnendedSubagentRun(
 }
 
 function isUnendedRunStalePastCutoff(
-  entry: Pick<
-    SubagentRunRecord,
-    "createdAt" | "startedAt" | "sessionStartedAt" | "runTimeoutSeconds"
-  >,
+  entry: SubagentRunLivenessRecord,
   now: number,
   defaultFloorMs: number,
 ): boolean {
@@ -97,12 +94,7 @@ function isUnendedRunStalePastCutoff(
 export type SubagentRunLiveness = "alive" | "confident-terminal" | "uncertain";
 
 export function classifySubagentRunLiveness(
-  entry:
-    | Pick<
-        SubagentRunRecord,
-        "createdAt" | "startedAt" | "sessionStartedAt" | "endedAt" | "runTimeoutSeconds"
-      >
-    | undefined,
+  entry: SubagentRunLivenessRecord | undefined,
   options: { now?: number; staleCutoffMs?: number } = {},
 ): SubagentRunLiveness {
   if (!entry) {

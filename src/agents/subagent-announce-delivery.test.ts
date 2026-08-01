@@ -294,7 +294,6 @@ async function deliverDiscordDirectMessageCompletion(params: {
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
   signal?: AbortSignal;
-  durableGeneratedMediaHandoff?: boolean;
   continuationTriggerOverride?: "work-wake" | "delegate-return" | "subagent-return";
   traceparent?: string;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
@@ -333,7 +332,6 @@ async function deliverDiscordDirectMessageCompletion(params: {
     internalEvents: params.internalEvents,
     sourceTool: params.sourceTool,
     signal: params.signal,
-    durableGeneratedMediaHandoff: params.durableGeneratedMediaHandoff,
     continuationTriggerOverride: params.continuationTriggerOverride,
     traceparent: params.traceparent,
     onDeliveryResult: params.onDeliveryResult,

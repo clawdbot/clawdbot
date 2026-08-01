@@ -139,18 +139,21 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
 
   it("treats an explicitly-ended run as confident-terminal", () => {
     expect(
-      classifySubagentRunLiveness({ createdAt: now - 60_000, endedAt: now - 1 }, { now }),
+      classifySubagentRunLiveness(
+        { createdAt: now - 60_000, execution: { endedAt: now - 1 } },
+        { now },
+      ),
     ).toBe("confident-terminal");
   });
 
   it("treats a fresh unended run as alive", () => {
-    expect(classifySubagentRunLiveness({ createdAt: now - 60_000 }, { now })).toBe("alive");
+    expect(classifySubagentRunLiveness({ createdAt: now - 60_000, execution: {} }, { now })).toBe("alive");
   });
 
   it("treats an unended run inside the stale window as alive (racy → quiesce)", () => {
     expect(
       classifySubagentRunLiveness(
-        { createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS + 60_000 },
+        { createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS + 60_000, execution: {} },
         { now },
       ),
     ).toBe("alive");
@@ -158,12 +161,15 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
 
   it("treats an unended run past the stale cutoff as confident-terminal", () => {
     expect(
-      classifySubagentRunLiveness({ createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1 }, { now }),
+      classifySubagentRunLiveness(
+        { createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1, execution: {} },
+        { now },
+      ),
     ).toBe("confident-terminal");
   });
 
   it("honors a tunable staleCutoffMs floor (reap sooner)", () => {
-    const entry = { createdAt: now - 31 * 60 * 1_000 };
+    const entry = { createdAt: now - 31 * 60 * 1_000, execution: {} };
     // Default 2h floor → still alive.
     expect(classifySubagentRunLiveness(entry, { now })).toBe("alive");
     // 30m operator floor → confident-terminal.
@@ -173,7 +179,7 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
   });
 
   it("never reaps before a run's explicit timeout even with a small staleCutoffMs", () => {
-    const entry = { createdAt: now - 31 * 60 * 1_000, runTimeoutSeconds: 6 * 60 * 60 };
+    const entry = { createdAt: now - 31 * 60 * 1_000, runTimeoutSeconds: 6 * 60 * 60, execution: {} };
     // A 6h run timeout dominates a 30m operator floor: per-run cutoff is respected.
     expect(classifySubagentRunLiveness(entry, { now, staleCutoffMs: 30 * 60 * 1_000 })).toBe(
       "alive",
@@ -181,6 +187,6 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
   });
 
   it("ignores non-real fixture timestamps (cannot age them out → alive)", () => {
-    expect(classifySubagentRunLiveness({ createdAt: 100 }, { now })).toBe("alive");
+    expect(classifySubagentRunLiveness({ createdAt: 100, execution: {} }, { now })).toBe("alive");
   });
 });

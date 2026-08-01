@@ -499,6 +499,7 @@ function addSubagentRun(childSessionKey: string, overrides: Partial<SubagentRunR
     task: overrides.task ?? "delegated task",
     cleanup: overrides.cleanup ?? "keep",
     createdAt: overrides.createdAt ?? Date.now(),
+    execution: overrides.execution ?? { status: "running" },
     ...overrides,
   });
 }

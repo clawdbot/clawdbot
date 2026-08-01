@@ -19,6 +19,7 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -417,7 +418,7 @@ describe("subagent registry persistence", () => {
 
     saveSubagentRegistryToSqlite(
       canonicalSubagentRunFixtures(
-        new Map(Object.entries(persisted.runs as Record<string, SubagentRunRecord>)),
+        new Map(Object.entries(persisted.runs as Record<string, SubagentRunFixture>)),
       ),
     );
 
@@ -478,7 +479,7 @@ describe("subagent registry persistence", () => {
       runId: "run-active",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBeUndefined();
+    expect(resolved?.execution.endedAt).toBeUndefined();
   });
 
   it("can resolve the newest child-session row even when an older stale row is still active", async () => {
@@ -524,7 +525,7 @@ describe("subagent registry persistence", () => {
       runId: "run-current-ended",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBe(220);
+    expect(resolved?.execution.endedAt).toBe(220);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {

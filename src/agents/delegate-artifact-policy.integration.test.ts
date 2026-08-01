@@ -56,7 +56,7 @@ function runRecord(params: {
     task: "tree",
     cleanup: "keep",
     createdAt: params.createdAt,
-    startedAt: params.createdAt,
+    execution: { status: "running", startedAt: params.createdAt },
   };
 }
 

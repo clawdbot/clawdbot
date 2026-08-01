@@ -252,7 +252,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
             childSessionKey: entry.childSessionKey,
             requesterSessionKey: entry.requesterSessionKey,
             task: entry.task,
-            endedAt: entry.endedAt,
+            endedAt: entry.execution.endedAt,
             cleanupCompletedAt: entry.cleanupCompletedAt,
           })),
           childRuns: listSubagentRunsForRequester(hop1ChildSessionKey).map((entry) => ({
