@@ -50,6 +50,7 @@ import {
 } from "./short-term-promotion-types.js";
 import {
   isContaminatedDreamingSnippet,
+  isShortTermSessionCorpusPath,
   normalizeSnippet,
   toFiniteNonNegativeInt,
   toFiniteScore,
@@ -298,7 +299,9 @@ export async function applyShortTermPromotions(
       if (options.consolidation && (!latest || !isConsolidationCandidateEligible(candidate))) {
         return false;
       }
-      if (isContaminatedDreamingSnippet(candidate.snippet)) {
+      if (isContaminatedDreamingSnippet(candidate.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(candidate.path),
+      })) {
         return false;
       }
       if (candidate.promotedAt) {
@@ -337,7 +340,9 @@ export async function applyShortTermPromotions(
     if (
       sourceFingerprintBefore === sourceFingerprintAfter &&
       rehydrated &&
-      !isContaminatedDreamingSnippet(rehydrated.snippet)
+      !isContaminatedDreamingSnippet(rehydrated.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(rehydrated.path),
+      })
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
@@ -426,7 +431,9 @@ export async function applyShortTermPromotions(
           if (
             wasDirectCandidate &&
             sourceUnchanged &&
-            !isContaminatedDreamingSnippet(candidate.snippet)
+            !isContaminatedDreamingSnippet(candidate.snippet, {
+              allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(candidate.path),
+            })
           ) {
             authoritativeSelected.push(candidate);
           }
@@ -447,7 +454,9 @@ export async function applyShortTermPromotions(
         if (options.consolidation && !isConsolidationCandidateEligible(currentCandidate)) {
           continue;
         }
-        if (!isContaminatedDreamingSnippet(currentCandidate.snippet)) {
+        if (!isContaminatedDreamingSnippet(currentCandidate.snippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(currentCandidate.path),
+        })) {
           authoritativeSelected.push(currentCandidate);
         }
       }
