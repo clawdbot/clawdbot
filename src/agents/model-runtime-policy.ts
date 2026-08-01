@@ -74,7 +74,9 @@ function normalizeModelIdForProvider(
   const modelProvider = normalizeProviderId(trimmed.slice(0, slash));
   const expectedProvider = normalizeProviderId(provider ?? "");
   if (expectedProvider && modelProvider !== expectedProvider) {
-    return undefined;
+    // Provider-owned model ids may contain a different provider's name. Only
+    // remove a model-ref prefix when it belongs to the selected provider.
+    return trimmed;
   }
   return trimmed.slice(slash + 1).trim() || undefined;
 }

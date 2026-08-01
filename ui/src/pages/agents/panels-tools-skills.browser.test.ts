@@ -12,7 +12,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     agentId: "main",
     configForm: {
       agents: {
-        list: [{ id: "main", tools: { profile: "full" } }],
+        entries: { main: { default: true, tools: { profile: "full" } } },
       },
     } as Record<string, unknown>,
     configLoading: false,
@@ -483,7 +483,7 @@ describe("agents skills panel (browser)", () => {
         loading: false,
         error: null,
         activeAgentId: "main",
-        configForm: { agents: { list: [{ id: "main" }] } },
+        configForm: { agents: { entries: { main: { default: true } } } },
         configLoading: false,
         configSaving: false,
         configDirty: false,

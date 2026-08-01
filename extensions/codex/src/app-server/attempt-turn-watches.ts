@@ -44,7 +44,11 @@ export function createCodexAttemptTurnWatchController(params: {
   turnAttemptIdleTimeoutMs: number;
   turnTerminalIdleTimeoutMs: number;
   interruptTimeoutMs: number;
-  onInterruptTurn: (input: { threadId: string; turnId: string; timeoutMs: number }) => void;
+  onInterruptTurn: (input: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+  }) => Promise<boolean>;
   onTimeout: (timeout: CodexAttemptTurnWatchTimeout) => void;
   onMarkTimedOut: () => void;
   onAbort: (reason: string) => void;
@@ -264,11 +268,17 @@ export function createCodexAttemptTurnWatchController(params: {
       },
     );
     if (turnId) {
-      params.onInterruptTurn({
-        threadId: params.threadId,
-        turnId,
-        timeoutMs: interruptTimeoutMs,
-      });
+      void params
+        .onInterruptTurn({
+          threadId: params.threadId,
+          turnId,
+          timeoutMs: interruptTimeoutMs,
+        })
+        .finally(() => {
+          params.onCompleted();
+          params.onResolveCompletion();
+        });
+      return;
     }
     params.onCompleted();
     params.onResolveCompletion();

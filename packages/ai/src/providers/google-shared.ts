@@ -31,6 +31,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -172,7 +173,6 @@ export function convertMessages<T extends GoogleApiType>(
   };
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
-
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
   // live inside functionResponse, so hold them until the consecutive result run ends.
   const pendingToolResultImageTurns: Content[] = [];
@@ -191,12 +191,12 @@ export function convertMessages<T extends GoogleApiType>(
       if (typeof msg.content === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeSurrogates(msg.content) }],
+          parts: [{ text: sanitizeSurrogates(msg.content) || " " }],
         });
       } else {
         const parts: Part[] = msg.content.map((item) => {
           if (item.type === "text") {
-            return { text: sanitizeSurrogates(item.text) };
+            return { text: sanitizeSurrogates(item.text) || " " };
           }
           return {
             inlineData: {
@@ -206,7 +206,7 @@ export function convertMessages<T extends GoogleApiType>(
           };
         });
         if (parts.length === 0) {
-          continue;
+          parts.push({ text: " " });
         }
         contents.push({
           role: "user",
@@ -255,10 +255,12 @@ export function convertMessages<T extends GoogleApiType>(
             });
           }
         } else if (block.type === "toolCall") {
-          const thoughtSignature = resolveThoughtSignature(
-            isSameProviderAndModel,
-            block.thoughtSignature,
-          );
+          const thoughtSignature =
+            resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature) ??
+            (model.provider !== "google-gemini-cli" &&
+            (isGemini3ProModel(model) || isGemini3FlashModel(model))
+              ? "skip_thought_signature_validator"
+              : undefined);
           const part: Part = {
             functionCall: {
               name: block.name,
@@ -336,62 +338,28 @@ export function convertMessages<T extends GoogleApiType>(
   }
 
   flushToolResultRun();
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: " " }] });
+  }
   return contents;
-}
-
-const JSON_SCHEMA_META_DECLARATIONS = new Set([
-  "$schema",
-  "$id",
-  "$anchor",
-  "$dynamicAnchor",
-  "$vocabulary",
-  "$comment",
-  "$defs",
-  "definitions", // pre-draft-2019-09 equivalent of $defs
-]);
-
-/**
- * Strip meta-declarations from a schema obj
- */
-function sanitizeForOpenApi(schema: unknown): unknown {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
-    return schema;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (JSON_SCHEMA_META_DECLARATIONS.has(key)) {
-      continue;
-    }
-    result[key] = sanitizeForOpenApi(value);
-  }
-  return result;
 }
 
 /**
  * Convert tools to Gemini function declarations format.
- *
- * By default uses `parametersJsonSchema` which supports full JSON Schema (including
- * anyOf, oneOf, const, etc.). Set `useParameters` to true to use the legacy `parameters`
- * field instead (OpenAPI 3.03 Schema). This is needed for Cloud Code Assist with Claude
- * models, where the API translates `parameters` into Anthropic's `input_schema`.
  * @internal Directly tested provider implementation detail.
  */
 export function convertTools(
   tools: Tool[],
-  useParameters = false,
 ): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
   if (tools.length === 0) {
     return undefined;
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
-        ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
+        parametersJsonSchema: tool.parameters,
       })),
     },
   ];
@@ -481,9 +449,6 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   model: Model<T>,
   context: Context,
   options: GoogleProviderOptions = {},
-  configHooks?: {
-    getDisabledThinkingConfig?: (model: Model<T>) => ThinkingConfig;
-  },
 ): GenerateContentParameters {
   const contents = convertMessages(model, context);
 
@@ -525,9 +490,10 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     }
     config.thinkingConfig = thinkingConfig;
   } else if (model.reasoning && options.thinking && !options.thinking.enabled) {
-    config.thinkingConfig = configHooks?.getDisabledThinkingConfig
-      ? configHooks.getDisabledThinkingConfig(model)
-      : getDisabledGoogleThinkingConfig(model);
+    const disabledThinkingConfig = getDisabledGoogleThinkingConfig(model);
+    if (Object.keys(disabledThinkingConfig).length > 0) {
+      config.thinkingConfig = disabledThinkingConfig;
+    }
   }
 
   if (options.signal) {
@@ -544,6 +510,10 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 }
 
+function isAdaptiveGoogleReasoningLevel(value: unknown): value is "adaptive" {
+  return value === "adaptive";
+}
+
 export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   model: Model<T>,
   options: SimpleStreamOptions | undefined,
@@ -554,6 +524,17 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
 ): GoogleThinkingOptions {
   if (!options?.reasoning || options.reasoning === "off") {
     return { enabled: false };
+  }
+  if (isAdaptiveGoogleReasoningLevel(options.reasoning)) {
+    if (!model.reasoning) {
+      return { enabled: false };
+    }
+    if (isGemma4Model(model)) {
+      return { enabled: true, level: ThinkingLevel.HIGH };
+    }
+    return isGemini3ProModel(model) || isGemini3FlashModel(model)
+      ? { enabled: true }
+      : { enabled: true, budgetTokens: -1 };
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
@@ -585,12 +566,7 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   };
 }
 
-export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
-  model: Model<T>,
-  config?: {
-    includeGemma4?: boolean;
-  },
-): ThinkingConfig {
+function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig {
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
   // do not support full thinking-off either. For Gemini 3 models, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
@@ -600,8 +576,8 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
   if (isGemini3FlashModel(model)) {
     return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
-  if (config?.includeGemma4 && isGemma4Model(model)) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
+  if (isGemma4Model(model) || model.id.toLowerCase().includes("gemini-2.5-pro")) {
+    return {};
   }
 
   // Gemini 2.x supports disabling via thinkingBudget = 0.
@@ -614,11 +590,11 @@ function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
 }
 
 function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
+  return /gemini-(?:3(?:\.\d+)?-pro|pro-latest)/.test(model.id.toLowerCase());
 }
 
 function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
+  return /gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)/.test(model.id.toLowerCase());
 }
 
 function getGoogleThinkingLevel<T extends GoogleApiType>(
@@ -749,6 +725,13 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   const blocks = params.output.content;
   let sawTerminalReason = false;
   let terminalGenerationError: (Error & { code: string; type: string }) | undefined;
+  const knownUsage = {
+    promptTokenCount: 0,
+    cachedContentTokenCount: 0,
+    toolUsePromptTokenCount: 0,
+    candidatesTokenCount: 0,
+    thoughtsTokenCount: 0,
+  };
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -782,14 +765,18 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
     if (chunk.usageMetadata) {
-      const promptTokens = chunk.usageMetadata.promptTokenCount || 0;
-      const cacheRead = chunk.usageMetadata.cachedContentTokenCount || 0;
-      const toolUsePromptTokens = chunk.usageMetadata.toolUsePromptTokenCount || 0;
-      const outputTokens =
-        (chunk.usageMetadata.candidatesTokenCount || 0) +
-        (chunk.usageMetadata.thoughtsTokenCount || 0);
+      for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
+        const value = chunk.usageMetadata[field];
+        if (typeof value === "number") {
+          knownUsage[field] = value;
+        }
+      }
+      const promptTokens = knownUsage.promptTokenCount;
+      const cacheRead = knownUsage.cachedContentTokenCount;
+      const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
+      const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
       params.output.usage = {
-        input: promptTokens - cacheRead + toolUsePromptTokens,
+        input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
         cacheWrite: 0,

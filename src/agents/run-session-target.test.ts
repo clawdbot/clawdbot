@@ -67,7 +67,7 @@ describe("agent run session target", () => {
     ).resolves.toEqual({
       agentId: "main",
       sessionId: "compat-session",
-      sessionKey: "compat-session",
+      sessionKey: "agent:main:compat-session",
       storePath,
     });
   });
@@ -84,7 +84,7 @@ describe("agent run session target", () => {
     ).resolves.toEqual({
       agentId: "main",
       sessionId: "compat-session",
-      sessionKey: "compat-session",
+      sessionKey: "agent:main:compat-session",
       storePath,
     });
   });
@@ -99,7 +99,7 @@ describe("agent run session target", () => {
         sessionFile: "custom-key",
         sessionKey: " custom-key ",
       }),
-    ).resolves.toMatchObject({ sessionKey: "custom-key", storePath });
+    ).resolves.toMatchObject({ sessionKey: "agent:main:custom-key", storePath });
   });
 
   it("matches a partial typed target key against its compatibility token", async () => {
@@ -116,7 +116,7 @@ describe("agent run session target", () => {
           sessionKey: "custom-key",
         },
       }),
-    ).resolves.toMatchObject({ sessionKey: "custom-key", storePath });
+    ).resolves.toMatchObject({ sessionKey: "agent:main:custom-key", storePath });
   });
 
   it("uses a compatibility session-file token when callers omit sessionKey", async () => {
@@ -235,7 +235,7 @@ describe("agent run session target", () => {
     ).resolves.toMatchObject({
       agentId: "main",
       sessionId: "current-session",
-      sessionKey: "current-session",
+      sessionKey: "agent:main:current-session",
     });
   });
 
@@ -263,7 +263,10 @@ describe("agent run session target", () => {
           sessionKey,
           sessionFile: sessionKey,
         }),
-      ).resolves.toMatchObject({ agentId: "main", sessionKey });
+      ).resolves.toMatchObject({
+        agentId: "main",
+        sessionKey: sessionKey.startsWith("agent:") ? sessionKey : `agent:main:${sessionKey}`,
+      });
     },
   );
 

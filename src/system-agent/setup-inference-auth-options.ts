@@ -35,6 +35,7 @@ export type SetupInferencePrepareOption = {
   brandId?: string;
   label: string;
   hint?: string;
+  actionLabel?: string;
   icon?: string;
   website?: string;
 };
@@ -158,6 +159,9 @@ export function listSetupInferencePrepareOptions(
         brandId: choice.providerId,
         label: choice.choiceLabel,
         ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+        ...(choice.appGuidedActionLabel?.trim()
+          ? { actionLabel: choice.appGuidedActionLabel.trim() }
+          : {}),
         ...(choice.icon ? { icon: choice.icon } : {}),
         ...(choice.website ? { website: choice.website } : {}),
       },

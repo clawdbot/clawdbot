@@ -17,6 +17,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
+import { resolveAgentConfigEntryTarget } from "../config/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 type AgentRosterEntry = {
@@ -274,7 +275,6 @@ type ToolPolicy = {
 };
 
 type AgentConfigEntry = {
-  id: string;
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -292,7 +292,7 @@ type AgentConfigEntry = {
 type ConfigSnapshot = {
   agents?: {
     defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
-    list?: AgentConfigEntry[];
+    entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {
     profile?: string;
@@ -349,8 +349,9 @@ export function formatBytes(bytes?: number) {
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
   const cfg = config as ConfigSnapshot | null;
-  const list = cfg?.agents?.list ?? [];
-  const entry = list.find((agent) => agent?.id === agentId);
+  const entry = resolveAgentConfigEntryTarget(config, agentId)?.entry as
+    | AgentConfigEntry
+    | undefined;
   return {
     entry,
     defaults: cfg?.agents?.defaults,

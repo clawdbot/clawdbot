@@ -1,5 +1,4 @@
 // Defines reply directive parsing constants and text-matching helpers.
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../../utils.js";
 import type { ReasoningLevel, TraceLevel } from "../thinking.js";
 import {
@@ -30,12 +29,6 @@ const compileDirectivePattern = (names: readonly string[], suffix = ""): RegExp 
   return new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)${suffix}`, "i");
 };
 
-const THINK_DIRECTIVE_PATTERN = compileDirectivePattern(["thinking", "think", "t"]);
-const VERBOSE_DIRECTIVE_PATTERN = compileDirectivePattern(["verbose", "v"]);
-const TRACE_DIRECTIVE_PATTERN = compileDirectivePattern(["trace"]);
-const FAST_DIRECTIVE_PATTERN = compileDirectivePattern(["fast"]);
-const ELEVATED_DIRECTIVE_PATTERN = compileDirectivePattern(["elevated", "elev"]);
-const REASONING_DIRECTIVE_PATTERN = compileDirectivePattern(["reasoning", "reason"]);
 const STATUS_DIRECTIVE_PATTERN = compileDirectivePattern(["status"], `(?:\\s*:\\s*)?`);
 
 const matchLevelDirective = (
@@ -49,8 +42,7 @@ const matchLevelDirective = (
     return null;
   }
   const start = match.index;
-  const directiveEnd = match.index + match[0].length;
-  let i = directiveEnd;
+  let i = match.index + match[0].length;
   while (i < body.length && /\s/.test(body.charAt(i))) {
     i += 1;
   }
@@ -89,10 +81,7 @@ const extractLevelDirective = <T>(
   }
   const rawLevel = match.rawLevel;
   const level = normalize(rawLevel);
-  const cleaned = body
-    .slice(0, match.start)
-    .concat(" ")
-    .concat(body.slice(match.end))
+  const cleaned = `${body.slice(0, match.start)} ${body.slice(match.end)}`
     .replace(/\s+/g, " ")
     .trim();
   return {
@@ -103,168 +92,60 @@ const extractLevelDirective = <T>(
   };
 };
 
-const extractSimpleDirective = (
-  body: string,
-  pattern: RegExp,
-): { cleaned: string; hasDirective: boolean } => {
-  const match = body.match(pattern);
-  const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
-  return {
-    cleaned,
-    hasDirective: Boolean(match),
-  };
+type NamedLevelDirective<T, Field extends string> = Omit<ExtractedLevel<T>, "level"> & {
+  [Key in Field]?: T;
 };
 
-export function extractThinkDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  thinkLevel?: ThinkLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(
-    body,
-    THINK_DIRECTIVE_PATTERN,
-    normalizeThinkLevel,
-    options,
-  );
-  return {
-    cleaned: extracted.cleaned,
-    thinkLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
+function createLevelDirectiveExtractor<T, Field extends string>(
+  names: readonly string[],
+  field: Field,
+  normalize: (raw?: string) => T | undefined,
+): (body?: string, options?: LevelDirectiveParseOptions) => NamedLevelDirective<T, Field> {
+  const pattern = compileDirectivePattern(names);
+  return (body, options) => {
+    if (!body) {
+      return { cleaned: "", hasDirective: false } as NamedLevelDirective<T, Field>;
+    }
+    const { cleaned, level, rawLevel, hasDirective } = extractLevelDirective(
+      body,
+      pattern,
+      normalize,
+      options,
+    );
+    return { cleaned, [field]: level, rawLevel, hasDirective } as NamedLevelDirective<T, Field>;
   };
 }
 
-export function extractVerboseDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  verboseLevel?: VerboseLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(
-    body,
-    VERBOSE_DIRECTIVE_PATTERN,
-    normalizeVerboseLevel,
-    options,
-  );
-  return {
-    cleaned: extracted.cleaned,
-    verboseLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
-
-export function extractTraceDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  traceLevel?: TraceLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(
-    body,
-    TRACE_DIRECTIVE_PATTERN,
-    normalizeTraceLevel,
-    options,
-  );
-  return {
-    cleaned: extracted.cleaned,
-    traceLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
-
-export function extractFastDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  fastMode?: FastMode;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(body, FAST_DIRECTIVE_PATTERN, normalizeFastMode, options);
-  return {
-    cleaned: extracted.cleaned,
-    fastMode: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
-
-export function extractElevatedDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  elevatedLevel?: ElevatedLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(
-    body,
-    ELEVATED_DIRECTIVE_PATTERN,
-    normalizeElevatedLevel,
-    options,
-  );
-  return {
-    cleaned: extracted.cleaned,
-    elevatedLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
-
-export function extractReasoningDirective(
-  body?: string,
-  options?: LevelDirectiveParseOptions,
-): {
-  cleaned: string;
-  reasoningLevel?: ReasoningLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(
-    body,
-    REASONING_DIRECTIVE_PATTERN,
-    normalizeReasoningLevel,
-    options,
-  );
-  return {
-    cleaned: extracted.cleaned,
-    reasoningLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
+export const extractThinkDirective = createLevelDirectiveExtractor(
+  ["thinking", "think", "t"],
+  "thinkLevel",
+  normalizeThinkLevel,
+);
+export const extractVerboseDirective = createLevelDirectiveExtractor(
+  ["verbose", "v"],
+  "verboseLevel",
+  normalizeVerboseLevel,
+);
+export const extractTraceDirective = createLevelDirectiveExtractor(
+  ["trace"],
+  "traceLevel",
+  normalizeTraceLevel,
+);
+export const extractFastDirective = createLevelDirectiveExtractor(
+  ["fast"],
+  "fastMode",
+  normalizeFastMode,
+);
+export const extractElevatedDirective = createLevelDirectiveExtractor(
+  ["elevated", "elev"],
+  "elevatedLevel",
+  normalizeElevatedLevel,
+);
+export const extractReasoningDirective = createLevelDirectiveExtractor(
+  ["reasoning", "reason"],
+  "reasoningLevel",
+  normalizeReasoningLevel,
+);
 
 export function extractStatusDirective(body?: string): {
   cleaned: string;
@@ -273,7 +154,11 @@ export function extractStatusDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  return extractSimpleDirective(body, STATUS_DIRECTIVE_PATTERN);
+  const match = body.match(STATUS_DIRECTIVE_PATTERN);
+  return {
+    cleaned: match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim(),
+    hasDirective: Boolean(match),
+  };
 }
 
 export type { ElevatedLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };

@@ -55,12 +55,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
       await replaceSessionEntry(
-        { sessionKey: "warm", storePath },
+        { sessionKey: "agent:main:warm", storePath },
         { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
       );
       await appendAssistantMessageToSessionTranscript({
         agentId: "main",
-        sessionKey: "warm",
+        sessionKey: "agent:main:warm",
         text: "warm",
         storePath,
       });
@@ -577,40 +577,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result).toBe("ok");
     expect(events).toEqual(["lock", "write"]);
-  });
-
-  it("appends to legacy lowercase Signal group session entries", async () => {
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-    const signalSessionKey = `agent:main:signal:group:${mixedGroupId}`;
-    const legacySignalSessionKey = signalSessionKey.toLowerCase();
-    await writeTranscriptSessionEntry({
-      sessionKey: legacySignalSessionKey,
-      entry: {
-        sessionId,
-        chatType: "group",
-        channel: "signal",
-      },
-    });
-
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: signalSessionKey,
-      text: "Hello Signal group",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const events = await loadFixtureMessages({
-        sessionKey: legacySignalSessionKey,
-      });
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "Hello Signal group" }],
-          }),
-        }),
-      );
-    }
   });
 
   it("uses SQLite identity for malformed persisted sessionFile metadata", async () => {

@@ -16,6 +16,64 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("never deletes a hidden thread selected before changing the roster search", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const alpha = "agent:main:alpha";
+    const bravo = "agent:main:bravo";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(alpha, "Alpha", Date.parse("2026-07-01T15:00:00.000Z")),
+          sessionRow(bravo, "Bravo", Date.parse("2026-07-01T14:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const rowFor = (label: string) =>
+        page.locator(".session-data-row").filter({ hasText: label });
+
+      await rowFor("Alpha").locator('input[type="checkbox"]').check();
+      await page.locator(".data-table-bulk-bar").getByText("1 selected").waitFor();
+      await page.locator('.sessions-toolbar__search input[type="text"]').fill("Bravo");
+
+      await expect.poll(() => rowFor("Alpha").count()).toBe(0);
+      await expect.poll(() => page.locator(".data-table-bulk-bar").count()).toBe(0);
+
+      await rowFor("Bravo").locator('input[type="checkbox"]').check();
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page
+        .locator(".data-table-bulk-bar")
+        .getByRole("button", { name: "Delete", exact: true })
+        .click();
+      await gateway.waitForRequest("sessions.delete");
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.delete")).map(
+            (request) => requireRecord(request.params).key,
+          ),
+        )
+        .toEqual([bravo]);
+      const request = (await gateway.getRequests("sessions.delete"))[0];
+      expect(requireRecord(request?.params)).toMatchObject({
+        key: bravo,
+        deleteTranscript: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("archives a session from the Sessions page context menu and kebab", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

@@ -285,11 +285,12 @@ export function readCodexErrorNotification(value: unknown): CodexErrorNotificati
   );
 }
 
-/** Reads a Codex model/list response if it matches the protocol schema. */
-export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
-  return readCodexShape(
+/** Asserts and normalizes a Codex model/list response. */
+export function assertCodexModelListResponse(value: unknown): CodexModelListResponse {
+  return assertCodexShape(
     validateModelListResponse,
     normalizeWithDefaults(modelListResponseSchema, value),
+    "model/list response",
   );
 }
 

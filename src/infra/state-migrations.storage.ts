@@ -40,7 +40,7 @@ export type LegacyPluginStateSidecarRow = {
 // readable database separated from committed WAL rows. Pending sidecars are
 // detected and archived without reopening the migrated database.
 export const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
-export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
+export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES;
 const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
@@ -181,8 +181,9 @@ function recordArchiveCollisionResolutions(
   }
 }
 
-export function archiveLegacyPluginStateSidecar(params: {
+function archiveLegacySqliteSidecar(params: {
   sourcePath: string;
+  label: string;
   changes: string[];
   warnings: string[];
 }): void {
@@ -197,7 +198,7 @@ export function archiveLegacyPluginStateSidecar(params: {
   for (const sourcePath of existingSources) {
     const resolution = archiveLegacyFileSource({
       sourcePath,
-      label: "plugin-state sidecar",
+      label: `${params.label} sidecar`,
       warnings: params.warnings,
     });
     if (!resolution) {
@@ -213,11 +214,19 @@ export function archiveLegacyPluginStateSidecar(params: {
     )
   ) {
     params.changes.push(
-      `Archived plugin-state sidecar legacy source → ${params.sourcePath}.migrated`,
+      `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
     );
   } else {
-    recordArchiveCollisionResolutions(params.changes, "plugin-state sidecar", resolutions);
+    recordArchiveCollisionResolutions(params.changes, `${params.label} sidecar`, resolutions);
   }
+}
+
+export function archiveLegacyPluginStateSidecar(params: {
+  sourcePath: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  archiveLegacySqliteSidecar({ ...params, label: "plugin-state" });
 }
 
 export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
@@ -439,45 +448,6 @@ export function archiveLegacyInstalledPluginIndex(params: {
   );
 }
 
-function archiveLegacyTaskStateSidecar(params: {
-  sourcePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  const existingSources = TASK_STATE_SQLITE_SIDECAR_SUFFIXES.map(
-    (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(fileExists);
-  if (existingSources.length === 0) {
-    return;
-  }
-  const resolutions: LegacyArchiveResolution[] = [];
-  for (const sourcePath of existingSources) {
-    const resolution = archiveLegacyFileSource({
-      sourcePath,
-      label: `${params.label} sidecar`,
-      warnings: params.warnings,
-    });
-    if (!resolution) {
-      return;
-    }
-    resolutions.push(resolution);
-  }
-  if (
-    resolutions.every(
-      (resolution) =>
-        resolution.action === "archived" &&
-        resolution.targetPath === `${resolution.sourcePath}.migrated`,
-    )
-  ) {
-    params.changes.push(
-      `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
-    );
-  } else {
-    recordArchiveCollisionResolutions(params.changes, `${params.label} sidecar`, resolutions);
-  }
-}
-
 function hardenLegacyImportSource(params: {
   sourcePath: string;
   label: string;
@@ -652,7 +622,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacyTaskStateSidecar({ sourcePath, label: "task registry", changes, warnings });
+      archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
     }
     return { changes, warnings };
   }
@@ -778,7 +748,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
     };
   }
 
-  archiveLegacyTaskStateSidecar({ sourcePath, label: "task registry", changes, warnings });
+  archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
   return { changes, warnings };
 }
 
@@ -790,7 +760,7 @@ async function migrateLegacyFlowRunsSidecar(params: {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacyTaskStateSidecar({ sourcePath, label: "task flow", changes, warnings });
+      archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
     }
     return { changes, warnings };
   }
@@ -871,7 +841,7 @@ async function migrateLegacyFlowRunsSidecar(params: {
     };
   }
 
-  archiveLegacyTaskStateSidecar({ sourcePath, label: "task flow", changes, warnings });
+  archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
   return { changes, warnings };
 }
 

@@ -5,7 +5,8 @@ import {
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  interruptCodexTurnBestEffort,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
   retireCodexAppServerClientAfterTimedOutTurn,
 } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -249,11 +250,16 @@ export async function activateCodexAttemptTurn(
       })().finally(() => state.resolveCompletion?.());
       return;
     }
-    interruptCodexTurnBestEffort(resourceState.client, {
+    void interruptCodexTurnAndWaitBestEffort(resourceState.client, {
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
-    });
-    state.resolveCompletion?.();
+    })
+      .then(async (completed) => {
+        if (!completed) {
+          await closeCodexStartupClientBestEffort(resourceState.client);
+        }
+      })
+      .finally(() => state.resolveCompletion?.());
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

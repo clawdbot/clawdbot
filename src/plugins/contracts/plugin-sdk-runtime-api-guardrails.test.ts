@@ -136,6 +136,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";',
     'export { setMSTeamsRuntime } from "./src/runtime.js";',
+    "export const qaRunnerCliRegistrations = [msteamsQaCliRegistration];",
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "irc", relativePath: "runtime-api.ts" })]: [
     'export { setIrcRuntime } from "./src/runtime.js";',

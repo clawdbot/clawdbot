@@ -85,7 +85,7 @@ describeControlUiE2e("Control UI Agents channel status", () => {
           channelDefaultAccountId: { discord: "default" },
         },
         "config.get": {
-          config: { agents: { list: [{ id: "main" }] } },
+          config: { agents: { entries: { main: { default: true } } } },
           hash: "hash-1",
           issues: [],
           raw: '{"agents":{"list":[{"id":"main"}]}}',

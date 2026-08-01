@@ -2,6 +2,10 @@
 // detached task status, and resource retirement around child-run endings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -317,6 +321,51 @@ describe("subagent registry lifecycle hardening", () => {
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
+  });
+
+  it("runs detached cleanup outside a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:main:disposed-cleanup-owner";
+    const entry = createRunEntry({
+      requesterSessionKey: sessionKey,
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    let disposed = false;
+    let releaseCleanup!: () => void;
+    const cleanupReady = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const runSubagentAnnounceFlow = vi.fn(async () => {
+      await cleanupReady;
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return true;
+    });
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+      },
+    );
+
+    disposed = true;
+    releaseCleanup();
+
+    await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("delivered"));
+    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
 
   it("emits one progress end event at the canonical terminal transition", async () => {
@@ -2182,6 +2231,58 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("persists identified completion delivery before stalled announce bookkeeping settles", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        lastError: "earlier delivery failed",
+        lastDropReason: "sink_unavailable",
+      },
+    });
+    let releaseAnnounce!: () => void;
+    const announcePending = new Promise<void>((resolve) => {
+      releaseAnnounce = resolve;
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+        });
+        await announcePending;
+        return true;
+      },
+    );
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() =>
+      expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "delivered",
+        error: undefined,
+      }),
+    );
+
+    expect(entry.delivery).toMatchObject({
+      status: "delivered",
+      announcedAt: 12_300,
+      deliveredAt: 12_300,
+    });
+    expect(entry.delivery?.lastError).toBeUndefined();
+    expect(entry.delivery?.lastDropReason).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(persist).toHaveBeenCalledWith(entry.runId);
+
+    releaseAnnounce();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+  });
+
   it("keeps a late superseded-delivery retirement root-admitted", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true, generation: 1 });
     const runs = new Map([[entry.runId, entry]]);
@@ -3333,6 +3434,53 @@ describe("requester settle wake trigger", () => {
     helperMocks.safeRemoveAttachmentsDir.mockClear();
     helperMocks.logAnnounceGiveUp.mockClear();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+  });
+
+  it("runs a detached settle wake outside a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:main:disposed-settle-wake-owner";
+    const entry = createRunEntry({ requesterSessionKey: sessionKey, endedAt: 4_000 });
+    let disposed = false;
+    let releaseWake!: () => void;
+    const wakeReady = new Promise<void>((resolve) => {
+      releaseWake = resolve;
+    });
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const settleWake = vi.fn(async () => {
+      await wakeReady;
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return false;
+    });
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        controller.completeCleanupBookkeeping({
+          runId: entry.runId,
+          entry,
+          cleanup: "keep",
+          completedAt: 5_000,
+        });
+      },
+    );
+
+    disposed = true;
+    releaseWake();
+
+    await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(settleWake).toHaveBeenCalledOnce();
   });
 
   it("fires the settle wake from keep-cleanup bookkeeping", () => {

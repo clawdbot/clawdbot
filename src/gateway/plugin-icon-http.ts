@@ -269,8 +269,9 @@ export async function handlePluginIconHttpRequest(
   if (!pluginId && !catalogIconUrl) {
     return false;
   }
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  const method = req.method;
+  if (method !== "GET" && method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
@@ -322,6 +323,7 @@ export async function handlePluginIconHttpRequest(
     "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
   );
   res.setHeader("content-disposition", 'attachment; filename="plugin-icon"');
-  res.end(icon.body);
+  // HEAD uses the same authenticated, cached representation; only its body is omitted.
+  res.end(method === "HEAD" ? undefined : icon.body);
   return true;
 }

@@ -1386,7 +1386,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
@@ -1418,7 +1418,7 @@ describe("sendMessageIMessage receipts", () => {
           resolveSentMessageGuidImpl,
         }),
       ).rejects.toThrow("imsg rpc timeout (send)");
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(5_000);
       await rejection;
     } finally {
       fs.rmSync(wrapperDir, { recursive: true, force: true });
@@ -1466,7 +1466,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(getClientMocks(client).stop).toHaveBeenCalledTimes(1);
@@ -1487,7 +1487,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
@@ -1526,7 +1526,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();

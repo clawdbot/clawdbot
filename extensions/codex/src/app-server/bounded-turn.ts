@@ -184,7 +184,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
-  let interruptPromise: Promise<void> | undefined;
+  let interruptPromise: Promise<boolean> | undefined;
   const requestInterrupt = () => {
     if (!activeThreadId || interruptPromise) {
       return;
@@ -305,6 +305,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         model,
       };
     } finally {
+      await interruptPromise;
       requestCleanup();
       cleanup();
     }

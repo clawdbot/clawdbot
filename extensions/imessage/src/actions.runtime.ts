@@ -1,13 +1,14 @@
 // Imessage plugin module implements actions behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, parse, win32 } from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
@@ -225,15 +226,23 @@ function resolveMessageId(result: Record<string, unknown>): string {
 }
 
 async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-"));
-  const safeExt = extname(input.filename).slice(0, 16) || ".bin";
-  const filePath = join(dir, `upload${safeExt}`);
-  try {
-    await writeFile(filePath, input.buffer);
-    return await fn(filePath);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-" },
+    async (workspace) => {
+      const safeFilename = sanitizeUntrustedFileName(input.filename, "upload.bin");
+      const { name, ext: safeExtension } = parse(safeFilename);
+      const originalExtension = parse(win32.basename(basename(input.filename))).ext;
+      const extension = truncateUtf16Safe(
+        sanitizeUntrustedFileName(originalExtension, safeExtension),
+        16,
+      );
+      // Each UTF-16 unit occupies at most three UTF-8 bytes, keeping 80 units below
+      // the 255-byte filesystem component limit without dropping the attachment extension.
+      const filename = `${truncateUtf16Safe(name, 80 - extension.length)}${extension}`;
+      const filePath = await workspace.write(filename, input.buffer);
+      return await fn(filePath);
+    },
+  );
 }
 
 export const imessageActionsRuntime = {

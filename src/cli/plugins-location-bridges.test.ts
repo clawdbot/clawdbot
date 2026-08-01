@@ -167,6 +167,10 @@ describe("listPersistedBundledPluginLocationBridges", () => {
   it.each([
     ["byteplus", "@openclaw/byteplus-provider", true],
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
+    ["mistral", "@openclaw/mistral-provider", true],
+    ["novita", "@openclaw/novita-provider", true],
+    ["opencode", "@openclaw/opencode-provider", true],
+    ["opencode-go", "@openclaw/opencode-go-provider", true],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
     ["volcengine", "@openclaw/volcengine-provider", true],
@@ -237,6 +241,39 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         npmSpec: "@openclaw/comfy-provider",
         clawhubSpec: "clawhub:@openclaw/comfy-provider",
         enabledByDefault: true,
+      },
+    ]);
+  });
+
+  it("externalizes the shipped bundled iMessage channel while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "imessage",
+        manifestPath: "/app/dist/extensions/imessage/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/imessage/index.js",
+        rootDir: "/app/dist/extensions/imessage",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("imessage"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "imessage",
+        pluginId: "imessage",
+        preferredSource: "npm",
+        npmSpec: "@openclaw/imessage",
+        clawhubSpec: "clawhub:@openclaw/imessage",
+        enabledByDefault: true,
+        channelIds: ["imessage"],
       },
     ]);
   });

@@ -22,18 +22,21 @@ const localPrepareOptions = [
     brandId: "ollama",
     label: "Ollama",
     hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
   },
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "Local model (llama.cpp)",
     hint: "Download and run a private GGUF model",
+    actionLabel: "Review download",
   },
   {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -383,7 +386,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       expect(new Set(localProviderIconColors).size).toBe(1);
       await page
         .locator('[data-prepare-choice="ollama"]')
-        .getByRole("button", { name: "Check & set up" })
+        .getByRole("button", { name: "Choose connection" })
         .click();
 
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");

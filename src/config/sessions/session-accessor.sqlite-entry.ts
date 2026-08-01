@@ -33,6 +33,7 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
+  readExactSessionEntryRowValidated,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
@@ -64,11 +65,16 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  assertCanonicalSessionKeyWrite,
+  assertCanonicalSqliteSessionKeysCurrent,
+  canonicalSessionKeyMigrationRequiredError,
+} from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { resolveSessionEntryCandidates } from "./store-entry.js";
+import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -88,6 +94,12 @@ const childSessionKeysByEntrySnapshot = new WeakMap<
   Map<string, SessionEntry>,
   Map<string, string[]>
 >();
+
+function assertCanonicalSessionWriteScope(
+  scope: Pick<ResolvedSqliteScope, "agentId" | "sessionKey">,
+): void {
+  assertCanonicalSessionKeyWrite(scope.sessionKey, scope.agentId);
+}
 
 function getChildSessionKeysByParent(entries: Map<string, SessionEntry>): Map<string, string[]> {
   const cached = childSessionKeysByEntrySnapshot.get(entries);
@@ -124,19 +136,15 @@ export function resolveSqliteSessionEntry(
   const read = (
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   ): ResolvedSqliteSessionEntry => {
-    const snapshot = readSessionEntrySnapshot(database, resolved, scope.readConsistency);
-    const selected = resolveSessionEntryCandidates({
-      entries: [...snapshot.entries].map(([sessionKey, entry]) => ({ entry, sessionKey })),
-      sessionKey: resolved.sessionKey,
-    });
-    const existing = selected.existing?.entry;
+    const selected = readSessionEntryRow(database, resolved.sessionKey);
+    const existing = selected?.entry;
     return {
       existing: existing
         ? scope.clone === false
           ? existing
           : cloneSessionEntry(existing)
         : undefined,
-      legacyKeys: selected.legacyKeys,
+      legacyKeys: selected?.legacyKeys ?? [],
       normalizedKey: resolved.sessionKey,
     };
   };
@@ -171,9 +179,7 @@ export function loadExactSqliteSessionEntry(
   }
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const entry = readSessionEntrySnapshot(database, resolved, scope.readConsistency).entries.get(
-    sessionKey,
-  );
+  const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
   return entry
     ? { sessionKey, entry: scope.clone === false ? entry : cloneSessionEntry(entry) }
     : undefined;
@@ -200,8 +206,7 @@ export function loadExactSqliteSessionEntryReadOnly(
   }
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readSessionEntrySnapshot(database, resolved, scope.readConsistency).entries.get(sessionKey),
+    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
     toDatabaseOptions(resolved),
   );
   return result.found && result.value
@@ -276,11 +281,28 @@ export function listSqliteSessionEntriesReadOnly(
   return result.found ? result.value : [];
 }
 
+/** Counts durable session rows without materializing entry JSON or warming the entry cache. */
+export function countSqliteSessionEntryRowsReadOnly(scope: SessionEntryListScope = {}): number {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getSessionKysely(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_nodes")
+        .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
+    );
+    return row ? normalizeSqliteNumber(row.count) : 0;
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : 0;
+}
+
 function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
 ): SessionEntrySummary[] {
+  assertCanonicalSqliteSessionKeysCurrent(database);
   const snapshot = readSessionEntrySnapshot(database, resolved, scope.readConsistency);
   const entries = scope.projection === "list" ? snapshot.listEntries : snapshot.entries;
   return snapshot.keys.flatMap((sessionKey) => {
@@ -290,6 +312,12 @@ function listSqliteSessionEntriesFromDatabase(
     const entry = entries.get(sessionKey);
     if (!entry) {
       return [];
+    }
+    const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry);
+    if (deliveryCanonicalKey !== sessionKey) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
+      );
     }
     return [
       {
@@ -379,6 +407,7 @@ export function replaceSqliteSessionEntrySync(
   entry: SessionEntry,
 ): void {
   const resolved = resolveSqliteScope(scope);
+  assertCanonicalSessionWriteScope(resolved);
   let previous = new Map<string, SessionEntry>();
   let current = new Map<string, SessionEntry>();
   runOpenClawAgentWriteTransaction((database) => {
@@ -400,6 +429,7 @@ export async function patchSqliteSessionEntry(
   options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
+  assertCanonicalSessionWriteScope(resolved);
   return await patchSqliteSessionEntrySnapshot<
     ReturnType<typeof readSqliteSessionEntrySelectionSnapshot>
   >({

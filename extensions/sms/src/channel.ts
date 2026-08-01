@@ -298,10 +298,6 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     },
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
     configSchema: SmsChannelConfigSchema,
-    setup: {
-      applyAccountConfig: ({ cfg, accountId, input }) =>
-        applySmsAccountConfig({ cfg, accountId, input: input as SmsSetupInput }),
-    },
     setupContract: smsSetupContract,
     config: {
       ...smsConfigAdapter,

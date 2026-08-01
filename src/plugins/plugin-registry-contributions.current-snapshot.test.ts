@@ -138,6 +138,7 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
         pluginIds: ["disabled"],
       }).plugins.map((plugin) => plugin.id),
     ).toEqual(["disabled"]);
+    expect(loadPluginManifestRegistryForPluginRegistry({ config, env }).plugins).toEqual([]);
   });
 
   it("does not reuse current metadata for explicit registry inputs or diagnostics", () => {

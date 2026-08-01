@@ -1773,6 +1773,14 @@ describe("shared Codex app-server client", () => {
     });
     expect(harness.process.stdin.destroyed).toBe(false);
 
+    // The ordinary lease is gone, but native completion still explicitly owns
+    // the detached process and repeated cleanup must not close that owner.
+    expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
+      activeLeases: 1,
+      closed: false,
+    });
+    expect(harness.process.stdin.destroyed).toBe(false);
+
     harness.send({
       method: "turn/completed",
       params: {

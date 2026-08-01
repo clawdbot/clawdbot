@@ -176,4 +176,25 @@ describe("McpLoopbackToolCache", () => {
     cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
+
+  it("never reuses ordinary private-mode tools for a source-reply-only grant", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+    const params = scopeParams({
+      cfg,
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolsAllow: ["message"],
+    });
+
+    cache.resolve(params);
+    cache.resolve({ ...params, sourceReplyOnly: true });
+    cache.resolve(params);
+    cache.resolve({ ...params, sourceReplyOnly: true });
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
+  });
 });

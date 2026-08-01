@@ -213,8 +213,13 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
     isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
   const cronLaneDepth = getSize(CommandLane.Cron);
+  // HookDispatch is included so moving hook agent runs off `cron-nested` onto
+  // their own lane does not silently stop them from suppressing heartbeats.
+  // They are still active agent work; only the lane they occupy changed.
   const cronLaneBusy =
-    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) || getSize(CommandLane.CronNested) > 0;
+    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) ||
+    getSize(CommandLane.CronNested) > 0 ||
+    getSize(CommandLane.HookDispatch) > 0;
   if (cronBusy || cronLaneBusy) {
     emitHeartbeatEvent({
       status: "skipped",
@@ -487,6 +492,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // re-entry for heartbeat-created isolated sessions. Real session keys that
     // happen to end with `:heartbeat` still get a distinct isolated sibling.
     const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      agentId,
       sessionKey,
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,

@@ -175,6 +175,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(call.targetRequesterSessionKey).toBe(REQUESTER);
     expect(call.requesterIsSubagent).toBe(false);
     expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireDirectDelivery).toBe(true);
     expect(call.directIdempotencyKey).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");

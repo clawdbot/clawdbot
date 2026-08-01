@@ -26,27 +26,6 @@ function bedrockModel(overrides: Record<string, unknown>) {
   } as never;
 }
 
-function signedThinkingContext(modelId: string) {
-  const highSurrogate = String.fromCharCode(0xd83d);
-  return {
-    messages: [
-      {
-        role: "assistant",
-        api: "bedrock-converse-stream",
-        provider: "amazon-bedrock",
-        model: modelId,
-        content: [
-          {
-            type: "thinking",
-            thinking: `private${highSurrogate}reasoning`,
-            thinkingSignature: "sig-1",
-          },
-        ],
-      },
-    ],
-  } as never;
-}
-
 async function* streamEvents(events: unknown[]) {
   for (const event of events) {
     yield event;
@@ -86,6 +65,104 @@ async function captureClientRegion(
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+describe("Bedrock stream client lifecycle", () => {
+  const context = {
+    messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+  } as never;
+
+  function expectDestroyedClient(
+    send: ReturnType<typeof vi.spyOn>,
+    destroy: ReturnType<typeof vi.spyOn>,
+  ) {
+    expect(send).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
+    expect(destroy.mock.invocationCallOrder[0]).toBeGreaterThan(
+      send.mock.invocationCallOrder[0] ?? 0,
+    );
+  }
+
+  it("destroys the client after a successful stream", async () => {
+    let markStreamBlocked!: () => void;
+    const streamBlocked = new Promise<void>((resolve) => {
+      markStreamBlocked = resolve;
+    });
+    let releaseStream!: () => void;
+    const streamReleased = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    async function* successfulStream() {
+      yield { messageStart: { role: ConversationRole.ASSISTANT } };
+      markStreamBlocked();
+      await streamReleased;
+      yield { messageStop: { stopReason: BedrockStopReason.END_TURN } };
+    }
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: successfulStream(),
+    } as never);
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+
+    const resultPromise = streamBedrockForTest(bedrockModel({}), context).result();
+    await streamBlocked;
+    expect(destroy).not.toHaveBeenCalled();
+
+    releaseStream();
+    const result = await resultPromise;
+
+    expect(result.stopReason).toBe("stop");
+    expectDestroyedClient(send, destroy);
+  });
+
+  it("destroys the client after a provider error", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValue(new Error("synthetic provider failure"));
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+
+    const result = await streamBedrockForTest(bedrockModel({}), context).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("synthetic provider failure");
+    expectDestroyedClient(send, destroy);
+  });
+
+  it("destroys the client when response stream iteration fails", async () => {
+    async function* failingStream() {
+      yield { messageStart: { role: ConversationRole.ASSISTANT } };
+      throw new Error("synthetic iterator failure");
+    }
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: failingStream(),
+    } as never);
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+
+    const result = await streamBedrockForTest(bedrockModel({}), context).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("synthetic iterator failure");
+    expectDestroyedClient(send, destroy);
+  });
+
+  it("destroys the client after an aborted request", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValue(new Error("synthetic abort"));
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+
+    const result = await streamBedrockForTest(bedrockModel({}), context, {
+      signal: controller.signal,
+    }).result();
+
+    expect(result.stopReason).toBe("aborted");
+    expect(result.errorMessage).toBe("synthetic abort");
+    expectDestroyedClient(send, destroy);
+  });
 });
 
 describe("Bedrock inbound image base64", () => {
@@ -225,106 +302,6 @@ describe("Bedrock tool-result replay", () => {
     });
     expect(JSON.stringify(messages)).not.toContain('"image"');
     expect(JSON.stringify(messages)).not.toContain("see attached image");
-  });
-});
-
-describe("Bedrock reasoning replay", () => {
-  it("preserves signed reasoning for Claude profile descriptors", () => {
-    const modelId =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
-      bedrockModel({
-        id: modelId,
-        name: "Claude Sonnet application profile",
-      }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([
-      {
-        reasoningContent: {
-          reasoningText: {
-            text: `private${String.fromCharCode(0xd83d)}reasoning`,
-            signature: "sig-1",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("replays signed reasoning as plain text for non-Claude models", () => {
-    const modelId = "amazon.nova-micro-v1:0";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
-      bedrockModel({ id: modelId, name: "Nova Micro" }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([{ text: "privatereasoning" }]);
-  });
-
-  it("preserves signature-only Fable reasoning blocks", () => {
-    const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: " sig-fable ",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([
-      {
-        reasoningContent: {
-          reasoningText: {
-            text: "",
-            signature: " sig-fable ",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("drops synthetic reasoning placeholders from Claude replay", () => {
-    const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "hidden compatibility reasoning",
-                thinkingSignature: "reasoning_content",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
-
-    expect(messages).toEqual([]);
   });
 });
 

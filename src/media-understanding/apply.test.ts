@@ -1282,6 +1282,54 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("fallback transcript");
   });
 
+  it.each([
+    { extension: ".aiff", form: "AIFF" },
+    { extension: ".aif", form: "AIFF" },
+    { extension: ".aifc", form: "AIFC" },
+  ])(
+    "transcribes $extension attachments without an explicit content type",
+    async ({ extension, form }) => {
+      const audioBuffer = createSafeAudioFixtureBuffer(2048, 0);
+      audioBuffer.write("FORM", 0, "ascii");
+      audioBuffer.writeUInt32BE(audioBuffer.length - 8, 4);
+      audioBuffer.write(form, 8, "ascii");
+      const audioPath = await createTempMediaFile({
+        fileName: `speech${extension}`,
+        content: audioBuffer,
+      });
+      const transcribeAudio = vi.fn(async () => ({ text: "AIFF transcript" }));
+      const ctx: MsgContext = {
+        Body: "",
+        media: [{ path: audioPath }],
+      };
+      const cfg: OpenClawConfig = {
+        tools: {
+          media: {
+            models: [{ provider: "google", capabilities: ["audio"] }],
+            audio: { enabled: true, maxBytes: 1024 * 1024 },
+          },
+        },
+      };
+
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg,
+        providers: {
+          google: {
+            id: "google",
+            transcribeAudio,
+          },
+        },
+      });
+
+      expect(result.appliedAudio).toBe(true);
+      expect(transcribeAudio).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: `speech${extension}`, mime: "audio/aiff" }),
+      );
+      expect(ctx.Transcript).toBe("AIFF transcript");
+    },
+  );
+
   it("skips audio STT for attachments marked transcribed by channel preflight", async () => {
     const dir = await createTempMediaDir();
     const audioPath = path.join(dir, "voice.ogg");

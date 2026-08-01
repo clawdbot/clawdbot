@@ -508,10 +508,15 @@ export function createSubagentRegistryLifecycleCleanup(
         recordAnnounceDeliveryResult(entry, delivery);
         if (delivery.delivered) {
           const deliveryState = ensureDeliveryState(entry);
-          if (deliveryState.lastError !== undefined) {
-            deliveryState.lastError = undefined;
-            params.persist(runId);
-          }
+          deliveryState.status = "delivered";
+          deliveryState.announcedAt = deliveryState.deliveredAt ?? Date.now();
+          deliveryState.lastError = undefined;
+          deliveryState.suspendedAt = undefined;
+          deliveryState.suspendedReason = undefined;
+          // Identified platform delivery precedes best-effort transcript
+          // mirroring; task ownership must become durable at that same edge.
+          params.persist(runId);
+          safeSetSubagentTaskDeliveryStatus({ entry, deliveryStatus: "delivered" });
           latestDeliveryError = undefined;
           return;
         }

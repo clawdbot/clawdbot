@@ -113,27 +113,12 @@ export function extractContextInfo(
 }
 
 export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
+  // Context ownership already follows Baileys envelopes without entering quoted messages.
+  const mentionedJids = extractContextInfo(rawMessage)?.mentionedJid?.filter(Boolean);
+  if (!mentionedJids?.length) {
     return undefined;
   }
-
-  const candidates: Array<string[] | null | undefined> = [
-    message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.imageMessage?.contextInfo?.mentionedJid,
-    message.videoMessage?.contextInfo?.mentionedJid,
-    message.documentMessage?.contextInfo?.mentionedJid,
-    message.audioMessage?.contextInfo?.mentionedJid,
-    message.stickerMessage?.contextInfo?.mentionedJid,
-    message.buttonsResponseMessage?.contextInfo?.mentionedJid,
-    message.listResponseMessage?.contextInfo?.mentionedJid,
-  ];
-
-  const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
-  if (flattened.length === 0) {
-    return undefined;
-  }
-  return uniqueStrings(flattened);
+  return uniqueStrings(mentionedJids);
 }
 
 function extractNativeFlowResponseText(
@@ -177,6 +162,7 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     const caption =
       candidate.imageMessage?.caption ??
       candidate.videoMessage?.caption ??
+      candidate.ptvMessage?.caption ??
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
@@ -193,6 +179,23 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     ].find((value) => Boolean(value?.trim()));
     if (interactiveSelection) {
       return interactiveSelection.trim();
+    }
+    const poll =
+      candidate.pollCreationMessage ??
+      candidate.pollCreationMessageV2 ??
+      candidate.pollCreationMessageV3 ??
+      candidate.pollCreationMessageV5;
+    if (poll) {
+      const question = poll.name?.trim();
+      const options = (poll.options ?? [])
+        .map((option) => option.optionName?.trim())
+        .filter((option): option is string => Boolean(option));
+      const pollText = [question, ...options.map((option) => `- ${option}`)]
+        .filter(Boolean)
+        .join("\n");
+      if (pollText) {
+        return pollText;
+      }
     }
   }
   const contactPlaceholder =
@@ -236,7 +239,7 @@ export function extractMediaKind(
   if (message.imageMessage) {
     return "image";
   }
-  if (message.videoMessage) {
+  if (message.videoMessage || message.ptvMessage) {
     // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
     return "video";
   }

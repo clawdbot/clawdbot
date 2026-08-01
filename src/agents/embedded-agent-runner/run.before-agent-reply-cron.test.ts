@@ -90,7 +90,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.jobId).toBe("cron-job-123");
     expect(hookContext?.agentId).toBe("main");
     expect(hookContext?.sessionId).toBe("test-session");
-    expect(hookContext?.sessionKey).toBe("test-key");
+    expect(hookContext?.sessionKey).toBe(overflowBaseRunParams.sessionKey);
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
     expect(hookContext?.senderId).toBeUndefined();

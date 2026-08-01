@@ -11,7 +11,6 @@ import {
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
-import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -23,6 +22,7 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
@@ -39,10 +39,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-
-function hasSessionsChangedReceiver(connIds: ReadonlySet<string>): boolean {
-  return connIds.size > 0 || hasPluginSessionsChangedSubscribers();
-}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -271,7 +267,7 @@ async function handleTranscriptUpdateBroadcast(
   }
   if (connIds.size === 0) {
     if (
-      !hasPluginSessionsChangedSubscribers() ||
+      !hasSessionChangeReceivers(connIds) ||
       (update.message !== undefined && projectChatDisplayMessage(update.message))
     ) {
       return;
@@ -388,7 +384,7 @@ async function handleTranscriptUpdateBroadcast(
   // Messages suppressed from display can still change transcript state, so
   // notify broad session listeners even when no session.message is emitted.
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-  if (!hasSessionsChangedReceiver(sessionEventConnIds)) {
+  if (!hasSessionChangeReceivers(sessionEventConnIds)) {
     return;
   }
   params.broadcastToConnIds(
@@ -420,7 +416,7 @@ export function createLifecycleEventBroadcastHandler(params: {
       text?: string;
     };
     const connIds = params.sessionEventSubscribers.getAll();
-    if (!hasSessionsChangedReceiver(connIds)) {
+    if (!hasSessionChangeReceivers(connIds)) {
       return;
     }
     const sessionRow = loadGatewaySessionRow(event.sessionKey);

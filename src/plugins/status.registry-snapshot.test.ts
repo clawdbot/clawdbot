@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
-import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
+import {
+  buildPluginDiagnosticsReport,
+  buildPluginRegistrySnapshotReport,
+  buildPluginSnapshotReport,
+} from "./status.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
@@ -207,6 +211,18 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
 
     const plugin = requirePlugin(report.plugins, "dependency-demo");
+    expectFields(plugin, {
+      status: "error",
+      error:
+        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
+    });
+    expect(report.diagnostics).toContainEqual({
+      level: "error",
+      pluginId: "dependency-demo",
+      source: fs.realpathSync(fixture.runtimeSource),
+      message:
+        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
+    });
     const dependencyStatus = requireRecord(plugin.dependencyStatus);
     expectFields(dependencyStatus, {
       hasDependencies: true,
@@ -239,6 +255,101 @@ describe("buildPluginRegistrySnapshotReport", () => {
       optional: true,
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("honors npm optional dependency precedence without reporting a false required failure", () => {
+    const fixture = createColdPluginFixture({
+      rootDir: makeTempDir(),
+      pluginId: "optional-dependency-demo",
+      packageJson: {
+        dependencies: { "optional-runtime": "1.0.0" },
+        optionalDependencies: { "optional-runtime": "2.0.0" },
+      },
+    });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config: createColdPluginConfig(fixture.rootDir, fixture.pluginId),
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+
+    expectFields(plugin, { status: "loaded" });
+    expectFields(requireRecord(plugin.dependencyStatus), {
+      requiredInstalled: true,
+      optionalInstalled: false,
+      missing: [],
+      missingOptional: ["optional-runtime"],
+      dependencies: [],
+    });
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
+    );
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("keeps disabled plugins with missing required dependencies diagnostic-free", () => {
+    const fixture = createColdPluginFixture({
+      rootDir: makeTempDir(),
+      pluginId: "disabled-dependency-demo",
+      packageJson: { dependencies: { "missing-required": "1.0.0" } },
+    });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config: {
+        plugins: {
+          load: { paths: [fixture.rootDir] },
+          entries: { [fixture.pluginId]: { enabled: false } },
+        },
+      },
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+
+    expectFields(plugin, { enabled: false, status: "disabled" });
+    expect(plugin.error).toBeUndefined();
+    expect(requireRecord(plugin.dependencyStatus).missing).toEqual(["missing-required"]);
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
+    );
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("preserves the real runtime import error while explaining missing dependencies", () => {
+    const rootDir = makeTempDir();
+    const bundledRoot = makeTempDir();
+    const fixture = createColdPluginFixture({
+      rootDir,
+      pluginId: "failed-runtime-dependency-demo",
+      packageJson: {
+        dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
+        optionalDependencies: { "optional-runtime": "2.0.0" },
+      },
+    });
+    fs.writeFileSync(
+      fixture.runtimeSource,
+      `require("node:fs").writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded");\n` +
+        'require("missing-runtime");\n',
+      "utf8",
+    );
+
+    const report = buildPluginDiagnosticsReport({
+      config: createColdPluginConfig(rootDir, fixture.pluginId),
+      workspaceDir: rootDir,
+      env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+    const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === fixture.pluginId);
+
+    expectFields(plugin, { status: "error" });
+    expect(String(plugin.error)).toContain("Cannot find module");
+    expect(String(plugin.error)).toContain("Install the plugin dependencies");
+    expectFields(requireRecord(plugin.dependencyStatus), {
+      missing: ["missing-runtime"],
+      missingOptional: ["optional-runtime"],
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Cannot find module");
+    expect(diagnostics[0]?.message).toContain("Install the plugin dependencies");
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(true);
   });
 
   it("replays persisted list metadata without importing plugin runtime", async () => {

@@ -49,27 +49,25 @@ import {
   resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
-import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
+import {
+  commandReply as sessionCommandReply,
+  defineAuthorizedTextCommand,
+  matchCommandPrefix,
+  rejectNonOwnerCommand,
+  rejectUnauthorizedCommand,
+} from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import {
   persistSessionEntry,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
-
-function sessionCommandReply(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
 
 function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -250,136 +248,148 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   return sessionCommandReply(`⚙️ Group activation set to ${activationCommand.mode}.`);
 };
 
-export const handleSendPolicyCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const sendPolicyCommand = parseSendPolicyCommand(params.command.commandBodyNormalized);
-  if (!sendPolicyCommand.hasCommand) {
-    return null;
-  }
-  const unauthorizedResult = rejectUnauthorizedCommand(params, "/send");
-  if (unauthorizedResult) {
-    return unauthorizedResult;
-  }
-  const nonOwnerResult = rejectNonOwnerCommand(params, "/send");
-  if (nonOwnerResult) {
-    return nonOwnerResult;
-  }
-  if (!sendPolicyCommand.mode) {
-    return sessionCommandReply("⚙️ Usage: /send on|off|inherit");
-  }
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    if (sendPolicyCommand.mode === "inherit") {
-      delete params.sessionEntry.sendPolicy;
-    } else {
-      params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
+export const handleSendPolicyCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/send",
+    match: (body) => {
+      const command = parseSendPolicyCommand(body);
+      return command.hasCommand ? command : null;
+    },
+    ownerOnly: true,
+  },
+  async (params, sendPolicyCommand) => {
+    if (!sendPolicyCommand.mode) {
+      return sessionCommandReply("⚙️ Usage: /send on|off|inherit");
     }
-    if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
-      return sessionEntryPersistenceConflictReply();
+    if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      if (sendPolicyCommand.mode === "inherit") {
+        delete params.sessionEntry.sendPolicy;
+      } else {
+        params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
+      }
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
     }
-  }
-  const label =
-    sendPolicyCommand.mode === "inherit"
-      ? "inherit"
-      : sendPolicyCommand.mode === "allow"
-        ? "on"
-        : "off";
-  return sessionCommandReply(`⚙️ Send policy set to ${label}.`);
-};
+    const label =
+      sendPolicyCommand.mode === "inherit"
+        ? "inherit"
+        : sendPolicyCommand.mode === "allow"
+          ? "on"
+          : "off";
+    return sessionCommandReply(`⚙️ Send policy set to ${label}.`);
+  },
+);
 
-export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/usage" && !normalized.startsWith("/usage ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-
-  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
-  const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
-  if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId =
-      params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
-        ? resolveSessionAgentId({
-            sessionKey: params.sessionKey,
-            config: params.cfg,
-            agentId: params.agentId,
-          })
-        : params.agentId;
-    const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
-    const sessionSummary = await loadSessionCostSummary({
-      sessionId: targetSessionEntry?.sessionId,
-      sessionEntry: targetSessionEntry,
-      ...(targetSessionEntry?.sessionId && params.sessionKey
-        ? {
-            sessionTarget: {
-              agentId: usageAgentId,
-              sessionId: targetSessionEntry.sessionId,
+export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/usage",
+    match: (body) => matchCommandPrefix(body, "/usage"),
+    silentUnauthorized: true,
+  },
+  async (params, rawArgs) => {
+    const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+    if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const sessionAgentId =
+        params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
+          ? resolveSessionAgentId({
               sessionKey: params.sessionKey,
-              storePath: resolveSessionStorePathForScope({
+              config: params.cfg,
+              agentId: params.agentId,
+            })
+          : params.agentId;
+      const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
+      const sessionSummary = await loadSessionCostSummary({
+        sessionId: targetSessionEntry?.sessionId,
+        sessionEntry: targetSessionEntry,
+        ...(targetSessionEntry?.sessionId && params.sessionKey
+          ? {
+              sessionTarget: {
                 agentId: usageAgentId,
+                sessionId: targetSessionEntry.sessionId,
                 sessionKey: params.sessionKey,
-                storePath:
-                  params.storePath ??
-                  resolveStorePath(params.cfg.session?.store, { agentId: usageAgentId }),
-              }),
-            },
-          }
-        : {}),
-      config: params.cfg,
-      agentId: usageAgentId,
-    });
-    const summary = await loadCostUsageSummary({
-      config: params.cfg,
-      agentId: usageAgentId,
-    });
+                storePath: resolveSessionStorePathForScope({
+                  agentId: usageAgentId,
+                  sessionKey: params.sessionKey,
+                  storePath:
+                    params.storePath ??
+                    resolveStorePath(params.cfg.session?.store, { agentId: usageAgentId }),
+                }),
+              },
+            }
+          : {}),
+        config: params.cfg,
+        agentId: usageAgentId,
+      });
+      const summary = await loadCostUsageSummary({
+        config: params.cfg,
+        agentId: usageAgentId,
+      });
 
-    const sessionCost = formatUsd(sessionSummary?.totalCost);
-    const sessionTokens = sessionSummary?.totalTokens
-      ? formatTokenCount(sessionSummary.totalTokens)
-      : undefined;
-    const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
-    const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
-    const sessionLine =
-      sessionCost || sessionTokens
-        ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
-        : "Session n/a";
+      const sessionCost = formatUsd(sessionSummary?.totalCost);
+      const sessionTokens = sessionSummary?.totalTokens
+        ? formatTokenCount(sessionSummary.totalTokens)
+        : undefined;
+      const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
+      const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
+      const sessionLine =
+        sessionCost || sessionTokens
+          ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
+          : "Session n/a";
 
-    const todayKey = new Date().toLocaleDateString("en-CA");
-    const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
-    const todayCost = formatUsd(todayEntry?.totalCost);
-    const todayMissing = todayEntry?.missingCostEntries ?? 0;
-    const todaySuffix = todayMissing > 0 ? " (partial)" : "";
-    const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
+      const todayKey = new Date().toLocaleDateString("en-CA");
+      const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
+      const todayCost = formatUsd(todayEntry?.totalCost);
+      const todayMissing = todayEntry?.missingCostEntries ?? 0;
+      const todaySuffix = todayMissing > 0 ? " (partial)" : "";
+      const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
 
-    const last30Cost = formatUsd(summary.totals.totalCost);
-    const last30Missing = summary.totals.missingCostEntries;
-    const last30Suffix = last30Missing > 0 ? " (partial)" : "";
-    const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
+      const last30Cost = formatUsd(summary.totals.totalCost);
+      const last30Missing = summary.totals.missingCostEntries;
+      const last30Suffix = last30Missing > 0 ? " (partial)" : "";
+      const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
 
-    return sessionCommandReply(`💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`);
-  }
+      return sessionCommandReply(`💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`);
+    }
 
-  const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+    const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
 
-  if (rawArgs && !requested && !isReset) {
-    return sessionCommandReply("⚙️ Usage: /usage off|tokens|full|reset|cost");
-  }
+    if (rawArgs && !requested && !isReset) {
+      return sessionCommandReply("⚙️ Usage: /usage off|tokens|full|reset|cost");
+    }
 
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-  if (isReset) {
+    if (isReset) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.responseUsage;
+        params.sessionStore[params.sessionKey] = targetSessionEntry;
+        if (
+          !(await persistSessionEntry({
+            ...params,
+            sessionEntry: targetSessionEntry,
+            touchedFields: ["responseUsage"],
+          }))
+        ) {
+          return sessionEntryPersistenceConflictReply();
+        }
+      }
+      return sessionCommandReply("⚙️ Usage footer: reset to default.");
+    }
+
+    const replyChannel = params.command.channel;
+    const currentRaw = targetSessionEntry?.responseUsage;
+    const current = resolveEffectiveResponseUsage(
+      currentRaw,
+      params.cfg.messages?.responseUsage,
+      replyChannel,
+    );
+    const next =
+      requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      delete targetSessionEntry.responseUsage;
+      targetSessionEntry.responseUsage = next;
       params.sessionStore[params.sessionKey] = targetSessionEntry;
       if (
         !(await persistSessionEntry({
@@ -391,115 +401,79 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
         return sessionEntryPersistenceConflictReply();
       }
     }
-    return sessionCommandReply("⚙️ Usage footer: reset to default.");
-  }
 
-  const replyChannel = params.command.channel;
-  const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveEffectiveResponseUsage(
-    currentRaw,
-    params.cfg.messages?.responseUsage,
-    replyChannel,
-  );
-  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+    return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
+  },
+);
 
-  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    targetSessionEntry.responseUsage = next;
-    params.sessionStore[params.sessionKey] = targetSessionEntry;
-    if (
-      !(await persistSessionEntry({
-        ...params,
+export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast"), silentUnauthorized: true },
+  async (params, rawArgs) => {
+    const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
+    if (!rawMode || rawMode === "status") {
+      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const sessionAgentId = params.sessionKey
+        ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+        : params.agentId;
+      const state = resolveFastModeState({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: sessionAgentId,
         sessionEntry: targetSessionEntry,
-        touchedFields: ["responseUsage"],
-      }))
-    ) {
-      return sessionEntryPersistenceConflictReply();
+      });
+      return sessionCommandReply(
+        formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      );
     }
-  }
 
-  return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
-};
-
-export const handleFastCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/fast" && !normalized.startsWith("/fast ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /fast from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-
-  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
-  const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
-  if (!rawMode || rawMode === "status") {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
-    const state = resolveFastModeState({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      agentId: sessionAgentId,
-      sessionEntry: targetSessionEntry,
-    });
-    return sessionCommandReply(
-      formatFastModeCurrentStatus({
-        mode: state.mode,
-        source: state.source,
-        fastAutoOnSeconds: state.fastAutoOnSeconds,
-        label: "⚙️ Current fast mode",
-      }),
-    );
-  }
-
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
-  const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
-  if (nextMode === undefined) {
-    if (resetsToDefault) {
-      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-        delete targetSessionEntry.fastMode;
-        if (
-          !(await persistSessionEntry({
-            ...params,
-            sessionEntry: targetSessionEntry,
-            touchedFields: ["fastMode"],
-          }))
-        ) {
-          return sessionEntryPersistenceConflictReply();
+    const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+    const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
+    if (nextMode === undefined) {
+      if (resetsToDefault) {
+        if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+          delete targetSessionEntry.fastMode;
+          if (
+            !(await persistSessionEntry({
+              ...params,
+              sessionEntry: targetSessionEntry,
+              touchedFields: ["fastMode"],
+            }))
+          ) {
+            return sessionEntryPersistenceConflictReply();
+          }
         }
+        return sessionCommandReply("⚙️ Fast mode reset to default.");
       }
-      return sessionCommandReply("⚙️ Fast mode reset to default.");
+      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
     }
-    return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
-  }
 
-  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    targetSessionEntry.fastMode = nextMode;
-    if (
-      !(await persistSessionEntry({
-        ...params,
-        sessionEntry: targetSessionEntry,
-        touchedFields: ["fastMode"],
-      }))
-    ) {
-      return sessionEntryPersistenceConflictReply();
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      targetSessionEntry.fastMode = nextMode;
+      if (
+        !(await persistSessionEntry({
+          ...params,
+          sessionEntry: targetSessionEntry,
+          touchedFields: ["fastMode"],
+        }))
+      ) {
+        return sessionEntryPersistenceConflictReply();
+      }
     }
-  }
 
-  return sessionCommandReply(
-    nextMode === "auto"
-      ? "⚙️ Fast mode set to auto."
-      : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
-  );
-};
+    return sessionCommandReply(
+      nextMode === "auto"
+        ? "⚙️ Fast mode set to auto."
+        : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+    );
+  },
+);
 
 export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {

@@ -1473,6 +1473,7 @@ export async function setManagedPluginEnabled(params: {
       reason: "policy-changed",
       invalidateRuntimeCache: false,
       policyPluginIds: [policyPluginId],
+      logger: { warn: (message) => warnings.push(message) },
     });
     const catalog = await listManagedPlugins({ config: next, env });
     const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
