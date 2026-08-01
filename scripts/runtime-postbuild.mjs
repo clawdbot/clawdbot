@@ -1,11 +1,11 @@
 // Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
 // runtime aliases, static assets, and compatibility chunks for live upgrades.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
-import { parse as markedParse, use as markedUse } from "marked";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
@@ -321,16 +321,16 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
 }
 
 /** Builds deterministic browser globals from the pinned workspace packages. */
-export function generateExportHtmlVendorAssets() {
-  if (typeof markedParse !== "function" || typeof markedUse !== "function") {
-    throw new Error("marked must export parse and use functions");
-  }
+export function generateExportHtmlVendorAssets(params = {}) {
+  const rootDir = path.resolve(params.rootDir ?? ROOT);
+  const resolveFromRoot = createRequire(path.join(rootDir, "package.json")).resolve;
   return Object.fromEntries(
     EXPORT_HTML_VENDOR_ENTRYPOINTS.map(
       ({ fileName, packageEntry, packageName, globalName, footer, licenseFile }) => {
         const result = buildSync({
+          absWorkingDir: rootDir,
           bundle: true,
-          entryPoints: [fileURLToPath(import.meta.resolve(packageEntry))],
+          entryPoints: [packageEntry],
           footer: footer ? { js: footer } : undefined,
           format: "iife",
           globalName,
@@ -345,9 +345,7 @@ export function generateExportHtmlVendorAssets() {
         if (!output || result.outputFiles?.length !== 1) {
           throw new Error(`Expected one generated export-html asset for ${packageEntry}`);
         }
-        const packageRoot = path.dirname(
-          fileURLToPath(import.meta.resolve(`${packageName}/package.json`)),
-        );
+        const packageRoot = path.dirname(resolveFromRoot(`${packageName}/package.json`));
         const license = fs.readFileSync(path.join(packageRoot, licenseFile), "utf8").trimEnd();
         if (license.includes("*/")) {
           throw new Error(`Cannot embed ${packageName} license in a JavaScript comment`);
@@ -368,7 +366,7 @@ export function listExportHtmlTemplateOutputs(params = {}) {
 
 /** Copies authored templates and generates dependency-owned browser payloads. */
 export function copyExportHtmlTemplates(params = {}) {
-  const rootDir = params.rootDir ?? ROOT;
+  const rootDir = path.resolve(params.rootDir ?? ROOT);
   const fsImpl = params.fs ?? fs;
   const sourceDir = path.join(rootDir, EXPORT_HTML_SOURCE_DIR);
   if (!fsImpl.existsSync(sourceDir)) {
@@ -386,7 +384,7 @@ export function copyExportHtmlTemplates(params = {}) {
   }
   const vendorDir = path.join(outputDir, "vendor");
   fsImpl.mkdirSync(vendorDir, { recursive: true });
-  for (const [fileName, contents] of Object.entries(generateExportHtmlVendorAssets())) {
+  for (const [fileName, contents] of Object.entries(generateExportHtmlVendorAssets({ rootDir }))) {
     fsImpl.writeFileSync(path.join(vendorDir, fileName), contents);
   }
 }
@@ -648,8 +646,9 @@ function shouldCopyStaticExtensionAssets(params) {
  * Runs every runtime postbuild phase after the main dist build.
  */
 export function runRuntimePostBuild(params = {}) {
-  const rootDir = params.rootDir ?? params.cwd ?? params.repoRoot ?? ROOT;
+  const rootDir = path.resolve(params.rootDir ?? params.cwd ?? params.repoRoot ?? ROOT);
   const fsImpl = params.fs ?? fs;
+  const phaseParams = { ...params, cwd: rootDir, repoRoot: rootDir, rootDir };
   // Postbuild phases share both roots. Validate the whole mutation set before
   // any phase runs so a later unsafe root cannot leave earlier output changed.
   assertRealOutputRoot(path.join(rootDir, "dist"), { fs: fsImpl });
@@ -684,25 +683,25 @@ export function runRuntimePostBuild(params = {}) {
       `runtime-postbuild: ${phaseTimings.length} phases completed in ${totalMs}ms (slowest: ${slowest.label} ${slowest.durationMs}ms)`,
     );
   };
-  runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
-  runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
-  runPhase("export HTML assets", () => copyExportHtmlTemplates({ ...params, rootDir }));
-  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+  runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(phaseParams));
+  runPhase("official channel catalog", () => writeOfficialChannelCatalog(phaseParams));
+  runPhase("export HTML assets", () => copyExportHtmlTemplates(phaseParams));
+  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(phaseParams));
   runPhase("static extension assets", () => {
-    if (!shouldCopyStaticExtensionAssets(params)) {
+    if (!shouldCopyStaticExtensionAssets(phaseParams)) {
       return;
     }
-    const staticAssetParams = {
-      rootDir: ROOT,
-      ...params,
-    };
-    copyStaticExtensionAssets(staticAssetParams);
-    copyStaticExtensionAssetsToRuntimeOverlay(staticAssetParams);
+    copyStaticExtensionAssets(phaseParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(phaseParams);
   });
-  runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
-  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
-  runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
-  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
+  runPhase("stable root runtime imports", () =>
+    rewriteRootRuntimeImportsToStableAliases(phaseParams),
+  );
+  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(phaseParams));
+  runPhase("legacy root runtime compat aliases", () =>
+    writeLegacyRootRuntimeCompatAliases(phaseParams),
+  );
+  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(phaseParams));
   logSummary();
 }
 
