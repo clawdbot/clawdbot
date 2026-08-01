@@ -35,7 +35,10 @@ import {
   createBackupSqliteSnapshotPlan,
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
-import { sweepStaleBackupTempDirectories } from "./backup-temp-sweep.js";
+import {
+  keepBackupTempDirectoryAlive,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
   createBackupLinkCache,
@@ -426,14 +429,19 @@ export async function createBackupArchive(
     log: opts.log,
   });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
+  // Claim both temp dirs for this run: `tar` only reads the staging directory,
+  // so a multi-hour archive would otherwise age it into another run's sweep.
+  const stopTempDirKeepAlive = keepBackupTempDirectoryAlive(tempDir);
   const manifestPath = path.join(tempDir, "manifest.json");
   let publication: BackupArchivePublication;
   try {
     publication = await createBackupArchivePublication(outputPath, opts.log);
   } catch (error) {
+    stopTempDirKeepAlive();
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
+  const stopPublishDirKeepAlive = keepBackupTempDirectoryAlive(publication.stagingDir);
   const tempArchivePath = publication.tempArchivePath;
   try {
     // Capture every legacy file first, including active and claimed sources.
@@ -655,6 +663,8 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "publication");
     }
   } finally {
+    stopPublishDirKeepAlive();
+    stopTempDirKeepAlive();
     await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }

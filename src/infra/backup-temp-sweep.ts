@@ -1,4 +1,5 @@
 // Reclaims backup temp directories that a hard-killed run left behind.
+import { utimesSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -8,6 +9,29 @@ import path from "node:path";
 // full-size archive copy. Every owner sweeps its own artifacts before
 // staging a new run.
 const BACKUP_TEMP_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
+
+// Derived so the heartbeat can never drift past the window it defends.
+export const BACKUP_TEMP_KEEPALIVE_INTERVAL_MS = BACKUP_TEMP_ORPHAN_MIN_AGE_MS / 48;
+
+/**
+ * Marks `directoryPath` as owned by the running backup until the returned stop
+ * function is called. Idle time is the only signal the sweep has, and a long
+ * `tar` pass only reads the staging directory, so without this a multi-hour run
+ * ages past the orphan window and a second backup deletes its live source.
+ * A hard-killed run stops refreshing, which is exactly what makes it reclaimable.
+ */
+export function keepBackupTempDirectoryAlive(directoryPath: string): () => void {
+  const timer = setInterval(() => {
+    // Sync: a floating promise in a timer can outlive the directory and reject
+    // after cleanup. One utimes syscall is cheaper than that failure mode.
+    try {
+      const now = new Date();
+      utimesSync(directoryPath, now, now);
+    } catch {}
+  }, BACKUP_TEMP_KEEPALIVE_INTERVAL_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 // A long tar write only touches the archive file, never its parent
 // directory, so directory mtime alone would age out a live run and delete
@@ -30,11 +54,12 @@ async function resolveNewestActivityMs(directoryPath: string): Promise<number | 
 
 /**
  * Removes directories in `directoryPath` whose name matches `entryPattern`
- * and that have been idle past the orphan window. That window is the only
- * fence against deleting a concurrent run's staging directory, so callers
- * must pass a pattern matching their own `mkdtemp` output exactly rather
- * than a bare prefix. Never throws: a failed sweep must not take down the
- * backup it was preparing for.
+ * and that have been idle past the orphan window. Live runs stay out of reach
+ * by refreshing their own directories via `keepBackupTempDirectoryAlive`, so
+ * idle time means abandoned rather than merely slow. Callers must still pass a
+ * pattern matching their own `mkdtemp` output exactly rather than a bare
+ * prefix. Never throws: a failed sweep must not take down the backup it was
+ * preparing for.
  */
 export async function sweepStaleBackupTempDirectories(params: {
   directoryPath: string;

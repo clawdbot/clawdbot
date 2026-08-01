@@ -1,10 +1,16 @@
 // Covers reclaiming backup temp artifacts that a hard-killed run orphaned.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
+import {
+  BACKUP_TEMP_KEEPALIVE_INTERVAL_MS,
+  keepBackupTempDirectoryAlive,
+  sweepStaleBackupTempDirectories,
+} from "./backup-temp-sweep.js";
 
 const HOUR_MS = 60 * 60_000;
 const ARCHIVE_NOW_MS = Date.UTC(2026, 4, 9, 8, 0, 0);
@@ -161,5 +167,66 @@ describe("createBackupArchive stale temp sweep", () => {
         expect(await directoryExists(unrelatedDir)).toBe(true);
       },
     );
+  });
+});
+
+describe("live-owner fence", () => {
+  // `tar` only reads the staging directory, so a backup whose archive stream
+  // runs longer than the orphan window would age out while still live.
+  const STAGING_PATTERN = /^openclaw-backup-[A-Za-z0-9]{6}$/u;
+
+  async function withAgedStagingRoot(
+    run: (params: { root: string; staging: string }) => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fence-")));
+    try {
+      const staging = path.join(root, "openclaw-backup-liv001");
+      await fs.mkdir(staging);
+      await fs.writeFile(path.join(staging, "manifest.json"), "{}\n");
+      // Age past the window, as a long archive stream leaves the source dir.
+      const aged = new Date(Date.now() - 25 * HOUR_MS);
+      await fs.utimes(path.join(staging, "manifest.json"), aged, aged);
+      await fs.utimes(staging, aged, aged);
+      await run({ root, staging });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  it("keeps an aged staging directory that a live run is still refreshing", async () => {
+    vi.useFakeTimers();
+    try {
+      await withAgedStagingRoot(async ({ root, staging }) => {
+        const stopKeepAlive = keepBackupTempDirectoryAlive(staging);
+        await vi.advanceTimersByTimeAsync(BACKUP_TEMP_KEEPALIVE_INTERVAL_MS);
+        stopKeepAlive();
+
+        await sweepStaleBackupTempDirectories({
+          directoryPath: root,
+          entryPattern: STAGING_PATTERN,
+        });
+
+        expect(await directoryExists(staging)).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reclaims the same directory once its owner stops refreshing", async () => {
+    vi.useFakeTimers();
+    try {
+      await withAgedStagingRoot(async ({ root, staging }) => {
+        // Negative control: identical fixture, no live owner (the hard-kill case).
+        await sweepStaleBackupTempDirectories({
+          directoryPath: root,
+          entryPattern: STAGING_PATTERN,
+        });
+
+        expect(await directoryExists(staging)).toBe(false);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
