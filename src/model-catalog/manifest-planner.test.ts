@@ -78,6 +78,61 @@ describe("manifest model catalog planner", () => {
     ]);
   });
 
+  it("keeps manifest lifecycle metadata authoritative over remote rows", () => {
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "nvidia",
+            providers: ["nvidia"],
+            modelCatalog: {
+              providers: {
+                nvidia: {
+                  models: [
+                    {
+                      id: "retired",
+                      status: "deprecated",
+                      statusReason: "Use nvidia/replacement.",
+                      replaces: ["nvidia/older"],
+                      replacedBy: "nvidia/replacement",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+      remoteOverlay: {
+        nvidia: {
+          models: [
+            {
+              id: "retired",
+              name: "Remote name",
+              status: "available",
+              statusReason: "Remote status",
+              replaces: ["nvidia/remote-older"],
+              replacedBy: "nvidia/remote-replacement",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(plan.rows).toMatchObject([
+      {
+        provider: "nvidia",
+        id: "retired",
+        name: "Remote name",
+        source: "runtime-refresh",
+        status: "deprecated",
+        statusReason: "Use nvidia/replacement.",
+        replaces: ["nvidia/older"],
+        replacedBy: "nvidia/replacement",
+      },
+    ]);
+  });
+
   it("selects static and supplemental rows at their owning catalog boundary", () => {
     const providers = [
       ["static-provider", "static"],

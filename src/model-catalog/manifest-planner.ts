@@ -72,11 +72,18 @@ function mergeRemoteModelWithTrustedTransport(
   trustedModel: ModelCatalogModel | undefined,
 ): ModelCatalogModel {
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
-  // Object.prototype's setter while trusted transport fields win explicitly.
+  // Object.prototype's setter. Manifest-owned transport and lifecycle policy
+  // must survive same-ID remote refreshes.
   return {
     ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+    ...(trustedModel?.status !== undefined ? { status: trustedModel.status } : {}),
+    ...(trustedModel?.statusReason !== undefined
+      ? { statusReason: trustedModel.statusReason }
+      : {}),
+    ...(trustedModel?.replaces !== undefined ? { replaces: trustedModel.replaces } : {}),
+    ...(trustedModel?.replacedBy !== undefined ? { replacedBy: trustedModel.replacedBy } : {}),
   };
 }
 
