@@ -81,7 +81,7 @@ describe("ChatSessionRailState", () => {
     localStorage.setItem(displayPreferenceKey, "pill");
     const state = new ChatSessionRailState();
 
-    expect(state.tryAutoOpen(1)).toBe(true);
+    expect(state.tryAutoOpen()).toBe(true);
     expect(state.mode(input())).toBe("expanded");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
     expect(new ChatSessionRailState().mode(input())).toBe("pill");
@@ -91,7 +91,7 @@ describe("ChatSessionRailState", () => {
     localStorage.setItem(displayPreferenceKey, "off");
     const state = new ChatSessionRailState();
 
-    expect(state.tryAutoOpen(1)).toBe(false);
+    expect(state.tryAutoOpen()).toBe(false);
     expect(state.mode(input())).toBe("restore-icon");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
     expect(new ChatSessionRailState().mode(input())).toBe("restore-icon");
@@ -100,30 +100,28 @@ describe("ChatSessionRailState", () => {
   it("persists explicit collapse and hide after transient auto-open", () => {
     const state = new ChatSessionRailState("pill");
 
-    expect(state.tryAutoOpen(1)).toBe(true);
+    expect(state.tryAutoOpen()).toBe(true);
     expect(state.mode(input())).toBe("expanded");
     state.collapse();
     expect(state.mode(input())).toBe("pill");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
 
-    expect(state.tryAutoOpen(2)).toBe(true);
+    expect(state.tryAutoOpen()).toBe(true);
     state.hide();
     expect(state.mode(input())).toBe("restore-icon");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(state.tryAutoOpen(3)).toBe(false);
+    expect(state.tryAutoOpen()).toBe(false);
   });
 
   it("clears transient auto-open when the session changes", () => {
     localStorage.setItem(displayPreferenceKey, "pill");
     const state = new ChatSessionRailState();
 
-    expect(state.tryAutoOpen(1)).toBe(true);
+    expect(state.tryAutoOpen()).toBe(true);
     expect(state.mode(input())).toBe("expanded");
     state.resetTransientState();
     expect(state.mode(input())).toBe("pill");
-    expect(state.tryAutoOpen(1)).toBe(false);
-    expect(state.mode(input())).toBe("pill");
-    expect(state.tryAutoOpen(2)).toBe(true);
+    expect(state.tryAutoOpen()).toBe(true);
     expect(state.mode(input())).toBe("expanded");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
@@ -343,7 +341,8 @@ describe("ChatSessionRailElement", () => {
 
   it("does not reopen or report visible after hide when an open request arrives", async () => {
     const onVisibilityChange = vi.fn();
-    const element = await mount({ onVisibilityChange });
+    const onOpenRequestConsumed = vi.fn();
+    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
 
     (element.querySelector(".chat-session-rail__hide") as HTMLButtonElement | null)?.click();
     await element.updateComplete;
@@ -356,19 +355,22 @@ describe("ChatSessionRailElement", () => {
 
     expect(element.querySelector(".chat-session-rail--restore")).not.toBeNull();
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
+    expect(onOpenRequestConsumed).toHaveBeenCalledWith(1);
     expect(onVisibilityChange).not.toHaveBeenCalled();
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {
     localStorage.setItem(displayPreferenceKey, "pill");
+    const onOpenRequestConsumed = vi.fn();
     const onVisibilityChange = vi.fn();
-    const element = await mount({ onVisibilityChange });
+    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
 
     element.openRequest = 1;
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
+    expect(onOpenRequestConsumed).toHaveBeenCalledWith(1);
     expect(onVisibilityChange).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenLastCalledWith(true);
 
@@ -382,16 +384,22 @@ describe("ChatSessionRailElement", () => {
 
   it("does not replay a retained auto-open request after a session round trip", async () => {
     localStorage.setItem(displayPreferenceKey, "pill");
+    let consumedOpenRequest = 0;
+    const onOpenRequestConsumed = vi.fn((openRequest: number) => {
+      consumedOpenRequest = openRequest;
+    });
     const onVisibilityChange = vi.fn();
-    const element = await mount({ onVisibilityChange });
+    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
 
     element.openRequest = 1;
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    expect(consumedOpenRequest).toBe(1);
     expect(onVisibilityChange).toHaveBeenCalledOnce();
 
     element.sessionKey = "agent:main:other";
     element.openRequest = 0;
+    element.consumedOpenRequest = consumedOpenRequest;
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
 
@@ -404,6 +412,7 @@ describe("ChatSessionRailElement", () => {
     element.openRequest = 2;
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    expect(onOpenRequestConsumed).toHaveBeenCalledTimes(2);
     expect(onVisibilityChange).toHaveBeenCalledTimes(2);
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });

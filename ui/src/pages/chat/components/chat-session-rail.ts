@@ -49,9 +49,6 @@ function unreadFinalDigest(digest: SessionObserverDigest, lastReadAt?: number): 
 export class ChatSessionRailState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
-  // The pane projects a retained generation as 0 while another session is selected.
-  // Keep consumption across resets so A/N -> B/0 -> A/N cannot replay N.
-  private lastHandledOpenRequest = 0;
   private transientExpanded = false;
   // Explicit open from the restore icon while idle: the companion must stay
   // reachable at any point, even with no digest and an empty thread.
@@ -67,11 +64,7 @@ export class ChatSessionRailState {
     this.manualOpen = false;
   }
 
-  tryAutoOpen(openRequest: number): boolean {
-    if (openRequest <= this.lastHandledOpenRequest) {
-      return false;
-    }
-    this.lastHandledOpenRequest = openRequest;
+  tryAutoOpen(): boolean {
     if (this.displayPreference === "off") {
       return false;
     }
@@ -199,6 +192,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   };
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) openRequest = 0;
+  @property({ attribute: false }) consumedOpenRequest = 0;
+  @property({ attribute: false }) onOpenRequestConsumed?: (openRequest: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
   @property({ attribute: false }) onClear?: () => void;
@@ -229,8 +224,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         this.terminalAgeReference = Date.now();
       }
     }
-    if (changedProperties.has("openRequest") && this.openRequest > 0) {
-      if (this.railState.tryAutoOpen(this.openRequest)) {
+    if (changedProperties.has("openRequest") && this.openRequest > this.consumedOpenRequest) {
+      this.onOpenRequestConsumed?.(this.openRequest);
+      if (this.railState.tryAutoOpen()) {
         this.onVisibilityChange?.(true);
       }
     }
