@@ -66,10 +66,8 @@ import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js"
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
-  recoverStartupOrphanedMainSessions as recoverStartupOrphanedMainSessionsBase,
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
   retryRestartAbortedMainSessionRecovery as retryRestartAbortedMainSessionRecoveryBase,
-  retryRestartAbortedMainSessionRecoveryAfterOwnerRelease as retryRestartAbortedMainSessionRecoveryAfterOwnerReleaseBase,
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
@@ -115,21 +113,26 @@ type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRun
 const recoverRestartAbortedMainSessions = (
   params: RecoveryParams<Parameters<typeof recoverRestartAbortedMainSessionsBase>[0]>,
 ) => recoverRestartAbortedMainSessionsBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
-const recoverStartupOrphanedMainSessions = (
-  params: RecoveryParams<Parameters<typeof recoverStartupOrphanedMainSessionsBase>[0]>,
-) => recoverStartupOrphanedMainSessionsBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
+const recoverStartupOrphanedMainSessions = async (
+  params: RecoveryParams<Parameters<typeof recoverRestartAbortedMainSessionsBase>[0]> & {
+    updatedBeforeMs?: number;
+  },
+) => {
+  if (params.shouldContinue?.() === false) {
+    return { marked: 0, recovered: 0, failed: 0, skipped: 0 };
+  }
+  const marked = await markStartupOrphanedMainSessionsForRecovery(params);
+  if (params.shouldContinue?.() === false) {
+    return { marked: marked.marked, recovered: 0, failed: 0, skipped: marked.skipped };
+  }
+  const recovered = await recoverRestartAbortedMainSessions(params);
+  return { ...recovered, marked: marked.marked, skipped: marked.skipped + recovered.skipped };
+};
 const retryRestartAbortedMainSessionRecovery = (
   params: RecoveryParams<Parameters<typeof retryRestartAbortedMainSessionRecoveryBase>[0]>,
 ) => retryRestartAbortedMainSessionRecoveryBase({ gatewayRuntime: mockRecoveryRuntime, ...params });
-const retryRestartAbortedMainSessionRecoveryAfterOwnerRelease = (
-  params: RecoveryParams<
-    Parameters<typeof retryRestartAbortedMainSessionRecoveryAfterOwnerReleaseBase>[0]
-  >,
-) =>
-  retryRestartAbortedMainSessionRecoveryAfterOwnerReleaseBase({
-    gatewayRuntime: mockRecoveryRuntime,
-    ...params,
-  });
+const retryRestartAbortedMainSessionRecoveryAfterOwnerRelease =
+  retryRestartAbortedMainSessionRecovery;
 const scheduleRestartAbortedMainSessionRecovery = (
   params: RecoveryParams<Parameters<typeof scheduleRestartAbortedMainSessionRecoveryBase>[0]>,
 ) =>
