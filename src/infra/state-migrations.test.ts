@@ -8,12 +8,14 @@ import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import type { PluginDoctorStateMigrationContext } from "../plugins/doctor-contract-registry.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
@@ -29,6 +31,7 @@ import {
   readPersistedVapidKeyPair,
 } from "./push-web-store.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
+import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
@@ -746,6 +749,53 @@ describe("state migrations", () => {
     } finally {
       writer.exec("ROLLBACK;");
       writer.close();
+    }
+  });
+
+  it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const detectLegacyState = vi.fn(async ({ context }: { context: unknown }) => {
+      const pluginState = (context as PluginDoctorStateMigrationContext).openPluginStateKeyedStore({
+        namespace: "fresh-start-detection",
+        maxEntries: 10,
+      });
+      await expect(pluginState.lookup("legacy")).resolves.toBeUndefined();
+      await expect(pluginState.entries()).resolves.toEqual([]);
+      return null;
+    });
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-fresh-start-plugin-state",
+          label: "Fixture fresh-start plugin state",
+          detectLegacyState,
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+    ];
+
+    const lease = acquireStartupMigrationLease({ env, owner: "fresh-start-test" });
+    try {
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
+      ).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+      database.close();
+
+      const detected = await detectLegacyStateMigrations({
+        cfg: createConfig(),
+        env,
+        homedir: () => root,
+      });
+
+      expect(detectLegacyState).toHaveBeenCalledOnce();
+      expect(detected.warnings).toEqual([]);
+    } finally {
+      lease.release();
     }
   });
 

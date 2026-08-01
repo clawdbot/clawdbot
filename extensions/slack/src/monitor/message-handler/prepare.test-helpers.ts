@@ -32,6 +32,7 @@ export function createInboundSlackTestContext(params: {
     channelRuntime: params.channelRuntime ?? createPluginRuntimeMock().channel,
     botUserId: "B1",
     botId: "B1",
+    identityHealth: { healthState: "healthy", lastError: null },
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,

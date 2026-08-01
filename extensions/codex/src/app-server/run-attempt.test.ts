@@ -19,7 +19,10 @@ import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -261,6 +264,24 @@ async function attachSqliteSessionTarget(
     sessionKey: params.sessionKey,
     storePath,
     entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+  });
+}
+
+async function appendSqliteHistoryMessage(
+  params: EmbeddedRunAttemptParams,
+  message: ReturnType<typeof userMessage> | ReturnType<typeof assistantMessage>,
+): Promise<void> {
+  const target = params.sessionTarget;
+  if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+    throw new Error("expected complete SQLite session target");
+  }
+  await appendSessionTranscriptMessageByIdentity({
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    message,
+    now: message.timestamp,
   });
 }
 
@@ -2538,6 +2559,40 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
+  it("projects canonical SQLite continuity when starting without a native thread binding", async () => {
+    const sessionId = "session-sqlite-fresh-continuity";
+    const sessionFile = `agent:main:${sessionId}`;
+    const storePath = path.join(tempDir, "sqlite-fresh-continuity.sqlite");
+    const workspaceDir = path.join(tempDir, "workspace-sqlite-fresh-continuity");
+    const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("canonical SQLite startup question", Date.now()),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      assistantMessage("canonical SQLite startup answer", Date.now() + 1),
+    );
+    params.prompt = "continue the canonical SQLite startup";
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("canonical SQLite startup question");
+    expect(inputText).toContain("canonical SQLite startup answer");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue the canonical SQLite startup");
+  });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
@@ -2808,6 +2863,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("copilot mirror context also matters");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
+  });
+  it("projects newer canonical SQLite continuity when a resumed binding is stale", async () => {
+    const sessionId = "session-sqlite-resume-continuity";
+    const sessionFile = `agent:main:${sessionId}`;
+    const storePath = path.join(tempDir, "sqlite-resume-continuity.sqlite");
+    const workspaceDir = path.join(tempDir, "workspace-sqlite-resume-continuity");
+    const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("old canonical SQLite native-owned context", bindingUpdatedAt - 2_000),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("new canonical SQLite resume question", bindingUpdatedAt + 1_000),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      assistantMessage("new canonical SQLite resume answer", bindingUpdatedAt + 2_000),
+    );
+    params.prompt = "continue the canonical SQLite resume";
+    const harness = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("old canonical SQLite native-owned context");
+    expect(inputText).toContain("new canonical SQLite resume question");
+    expect(inputText).toContain("new canonical SQLite resume answer");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue the canonical SQLite resume");
   });
   it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -3600,7 +3700,7 @@ describe("runCodexAppServerAttempt", () => {
   it("captures the complete mirrored branch through a settled tool-result boundary", async () => {
     const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
     const sessionId = "session-settled-finalization-context";
-    const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+    const sessionFile = `agent:main:${sessionId}`;
     const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);

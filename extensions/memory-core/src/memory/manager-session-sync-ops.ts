@@ -50,6 +50,10 @@ type MemorySessionTranscriptUpdate = {
 };
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
+  protected listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
+    return listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+  }
+
   protected sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
     return entry.transcriptSource === "sqlite"
       ? sessionPathForSessionIdentity(entry.agentId, entry.sessionId)
@@ -114,7 +118,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = await this.listSessionCorpusEntries();
     if (corpusEntries.some((entry) => path.resolve(entry.sessionFile) === resolvedSessionFile)) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
@@ -133,7 +137,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = await this.listSessionCorpusEntries();
     if (corpusEntries.length === 0 || this.closed) {
       return [];
     }
@@ -487,30 +491,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private normalizeTargetSessions(
-    sessions?: MemorySessionSyncTarget[],
-  ): Map<string, MemorySessionSyncTarget> | null {
-    if (!sessions || sessions.length === 0) {
-      return null;
-    }
-    const normalized = new Map<string, MemorySessionSyncTarget>();
-    for (const session of sessions) {
-      const sessionId = session.sessionId.trim();
-      const agentId = session.agentId?.trim() || this.agentId;
-      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
-        continue;
-      }
-      const sessionKey = session.sessionKey?.trim();
-      const target = {
-        agentId,
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-      };
-      normalized.set(this.memorySessionSyncTargetKey(target), target);
-    }
-    return normalized.size > 0 ? normalized : null;
-  }
-
   private async resolveArchiveFilesForSyncTargets(
     sessions?: Iterable<MemorySessionSyncTarget> | null,
     knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
@@ -520,27 +500,27 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (targets.length === 0) {
       return files;
     }
-    const corpusEntries =
-      knownCorpusEntries ?? (await listSessionTranscriptCorpusEntriesForAgent(this.agentId));
-    for (const session of targets) {
-      const sessionKey = session.sessionKey?.trim();
-      let matchedCorpusEntry = false;
-      for (const entry of corpusEntries) {
-        if (normalizeAgentId(entry.agentId) !== normalizeAgentId(this.agentId)) {
-          continue;
-        }
-        if (entry.sessionId !== session.sessionId) {
-          continue;
-        }
-        if (sessionKey && entry.sessionKey !== sessionKey) {
-          continue;
-        }
+    const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
+    for (const rawSession of targets) {
+      const sessionId = rawSession.sessionId.trim();
+      const agentId = rawSession.agentId?.trim() || this.agentId;
+      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+        continue;
+      }
+      const sessionKey = rawSession.sessionKey?.trim();
+      const session = { agentId, sessionId, ...(sessionKey ? { sessionKey } : {}) };
+      const matchingEntries = corpusEntries.filter(
+        (entry) =>
+          normalizeAgentId(entry.agentId) === normalizeAgentId(this.agentId) &&
+          entry.sessionId === sessionId &&
+          (!sessionKey || entry.sessionKey === sessionKey),
+      );
+      for (const entry of matchingEntries) {
         files.add(
           entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
         );
-        matchedCorpusEntry = true;
       }
-      if (matchedCorpusEntry) {
+      if (matchingEntries.length > 0) {
         continue;
       }
       const resolved = resolveSessionFileForSyncTarget(session, this.agentId);
@@ -558,22 +538,22 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return files;
   }
 
-  protected async combineTargetArchiveFiles(params: {
+  protected async resolveTargetSessionSyncPlan(params: {
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
-  }): Promise<Set<string> | null> {
+  }) {
     const files = new Set<string>();
-    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const corpusEntries = await this.listSessionCorpusEntries();
     for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
       files.add(file);
     }
     for (const file of await this.resolveArchiveFilesForSyncTargets(
-      this.normalizeTargetSessions(params.sessions)?.values(),
+      params.sessions,
       corpusEntries,
     )) {
       files.add(file);
     }
-    return files.size > 0 ? files : null;
+    return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
 
   private memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {

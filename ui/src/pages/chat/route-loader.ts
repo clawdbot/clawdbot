@@ -91,10 +91,13 @@ type SessionReferenceSearch = { agentId: string } & (
   | { kind: "slug"; value: string }
 );
 
-const resolutionCache = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, Promise<SessionReferenceResolution | null>>
->();
+type PendingSessionReference = {
+  controller: AbortController;
+  promise: Promise<SessionReferenceResolution | null>;
+  subscribers: Set<AbortSignal>;
+};
+
+const resolutionCache = new WeakMap<GatewayBrowserClient, Map<string, PendingSessionReference>>();
 
 function uniqueShortIdPrefix(
   value: string,
@@ -205,21 +208,47 @@ async function querySessionReference(
   signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const client = await waitForGatewayClient(context.gateway, signal);
-  let cache = resolutionCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    resolutionCache.set(client, cache);
-  }
+  signal.throwIfAborted();
+  const cache = resolutionCache.get(client) ?? new Map<string, PendingSessionReference>();
+  resolutionCache.set(client, cache);
   const cacheKey = `${normalizeAgentId(search.agentId)}:${search.kind}:${search.value}`;
   let pending = cache.get(cacheKey);
-  if (!pending) {
-    pending = querySessionReferencePages(context, search);
+  if (!pending || pending.controller.signal.aborted) {
+    const controller = new AbortController();
+    pending = {
+      controller,
+      promise: Promise.resolve().then(() =>
+        querySessionReferencePages(context, search, controller.signal),
+      ),
+      subscribers: new Set(),
+    };
     cache.set(cacheKey, pending);
   }
+  pending.subscribers.add(signal);
+  const shared = pending;
+  let rejectAbort: (reason: unknown) => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    shared.subscribers.delete(signal);
+    // The producer is shared: one cancelled navigation must not cancel another
+    // active route's lookup, but the final subscriber must stop later pages.
+    if (shared.subscribers.size === 0) {
+      shared.controller.abort(signal.reason);
+    }
+    rejectAbort(signal.reason);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
   try {
-    return await pending;
+    return await Promise.race([shared.promise, aborted]);
   } finally {
-    if (cache.get(cacheKey) === pending) {
+    signal.removeEventListener("abort", onAbort);
+    shared.subscribers.delete(signal);
+    if (shared.subscribers.size === 0 && cache.get(cacheKey) === shared) {
       cache.delete(cacheKey);
     }
   }
@@ -228,10 +257,12 @@ async function querySessionReference(
 async function querySessionReferencePages(
   context: ApplicationContext,
   search: SessionReferenceSearch,
+  signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const matches = new Map<string, GatewaySessionRow>();
   let offset = 0;
   for (let page = 0; ; page += 1) {
+    signal.throwIfAborted();
     const result = await context.sessions.list({
       agentId: search.agentId,
       archivedFilter: "all",
@@ -240,6 +271,7 @@ async function querySessionReferencePages(
       search: sessionReferenceSearchText(context, search),
       ...(offset > 0 ? { offset } : {}),
     });
+    signal.throwIfAborted();
     if (!result) {
       return null;
     }

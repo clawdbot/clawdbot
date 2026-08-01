@@ -69,6 +69,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "ollama",
       label: "Ollama",
       hint: "Connect to an Ollama server and select a cloud or local model",
+      actionLabel: "Choose connection",
       icon: "https://cdn.simpleicons.org/ollama",
       website: "https://ollama.com/download",
     },
@@ -77,6 +78,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "lmstudio",
       label: "LM Studio",
       hint: "Connect to a running LM Studio server and use an already loaded model",
+      actionLabel: "Connect server",
       icon: "https://cdn.simpleicons.org/lmstudio",
       website: "https://lmstudio.ai/download",
     },
@@ -85,6 +87,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "llama-cpp",
       label: "Local model (llama.cpp)",
       hint: "Download and run a private GGUF model",
+      actionLabel: "Review download",
     },
   ],
   recommendedInstalls: [
@@ -498,8 +501,12 @@ describe("renderModelSetup", () => {
     const llamaCpp = container.querySelector<HTMLButtonElement>(
       '[data-prepare-choice="llama-cpp"] button',
     );
-    expect(ollama?.textContent).toContain("Check & set up");
-    expect(llamaCpp?.textContent).toContain("Check & set up");
+    expect(ollama?.textContent).toContain("Choose connection");
+    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
+        ?.textContent,
+    ).toContain("Connect server");
     const llamaCppRow = container.querySelector('[data-prepare-choice="llama-cpp"]');
     expect(llamaCppRow?.querySelector('[data-provider-icon="llamacpp"]')).not.toBeNull();
     expect(text(llamaCppRow!)).toContain("llama.cpp");

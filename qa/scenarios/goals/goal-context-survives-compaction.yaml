@@ -37,7 +37,7 @@ scenario:
       conversationId: goal-context-compaction
       senderId: qa-goal-operator
       goalObjective: Preserve the deployment audit objective
-      expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance it or update its status (get_goal/update_goal)."
+      expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final."
       contextSeedMarker: GOAL-COMPACTION-CONTEXT-SEED
       postCompactionMessage: GOAL-CONTEXT-POST-COMPACTION unrelated lunch question
 

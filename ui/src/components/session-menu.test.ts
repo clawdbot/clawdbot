@@ -237,9 +237,11 @@ describe("session menu", () => {
 
   it("opens an accessible icon picker with keyboard grid navigation", async () => {
     const menu = await mountMenu();
+    const dropdown = menu.querySelector("wa-dropdown");
 
     await openIconPicker(menu);
 
+    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
     expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("role")).toBe("dialog");
     const choices = Array.from(
       menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"),
@@ -247,6 +249,47 @@ describe("session menu", () => {
     expect(document.activeElement).toBe(choices[0]);
     choices[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     expect(document.activeElement).toBe(choices[1]);
+  });
+
+  it("keeps Tab ownership inside the nested icon-picker dialog", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    containers.push(trigger);
+    const menu = await mountMenu({ trigger });
+
+    await openIconPicker(menu);
+
+    const choice = menu.querySelector<HTMLButtonElement>(".session-menu__icon-choice");
+    expect(document.activeElement).toBe(choice);
+    choice?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(choice);
+  });
+
+  it("preserves an intentionally focused icon-picker field after the dropdown opens", async () => {
+    const menu = await mountMenu();
+    await openIconPicker(menu);
+    const input = menu.querySelector<HTMLInputElement>(".session-menu__emoji-field input");
+    input?.focus();
+
+    menu.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-after-show"));
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps one dropdown and restores its originating item after leaving the icon picker", async () => {
+    const menu = await mountMenu();
+    const dropdown = menu.querySelector("wa-dropdown");
+    await openIconPicker(menu);
+
+    menu.querySelector<HTMLButtonElement>(".session-menu__icon-picker-back")?.click();
+    await menu.updateComplete;
+    await Promise.resolve();
+
+    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
+    expect(document.activeElement).toBe(menuItem(menu, "Change icon"));
   });
 
   it("opens group actions and dispatches group, removal, and creation choices", async () => {
@@ -437,6 +480,40 @@ describe("session menu", () => {
     );
 
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to its durable trigger before a Tab leaves the menu", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    containers.push(trigger);
+    const menu = await mountMenu({ trigger });
+    const item = menuItem(menu, "Open chat");
+    item.focus();
+
+    const keydown = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    item.dispatchEvent(keydown);
+
+    expect(document.activeElement).toBe(trigger);
+    expect(keydown.defaultPrevented).toBe(false);
+  });
+
+  it("does not reclaim focus when Tab originates outside the open menu", async () => {
+    const trigger = document.createElement("button");
+    const outside = document.createElement("button");
+    document.body.append(trigger, outside);
+    containers.push(trigger, outside);
+    await mountMenu({ trigger });
+    outside.focus();
+
+    outside.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(outside);
   });
 
   it("closes on Escape without leaking the key past the menu", async () => {

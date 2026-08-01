@@ -11,21 +11,15 @@ import {
   resolvePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 
-const {
-  loadPluginRegistrySnapshotWithMetadata,
-  loadPluginManifestRegistry,
-  loadPluginManifestRegistryForInstalledIndex,
-  loadInstalledPluginIndexWithDiscovery,
-} = vi.hoisted(() => {
-  // Shared plugin workers must load this graph after this file's mocks are installed.
-  vi.resetModules();
-  return {
-    loadPluginRegistrySnapshotWithMetadata: vi.fn(),
-    loadPluginManifestRegistry: vi.fn(),
-    loadPluginManifestRegistryForInstalledIndex: vi.fn(),
-    loadInstalledPluginIndexWithDiscovery: vi.fn(),
-  };
-});
+const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
+  vi.hoisted(() => {
+    // Shared plugin workers must load this graph after this file's mocks are installed.
+    vi.resetModules();
+    return {
+      loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+      loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+    };
+  });
 
 vi.mock("./plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-registry.js")>();
@@ -36,29 +30,12 @@ vi.mock("./plugin-registry.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./manifest-registry.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistry: (params: unknown) => loadPluginManifestRegistry(params),
-  };
-});
-
 vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
   return {
     ...actual,
     loadPluginManifestRegistryForInstalledIndex: (params: unknown) =>
       loadPluginManifestRegistryForInstalledIndex(params),
-  };
-});
-
-vi.mock("./installed-plugin-index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index.js")>();
-  return {
-    ...actual,
-    loadInstalledPluginIndexWithDiscovery: (params: unknown) =>
-      loadInstalledPluginIndexWithDiscovery(params),
   };
 });
 
@@ -114,15 +91,8 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
     loadPluginRegistrySnapshotWithMetadata.mockReset();
-    loadPluginManifestRegistry.mockReset();
-    loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
     loadPluginManifestRegistryForInstalledIndex.mockReset();
-    loadInstalledPluginIndexWithDiscovery.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
-    loadInstalledPluginIndexWithDiscovery.mockReturnValue({
-      index: makeIndex(),
-      discovery: { candidates: [], diagnostics: [] },
-    });
   });
 
   afterEach(() => {
@@ -337,7 +307,6 @@ describe("plugin metadata snapshot", () => {
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
 
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         index: expect.objectContaining({ plugins: [] }),
@@ -370,26 +339,28 @@ describe("plugin metadata snapshot", () => {
         includeDisabled: true,
       }),
     );
-    expect(loadInstalledPluginIndexWithDiscovery).not.toHaveBeenCalled();
   });
 
-  it("bootstraps bundled discovery when no registry snapshot is available", () => {
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue(undefined);
+  it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
+    const index = makeIndex();
+    const manifestRegistry = makeManifestRegistry();
+    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+      discovery,
+      manifestRegistry,
+    });
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
 
     expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
     expect(snapshot.registrySource).toBe("derived");
-    expect(snapshot.index.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    expect(loadInstalledPluginIndexWithDiscovery).toHaveBeenCalledExactlyOnceWith({
-      config: {},
-      env: {},
-    });
+    expect(snapshot.discovery).toBe(discovery);
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        index: expect.objectContaining({
-          plugins: [expect.objectContaining({ pluginId: "demo" })],
-        }),
+        manifestRegistry,
         includeDisabled: true,
       }),
     );

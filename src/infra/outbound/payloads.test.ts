@@ -2,6 +2,7 @@
 // interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
@@ -51,6 +52,43 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         audioAsVoice: true,
       },
     ]);
+  });
+
+  it("strips leading echoed inbound metadata before parsing reply directives", () => {
+    const text = [
+      markInboundContextLabel("Location:"),
+      "```json",
+      '{"latitude":51.5072,"longitude":-0.1276}',
+      "```",
+      "",
+      markInboundContextLabel("Plugin context:"),
+      "```json",
+      '{"source":"example","payload":{"mode":"test"}}',
+      "```",
+      "",
+      "[[reply_to: 123]] Visible reply",
+    ].join("\n");
+
+    expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([
+      {
+        text: "Visible reply",
+        replyToId: "123",
+        replyToTag: true,
+      },
+    ]);
+  });
+
+  it("preserves marked metadata examples after visible reply text", () => {
+    const text = [
+      "Here is the metadata format:",
+      "",
+      markInboundContextLabel("Location:"),
+      "```json",
+      '{"latitude":51.5072,"longitude":-0.1276}',
+      "```",
+    ].join("\n");
+
+    expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([{ text }]);
   });
 
   it("strips unsupported citation control markers from reply payload text", () => {

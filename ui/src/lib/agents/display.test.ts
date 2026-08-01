@@ -213,7 +213,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          list: [{ id: "main" }],
+          entries: { main: { default: true } },
         },
       },
       null,

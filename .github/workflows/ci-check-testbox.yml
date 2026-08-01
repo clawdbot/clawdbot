@@ -24,7 +24,6 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
   PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
 
 jobs:
@@ -99,6 +98,10 @@ jobs:
         with:
           install-bun: "false"
           install-trufflehog: "true"
+          # Real Testbox hydration reuses the protected dependency snapshot.
+          # Pull-request validation runs on GitHub-hosted runners instead.
+          sticky-disk: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}
       - name: Prepare Testbox shell
         shell: bash
         run: |
@@ -185,3 +188,23 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+      - name: Close Testbox SSH sessions
+        if: github.event_name == 'workflow_dispatch' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Testbox state stores Blacksmith's external forwarded port. Resolve
+          # sshd's VM-local listener because that is the sport visible to ss.
+          runner_ssh_local_port="$(sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+          if [[ ! "$runner_ssh_local_port" =~ ^[0-9]+$ ]] ||
+            (( runner_ssh_local_port < 1 || runner_ssh_local_port > 65535 )); then
+            echo "No valid local SSH listener port found; skipping session cleanup"
+            exit 0
+          fi
+
+          # run-testbox has no post hook. Close only Testbox client sockets so
+          # Blacksmith's runner teardown does not wait for its 290-second grace.
+          timeout --signal=KILL 5s sudo ss -K state established \
+            "( sport = :${runner_ssh_local_port} )" || true

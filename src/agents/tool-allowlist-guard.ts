@@ -37,11 +37,13 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   callableToolNames: string[];
   toolsEnabled: boolean;
   disableTools?: boolean;
+  toolsAllowExplicitlyEmpty?: boolean;
 }): Error | null {
-  const sources =
-    params.disableTools === true
-      ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
-      : params.sources;
+  const toolsIntentionallyDisabled =
+    params.disableTools === true || params.toolsAllowExplicitlyEmpty === true;
+  const sources = toolsIntentionallyDisabled
+    ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
+    : params.sources;
   const callableToolNames = normalizeToolList(params.callableToolNames);
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;

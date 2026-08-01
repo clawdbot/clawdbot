@@ -4,7 +4,7 @@
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
 import { getAgentRunContext } from "../infra/agent-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
@@ -23,7 +23,6 @@ import {
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
   getSubagentSessionRuntimeMs,
@@ -90,15 +89,10 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     return null;
   }
 
-  let latestInMemory: SubagentRunRecord | null = null;
-  for (const entry of subagentRuns.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (!latestInMemory || compareSubagentRunGeneration(entry, latestInMemory) > 0) {
-      latestInMemory = entry;
-    }
-  }
+  const latestInMemory = getLatestSubagentRunByChildSessionKeyFromRuns(
+    getSubagentRunsForChildSession(key),
+    key,
+  );
   // Fresh in-memory terminal state is more accurate than an older active snapshot row.
   return (
     latestInMemory ??

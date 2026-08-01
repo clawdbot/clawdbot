@@ -835,6 +835,7 @@ export async function runBtwSideQuestion(
   ): Promise<BtwHarnessSideQuestionDispatch> => {
     const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
       config: params.cfg,
+      sessionId,
       sessionKey: params.sessionKey,
       sandboxSessionKey: params.sandboxSessionKey,
       agentId: sessionAgentId,

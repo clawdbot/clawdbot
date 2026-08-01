@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
-  getMemoryEmbeddingProvider,
   getRegisteredMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -62,7 +61,7 @@ function expectCurrentMemoryEmbeddingProvider(
   id: string,
   adapter: MemoryEmbeddingProviderAdapter | undefined,
 ) {
-  expect(getMemoryEmbeddingProvider(id)).toBe(adapter);
+  expect(getRegisteredMemoryEmbeddingProvider(id)?.adapter).toBe(adapter);
 }
 
 function expectMemoryEmbeddingProviderState(params: {

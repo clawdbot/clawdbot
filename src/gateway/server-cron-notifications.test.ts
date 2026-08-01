@@ -261,6 +261,48 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(cleanupOrder).toEqual(["cancel", "release"]);
   });
 
+  it("releases Gateway admission when webhook response cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const response = new Response(
+        new ReadableStream({ cancel: () => new Promise<void>(() => {}) }),
+      );
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response,
+        finalUrl: "https://example.invalid/cron",
+        release,
+      });
+
+      const delivery = sendGatewayCronFailureAlert({
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+        job: createWebhookJob({
+          mode: "webhook",
+          to: "https://example.invalid/cron",
+        }),
+        text: "cron failed",
+        channel: "last",
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(release).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(delivery).resolves.toBeUndefined();
+      expect(release).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("adds the run start time to immediate chat alerts in the agent timezone", async () => {
     const job = createWebhookJob({
       mode: "announce",
@@ -286,6 +328,40 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "cron failed\nRun started: 2026-01-15 10:30 EST",
+      }),
+    );
+  });
+
+  it("preserves the primary topic on immediate failure alerts", async () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+    });
+
+    await sendGatewayCronFailureAlert({
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      job,
+      text: "cron failed",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+      mode: "announce",
+    });
+
+    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          channel: "telegram",
+          to: "-1001234567890",
+          accountId: "bot-a",
+          threadId: 42,
+        }),
       }),
     );
   });
@@ -771,6 +847,38 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
       inheritSessionThread: false,
     });
+  });
+
+  it("preserves the primary topic when a failed run falls back to its delivery route", () => {
+    const job = createWebhookJob({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+      threadId: 42,
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "error", error: "boom" },
+      job,
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "main",
+      job.id,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "-1001234567890",
+        accountId: "bot-a",
+        threadId: 42,
+      }),
+      expect.any(String),
+    );
   });
 
   it("announces channel-shaped failure destinations without mode under a global webhook default (#102235)", () => {

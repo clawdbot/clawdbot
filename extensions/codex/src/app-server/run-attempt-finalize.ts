@@ -122,7 +122,6 @@ export async function finalizeCodexAttempt(
   const recoveredTurnWatchTimeout =
     state.turnCompletionIdleTimedOut &&
     !terminalState.explicitCancellationObserved &&
-    !state.terminalTurnNotificationQueued &&
     hasRecoverableCompletedAssistant &&
     activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
   if (recoveredTurnWatchTimeout) {
@@ -271,18 +270,16 @@ export async function finalizeCodexAttempt(
     : undefined;
   const finalAborted = isFinalAborted();
   const completedTurnStatus = activeProjector.getCompletedTurnStatus();
-  const completedWithoutTerminalNotification =
+  const locallyCompletedTurn =
     state.completed &&
-    !state.terminalTurnNotificationQueued &&
+    (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    (completedTurnStatus === "completed" ||
-      recoveredTurnWatchTimeout ||
-      completedWithoutTerminalNotification);
+    (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
   // terminal observer consumes the result.

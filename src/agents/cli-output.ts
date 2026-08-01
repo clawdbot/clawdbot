@@ -6,6 +6,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  createReasoningTagTextPartitioner,
+  scanReasoningTags,
+  type ReasoningTagTextDelta,
+} from "../../packages/markdown-core/src/reasoning-tags.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
@@ -1232,6 +1237,87 @@ function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string |
   return undefined;
 }
 
+// A possible leading block stays buffered until visible prose or the message
+// boundary proves where private reasoning ends. Later tags remain literal.
+function partitionLeadingTaggedReasoning(
+  text: string,
+  final: boolean,
+): { pending: true } | { pending: false; reasoningText: string; visibleText: string } {
+  const first = text.search(/\S/u);
+  if (first === -1) {
+    return final ? { pending: false, reasoningText: "", visibleText: text } : { pending: true };
+  }
+  if (text.charAt(first) !== "<") {
+    return { pending: false, reasoningText: "", visibleText: text };
+  }
+
+  const scan = scanReasoningTags(text, final);
+  let depth = 0;
+  let end = -1;
+  for (const tag of scan.tags) {
+    if (depth === 0) {
+      const expectedStart = end === -1 ? first : end;
+      if (text.slice(expectedStart, tag.index).trim() || tag.isClose || tag.isSelfClosing) {
+        break;
+      }
+    }
+    depth += tag.isClose ? -1 : tag.isSelfClosing ? 0 : 1;
+    if (depth === 0 && tag.isClose) {
+      end = tag.index + tag.text.length;
+    }
+  }
+
+  const pendingTagAfterBlock =
+    end !== -1 && scan.pendingStart !== undefined && !text.slice(end, scan.pendingStart).trim();
+  if (end === -1) {
+    const pendingLeadingTag =
+      scan.pendingStart !== undefined && !text.slice(first, scan.pendingStart).trim();
+    return !final && (depth > 0 || pendingLeadingTag)
+      ? { pending: true }
+      : { pending: false, reasoningText: "", visibleText: text };
+  }
+  if (!final && (depth > 0 || pendingTagAfterBlock || !text.slice(end).trim())) {
+    return { pending: true };
+  }
+
+  const partitioner = createReasoningTagTextPartitioner();
+  const deltas = [...partitioner.pushVisible(text.slice(0, end)), ...partitioner.flush()];
+  const reasoningText = deltas
+    .filter((delta) => delta.kind === "thinking")
+    .map((delta) => delta.text)
+    .join("");
+  return reasoningText
+    ? { pending: false, reasoningText, visibleText: text.slice(end) }
+    : { pending: false, reasoningText: "", visibleText: text };
+}
+
+function createLeadingTaggedReasoningRouter() {
+  let pending = "";
+  let settled = false;
+  const consume = (chunk: string, final: boolean): ReasoningTagTextDelta[] => {
+    if (settled) {
+      return chunk ? [{ kind: "text", text: chunk }] : [];
+    }
+    pending += chunk;
+    const result = partitionLeadingTaggedReasoning(pending, final);
+    if (result.pending) {
+      return [];
+    }
+    settled = true;
+    pending = "";
+    return [
+      ...(result.reasoningText
+        ? ([{ kind: "thinking", text: result.reasoningText }] as const)
+        : []),
+      ...(result.visibleText ? ([{ kind: "text", text: result.visibleText }] as const) : []),
+    ];
+  };
+  return {
+    push: (chunk: string) => consume(chunk, false),
+    finish: () => consume("", true),
+  };
+}
+
 /** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
@@ -1280,6 +1366,9 @@ export function createCliJsonlStreamingParser(params: {
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
   const thinkingTracker = createThinkingTracker();
+  const claudeStreamJson = isClaudeStreamJsonDialect(params);
+  let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
+  let currentTaggedReasoningText = "";
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -1305,6 +1394,78 @@ export function createCliJsonlStreamingParser(params: {
     if (text) {
       params.onCommentaryText?.(text);
     }
+  };
+
+  const emitClaudeVisibleText = (delta: string) => {
+    if (!delta) {
+      return;
+    }
+    if (classifyClaudeCommentary) {
+      pendingClaudeText = `${pendingClaudeText}${delta}`;
+      return;
+    }
+    // A tool_use block starts a new post-tool segment even inside one assistant
+    // message; only tool-split boundaries may later outrank the result envelope.
+    // A message boundary is a tool split only when the PREVIOUS message used a
+    // tool: a tool-first fresh message must not connect an earlier draft, while
+    // a tool-using message keeps its text connected across its own boundary.
+    const boundaryPending = pendingMessageSeparator || sawToolUseSinceText;
+    const isToolSplitBoundary = pendingMessageSeparator
+      ? previousMessageHadToolUse
+      : sawToolUseSinceText;
+    const separator =
+      boundaryPending && assistantText ? missingMessageBoundarySeparator(assistantText, delta) : "";
+    if (boundaryPending && assistantText) {
+      currentMessageStart = assistantText.length + separator.length;
+      // Text before a non-tool boundary may be a superseded draft; only text
+      // connected to the result through tool splits stays a candidate.
+      if (!isToolSplitBoundary) {
+        preserveFrom = currentMessageStart;
+      }
+    }
+    pendingMessageSeparator = false;
+    sawToolUseSinceText = false;
+    const deltaText = `${separator}${delta}`;
+    assistantText = `${assistantText}${deltaText}`;
+    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+  };
+
+  const emitTaggedReasoning = (delta: string) => {
+    if (!delta) {
+      return;
+    }
+    currentTaggedReasoningText = `${currentTaggedReasoningText}${delta}`;
+    // Native thinking is the provider-authored shape and remains authoritative
+    // when a text block mirrors it with tags.
+    if (!thinkingTracker.emittedText) {
+      params.onThinkingDelta?.({
+        text: currentTaggedReasoningText,
+        delta,
+        isReasoningSnapshot: true,
+      });
+    }
+  };
+
+  const routeTaggedReasoningDeltas = (deltas: readonly ReasoningTagTextDelta[]) => {
+    for (const delta of deltas) {
+      if (delta.kind === "thinking") {
+        emitTaggedReasoning(delta.text);
+      } else {
+        emitClaudeVisibleText(delta.text);
+      }
+    }
+  };
+
+  const finishTaggedReasoningMessage = () => {
+    if (claudeStreamJson) {
+      routeTaggedReasoningDeltas(taggedReasoningRouter.finish());
+    }
+  };
+
+  const beginTaggedReasoningMessage = () => {
+    finishTaggedReasoningMessage();
+    taggedReasoningRouter = createLeadingTaggedReasoningRouter();
+    currentTaggedReasoningText = "";
   };
 
   const updateSessionId = (nextSessionId: string | undefined) => {
@@ -1479,10 +1640,13 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     if (classifyClaudeCommentary && parsed.type === "result") {
+      finishTaggedReasoningMessage();
       flushPendingClaudeAssistantText();
+    } else if (parsed.type === "result") {
+      finishTaggedReasoningMessage();
     }
 
-    const result = parseClaudeCliJsonlResult({
+    let result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -1493,6 +1657,19 @@ export function createCliJsonlStreamingParser(params: {
       if (result.errorText) {
         output = result;
         return;
+      }
+      if (claudeStreamJson && result.text) {
+        const taggedResult = partitionLeadingTaggedReasoning(result.text, true);
+        if (!taggedResult.pending && taggedResult.reasoningText) {
+          if (
+            !thinkingTracker.emittedText &&
+            taggedResult.reasoningText !== currentTaggedReasoningText
+          ) {
+            currentTaggedReasoningText = "";
+            emitTaggedReasoning(taggedResult.reasoningText);
+          }
+          result = { ...result, text: taggedResult.visibleText.trim() };
+        }
       }
       // Empty terminal result can follow already-streamed text; keep that text.
       const streamedText = assistantText.slice(segmentStart).trim();
@@ -1569,9 +1746,12 @@ export function createCliJsonlStreamingParser(params: {
       // boundary so accumulated text joins with a paragraph break instead of
       // gluing the pre-tool text to the next message's first delta.
       if (evt.type === "message_start") {
+        beginTaggedReasoningMessage();
         pendingMessageSeparator = true;
         previousMessageHadToolUse = currentMessageHadToolUse;
         currentMessageHadToolUse = false;
+      } else if (evt.type === "message_stop") {
+        finishTaggedReasoningMessage();
       }
       const isToolUseBlockStart =
         evt.type === "content_block_start" &&
@@ -1658,36 +1838,11 @@ export function createCliJsonlStreamingParser(params: {
       }
       return;
     }
-    if (classifyClaudeCommentary) {
-      pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
+    if (claudeStreamJson) {
+      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta.delta));
       return;
     }
-    // A tool_use block starts a new post-tool segment even inside one assistant
-    // message; only tool-split boundaries may later outrank the result envelope.
-    // A message boundary is a tool split only when the PREVIOUS message used a
-    // tool: a tool-first fresh message must not connect an earlier draft, while
-    // a tool-using message keeps its text connected across its own boundary.
-    const boundaryPending = pendingMessageSeparator || sawToolUseSinceText;
-    const isToolSplitBoundary = pendingMessageSeparator
-      ? previousMessageHadToolUse
-      : sawToolUseSinceText;
-    const separator =
-      boundaryPending && assistantText
-        ? missingMessageBoundarySeparator(assistantText, delta.delta)
-        : "";
-    if (boundaryPending && assistantText) {
-      currentMessageStart = assistantText.length + separator.length;
-      // Text before a non-tool boundary may be a superseded draft; only text
-      // connected to the result through tool splits stays a candidate.
-      if (!isToolSplitBoundary) {
-        preserveFrom = currentMessageStart;
-      }
-    }
-    pendingMessageSeparator = false;
-    sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta.delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ ...delta, text: assistantText, delta: deltaText });
+    emitClaudeVisibleText(delta.delta);
   };
 
   const flushLines = (flushPartial: boolean) => {
@@ -1757,6 +1912,7 @@ export function createCliJsonlStreamingParser(params: {
         return;
       }
       flushLines(true);
+      finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeAssistantText();
       }

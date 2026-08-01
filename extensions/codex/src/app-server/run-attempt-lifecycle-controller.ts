@@ -9,7 +9,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
 import {
@@ -78,16 +79,24 @@ export function createCodexAttemptLifecycleController(
     // Interrupt drops accepted pending input. Reject unconsumed steering first so
     // completion delivery can use its fallback path instead of reporting success.
     turnRuntime.steeringQueueRef.current?.cancel();
-    interruptCodexTurnBestEffort(resourceState.client, {
+    state.localCompletionRequested = true;
+    void interruptCodexTurnAndWaitBestEffort(resourceState.client, {
       threadId: value.call.threadId,
       turnId: value.call.turnId,
       timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    }).then(async (completed) => {
+      if (!completed) {
+        await closeCodexStartupClientBestEffort(resourceState.client);
+      }
+      if (state.completed) {
+        return;
+      }
+      state.completed = true;
+      turnWatches.clearCompletionIdleTimer();
+      turnWatches.clearAssistantCompletionIdleTimer();
+      turnWatches.clearTerminalIdleTimer();
+      state.resolveCompletion?.();
     });
-    state.completed = true;
-    turnWatches.clearCompletionIdleTimer();
-    turnWatches.clearAssistantCompletionIdleTimer();
-    turnWatches.clearTerminalIdleTimer();
-    state.resolveCompletion?.();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (

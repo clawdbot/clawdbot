@@ -50,6 +50,10 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("keeps the memory channel-context proof on the internal QA channel", () => {
+    expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
+  });
+
   it("marks live transport modules as live-driver-only", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",
@@ -63,6 +67,26 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("keeps the Teams final-dedupe proof on the real Gateway transport", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("msteams-thread-message-tool-final-dedupe"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("msteams");
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      tools: { alsoAllow: ["message"] },
+      agents: { entries: { qa: { tools: { alsoAllow: ["message"] } } } },
+    });
+    expect(flow).toContain("QA-MSTEAMS-SAME-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-THREAD-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-CONVERSATION-OK");
+    expect(flow).toContain("QA-MSTEAMS-DM-OK");
+    expect(flow).toContain("QA-MSTEAMS-GROUP-OK");
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
@@ -71,32 +95,24 @@ describe("qa scenario catalog channel contracts", () => {
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
-  it("uses durable subagent completion evidence before accepting fanout", () => {
+  it("uses public parent history and durable task records before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const completionWait = flow.indexOf('"saveAs":"completedFanout"');
-    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
     expect(flow).toContain('"call":"startAgentRun"');
     expect(flow).not.toContain('"call":"runAgentPrompt"');
     expect(flow).toContain('"taskTracking":false');
     expect(flow).toContain('"saveAs":"parentOutbound"');
-    expect(flow).toContain("messages.slice(parentOutboundStartIndex)");
-    expect(flow).not.toContain("waitForAgentHistoryReply");
+    expect(flow).toContain("waitForAgentHistoryReply");
     expect(flow).not.toContain('"call":"waitForOutboundMessage"');
     expect(flow).not.toContain("childCompletionMarker");
-    expect(flow).toContain("entry.spawnedBy === sessionKey");
-    expect(flow).toContain(
-      "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && (!env.mock || timeoutSpawnRequests.length >= 2)",
-    );
-    expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
-    expect(flow).toContain('saveAs":"timeoutEvidence');
-    expect(flow).toContain('saveAs":"recoveredParentOutbound');
+    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
+    expect(flow).toContain("task.requesterSessionKey === sessionKey");
+    expect(flow).toContain("task?.status === 'succeeded'");
+    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).not.toContain("readRawQaSessionStore");
+    expect(flow).not.toContain("readSessionTranscriptSummary");
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
-    expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
-    expect(completionWait).toBeGreaterThan(-1);
-    expect(storeReads).toHaveLength(2);
-    expect(completionWait).toBeLessThan(storeReads[0] ?? -1);
   });
 
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {

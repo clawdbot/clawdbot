@@ -381,7 +381,7 @@ openclaw config set channels.discord.token \
     {
       "ok": true,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,
@@ -398,7 +398,7 @@ openclaw config set channels.discord.token \
     {
       "ok": false,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,

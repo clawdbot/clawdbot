@@ -50,7 +50,7 @@ const DEPRECATION_HYGIENE_PATH_RE =
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
-  /^(?:package\.json$|ui\/src\/|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -222,16 +222,10 @@ export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   return [
     "scripts/crabbox-wrapper.mjs",
     "run",
-    "--provider",
-    "blacksmith-testbox",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    "--workload",
+    "ci-fast",
+    // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
+    // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
     "90m",
     "--ttl",
@@ -392,7 +386,7 @@ export function delegationFailedBeforeRunning(output) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
+  console.error("[check:changed] delegating through Crabbox workload routing.");
   let tail = "";
   const exitCode = await runManagedCommand({
     bin: "node",

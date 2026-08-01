@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,10 @@ import {
   sessionDeliveryChannel,
 } from "../utils/delivery-context.shared.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import {
+  type DoctorSessionEntryRow,
+  writeValidatedDoctorSessionEntryJson,
+} from "./doctor-session-entry-rewrite.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 export type SessionDeliveryStateRepairReport = {
@@ -30,7 +35,7 @@ type DeliveryRewrite = {
   channel: string | null;
   currentSessionId: string;
   entryJson: string;
-  sessionKey: string;
+  row: DoctorSessionEntryRow;
 };
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
@@ -95,22 +100,20 @@ function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const rows = executeSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select(["session_key", "current_session_id", "entry_json"]),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
   ).rows;
   return rows.flatMap((row) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.entry_json);
-    } catch {
-      return [];
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const parsed = parseSqliteSessionEntryRecord(row);
+    if (!parsed) {
       return [];
     }
     const entry = parsed as SessionEntry;
     const normalizedEntry = normalizeLegacySessionEntryDelivery(entry);
     const entryJson = JSON.stringify(normalizedEntry);
-    return entryJson === row.entry_json
+    return entryJson === row.entry_json ||
+      !parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })
       ? []
       : [
           {
@@ -118,7 +121,7 @@ function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
             channel: sessionDeliveryChannel(normalizedEntry) ?? null,
             currentSessionId: row.current_session_id,
             entryJson,
-            sessionKey: row.session_key,
+            row,
           },
         ];
   });
@@ -128,13 +131,7 @@ function applyDeliveryRewrites(database: DatabaseSync): number {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const rewrites = collectDeliveryRewrites(database);
   for (const rewrite of rewrites) {
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_json: rewrite.entryJson })
-        .where("session_key", "=", rewrite.sessionKey),
-    );
+    writeValidatedDoctorSessionEntryJson(database, rewrite.row, rewrite.entryJson);
     executeSqliteQuerySync(
       database,
       db

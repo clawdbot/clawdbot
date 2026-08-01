@@ -5,12 +5,14 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import {
   commitMainSessionRecovery,
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import type { TrustedSubagentCompletionHandoff } from "../../agents/subagent-announce-handoff.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -20,6 +22,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
 import {
   isPreRegistrationAbortedAgentDedupeEntryForSession,
@@ -44,6 +47,7 @@ export type PreparedAgentRunDispatch = {
   effectiveModelOverride?: string;
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   restoredCronContinuationLifecycleRevision?: string;
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
@@ -271,6 +275,35 @@ export async function prepareAgentRunDispatch(params: {
 
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
+  const completionSourceSessionKey =
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "subagent_announce"
+      ? params.inputProvenance.sourceSessionKey
+      : undefined;
+  const completionEvents = params.request.internalEvents?.filter(
+    (event) =>
+      event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
+  );
+  const completionEvent =
+    completionEvents?.length === 1 &&
+    completionEvents[0]?.childSessionKey === completionSourceSessionKey
+      ? completionEvents[0]
+      : undefined;
+  const trustedInternalHandoff =
+    params.providerOverride === undefined &&
+    params.modelOverride === undefined &&
+    params.restoredCronContinuation === undefined
+      ? consumeSubagentCompletionToolHandoff({
+          handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
+          sourceSessionKey: completionEvent?.childSessionKey,
+          sourceSessionId: completionEvent?.childSessionId,
+          targetSessionKey: params.resolvedSessionKey,
+          targetSessionId: params.getAdmittedSessionId(),
+          idempotencyKey: params.request.idempotencyKey,
+          provider: activeModel.provider,
+          model: activeModel.model,
+        })
+      : undefined;
   const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
     client: params.client,
     sessionKey: params.resolvedSessionKey,
@@ -403,6 +436,7 @@ export async function prepareAgentRunDispatch(params: {
     effectiveModelOverride,
     effectiveThinking,
     effectiveAllowModelOverride,
+    trustedInternalHandoff,
     restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
     lifecycleStorePath,
     resolvedThreadId,

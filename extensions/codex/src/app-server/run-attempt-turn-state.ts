@@ -1,7 +1,8 @@
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import {
@@ -44,6 +45,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
+    localCompletionRequested: false,
     terminalTurnNotificationQueued: false,
     // App-server collapses user interrupts and replacements to "interrupted";
     // this marker remains the user-interrupt hint until Codex exposes abortReason.
@@ -147,7 +149,14 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnAttemptIdleTimeoutMs,
     turnTerminalIdleTimeoutMs,
     interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-    onInterruptTurn: (input) => interruptCodexTurnBestEffort(resourceState.client, input),
+    onInterruptTurn: async (input) => {
+      state.localCompletionRequested = true;
+      const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, input);
+      if (!completed) {
+        await closeCodexStartupClientBestEffort(resourceState.client);
+      }
+      return completed;
+    },
     onTimeout: (timeout) => {
       state.timedOut = true;
       state.turnCompletionIdleTimedOut = true;

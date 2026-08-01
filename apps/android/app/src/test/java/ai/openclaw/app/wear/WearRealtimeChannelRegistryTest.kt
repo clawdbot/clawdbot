@@ -56,7 +56,8 @@ class WearRealtimeChannelRegistryTest {
 
         val secondClaim = checkNotNull(registry.claim("watch-a", "attempt-b"))
         withTimeout(2_000L) {
-          while (transport.closeCount(first) != 1 || synchronized(stoppedOwners) { stoppedOwners.size } != 1) {
+          transport.awaitClosed(first)
+          while (synchronized(stoppedOwners) { stoppedOwners.size } != 1) {
             kotlinx.coroutines.yield()
           }
         }
@@ -294,7 +295,8 @@ class WearRealtimeChannelRegistryTest {
         registry.accept(reconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(reconnect)
         withTimeout(1_000L) {
-          while (transport.closeCount(active) != 1 || !transport.hasStartedReading(reconnect)) yield()
+          transport.awaitClosed(active)
+          while (!transport.hasStartedReading(reconnect)) yield()
         }
 
         val repeated = checkNotNull(registry.claim("watch-a", "attempt-a"))
@@ -337,7 +339,8 @@ class WearRealtimeChannelRegistryTest {
         releaseWrite.countDown()
         withTimeout(1_000L) { send.await() }
         withTimeout(1_000L) {
-          while (transport.closeCount(active) != 1 || !transport.hasStartedReading(reconnect)) yield()
+          transport.awaitClosed(active)
+          while (!transport.hasStartedReading(reconnect)) yield()
         }
         assertTrue(registry.isCurrent(owner))
         registry.close(owner)
@@ -435,9 +438,7 @@ class WearRealtimeChannelRegistryTest {
         assertEquals(0, transport.closeCount(channel))
         scope.cancel()
         releaseClose.complete(Unit)
-        withTimeout(1_000L) {
-          while (transport.closeCount(channel) != 1) yield()
-        }
+        withTimeout(1_000L) { transport.awaitClosed(channel) }
       } finally {
         releaseClose.complete(Unit)
         scope.cancel()
@@ -483,9 +484,7 @@ class WearRealtimeChannelRegistryTest {
         val replacementOwner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
         assertEquals(listOf(activeOwner), synchronized(stoppedOwners) { stoppedOwners.toList() })
         assertTrue(registry.isCurrent(replacementOwner))
-        withTimeout(1_000L) {
-          while (transport.closeCount(staleReconnect) != 1) yield()
-        }
+        withTimeout(1_000L) { transport.awaitClosed(staleReconnect) }
         registry.close(replacementOwner)
       } finally {
         releaseStop.complete(Unit)
@@ -553,9 +552,7 @@ class WearRealtimeChannelRegistryTest {
       try {
         registry.accept(expired, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(expired)
-        withTimeout(1_000L) {
-          while (transport.closeCount(expired) != 1) yield()
-        }
+        withTimeout(1_000L) { transport.awaitClosed(expired) }
 
         val claim = async { registry.claim("watch-a", "attempt-a") }
         delay(100L)
@@ -655,6 +652,7 @@ class WearRealtimeChannelRegistryTest {
       val releaseStop = CompletableDeferred<Unit>()
       val active = FakeChannel("watch-a", "channel-a", "attempt-a")
       val reserved = FakeChannel("watch-a", "channel-b-reserved", "attempt-b")
+      val supersededReconnect = FakeChannel("watch-a", "channel-b-superseded", "attempt-b")
       val reconnect = FakeChannel("watch-a", "channel-b-reconnect", "attempt-b")
       val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
         if (owner.attemptId == "attempt-a") {
@@ -672,13 +670,18 @@ class WearRealtimeChannelRegistryTest {
         val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
         withTimeout(1_000L) { stopStarted.await() }
 
+        registry.accept(supersededReconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
+        transport.awaitOpened(supersededReconnect)
         registry.accept(reconnect, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(reconnect)
+        // The older reconnect cannot close until the newest channel is published in the registry.
+        withTimeout(1_000L) { transport.awaitClosed(supersededReconnect) }
         releaseStop.complete(Unit)
 
         val owner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
-        assertEquals(3L, owner.channelGeneration)
+        assertEquals(4L, owner.channelGeneration)
         assertEquals(1, transport.closeCount(reserved))
+        assertEquals(1, transport.closeCount(supersededReconnect))
         assertEquals(0, transport.closeCount(reconnect))
         assertTrue(registry.isCurrent(owner))
         registry.close(owner)
@@ -728,13 +731,9 @@ class WearRealtimeChannelRegistryTest {
 
         val owner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
         withTimeout(1_000L) {
-          while (
-            transport.closeCount(reserved) != 1 ||
-            transport.closeCount(firstReconnect) != 1 ||
-            !transport.hasStartedReading(latestReconnect)
-          ) {
-            yield()
-          }
+          transport.awaitClosed(reserved)
+          transport.awaitClosed(firstReconnect)
+          while (!transport.hasStartedReading(latestReconnect)) yield()
         }
         assertEquals("attempt-b", owner.attemptId)
         assertEquals(0, transport.closeCount(latestReconnect))
@@ -781,9 +780,7 @@ class WearRealtimeChannelRegistryTest {
         val cancelledClaim = async { registry.claim("watch-a", "attempt-b") }
         withTimeout(1_000L) { stopStarted.await() }
         cancelledClaim.cancelAndJoin()
-        withTimeout(1_000L) {
-          while (transport.closeCount(cancelled) != 1) yield()
-        }
+        withTimeout(1_000L) { transport.awaitClosed(cancelled) }
 
         registry.accept(retry, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(retry)
@@ -836,9 +833,7 @@ class WearRealtimeChannelRegistryTest {
 
         releaseFirst.complete(Unit)
         transport.awaitOpened(first)
-        withTimeout(1_000L) {
-          while (transport.closeCount(first) != 1) yield()
-        }
+        withTimeout(1_000L) { transport.awaitClosed(first) }
 
         val repeated = checkNotNull(registry.claim("watch-a", "attempt-b"))
         assertFalse(repeated.newlyAcquired)
@@ -926,7 +921,7 @@ class WearRealtimeChannelRegistryTest {
         transport.awaitOpened(first)
 
         registry.accept(sameNodeExcess, appendAudio = { _, _ -> }, stopTalk = {})
-        transport.awaitCloseStarted(sameNodeExcess)
+        transport.awaitClosed(sameNodeExcess)
         assertFalse(transport.wasOpened(sameNodeExcess))
         assertEquals(1, transport.closeCount(sameNodeExcess))
 
@@ -934,7 +929,7 @@ class WearRealtimeChannelRegistryTest {
         transport.awaitOpened(secondNode)
 
         registry.accept(globalExcess, appendAudio = { _, _ -> }, stopTalk = {})
-        transport.awaitCloseStarted(globalExcess)
+        transport.awaitClosed(globalExcess)
         assertFalse(transport.wasOpened(globalExcess))
         assertEquals(1, transport.closeCount(globalExcess))
       } finally {
@@ -948,6 +943,7 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
   private val openGates = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeGates = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeStarted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
+  private val closeCompleted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeCounts = ConcurrentHashMap<ChannelClient.Channel, Int>()
   private val writeGates = ConcurrentHashMap<ChannelClient.Channel, CountDownLatch>()
   private val writeStarted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
@@ -977,6 +973,7 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
     resources?.input?.close()
     resources?.output?.close()
     closeCounts.compute(channel) { _, count -> (count ?: 0) + 1 }
+    closeCompleted.computeIfAbsent(channel) { CompletableDeferred() }.complete(Unit)
   }
 
   suspend fun awaitOpened(channel: ChannelClient.Channel) {
@@ -997,6 +994,10 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
 
   suspend fun awaitCloseStarted(channel: ChannelClient.Channel) {
     closeStarted.computeIfAbsent(channel) { CompletableDeferred() }.await()
+  }
+
+  suspend fun awaitClosed(channel: ChannelClient.Channel) {
+    closeCompleted.computeIfAbsent(channel) { CompletableDeferred() }.await()
   }
 
   fun holdWrite(channel: ChannelClient.Channel): CountDownLatch =

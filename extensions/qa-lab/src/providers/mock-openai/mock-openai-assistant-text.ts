@@ -11,9 +11,11 @@ import {
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
   QA_IMAGE_GENERATION_PROMPT_RE,
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
+  buildSlackMpimHistoryBotReply,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
-  type MockScenarioState,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -33,6 +35,7 @@ import {
   extractLastUserText,
   extractToolOutput,
   extractLatestToolOutput,
+  extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
   extractAllRequestTexts,
   extractLatestImageUserTurn,
@@ -62,11 +65,7 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
-export function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
-) {
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
   const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
@@ -137,6 +136,18 @@ export function buildAssistantText(
     toolJson,
   });
 
+  const slackMpimHistoryRecall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
+  if (slackMpimHistoryRecall) {
+    const [, botReplyPrefix, recalledMarker, missingMarker] = slackMpimHistoryRecall;
+    const nonce = botReplyPrefix
+      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
+      : undefined;
+    return nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? "");
+  }
+  const slackMpimHistorySeed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
+  if (slackMpimHistorySeed) {
+    return buildSlackMpimHistoryBotReply(slackMpimHistorySeed);
+  }
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
   }
@@ -304,11 +315,6 @@ export function buildAssistantText(
   }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
-  }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
   }
   if (
     /forked subagent context qa check/i.test(prompt) &&

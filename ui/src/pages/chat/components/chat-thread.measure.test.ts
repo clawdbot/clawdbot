@@ -165,6 +165,35 @@ describe("chat transcript row measurement", () => {
     }
   });
 
+  it.each(["Enter", " "])("opens focused transcript file links with %j", async (key) => {
+    const transcript = createTestTranscript();
+    const onOpenWorkspaceFile = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-file-link", "agent:main:main", [
+        { role: "assistant", content: "Inspect `src/chat.ts:17`", timestamp: 1_000 },
+      ]),
+      onOpenWorkspaceFile,
+      onHistoryIntent,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+    link?.focus();
+    expect(document.activeElement).toBe(link);
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/chat.ts", line: 17 });
+    expect(onHistoryIntent).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
+
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
     const messagesA = [{ role: "assistant", content: "session A", timestamp: 1_000 }];

@@ -129,6 +129,33 @@ describe("printCronList", () => {
     expect(output).not.toContain(injectedMarker);
   });
 
+  it.each([
+    ["halfwidth voiced kana", `${"x".repeat(23)}ﾊﾞ`, `${"x".repeat(21)}...`],
+    ["halfwidth semi-voiced kana", `${"x".repeat(23)}ﾊﾟ`, `${"x".repeat(21)}...`],
+    ["zero-width space", `${"x".repeat(23)}\u200B`, `${"x".repeat(23)}\u200B `],
+    ["word joiner", `${"x".repeat(23)}\u2060`, `${"x".repeat(23)}\u2060 `],
+    ["zero-width no-break space", `${"x".repeat(23)}\uFEFF`, `${"x".repeat(23)}\uFEFF `],
+    ["leading zero-width non-joiner", `\u200C${"x".repeat(23)}`, `\u200C${"x".repeat(23)} `],
+    ["Hindi spacing mark", `${"x".repeat(23)}का`, `${"x".repeat(21)}...`],
+    ["repeated Hangul jamo", `${"x".repeat(22)}ᄀ가`, `${"x".repeat(21)}...`],
+    ["Hangul leading filler", `${"x".repeat(23)}\u115F`, `${"x".repeat(21)}...`],
+    ["Hangul compatibility filler", `${"x".repeat(23)}\u3164`, `${"x".repeat(21)}...`],
+    ["halfwidth Hangul filler", `${"x".repeat(23)}\uFFA0`, `${"x".repeat(23)}\uFFA0`],
+    ["zero-width Hangul vowel filler", `${"x".repeat(23)}\u1160`, `${"x".repeat(23)}\u1160 `],
+    ["lone high surrogate", `${"x".repeat(23)}\uD800`, `${"x".repeat(23)}\uD800`],
+    ["lone low surrogate", `${"x".repeat(23)}\uDC00`, `${"x".repeat(23)}\uDC00`],
+  ])("aligns the %s name cell without relying on its width helper", (_label, name, expected) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList([createBaseJob({ name })], runtime);
+
+    const [header = "", row = ""] = logs;
+    const nameColumn = header.indexOf("Name");
+    const scheduleColumn = row.indexOf("at ");
+    expect(nameColumn).toBeGreaterThan(-1);
+    expect(scheduleColumn).toBeGreaterThan(nameColumn);
+    expect(row.slice(nameColumn, scheduleColumn - 1)).toBe(expected);
+  });
+
   it("sanitizes and bounds named-session targets", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const injectedMarker = "cron-target-injection";

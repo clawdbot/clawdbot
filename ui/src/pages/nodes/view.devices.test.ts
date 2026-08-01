@@ -635,10 +635,10 @@ describe("nodes exec approvals rendering", () => {
     const container = renderNodesContainer({
       configForm: {
         agents: {
-          list: [
-            { id: "main", name: "Main", default: true },
-            { id: "research", name: "Research" },
-          ],
+          entries: {
+            main: { name: "Main", default: true },
+            research: { name: "Research" },
+          },
         },
       },
       execApprovalsForm: {
@@ -695,5 +695,36 @@ describe("nodes exec approvals rendering", () => {
     expect(section.textContent).toContain("hostname");
     expect(section.textContent).toContain("deny");
     expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("nodes agent bindings", () => {
+  it("reports the keyed agent id when a binding changes", () => {
+    const onBindAgent = vi.fn();
+    const container = renderNodesContainer({
+      nodes: [
+        {
+          nodeId: "worker-node",
+          displayName: "Worker node",
+          commands: ["system.run"],
+        },
+      ],
+      configForm: {
+        agents: {
+          entries: {
+            MAIN: { default: true },
+            research: {},
+          },
+        },
+      },
+      onBindAgent,
+    });
+    const bindingSection = getSection(container, "Exec node binding");
+    const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
+
+    selects[1]!.value = "worker-node";
+    selects[1]!.dispatchEvent(new Event("change"));
+
+    expect(onBindAgent).toHaveBeenCalledWith("MAIN", "worker-node");
   });
 });

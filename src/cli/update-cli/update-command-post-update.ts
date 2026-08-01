@@ -38,9 +38,13 @@ import {
 } from "./update-command-post-core.js";
 import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
 import {
+  assertGatewayServiceManagementAllowedForUpdate,
+  GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
+  isGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
+  resolveGatewayServiceManagementBlockMessageForUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   restoreWindowsTaskAutoStartOrExit,
@@ -340,18 +344,30 @@ export async function finishUpdate(params: {
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let skipLegacyServiceRestart = false;
+  const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
+    updateMode: resultWithPostUpdate.mode,
+    processEnv: process.env,
+    preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
+  });
+  const serviceMutationAllowed =
+    params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+    isGatewayServiceManagementAllowedForUpdate(process.env) &&
+    isGatewayServiceManagementAllowedForUpdate(serviceStateReadEnv);
+  const serviceMutationSkipMessage =
+    params.shouldRestart && !serviceMutationAllowed
+      ? (params.preManagedServiceStop?.serviceMutationSkipMessage ??
+        resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
+        resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
+      : undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
     processEnv: process.env,
   });
-  if (params.shouldRestart) {
+  if (params.shouldRestart && serviceMutationAllowed) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: resolvePostUpdateServiceStateReadEnv({
-          updateMode: resultWithPostUpdate.mode,
-          processEnv: process.env,
-          preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-        }),
+        env: serviceStateReadEnv,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       });
       const serviceMatchesUpdateRoot =
         (await gatewayServiceCommandUsesRoot({
@@ -399,7 +415,12 @@ export async function finishUpdate(params: {
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnv = serviceOwnershipConfirmed;
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof GatewayServiceUpdateOwnershipError) {
+        defaultRuntime.error(err.message);
+        defaultRuntime.exit(1);
+        return;
+      }
       // Ignore errors during pre-check; fallback to standard restart
     }
   }
@@ -420,7 +441,7 @@ export async function finishUpdate(params: {
     return;
   }
   const restartOk = await maybeRestartService({
-    shouldRestart: params.shouldRestart,
+    shouldRestart: params.shouldRestart && serviceMutationAllowed,
     result: resultWithPostUpdate,
     opts: params.opts,
     refreshServiceEnv: refreshGatewayServiceEnv,
@@ -432,6 +453,7 @@ export async function finishUpdate(params: {
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && params.preManagedServiceStop?.stopped === true,
+    serviceMutationSkipMessage,
     timeoutMs: params.updateStepTimeoutMs,
   });
   if (!restartOk) {

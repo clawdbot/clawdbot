@@ -274,6 +274,23 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
   });
 
+  it("surfaces /new guidance for terminal thinking-signature replay failures", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}';
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "Session history or replay state is invalid. Use /new to start a fresh session and try again.",
+      isError: true,
+    });
+  });
+
   it("uses structured provider details for model-not-found reply payloads", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

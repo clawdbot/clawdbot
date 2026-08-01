@@ -5,20 +5,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { ensureDirectory, logVerboseCopy, resolveBuildCopyContext } from "./lib/copy-assets.ts";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 
 const context = resolveBuildCopyContext(import.meta.url);
 
-const exportHtmlSrcDir = path.join(
-  context.projectRoot,
-  "src",
-  "auto-reply",
-  "reply",
-  "export-html",
-);
-const exportHtmlDistDir = path.join(context.projectRoot, "dist", "export-html");
-
-function copyExportHtmlTemplates() {
+export function copyExportHtmlTemplates(params: { projectRoot?: string } = {}) {
+  const projectRoot = params.projectRoot ?? context.projectRoot;
+  const exportHtmlSrcDir = path.join(projectRoot, "src", "auto-reply", "reply", "export-html");
+  const exportHtmlDistDir = path.join(projectRoot, "dist", "export-html");
+  assertRealOutputRoot(path.join(projectRoot, "dist"));
   if (!fs.existsSync(exportHtmlSrcDir)) {
     console.warn(`${context.prefix} Source directory not found:`, exportHtmlSrcDir);
     return;
@@ -52,4 +49,6 @@ function copyExportHtmlTemplates() {
   console.log(`${context.prefix} Copied ${copiedCount} export-html assets.`);
 }
 
-copyExportHtmlTemplates();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  copyExportHtmlTemplates();
+}

@@ -1,7 +1,9 @@
 // Codex plugin module implements conversation turn collector behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isAssistantCommentaryCompletionNotification } from "./app-server/attempt-notifications.js";
 import {
+  isCodexNotificationForTurn,
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./app-server/notification-correlation.js";
@@ -13,26 +15,28 @@ import {
 
 const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
 
+/** Identifies a timer that expired in the bound-turn collector itself. */
+export class CodexConversationTurnTimeoutError extends Error {
+  constructor() {
+    super("codex app-server bound turn timed out");
+    this.name = "CodexConversationTurnTimeoutError";
+  }
+}
+
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
   let completed = false;
+  let terminalReceived = false;
   let failedError: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
-  const assistantOrder: string[] = [];
   const pendingNotificationsByTurnId = new Map<string, CodexServerNotification[]>();
   let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
+  let resolveTerminal: (() => void) | undefined;
 
-  const rememberItem = (itemId: string) => {
-    if (!assistantOrder.includes(itemId)) {
-      assistantOrder.push(itemId);
-    }
-  };
   const collectReplyText = (): string => {
-    const texts = assistantOrder
-      .map((itemId) => assistantTextByItem.get(itemId)?.trim())
-      .filter((text): text is string => Boolean(text));
+    const texts = [...assistantTextByItem.values()].map((text) => text.trim()).filter(Boolean);
     return texts.at(-1) ?? "";
   };
   const clearWaitState = () => {
@@ -62,17 +66,29 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (!turnId) {
-      const pendingTurnId = readNotificationTurnId(params);
+      const pendingTurnId = readCodexNotificationTurnId(params);
       if (pendingTurnId) {
         const pending = pendingNotificationsByTurnId.get(pendingTurnId) ?? [];
-        if (pending.length < MAX_PENDING_NOTIFICATIONS_PER_TURN) {
-          pending.push(notification);
-          pendingNotificationsByTurnId.set(pendingTurnId, pending);
+        if (pending.length === MAX_PENDING_NOTIFICATIONS_PER_TURN) {
+          const incomingPriority = pendingNotificationPriority(notification);
+          // Keep the facts that classify assistant output and terminate the turn;
+          // otherwise retained progress deltas can impersonate a final answer.
+          const expiredPriority = Math.min(...pending.map(pendingNotificationPriority));
+          const maxReplaceablePriority = incomingPriority >= 2 ? 2 : incomingPriority - 1;
+          if (expiredPriority > maxReplaceablePriority) {
+            return;
+          }
+          pending.splice(
+            pending.findIndex((item) => pendingNotificationPriority(item) === expiredPriority),
+            1,
+          );
         }
+        pending.push(notification);
+        pendingNotificationsByTurnId.set(pendingTurnId, pending);
       }
       return;
     }
-    if (!isNotificationForTurn(params, threadId, turnId)) {
+    if (!isCodexNotificationForTurn(params, threadId, turnId)) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
@@ -81,7 +97,6 @@ export function createCodexConversationTurnCollector(threadId: string) {
       if (!delta) {
         return;
       }
-      rememberItem(itemId);
       assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
       return;
     }
@@ -89,31 +104,44 @@ export function createCodexConversationTurnCollector(threadId: string) {
       const item = isJsonObject(params.item) ? params.item : undefined;
       if (item?.type === "agentMessage") {
         const itemId = readString(item, "id") ?? readString(params, "itemId") ?? "assistant";
+        assistantTextByItem.delete(itemId);
+        if (isAssistantCommentaryCompletionNotification(notification)) {
+          return;
+        }
         const text = readTextString(item, "text");
-        if (text) {
-          rememberItem(itemId);
+        if (text?.trim()) {
           assistantTextByItem.set(itemId, text);
         }
       }
       return;
     }
     if (notification.method === "turn/completed") {
+      terminalReceived = true;
+      resolveTerminal?.();
       const turn = isJsonObject(params.turn) ? params.turn : undefined;
       const status = readString(turn, "status");
       if (status === "failed") {
         failedError =
           readString(readRecord(turn?.error), "message") ?? "codex app-server turn failed";
+      } else if (status === "interrupted") {
+        // Codex reports an interrupted turn as a terminal completion without a
+        // final answer; streamed partial text must not become a successful reply.
+        failedError = "codex app-server turn interrupted";
+      } else if (status !== "completed") {
+        failedError = "codex app-server turn completed without a valid terminal status";
       }
-      const items = Array.isArray(turn?.items) ? turn.items : [];
-      for (const item of items) {
-        if (!isJsonObject(item) || item.type !== "agentMessage") {
-          continue;
-        }
-        const itemId = readString(item, "id") ?? `assistant-${assistantOrder.length + 1}`;
-        const text = readTextString(item, "text");
-        if (text) {
-          rememberItem(itemId);
-          assistantTextByItem.set(itemId, text);
+      if (status === "completed") {
+        const items = Array.isArray(turn?.items) ? turn.items : [];
+        for (const item of items) {
+          if (!isJsonObject(item) || item.type !== "agentMessage") {
+            continue;
+          }
+          const itemId = readString(item, "id") ?? `assistant-${assistantTextByItem.size + 1}`;
+          assistantTextByItem.delete(itemId);
+          const text = item.phase === "commentary" ? undefined : readTextString(item, "text");
+          if (text?.trim()) {
+            assistantTextByItem.set(itemId, text);
+          }
         }
       }
       finish();
@@ -130,6 +158,26 @@ export function createCodexConversationTurnCollector(threadId: string) {
       }
     },
     handleNotification,
+    waitForTerminal(params: { timeoutMs: number }): Promise<void> {
+      if (terminalReceived) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => {
+        const terminalTimeout = setTimeout(
+          () => {
+            resolveTerminal = undefined;
+            reject(new Error("codex app-server interrupted turn did not complete"));
+          },
+          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
+        );
+        terminalTimeout.unref?.();
+        resolveTerminal = () => {
+          clearTimeout(terminalTimeout);
+          resolveTerminal = undefined;
+          resolve();
+        };
+      });
+    },
     wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
       if (completed) {
         return failedError
@@ -142,7 +190,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
         timeout = setTimeout(
           () => {
             completed = true;
-            reject(new Error("codex app-server bound turn timed out"));
+            reject(new CodexConversationTurnTimeoutError());
             clearWaitState();
           },
           resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
@@ -153,27 +201,15 @@ export function createCodexConversationTurnCollector(threadId: string) {
   };
 }
 
-function isNotificationForTurn(
-  params: JsonObject,
-  threadId: string,
-  turnId: string | undefined,
-): boolean {
-  if (readCodexNotificationThreadId(params) !== threadId) {
-    return false;
+function pendingNotificationPriority(notification: CodexServerNotification) {
+  if (notification.method === "turn/completed") {
+    return 3;
   }
-  if (!turnId) {
-    return true;
+  const item = readRecord(readRecord(notification.params)?.item);
+  if (notification.method !== "item/completed" || item?.type !== "agentMessage") {
+    return 0;
   }
-  const directTurnId = readString(params, "turnId");
-  if (directTurnId) {
-    return directTurnId === turnId;
-  }
-  const turn = isJsonObject(params.turn) ? params.turn : undefined;
-  return readString(turn, "id") === turnId;
-}
-
-function readNotificationTurnId(params: JsonObject): string | undefined {
-  return readCodexNotificationTurnId(params);
+  return isAssistantCommentaryCompletionNotification(notification) ? 1 : 2;
 }
 
 function readString(record: Record<string, unknown> | JsonObject | undefined, key: string) {

@@ -11,6 +11,16 @@ const loadGetMemorySearchManager = createLazyRuntimeModule(() =>
   import("./index.js").then((mod) => mod.getMemorySearchManager),
 );
 
+export function isolateMemoryManagerTestConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      enabled: cfg.plugins?.enabled ?? false,
+    },
+  };
+}
+
 export async function getRequiredMemoryIndexManager(params: {
   cfg: OpenClawConfig;
   agentId?: string;

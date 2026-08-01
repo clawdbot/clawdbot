@@ -758,10 +758,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     const ws = this.ws;
     this.ws = null;
     ws?.close(1000, "Bridge closed");
@@ -1385,6 +1388,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         return;
 
       case "conversation.output_transcript.delta":
+      case "response.text.delta":
       case "response.output_text.delta":
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
@@ -1393,6 +1397,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "response.text.done":
       case "response.output_text.done":
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done":
@@ -1415,6 +1420,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (event.transcript) {
           this.config.onTranscript?.("user", event.transcript, true);
         }
+        return;
+
+      case "conversation.item.input_audio_transcription.failed":
+        this.config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
         return;
 
       case "response.cancelled":
@@ -1453,7 +1462,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           itemId: event.item_id,
           callId: buffered?.callId || event.call_id,
           name: buffered?.name || event.name,
-          rawArgs: buffered?.args || event.arguments,
+          // The done payload owns the final JSON; streamed chunks may be stale or incomplete.
+          rawArgs: event.arguments ?? buffered?.args,
         });
         this.toolCallBuffers.delete(key);
         return;
@@ -1762,7 +1772,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private describeServerEvent(event: RealtimeEvent): string | undefined {
-    if (event.type === "error") {
+    if (
+      event.type === "error" ||
+      event.type === "conversation.item.input_audio_transcription.failed"
+    ) {
       return readRealtimeErrorDetail(event.error);
     }
     if (event.type === "response.done") {

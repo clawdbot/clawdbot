@@ -8,9 +8,7 @@ import {
 
 function buildSlackInvalidBlocksTableRow(index: number) {
   const rowId = String(index).padStart(3, "0");
-  // Cross both independently documented native-table limits. Slack has
-  // accepted the over-row-limit shape alone, so the probe also exceeds the
-  // 10,000-character aggregate cell contract.
+  // Keep the fallback large enough to catch accidental truncation.
   return [`row-${rowId}`, `value-${rowId}-${"x".repeat(96)}`] as const;
 }
 

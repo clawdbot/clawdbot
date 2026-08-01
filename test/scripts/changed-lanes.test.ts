@@ -300,7 +300,7 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
     expect(result.stderr).not.toContain("ambiguous argument");
   });
 
@@ -334,7 +334,7 @@ describe("scripts/changed-lanes", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
   });
 
   it.each([
@@ -953,6 +953,7 @@ describe("scripts/changed-lanes", () => {
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["ui/config/control-ui-locales.ts"])).toBe(true);
     expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
@@ -1140,16 +1141,8 @@ describe("scripts/changed-lanes", () => {
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "scripts/crabbox-wrapper.mjs",
       "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--blacksmith-org",
-      "openclaw",
-      "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
-      "--blacksmith-job",
-      "check",
-      "--blacksmith-ref",
-      "main",
+      "--workload",
+      "ci-fast",
       "--idle-timeout",
       "90m",
       "--ttl",

@@ -777,6 +777,98 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it.each([
+    {
+      name: "trusted one-tool completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: true,
+    },
+    {
+      name: "ordinary private reply",
+      trustedInternalHandoff: false,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "different handoff owner",
+      trustedInternalHandoff: true,
+      sourceTool: "sessions_send",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "wider trusted completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message", "read"],
+      expected: true,
+    },
+    {
+      name: "automatic completion delivery",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "automatic" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+  ])("limits $name to the source only for verified completion delivery", async (testCase) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-source-reply-only-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const sessionKey = "agent:main:direct:requester";
+      const sessionId = "requester-session";
+      const childSessionKey = "agent:main:subagent:child";
+      await writeSessionStore(storeTemplate, "main", {
+        [childSessionKey]: {
+          sessionId: "child-session",
+          updatedAt: Date.now(),
+          spawnedBy: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          inheritedToolPolicyVersion: 1,
+        },
+      });
+      vi.mocked(createOpenClawTools).mockClear();
+      createOpenClawCodingTools({
+        config: { session: { store: storeTemplate } },
+        sessionKey,
+        sessionId,
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+        trustedInternalHandoff: testCase.trustedInternalHandoff
+          ? {
+              kind: "subagent-completion",
+              sourceSessionKey: childSessionKey,
+              sourceSessionId: "child-session",
+              targetSessionKey: sessionKey,
+              targetSessionId: sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            }
+          : undefined,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: testCase.sourceTool,
+        },
+        sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+      });
+
+      expect(latestCreateOpenClawToolsOptions().sourceReplyOnly).toBe(testCase.expected);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured filesystem policy to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

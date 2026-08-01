@@ -12,6 +12,7 @@ import {
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   patchSettings,
+  UI_APPEARANCE_DEFAULTS,
   type ChatFollowUpMode,
   type ChatSendShortcut,
   type UiSettings,
@@ -22,8 +23,10 @@ const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"])
 type SyncedPrefSpec<T> = {
   extract: (value: unknown) => T | undefined;
   local: (settings: UiSettings) => T | undefined;
+  write?: (value: T | undefined) => Partial<UiSettings>;
   canApply?: (value: T, settings: UiSettings) => boolean;
   clearable?: boolean;
+  reset?: (settings: UiSettings) => Partial<UiSettings>;
 };
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 function prefValuesEqual(left: unknown, right: unknown): boolean {
@@ -42,6 +45,9 @@ const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
     extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
     local: (settings) => settings.theme,
+    write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
+    clearable: true,
+    reset: () => ({ theme: UI_APPEARANCE_DEFAULTS.theme }),
     // A server "custom" theme is only honorable once this browser imported one;
     // the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
@@ -49,10 +55,16 @@ const SYNCED_PREFS = {
   themeMode: prefSpec<ThemeMode>({
     extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
     local: (settings) => settings.themeMode,
+    write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
+    clearable: true,
+    reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
+    write: (value) => ({ locale: value }),
+    clearable: true,
+    reset: () => ({ locale: undefined }),
   }),
   chatShowThinking: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
@@ -72,13 +84,18 @@ const SYNCED_PREFS = {
         ? normalizeChatSendShortcut(value)
         : undefined,
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
+    write: (value) => ({ chatSendShortcut: value }),
+    clearable: true,
+    reset: () => ({ chatSendShortcut: undefined }),
   }),
   chatFollowUpMode: prefSpec<ChatFollowUpMode>({
     extract: (value) => normalizeChatFollowUpModeOverride(value),
     local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
+    write: (value) => ({ chatFollowUpMode: value }),
     // Unset means "use the server-configured queue mode"; clearing must propagate,
     // so the push serializes an explicit null removal.
     clearable: true,
+    reset: () => ({ chatFollowUpMode: undefined }),
   }),
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
@@ -86,6 +103,12 @@ const SYNCED_PREFS = {
   }),
 } as const;
 type SyncedPrefKey = keyof typeof SYNCED_PREFS;
+type ResettableServerUiPrefKey =
+  | "theme"
+  | "themeMode"
+  | "locale"
+  | "chatSendShortcut"
+  | "chatFollowUpMode";
 type SyncedPrefValue<K extends SyncedPrefKey> =
   ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
 type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
@@ -97,6 +120,14 @@ type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "runExternalMutation"> 
 };
 type ServerUiPrefsCommit = {
   needsRefresh: boolean;
+  retainedLocal?: boolean;
+};
+export type ServerUiPrefProvenance = "default" | "pending" | "synced" | "device-local";
+export type ServerUiPrefState<T> = {
+  overridden: boolean;
+  provenance: ServerUiPrefProvenance;
+  resetValue: T | undefined;
+  value: T | undefined;
 };
 const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
@@ -113,6 +144,78 @@ function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   }
   return result;
 }
+
+export function resolveServerUiPrefState<K extends SyncedPrefKey>(
+  configObject: unknown,
+  key: K,
+  scope = "",
+  settings = loadSettings(),
+): ServerUiPrefState<SyncedPrefValue<K>> {
+  const specification = SYNCED_PREFS[key];
+  const localValue = specification.local(settings) as SyncedPrefValue<K> | undefined;
+  const resetPatch = specification.reset?.(settings);
+  const productDefault = (
+    resetPatch ? specification.local({ ...settings, ...resetPatch }) : undefined
+  ) as SyncedPrefValue<K> | undefined;
+  const localState = (
+    resetValue: SyncedPrefValue<K> | undefined,
+  ): ServerUiPrefState<SyncedPrefValue<K>> => {
+    const overridden = !prefValuesEqual(localValue, resetValue);
+    return {
+      overridden,
+      provenance: overridden ? "device-local" : "default",
+      resetValue,
+      value: localValue,
+    };
+  };
+  const shadowPrefs =
+    scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
+  if (shadowPrefs && key in shadowPrefs) {
+    const shadowValue = shadowPrefs[key];
+    if (shadowValue === null) {
+      return { ...localState(productDefault), provenance: "pending" };
+    }
+    return {
+      overridden: true,
+      provenance: "pending",
+      resetValue: productDefault,
+      value: shadowValue as SyncedPrefValue<K>,
+    };
+  }
+  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
+  if (!prefs || !Object.hasOwn(prefs, key)) {
+    return localState(productDefault);
+  }
+  const serverValue = specification.extract(prefs[key]) as SyncedPrefValue<K> | undefined;
+  if (serverValue === undefined) {
+    return localState(productDefault);
+  }
+  const canApply =
+    !specification.canApply ||
+    (specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
+      serverValue,
+      settings,
+    );
+  if (!canApply) {
+    // The server still owns this authored preference even when this device cannot
+    // render it. Preserve that provenance so Restore default removes the override.
+    return {
+      overridden: true,
+      provenance: "synced",
+      resetValue: productDefault,
+      value: localValue,
+    };
+  }
+  if (prefValuesEqual(localValue, serverValue)) {
+    return {
+      overridden: true,
+      provenance: "synced",
+      resetValue: productDefault,
+      value: serverValue,
+    };
+  }
+  return localState(serverValue);
+}
 /** Local-settings patch that would bring the mirror in line with the server. */
 function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
@@ -128,8 +231,15 @@ function serverPrefsLocalPatch(
     // Null marks a server-side removal of a clearable key: drop the local override
     // so this device falls back to the server-configured behavior.
     if (serverValue === null) {
-      if (specification.clearable && specification.local(settings) !== undefined) {
-        (patch as Record<string, unknown>)[key] = undefined;
+      const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
+      if (resetPatch) {
+        for (const [resetKey, resetValue] of Object.entries(resetPatch)) {
+          if (
+            !prefValuesEqual((settings as unknown as Record<string, unknown>)[resetKey], resetValue)
+          ) {
+            (patch as Record<string, unknown>)[resetKey] = resetValue;
+          }
+        }
       }
       continue;
     }
@@ -153,6 +263,13 @@ function serverPrefsLocalPatch(
 export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
   const prefs: ServerUiPrefs = {};
   for (const key of SYNCED_PREF_KEYS) {
+    if (requestedDeviceLocalPrefResets.delete(key)) {
+      continue;
+    }
+    if (requestedServerUiPrefResets.delete(key)) {
+      (prefs as Record<string, unknown>)[key] = null;
+      continue;
+    }
     const specification = SYNCED_PREFS[key];
     const previousValue = specification.local(previous);
     const nextValue = specification.local(next);
@@ -179,6 +296,8 @@ const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
 const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
+const requestedServerUiPrefResets = new Set<SyncedPrefKey>();
+const requestedDeviceLocalPrefResets = new Set<SyncedPrefKey>();
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
@@ -265,6 +384,31 @@ export function resetServerUiPrefsSync() {
   pushScope = "";
   lastReconciledScope = "";
   lastReconciledConfigObject = null;
+  requestedServerUiPrefResets.clear();
+  requestedDeviceLocalPrefResets.clear();
+}
+
+export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
+  key: K,
+  state?: ServerUiPrefState<SyncedPrefValue<K>>,
+): UiSettings {
+  const specification = SYNCED_PREFS[key];
+  const reset = specification.reset;
+  if (!reset) {
+    throw new Error(`Server UI preference is not resettable: ${key}`);
+  }
+  if (state?.provenance === "device-local") {
+    const write = specification.write as
+      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
+      | undefined;
+    if (!write) {
+      throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
+    }
+    requestedDeviceLocalPrefResets.add(key);
+    return patchSettings(write(state.resetValue));
+  }
+  requestedServerUiPrefResets.add(key);
+  return patchSettings(reset(loadSettings()));
 }
 export function applyServerUiPrefs(
   configObject: unknown,
@@ -442,12 +586,19 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         scheduleConflictRedrain(writer, epoch);
         return;
       }
-      if (result.reason === "unavailable" || result.reason === "suspended") {
+      if (
+        result.reason === "error" ||
+        result.reason === "unavailable" ||
+        result.reason === "suspended"
+      ) {
         return;
       }
-      // Connected viewer-scope or validation failures degrade silently to device-local state.
+      // Definitive viewer-scope or validation rejections degrade to device-local state.
+      // LAST_SEEN still owns the authoritative server value per key, so identical
+      // refreshes and reloads preserve this local edit; only a server delta replaces it.
       removeBatch(batch);
       settlePendingStorage(batch);
+      afterCommit?.({ needsRefresh: false, retainedLocal: true });
       return;
     }
   }

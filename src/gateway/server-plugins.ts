@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagent-announce-handoff.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,6 +50,10 @@ import {
   resolvePluginSubagentRequestedModelRef,
 } from "./server-plugin-subagent-runtime.js";
 import { projectGatewayRuntimeNodes } from "./server-plugins-node-runtime.js";
+import {
+  cancelSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "./subagent-completion-tool-handoff.js";
 
 export {
   clearFallbackGatewayContext,
@@ -221,7 +226,7 @@ type DispatchGatewayMethodInProcessOptions = {
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  delegatedToolPolicyHandoff?: boolean;
+  delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
@@ -254,6 +259,9 @@ export async function dispatchGatewayMethodInProcessRaw(
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
+  const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
+    ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
+    : undefined;
   const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
@@ -267,7 +275,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
-    delegatedToolPolicyHandoff: options?.delegatedToolPolicyHandoff === true,
+    delegatedToolPolicyHandoffId,
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
@@ -278,7 +286,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
       options?.delegatedToolPolicyHandoff ||
-      scope?.client?.internal?.delegatedToolPolicyHandoff
+      scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
@@ -286,27 +294,30 @@ export async function dispatchGatewayMethodInProcessRaw(
             ? { pluginSubagentRequester: options.pluginSubagentRequester }
             : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
-          delegatedToolPolicyHandoff:
-            options?.delegatedToolPolicyHandoff === true ? (true as const) : undefined,
+          delegatedToolPolicyHandoffId,
         }
       : undefined,
   );
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
-  return await dispatchGatewayRequestInProcessRaw(method, params, {
-    client:
-      options?.forceSyntheticClient === true
-        ? syntheticClient
-        : (scopedClient ?? (options?.disableSyntheticClient === true ? null : syntheticClient)),
-    context,
-    expectFinal: options?.expectFinal,
-    isWebchatConnect,
-    onAccepted: options?.onAccepted,
-    requestIdPrefix: "plugin-subagent",
-    timeoutMs: options?.timeoutMs,
-    ...(options?.signal ? { signal: options.signal } : {}),
-  });
+  try {
+    return await dispatchGatewayRequestInProcessRaw(method, params, {
+      client:
+        options?.forceSyntheticClient === true
+          ? syntheticClient
+          : (scopedClient ?? (options?.disableSyntheticClient === true ? null : syntheticClient)),
+      context,
+      expectFinal: options?.expectFinal,
+      isWebchatConnect,
+      onAccepted: options?.onAccepted,
+      requestIdPrefix: "plugin-subagent",
+      timeoutMs: options?.timeoutMs,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  } finally {
+    cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+  }
 }
 
 /** Live request context for trusted built-in tools that need direct runtime state. */

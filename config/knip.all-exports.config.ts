@@ -54,6 +54,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
+  // Invoked directly by the sandbox bind-conflict E2E verification script.
+  "scripts/e2e-sandbox-bind-conflict.mjs!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // Loaded with cache-busting query strings so configuration fallback tests

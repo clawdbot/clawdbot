@@ -68,6 +68,9 @@ const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
 const GOOGLE_REALTIME_RECONNECT_BASE_DELAY_MS = 250;
 const GOOGLE_REALTIME_RECONNECT_MAX_DELAY_MS = 2_000;
+const GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES = 256 * 1024;
+const GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE =
+  "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit";
 // Google Live requires a leading letter/underscore and caps function names at 128 characters.
 const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
@@ -143,6 +146,10 @@ type GoogleRealtimeLiveConfig = {
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
 type GoogleLiveTranscription = NonNullable<LiveServerContent["inputTranscription"]>;
+type GoogleLiveTranscriptAccumulator = {
+  text: string;
+  byteCount: number;
+};
 
 function trimToUndefined(value: unknown): string | undefined {
   return normalizeOptionalString(value);
@@ -478,10 +485,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private closeNotified = false;
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
   private connectAttempt: GoogleLiveConnectionAttempt | undefined;
-  private readonly pendingTranscripts: Record<RealtimeVoiceRole, string> = {
-    user: "",
-    assistant: "",
-  };
+  // Google can interleave independent input/output transcripts, so each role
+  // owns its own in-progress byte budget until `finished` or terminal cleanup.
+  private readonly pendingTranscripts: Record<RealtimeVoiceRole, GoogleLiveTranscriptAccumulator> =
+    {
+      user: { text: "", byteCount: 0 },
+      assistant: { text: "", byteCount: 0 },
+    };
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
@@ -858,13 +868,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (content.inputTranscription) {
-      this.appendTranscript("user", content.inputTranscription);
+      if (!this.appendTranscript("user", content.inputTranscription)) {
+        return;
+      }
     }
 
     if (content.outputTranscription) {
       // outputAudioTranscription is requested in the session config. Keep that
       // official stream canonical; modelTurn text has no transcript turn identity.
-      this.appendTranscript("assistant", content.outputTranscription);
+      if (!this.appendTranscript("assistant", content.outputTranscription)) {
+        return;
+      }
     }
 
     for (const part of content.modelTurn?.parts ?? []) {
@@ -886,10 +900,18 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): void {
+  private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
     const text = transcript.text;
     if (text) {
-      this.pendingTranscripts[role] += text;
+      const pending = this.pendingTranscripts[role];
+      const textBytes = Buffer.byteLength(text, "utf8");
+      if (pending.byteCount + textBytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
+        this.resetPendingTranscripts();
+        this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
+        return false;
+      }
+      pending.text += text;
+      pending.byteCount += textBytes;
       this.emitTranscript(role, text, false);
     }
     // turnComplete belongs to model generation and is unordered with transcription.
@@ -897,11 +919,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (transcript.finished) {
       this.flushPendingTranscript(role);
     }
+    return true;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {
-    const completeText = this.pendingTranscripts[role].trim();
-    this.pendingTranscripts[role] = "";
+    const pending = this.pendingTranscripts[role];
+    const completeText = pending.text.trim();
+    pending.text = "";
+    pending.byteCount = 0;
     if (completeText) {
       this.emitTranscript(role, completeText, true);
     }
@@ -927,8 +952,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetPendingTranscripts(): void {
-    this.pendingTranscripts.user = "";
-    this.pendingTranscripts.assistant = "";
+    this.pendingTranscripts.user = { text: "", byteCount: 0 };
+    this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
   }
 
   private failConnection(error: Error): void {

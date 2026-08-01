@@ -15,6 +15,7 @@ import type {
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
@@ -603,7 +604,7 @@ describe("deliverOutboundPayloads", () => {
           silent: true,
         },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
   });
 
   it("requires a real reconciler for required unknown-send recovery support", async () => {
@@ -686,7 +687,7 @@ describe("deliverOutboundPayloads", () => {
           reconcileUnknownSend: true,
         },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
 
     await expect(
       resolveOutboundDurableFinalDeliverySupport({
@@ -728,7 +729,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "matrix",
         requirements: { text: true, reconcileUnknownSend: true },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
   });
 
   it("requires every concrete reconciliation kind for heterogeneous batches", async () => {
@@ -1191,6 +1192,73 @@ describe("deliverOutboundPayloads", () => {
     for (const [ctx] of messageSendText.mock.calls) {
       expect(ctx.deliveryQueueId).toBeUndefined();
     }
+  });
+
+  it("automatically enables provider reconciliation for one supported prepared payload", async () => {
+    const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      return {
+        messageId: "message-adapter-1",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+          kind: "text",
+        }),
+      };
+    });
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        automaticUnknownSendReconciliation: true,
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
+
+    await deliverMatrix({ queuePolicy: "required" });
+
+    expect(requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery")).toMatchObject({
+      requireUnknownSendReconciliation: true,
+    });
+    expect(messageSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryQueueId: "mock-queue-id",
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      }),
+    );
+  });
+
+  it("leaves ordinary multi-payload delivery on the existing fail-closed path", async () => {
+    const messageSendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
+      messageId: "message-adapter-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        automaticUnknownSendReconciliation: true,
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
+
+    await deliverMatrix({
+      payloads: [{ text: "first" }, { text: "second" }],
+      queuePolicy: "required",
+    });
+
+    expect(messageSendText).toHaveBeenCalledTimes(2);
+    expect(messageSendText.mock.calls.map(([ctx]) => ctx.deliveryQueueId)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("rejects explicitly reconciled multi-payload sends before enqueue or platform I/O", async () => {
@@ -3186,7 +3254,7 @@ describe("deliverOutboundPayloads", () => {
         },
         {
           type: "context",
-          text: "Actions:\n- Reje\n- Too",
+          text: "Actions:\n- Reject\n- Too long",
         },
       ],
     });
@@ -3260,6 +3328,96 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(requireMockCallArg(sendText, "send text").text).toBe("Question\n1. Yes\n2. No");
+  });
+
+  it("preserves full presentation labels when bounded native rendering declines", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "full-labels",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        selects: true,
+        limits: {
+          actions: { maxLabelLength: 4 },
+          selects: { maxLabelLength: 4 },
+          text: { maxLength: 18, encoding: "characters" },
+        },
+      },
+      renderPresentation: vi.fn(() => null),
+      sendText,
+    });
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve production", value: "approve" }],
+              },
+              {
+                type: "select",
+                placeholder: "Deployment target",
+                options: [{ label: "Production cluster", value: "production" }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe(
+      "- Approve production\n\nDeployment target:\n- Production cluster",
+    );
+  });
+
+  it("reassembles bounded fallback fragments when native presentation rendering succeeds", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "joined-labels",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      presentationCapabilities: {
+        supported: true,
+        buttons: false,
+        limits: { text: { maxLength: 18, encoding: "characters" } },
+      },
+      renderPresentation: ({ payload, presentation }) => ({
+        ...payload,
+        text: renderMessagePresentationFallbackText({ presentation }),
+      }),
+      sendText,
+    });
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Approve production", value: "approve" },
+                  { label: "Rollback release", value: "rollback" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe(
+      "Actions:\n- Approve production\n- Rollback release",
+    );
   });
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {

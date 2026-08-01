@@ -64,6 +64,38 @@ describe("offerLiveModelVerification", () => {
     expect(mocks.repair).not.toHaveBeenCalled();
   });
 
+  it("stops verification progress when the provider check rejects", async () => {
+    const verificationError = new Error("provider network dropped");
+    mocks.verify.mockRejectedValue(verificationError);
+    const stop = vi.fn();
+    const prompter = {
+      intro: vi.fn(),
+      outro: vi.fn(),
+      note: vi.fn(),
+      confirm: vi.fn(),
+      select: vi.fn(),
+      multiselect: vi.fn(),
+      text: vi.fn(),
+      progress: vi.fn(() => ({ stop, update: vi.fn() })),
+    } as unknown as WizardPrompter;
+
+    await expect(
+      offerLiveModelVerification({
+        config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+        opts: { nonInteractive: true },
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
+        workspaceDir: "/tmp/openclaw-test-workspace",
+        writeConfig: async (config) => config,
+        required: true,
+      }),
+    ).rejects.toBe(verificationError);
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(mocks.repair).not.toHaveBeenCalled();
+  });
+
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true } } },

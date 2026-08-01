@@ -18,6 +18,7 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -1545,7 +1546,21 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  await execSystemctlUser(env, ["disable", "--now", unitName]);
+  const disabled = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  if (disabled.code !== 0) {
+    const detail = readSystemctlDetail(disabled);
+    const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
+    const alreadyMissingOrInactive = new RegExp(
+      `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
+        `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
+        `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
+        `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
+      "u",
+    ).test(normalizeLowercaseStringOrEmpty(detail));
+    if (!alreadyMissingOrInactive) {
+      throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
+    }
+  }
 
   const unitPath = resolveSystemdUnitPath(env);
   let removed = false;

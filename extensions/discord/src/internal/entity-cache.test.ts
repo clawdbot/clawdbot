@@ -1,4 +1,5 @@
 // Discord tests cover entity cache plugin behavior.
+import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
 import type { RequestClient } from "./rest.js";
@@ -74,5 +75,21 @@ describe("DiscordEntityCache eviction", () => {
     await cache.fetchUser("u2");
 
     expect(cache.size).toBe(0);
+  });
+
+  it.each([
+    ["updated", GatewayDispatchEvents.ThreadUpdate],
+    ["deleted", GatewayDispatchEvents.ThreadDelete],
+  ])("invalidates cached channels when a thread is %s", async (_label, eventType) => {
+    const { cache, getCalls } = makeCache({ ttlMs: 60_000 });
+
+    await cache.fetchChannel("thread-42");
+    await cache.fetchChannel("thread-42");
+    expect(getCalls()).toBe(1);
+
+    cache.invalidateForGatewayEvent(eventType, { id: "thread-42" });
+    await cache.fetchChannel("thread-42");
+
+    expect(getCalls()).toBe(2);
   });
 });

@@ -333,6 +333,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   maxRetries?: number;
   shouldContinue?: () => boolean;
   stateDir?: string;
+  waitForStart?: () => Promise<void>;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): { stop: () => Promise<void> } {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
@@ -343,12 +344,16 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let queuedAttempt: Promise<void> | undefined;
   let activeAttempt: Promise<void> | undefined;
+  let cancelStartWait: (() => void) | undefined;
+  const startWaitCancelled = new Promise<void>((resolve) => {
+    cancelStartWait = resolve;
+  });
   const shouldContinue = () =>
     !stopped &&
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
-  // Only reconcile rows that existed before this startup recovery was scheduled.
-  // Fresh runs started by this gateway are protected again by the active-run check.
+  // Capture the cutoff at registration, before any startup gate can release new
+  // work. Sessions created by this gateway must never become recovery candidates.
   const startupRecoveryCutoffMs = Date.now();
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
@@ -436,28 +441,36 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     activeAttempt = trackedAttempt;
   };
 
+  const queueRecoveryAttempt = (attempt: number, delay: number) => {
+    const pendingStart = Promise.resolve().then(async () => {
+      if (attempt === 1 && params.waitForStart) {
+        // Shutdown must cancel an unresolved startup gate so failed startup and
+        // same-port replacement cannot hang while joining this lifetime owner.
+        await Promise.race([params.waitForStart(), startWaitCancelled]);
+      }
+      if (shouldContinue()) {
+        runRecoveryAttempt(attempt, delay);
+      }
+    });
+    const trackedStart = pendingStart.finally(() => {
+      if (queuedAttempt === trackedStart) {
+        queuedAttempt = undefined;
+      }
+    });
+    queuedAttempt = trackedStart;
+  };
+
   const scheduleAttempt = (attempt: number, delay: number) => {
     if (!shouldContinue()) {
       return;
     }
     if (delay <= 0) {
-      // Publish the cancellable handle before immediate startup can claim a session.
-      const pendingStart = Promise.resolve().then(() => {
-        if (shouldContinue()) {
-          runRecoveryAttempt(attempt, delay);
-        }
-      });
-      const trackedStart = pendingStart.finally(() => {
-        if (queuedAttempt === trackedStart) {
-          queuedAttempt = undefined;
-        }
-      });
-      queuedAttempt = trackedStart;
+      queueRecoveryAttempt(attempt, delay);
       return;
     }
     timer = setTimeout(() => {
       timer = undefined;
-      runRecoveryAttempt(attempt, delay);
+      queueRecoveryAttempt(attempt, delay);
     }, delay);
     timer.unref?.();
   };
@@ -468,6 +481,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
       stopped = true;
+      cancelStartWait?.();
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
