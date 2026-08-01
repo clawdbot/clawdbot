@@ -128,6 +128,68 @@ describe("resolveMSTeamsSendContext", () => {
     });
   });
 
+  it("looks up the base conversation and applies an explicit thread root", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        threadId: "stored-root",
+      }),
+    );
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg: {
+          channels: {
+            msteams: {
+              enabled: true,
+              appId: "app-id",
+              appPassword: "app-password",
+              tenantId: "tenant-id",
+              replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+        to: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      ref: { threadId: "explicit-root" },
+      replyStyle: "thread",
+    });
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+  });
+
+  it("resolves Graph team/channel targets through the stored channel conversation", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        threadId: "stored-root",
+      }),
+    );
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg: {
+          channels: {
+            msteams: {
+              enabled: true,
+              appId: "app-id",
+              appPassword: "app-password",
+              tenantId: "tenant-id",
+              replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+        to: "graph-team/19:channel@thread.tacv2;messageid=graph-root",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      ref: { threadId: "graph-root" },
+      replyStyle: "thread",
+    });
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+  });
+
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({

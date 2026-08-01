@@ -191,6 +191,7 @@ function createTestContext(): {
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
       messageToolOnlySourceReplyDelivered: false,
@@ -1631,6 +1632,43 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         mediaUrls: ["/tmp/rewritten.png"],
       },
     ]);
+  });
+
+  it("records preview suppression text only for confirmed current-source sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-other-route",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-other",
+        text: "Other route text",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-current-source",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-source",
+        text: "QA-MSTEAMS-DM-OK",
+      },
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          sourceReplyRoute: "current-source",
+        },
+      },
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
   });
 
   it("records rich-content delivery when visible text is blank", async () => {

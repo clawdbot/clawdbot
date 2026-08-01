@@ -67,6 +67,26 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("keeps the Teams final-dedupe proof on the real Gateway transport", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("msteams-thread-message-tool-final-dedupe"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("msteams");
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      tools: { alsoAllow: ["message"] },
+      agents: { entries: { qa: { tools: { alsoAllow: ["message"] } } } },
+    });
+    expect(flow).toContain("QA-MSTEAMS-SAME-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-THREAD-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-CONVERSATION-OK");
+    expect(flow).toContain("QA-MSTEAMS-DM-OK");
+    expect(flow).toContain("QA-MSTEAMS-GROUP-OK");
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));

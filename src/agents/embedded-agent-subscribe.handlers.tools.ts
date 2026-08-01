@@ -1576,16 +1576,20 @@ export async function handleToolExecutionEnd(
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
     }
-    if (
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-        toolName,
-        args: startArgs,
-        result,
-        isError: isToolError,
-      })
-    ) {
+    const deliveredCurrentSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+    if (deliveredCurrentSourceReply) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      const normalizedSourceReplyText = messageText ? normalizeTextForComparison(messageText) : "";
+      if (normalizedSourceReplyText) {
+        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+        ctx.trimMessagingToolSent();
+      }
       ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);

@@ -24,6 +24,7 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -82,18 +83,35 @@ function resolveMSTeamsProactiveReplyStyle(params: {
  * Parse the target value into a conversation reference lookup key.
  * Supported formats:
  * - conversation:19:abc@thread.tacv2 → lookup by conversation ID
+ * - conversation:19:abc@thread.tacv2;messageid=root → lookup base ID, use root
  * - user:aad-object-id → lookup by user AAD object ID
  * - 19:abc@thread.tacv2 → direct conversation ID
  */
 function parseRecipient(to: string): {
   type: "conversation" | "user";
   id: string;
+  threadId?: string;
 } {
   const trimmed = to.trim();
   const finalize = (type: "conversation" | "user", id: string) => {
     const normalized = id.trim();
     if (!normalized) {
       throw new Error(`Invalid target value: missing ${type} id`);
+    }
+    if (type === "conversation") {
+      const threadId = extractMSTeamsConversationMessageId(normalized);
+      const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
+      const slashIndex = normalizedConversationId.indexOf("/");
+      const graphChannelId =
+        slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
+      return {
+        type,
+        id:
+          graphChannelId && (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
+            ? graphChannelId
+            : normalizedConversationId,
+        ...(threadId ? { threadId } : {}),
+      };
     }
     return { type, id: normalized };
   };
@@ -165,7 +183,8 @@ export async function resolveMSTeamsSendContext(params: {
     );
   }
 
-  const { conversationId, ref } = found;
+  const conversationId = found.conversationId;
+  const ref = recipient.threadId ? { ...found.ref, threadId: recipient.threadId } : found.ref;
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:send" });
 
@@ -228,12 +247,18 @@ export async function resolveMSTeamsSendContext(params: {
     // groupChat, or unknown defaults to groupChat behavior
     conversationType = "groupChat";
   }
-  const replyStyle = resolveMSTeamsProactiveReplyStyle({
-    cfg: msteamsCfg,
-    conversationId,
-    ref: safeRef,
-    conversationType,
-  });
+  // An explicit messageid is a caller-owned destination. Ambient and stored
+  // roots still obey route policy, but explicit channel roots must not be
+  // flattened by a top-level default.
+  const replyStyle =
+    recipient.threadId && conversationType === "channel"
+      ? "thread"
+      : resolveMSTeamsProactiveReplyStyle({
+          cfg: msteamsCfg,
+          conversationId,
+          ref: safeRef,
+          conversationType,
+        });
 
   // Get SharePoint site ID from config (required for file uploads in group chats/channels)
   const sharePointSiteId = msteamsCfg.sharePointSiteId;

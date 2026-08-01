@@ -537,6 +537,44 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("returns the same Teams final after the message-tool send", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "qa msteams thread message-tool final dedupe.",
+      "msteams message target: `conversation:19:other@thread.tacv2;messageid=other-root`.",
+      "exact marker: `QA-MSTEAMS-THREAD-DEDUPE-OK`",
+    ].join(" ");
+
+    const initialBody = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-MSTEAMS-THREAD-DEDUPE-OK",
+      target: "conversation:19:other@thread.tacv2;messageid=other-root",
+    });
+
+    const finalBody = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_msteams_thread_dedupe"),
+          output: JSON.stringify({ ok: true }),
+        },
+      ],
+    });
+    expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
+    expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
+  });
+
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
     const server = await startMockServer();
 

@@ -301,6 +301,36 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
   );
 }
 
+function resolveCurrentSourceMessagingToolPartial(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "currentSourceMessagingToolHeldPartial" | "currentSourceMessagingToolSentTextsNormalized"
+  >,
+  params: {
+    evtType: "text_delta" | "text_start" | "text_end";
+    text: string;
+    visibleDelta: string;
+  },
+): { hold: boolean; text: string } {
+  const held = state.currentSourceMessagingToolHeldPartial;
+  const text =
+    held && params.evtType === "text_delta" && !params.text.startsWith(held)
+      ? `${held}${params.visibleDelta || params.text}`
+      : params.text;
+  const normalized = normalizeTextForComparison(text);
+  if (!normalized) {
+    state.currentSourceMessagingToolHeldPartial = undefined;
+    return { hold: false, text };
+  }
+  // A confirmed current-source tool send already made this prefix visible.
+  // Hold it until the assistant either repeats the sent text or diverges with new content.
+  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
+    (sentText) => sentText === normalized || sentText.startsWith(normalized),
+  );
+  state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
+  return { hold, text };
+}
+
 function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.append(chunk);
@@ -1157,14 +1187,23 @@ export function handleMessageUpdate(
     }
 
     if (shouldEmit) {
+      const currentSourcePartial =
+        ctx.params.sourceReplyDeliveryMode !== "message_tool_only"
+          ? resolveCurrentSourceMessagingToolPartial(ctx.state, {
+              evtType,
+              text: cleanedText,
+              visibleDelta,
+            })
+          : { hold: false, text: cleanedText };
+      const releaseHeldSnapshot = currentSourcePartial.text !== cleanedText;
       const data = buildAssistantStreamData({
-        text: cleanedText,
-        delta: deltaText,
-        replace,
+        text: currentSourcePartial.text,
+        delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
+        replace: releaseHeldSnapshot || replace,
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
+      ctx.emitAssistantStreamData(data, { emitPartialReply: !currentSourcePartial.hold });
       ctx.state.emittedAssistantUpdate = true;
     }
   } else if (shouldPersistRawStreamText) {
@@ -1204,6 +1243,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = {
     buildAssistantStreamData,
     recordPendingAssistantReplyDirectives,
+    resolveCurrentSourceMessagingToolPartial,
     resolveSilentReplyFallbackText,
   };
 }
