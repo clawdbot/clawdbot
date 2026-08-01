@@ -5,6 +5,7 @@ import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalogSnapshot: vi.fn(),
+  prepareScopedModelCatalog: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   shouldSuppressBuiltInModel: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
@@ -19,6 +20,10 @@ vi.mock("../../agents/model-suppression.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
+}));
+
+vi.mock("../../agents/prepared-model-runtime.scoped-catalog.js", () => ({
+  prepareScopedReadOnlyModelCatalog: mocks.prepareScopedModelCatalog,
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -234,7 +239,7 @@ describe("appendPreparedModelCatalogRows", () => {
       provider: "anthropic",
       input: ["text"] as "text"[],
     };
-    mocks.loadModelCatalogSnapshot.mockResolvedValueOnce({
+    mocks.prepareScopedModelCatalog.mockResolvedValueOnce({
       entries: [entry],
       routeVariants: [entry],
     });
@@ -247,6 +252,7 @@ describe("appendPreparedModelCatalogRows", () => {
         cfg: {},
         agentId: "worker",
         agentDir: "/tmp/openclaw-worker",
+        inheritedAuthDir: "/tmp/openclaw-default",
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["anthropic"],
         authIndex: {
@@ -260,14 +266,18 @@ describe("appendPreparedModelCatalogRows", () => {
     });
 
     expect(requireOnlyRow(rows).key).toBe("anthropic/claude-opus-4-7");
-    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledExactlyOnceWith({
-      config: {},
-      agentId: "worker",
-      agentDir: "/tmp/openclaw-worker",
-      workspaceDir: "/tmp/openclaw-workspace",
-      providerDiscoveryProviderIds: ["anthropic"],
-      readOnly: true,
-    });
+    expect(mocks.prepareScopedModelCatalog).toHaveBeenCalledExactlyOnceWith(
+      {
+        config: {},
+        agentId: "worker",
+        agentDir: "/tmp/openclaw-worker",
+        inheritedAuthDir: "/tmp/openclaw-default",
+        workspaceDir: "/tmp/openclaw-workspace",
+        readOnly: true,
+      },
+      ["anthropic"],
+    );
+    expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 });
 
@@ -901,7 +911,7 @@ describe("appendAuthenticatedCatalogRows", () => {
         maxTokens: 4096,
       },
     ];
-    mocks.loadModelCatalogSnapshot.mockResolvedValueOnce({ entries, routeVariants: entries });
+    mocks.prepareScopedModelCatalog.mockResolvedValueOnce({ entries, routeVariants: entries });
     const rows: ModelRow[] = [];
 
     await appendAuthenticatedCatalogRows({
@@ -931,13 +941,16 @@ describe("appendAuthenticatedCatalogRows", () => {
       local: true,
       available: true,
     });
-    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith({
-      config: {},
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
-      providerDiscoveryProviderIds: ["local-openai"],
-      readOnly: true,
-    });
+    expect(mocks.prepareScopedModelCatalog).toHaveBeenCalledWith(
+      {
+        config: {},
+        agentDir: "/tmp/openclaw-agent",
+        inheritedAuthDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        readOnly: true,
+      },
+      ["local-openai"],
+    );
   });
 
   it("still drops catalog rows with unresolved non-synthetic auth", async () => {

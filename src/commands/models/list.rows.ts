@@ -37,6 +37,8 @@ import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
+type ScopedModelCatalogModule =
+  typeof import("../../agents/prepared-model-runtime.scoped-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 
 type RowFilter = {
@@ -49,6 +51,7 @@ export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir: string;
+  inheritedAuthDir?: string;
   authIndex: ModelListAuthIndex;
   providerDiscoveryProviderIds?: readonly string[];
   availableKeys?: Set<string>;
@@ -63,11 +66,18 @@ export type RowBuilderContext = {
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
   () => import("../../agents/prepared-model-catalog.js"),
 );
+const scopedModelCatalogModuleLoader = createLazyImportLoader<ScopedModelCatalogModule>(
+  () => import("../../agents/prepared-model-runtime.scoped-catalog.js"),
+);
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
   () => import("../../agents/embedded-agent-runner/model.js"),
 );
 function loadPreparedModelCatalogModule(): Promise<ModelCatalogModule> {
   return modelCatalogModuleLoader.load();
+}
+
+function loadScopedModelCatalogModule(): Promise<ScopedModelCatalogModule> {
+  return scopedModelCatalogModuleLoader.load();
 }
 
 function loadModelResolverModule(): Promise<ModelResolverModule> {
@@ -456,16 +466,27 @@ function toFallbackConfiguredListModel(
 export async function loadListModelCatalogSnapshot(
   context: RowBuilderContext,
 ): Promise<ModelCatalogSnapshot> {
-  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
   const workspaceDir = context.workspaceDir ?? context.metadataSnapshot?.workspaceDir;
+  if (context.providerDiscoveryProviderIds) {
+    const { prepareScopedReadOnlyModelCatalog } = await loadScopedModelCatalogModule();
+    return prepareScopedReadOnlyModelCatalog(
+      {
+        config: context.cfg,
+        ...(context.agentId ? { agentId: context.agentId } : {}),
+        agentDir: context.agentDir,
+        inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
+        ...(workspaceDir ? { workspaceDir } : {}),
+        readOnly: true,
+      },
+      context.providerDiscoveryProviderIds,
+    );
+  }
+  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
   return loadPreparedModelCatalogSnapshot({
     config: context.cfg,
     ...(context.agentId ? { agentId: context.agentId } : {}),
     agentDir: context.agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
-    ...(context.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: context.providerDiscoveryProviderIds }
-      : {}),
     readOnly: true,
   });
 }

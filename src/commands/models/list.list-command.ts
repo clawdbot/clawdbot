@@ -169,6 +169,7 @@ export async function modelsListCommand(
     cfg,
     agentId,
     agentDir,
+    inheritedAuthDir: agentDir,
     authIndex,
     providerDiscoveryProviderIds,
     availableKeys,
