@@ -135,6 +135,11 @@ export async function modelsListCommand(
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
   })();
+  const providerRuntimeDiscoveryProviderIds = providerFilter
+    ? [providerFilter]
+    : opts.all
+      ? undefined
+      : authIndex.providerDiscoveryProviderIds;
   const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -181,6 +186,7 @@ export async function modelsListCommand(
     inheritedAuthDir: agentDir,
     authIndex,
     providerDiscoveryProviderIds,
+    providerRuntimeDiscoveryProviderIds,
     availableKeys,
     configuredByKey,
     discoveredKeys,

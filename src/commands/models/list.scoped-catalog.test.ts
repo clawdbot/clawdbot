@@ -218,6 +218,7 @@ describe("loadScopedListModelCatalogSnapshot", () => {
       },
       agentDir: "/tmp/openclaw-agent",
       providerIds: ["custom"],
+      runtimeProviderIds: ["custom"],
       configuredKeys: ["custom/custom-model"],
     });
 
@@ -225,6 +226,26 @@ describe("loadScopedListModelCatalogSnapshot", () => {
       expect.objectContaining({ readOnly: true }),
       ["custom"],
     );
+  });
+
+  it("does not runtime-discover providers included only to enrich configured refs", async () => {
+    mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([]);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([]);
+
+    const snapshot = await loadScopedListModelCatalogSnapshot({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      providerIds: ["google-antigravity"],
+      runtimeProviderIds: [],
+      configuredKeys: ["google-antigravity/claude-opus-4-6-thinking"],
+    });
+
+    expect(snapshot).toEqual({
+      entries: [],
+      routeVariants: [],
+      staticEntries: [],
+    });
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
   });
 
   it("falls back to scoped provider discovery only for providers with no lightweight rows", async () => {

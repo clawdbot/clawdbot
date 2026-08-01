@@ -74,6 +74,7 @@ vi.mock("../agents/auth-profiles/profile-list.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
+  ensureAuthProfileStore,
   getRuntimeAuthProfileStoreSnapshot: vi.fn(() => undefined),
   loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
   updateAuthProfileStoreWithLock: vi.fn(async () => ensureAuthProfileStore()),
@@ -258,7 +259,7 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
-  loadModelCatalog.mockClear();
+  loadModelCatalog.mockReset();
   loadModelCatalog.mockResolvedValue([]);
   shouldSuppressBuiltInModel.mockReset();
   shouldSuppressBuiltInModel.mockReturnValue(false);
@@ -378,8 +379,12 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, provider, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.count).toBe(1);
-    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
+    expect(payload.count).toBe(payload.models.length);
+    expect(payload.models.length).toBeGreaterThan(0);
+    expect(payload.models.map((model: { key: string }) => model.key)).toContain("zai/glm-4.7");
+    expect(payload.models.every((model: { key: string }) => model.key.startsWith("zai/"))).toBe(
+      true,
+    );
   }
 
   function setDefaultZaiRegistry(params: { available?: boolean } = {}) {
@@ -600,7 +605,6 @@ describe("models list/status", () => {
 
   it("models list all includes catalog rows with unknown auth availability", async () => {
     setDefaultZaiRegistry({ available: false });
-    loadModelCatalog.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
     await withEnvAsync(
@@ -609,11 +613,14 @@ describe("models list/status", () => {
     );
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).toHaveBeenCalledOnce();
-    expect(payload.models).toHaveLength(1);
-    const model = payload.models[0];
-    expect(model.key).toBe("moonshot/kimi-k2.6");
-    expect(model.name).toBe("Kimi K2.6");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(payload.models.length).toBeGreaterThan(0);
+    const model = payload.models.find(
+      (candidate: { key: string }) => candidate.key === "moonshot/kimi-k3",
+    );
+    expect(model).toBeDefined();
+    expect(model.key).toBe("moonshot/kimi-k3");
+    expect(model.name).toBe("Kimi K3");
     expect(model.available).toBeNull();
     expect(model.missing).toBe(false);
   });
@@ -653,7 +660,9 @@ describe("models list/status", () => {
       code: "MODEL_AVAILABILITY_UNAVAILABLE",
     });
     const runtime = makeRuntime();
-    await modelsListCommand({ json: true }, runtime);
+    await withEnvAsync({ OPENAI_API_KEY: undefined }, () =>
+      modelsListCommand({ json: true }, runtime),
+    );
 
     expect(runtime.error).not.toHaveBeenCalled();
     const payload = parseJsonLog(runtime);

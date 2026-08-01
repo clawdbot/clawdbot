@@ -260,6 +260,7 @@ describe("appendPreparedModelCatalogRows", () => {
         inheritedAuthDir: "/tmp/openclaw-default",
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["anthropic"],
+        providerRuntimeDiscoveryProviderIds: ["anthropic"],
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
@@ -278,6 +279,7 @@ describe("appendPreparedModelCatalogRows", () => {
       inheritedAuthDir: "/tmp/openclaw-default",
       workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["anthropic"],
+      runtimeProviderIds: ["anthropic"],
       configuredKeys: [],
     });
     expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
@@ -972,6 +974,7 @@ describe("appendAuthenticatedCatalogRows", () => {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["local-openai"],
+        providerRuntimeDiscoveryProviderIds: ["local-openai"],
         authIndex: {
           evaluateModelAuth: () => ({
             availability: undefined,
@@ -997,6 +1000,7 @@ describe("appendAuthenticatedCatalogRows", () => {
       inheritedAuthDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["local-openai"],
+      runtimeProviderIds: ["local-openai"],
       configuredKeys: [],
     });
   });

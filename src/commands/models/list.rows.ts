@@ -52,6 +52,7 @@ export type RowBuilderContext = {
   inheritedAuthDir?: string;
   authIndex: ModelListAuthIndex;
   providerDiscoveryProviderIds?: readonly string[];
+  providerRuntimeDiscoveryProviderIds?: readonly string[];
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
@@ -440,6 +441,7 @@ export async function loadListModelCatalogSnapshot(
       inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
       providerIds: context.providerDiscoveryProviderIds,
+      runtimeProviderIds: context.providerRuntimeDiscoveryProviderIds,
       configuredKeys: [...context.configuredByKey.keys()],
       ...(context.metadataSnapshot ? { metadataSnapshot: context.metadataSnapshot } : {}),
     });

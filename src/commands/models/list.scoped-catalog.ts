@@ -146,6 +146,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   inheritedAuthDir?: string;
   workspaceDir?: string;
   providerIds: readonly string[];
+  runtimeProviderIds?: readonly string[];
   configuredKeys: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogSnapshot> {
@@ -198,7 +199,14 @@ export async function loadScopedListModelCatalogSnapshot(params: {
     ...lightweightSnapshot.entries.map((entry) => normalizeProviderId(entry.provider)),
     ...resolveConfiguredProviderCoverage(params.cfg, providerIds),
   ]);
-  const uncoveredProviders = [...providerIds].filter((provider) => !coveredProviders.has(provider));
+  const runtimeProviderIds = new Set(
+    (params.runtimeProviderIds ?? params.providerIds)
+      .map(normalizeProviderId)
+      .filter((provider) => providerIds.has(provider)),
+  );
+  const uncoveredProviders = [...runtimeProviderIds].filter(
+    (provider) => !coveredProviders.has(provider),
+  );
   if (uncoveredProviders.length === 0) {
     return mergeSnapshotEntries([lightweightSnapshot]);
   }
