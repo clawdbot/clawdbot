@@ -115,7 +115,7 @@ export function buildSlackProgressCommentaryRun(
     ].join(" "),
     matchText: finalMarker,
     settleObservedMs: 3_000,
-    verifyObserved: ({ finalMessage, messages, nativeTaskUpdates = [] }) => {
+    verifyObserved: ({ finalMessage, messages }) => {
       if (!finalMessage.ts) {
         throw new Error("Slack progress commentary final message had no ts");
       }
@@ -129,18 +129,10 @@ export function buildSlackProgressCommentaryRun(
         observedSlackText(message).includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
-      const nativeCommentaryTaskObserved = nativeTaskUpdates.some(
-        (update) => update.title.trim() === `💬 ${commentaryMarker}`,
-      );
-      const commentaryHistoryOptional =
-        expectation.commentary === "lane" && nativeCommentaryTaskObserved;
       const [commentaryTs] = commentaryTimestamps;
-      if (
-        commentaryTimestamps.size > 1 ||
-        (!commentaryHistoryOptional && commentaryTs === undefined)
-      ) {
+      if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
         throw new Error(
-          `expected ${commentaryHistoryOptional ? "at most" : "exactly"} one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
+          `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
       if (commentaryTs === finalMessage.ts) {
@@ -153,17 +145,11 @@ export function buildSlackProgressCommentaryRun(
       );
       if (
         expectation.commentary === "lane" &&
-        !nativeCommentaryTaskObserved &&
-        (commentaryTs === undefined ||
-          commentaryLaneTimestamps.size !== 1 ||
-          !commentaryLaneTimestamps.has(commentaryTs))
+        (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
       ) {
-        throw new Error("expected commentary in a native Slack task update lane");
+        throw new Error("expected commentary in the Slack progress commentary lane");
       }
-      if (
-        expectation.commentary !== "lane" &&
-        (nativeCommentaryTaskObserved || commentaryLaneTimestamps.size !== 0)
-      ) {
+      if (expectation.commentary !== "lane" && commentaryLaneTimestamps.size !== 0) {
         throw new Error(
           expectation.commentary === "headline"
             ? "expected the preamble as the Slack progress status headline"
@@ -179,10 +165,7 @@ export function buildSlackProgressCommentaryRun(
         if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
           throw new Error("expected tool progress on the draft separate from the fresh final");
         }
-        if (
-          expectation.commentary !== "standalone" &&
-          (!commentaryTs || !toolTimestamps.has(commentaryTs))
-        ) {
+        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
           throw new Error("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {

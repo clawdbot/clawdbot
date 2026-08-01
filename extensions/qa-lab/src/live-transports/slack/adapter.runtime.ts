@@ -15,10 +15,7 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
-import {
-  getSlackQaNativeTaskUpdateCursor,
-  readSlackQaNativeTaskUpdates,
-} from "./slack-live.capture.js";
+import { getSlackQaMessageWriteCursor, readSlackQaMessageWrites } from "./slack-live.capture.js";
 import {
   buildSlackQaConfig,
   parseSlackQaCredentialPayload,
@@ -235,16 +232,16 @@ export async function createSlackQaTransportAdapter(
     channelId: runtimeEnv.channelId,
     driverBotUserId: driverIdentity.userId,
     driverClient,
-    getNativeTaskUpdateCursor: () =>
+    getMessageWriteCursor: () =>
       captureStoreLease
-        ? getSlackQaNativeTaskUpdateCursor({
+        ? getSlackQaMessageWriteCursor({
             sessionId: captureSessionId,
             store: captureStoreLease.store,
           })
         : 0,
-    readNativeTaskUpdates: async (afterRequestEventId) =>
+    readMessageWrites: async (afterRequestEventId) =>
       captureStoreLease
-        ? await readSlackQaNativeTaskUpdates({
+        ? await readSlackQaMessageWrites({
             afterRequestEventId,
             sessionId: captureSessionId,
             store: captureStoreLease.store,

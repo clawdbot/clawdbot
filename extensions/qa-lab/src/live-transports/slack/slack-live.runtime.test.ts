@@ -621,11 +621,11 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("verifies progress commentary by Slack history or successful native task update", () => {
+  it("verifies progress commentary from history or successful captured message writes", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
-        commentaryTs: undefined,
+        commentaryTs: "1.500000",
         commentaryStyle: "lane",
         toolProgress: "absent",
       },
@@ -670,7 +670,10 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text: commentaryMarker,
+                text: testCase.commentaryStyle === "lane" ? "Working…" : commentaryMarker,
+                ...(testCase.commentaryStyle === "lane"
+                  ? { blockText: ["Update", commentaryMarker] }
+                  : {}),
                 ts: testCase.commentaryTs,
               },
             ]
@@ -689,43 +692,9 @@ describe("Slack live QA runtime helpers", () => {
         verifyObserved({
           finalMessage: { text: finalMarker, ts: "2.000000" },
           messages,
-          nativeTaskUpdates:
-            testCase.commentaryStyle === "lane"
-              ? [
-                  {
-                    id: "item_fixture",
-                    method: "chat.startStream",
-                    status: "in_progress",
-                    title: `💬 ${commentaryMarker}`,
-                  },
-                ]
-              : [],
         }),
       ).toContain("verified");
     }
-  });
-
-  it("requires the commentary marker in a native task update for the lane scenario", () => {
-    const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
-    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
-    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
-    if (!commentaryMarker || !finalMarker || !verifyObserved) {
-      throw new Error("missing Slack native commentary verifier");
-    }
-
-    expect(() =>
-      verifyObserved({
-        finalMessage: { text: finalMarker, ts: "2.000000" },
-        messages: [
-          { channelId: "C123456789", text: commentaryMarker, ts: "1.500000" },
-          { channelId: "C123456789", text: finalMarker, ts: "2.000000" },
-        ],
-        nativeTaskUpdates: [],
-      }),
-    ).toThrow("native Slack task update lane");
   });
 
   it("rejects commentary when false and mismatched tool progress", () => {
@@ -763,17 +732,6 @@ describe("Slack live QA runtime helpers", () => {
             text,
             ts: text.includes(completeMarkers[2]) ? "2.000000" : "1.500000",
           })),
-          nativeTaskUpdates:
-            scenarioId === "slack-progress-commentary-true"
-              ? [
-                  {
-                    id: "item_fixture",
-                    method: "chat.startStream",
-                    status: "in_progress",
-                    title: `💬 ${completeMarkers[0]}`,
-                  },
-                ]
-              : [],
         });
     };
 

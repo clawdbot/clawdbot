@@ -1,36 +1,36 @@
 import { describe, expect, it } from "vitest";
-import {
-  getSlackQaNativeTaskUpdateCursor,
-  readSlackQaNativeTaskUpdates,
-} from "./slack-live.capture.js";
+import { getSlackQaMessageWriteCursor, readSlackQaMessageWrites } from "./slack-live.capture.js";
 
-function buildTaskRequest(params: {
+function buildMessageRequest(params: {
+  channel?: string;
   flowId: string;
   method?: string;
-  title: string;
+  text: string;
+  threadTs?: string;
+  ts?: string;
 }): Record<string, unknown> {
   return {
     dataText: new URLSearchParams({
-      chunks: JSON.stringify([
-        { type: "plan_update", title: "Working" },
-        {
-          id: `${params.flowId}_task`,
-          status: "in_progress",
-          title: params.title,
-          type: "task_update",
-        },
-      ]),
+      channel: params.channel ?? "C123",
+      text: params.text,
+      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+      ...(params.ts ? { ts: params.ts } : {}),
     }).toString(),
     flowId: params.flowId,
+    host: "slack.com",
     kind: "request",
     method: "POST",
-    path: `/api/${params.method ?? "chat.startStream"}`,
+    path: `/api/${params.method ?? "chat.postMessage"}`,
   };
 }
 
-function buildResponse(flowId: string, ok: boolean): Record<string, unknown> {
+function buildResponse(
+  flowId: string,
+  ok: boolean,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
-    dataText: JSON.stringify({ ok }),
+    dataText: JSON.stringify({ channel: "C123", ok, ts: "2.000000", ...overrides }),
     flowId,
     kind: "response",
     status: 200,
@@ -38,16 +38,40 @@ function buildResponse(flowId: string, ok: boolean): Record<string, unknown> {
 }
 
 describe("Slack QA debug capture", () => {
-  it("reads task updates only from successful Slack stream calls", async () => {
+  it("preserves only successful Slack post and update snapshots", async () => {
+    const postRequest = buildMessageRequest({
+      flowId: "post",
+      text: "fallback",
+      threadTs: "1.000000",
+    });
+    postRequest.dataText = new URLSearchParams({
+      channel: "C123",
+      text: "fallback",
+      blocks: JSON.stringify([
+        { type: "header", text: { type: "plain_text", text: "Update" } },
+        { type: "section", text: { type: "mrkdwn", text: "COMMENTARY" } },
+      ]),
+      thread_ts: "1.000000",
+    }).toString();
     const events = [
-      buildResponse("accepted", true),
-      { id: 3, ...buildTaskRequest({ flowId: "accepted", title: "COMMENTARY" }) },
+      buildResponse("update", true),
+      {
+        id: 4,
+        ...buildMessageRequest({
+          flowId: "update",
+          method: "chat.update",
+          text: "receipt",
+          ts: "2.000000",
+        }),
+      },
+      buildResponse("post", true),
+      { id: 3, ...postRequest },
       buildResponse("rejected", false),
-      { id: 2, ...buildTaskRequest({ flowId: "rejected", title: "REJECTED" }) },
-      buildResponse("non-stream", true),
+      { id: 2, ...buildMessageRequest({ flowId: "rejected", text: "REJECTED" }) },
+      buildResponse("non-write", true),
       {
         id: 1,
-        ...buildTaskRequest({ flowId: "non-stream", method: "auth.test", title: "IGNORED" }),
+        ...buildMessageRequest({ flowId: "non-write", method: "auth.test", text: "IGNORED" }),
       },
     ];
     const store = {
@@ -56,23 +80,25 @@ describe("Slack QA debug capture", () => {
     };
 
     await expect(
-      readSlackQaNativeTaskUpdates({
+      readSlackQaMessageWrites({
         afterRequestEventId: 0,
         sessionId: "qa-slack",
         store,
       }),
     ).resolves.toEqual([
       {
-        id: "accepted_task",
-        method: "chat.startStream",
-        status: "in_progress",
-        title: "COMMENTARY",
+        blockText: ["Update", "COMMENTARY"],
+        channelId: "C123",
+        text: "fallback",
+        threadTs: "1.000000",
+        ts: "2.000000",
       },
+      { channelId: "C123", text: "receipt", ts: "2.000000" },
     ]);
   });
 
   it("reads captured request and response blobs when previews are unavailable", async () => {
-    const request = buildTaskRequest({ flowId: "blob", title: "BLOB-COMMENTARY" });
+    const request = buildMessageRequest({ flowId: "blob", text: "BLOB-COMMENTARY" });
     const response = buildResponse("blob", true);
     const blobs = new Map([
       ["request", String(request.dataText)],
@@ -89,17 +115,17 @@ describe("Slack QA debug capture", () => {
     };
 
     await expect(
-      readSlackQaNativeTaskUpdates({
+      readSlackQaMessageWrites({
         afterRequestEventId: 0,
         sessionId: "qa-slack",
         store,
       }),
-    ).resolves.toEqual([expect.objectContaining({ title: "BLOB-COMMENTARY" })]);
+    ).resolves.toEqual([expect.objectContaining({ text: "BLOB-COMMENTARY" })]);
   });
 
   it("uses request ids as cursors and waits for late response capture", async () => {
-    const oldRequest = { id: 4, ...buildTaskRequest({ flowId: "old", title: "OLD" }) };
-    const nextRequest = { id: 5, ...buildTaskRequest({ flowId: "next", title: "NEXT" }) };
+    const oldRequest = { id: 4, ...buildMessageRequest({ flowId: "old", text: "OLD" }) };
+    const nextRequest = { id: 5, ...buildMessageRequest({ flowId: "next", text: "NEXT" }) };
     let reads = 0;
     const store = {
       getSessionEvents: () => {
@@ -109,13 +135,13 @@ describe("Slack QA debug capture", () => {
       readBlob: () => null,
     };
 
-    expect(getSlackQaNativeTaskUpdateCursor({ sessionId: "qa-slack", store })).toBe(5);
+    expect(getSlackQaMessageWriteCursor({ sessionId: "qa-slack", store })).toBe(5);
     await expect(
-      readSlackQaNativeTaskUpdates({
+      readSlackQaMessageWrites({
         afterRequestEventId: 4,
         sessionId: "qa-slack",
         store,
       }),
-    ).resolves.toEqual([expect.objectContaining({ title: "NEXT" })]);
+    ).resolves.toEqual([expect.objectContaining({ text: "NEXT" })]);
   });
 });
