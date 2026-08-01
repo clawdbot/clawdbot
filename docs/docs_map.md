@@ -8357,6 +8357,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Non-interactive setup
   - H2: Model IDs
   - H2: Advanced configuration
+  - H2: Image generation
   - H2: Related
 
 ## providers/index.md
