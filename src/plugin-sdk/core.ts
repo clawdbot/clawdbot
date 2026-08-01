@@ -5,6 +5,7 @@ import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -22,7 +23,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelMeta } from "../channels/plugins/types.public.js";
+import type { ChannelId, ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
@@ -329,12 +330,17 @@ function resolveSdkChatChannelMeta(id: string) {
       metaById: buildChatChannelMetaById(),
     };
   }
-  // Optional by design: createChannelPluginBase serves external plugin ids that
-  // are never in the bundled catalog; their meta comes entirely from params.meta.
-  return cachedSdkChatChannelMeta.metaById[id];
+  const bundled = cachedSdkChatChannelMeta.metaById[id];
+  if (bundled) {
+    return bundled;
+  }
+  // Third-party channel plugins are never in the bundled catalog. Fall back to
+  // the active plugin registry so SDK helpers resolve metadata for any properly
+  // registered channel, while unknown ids still resolve to undefined and fail.
+  return getLoadedChannelPluginForRead(id as ChannelId)?.meta;
 }
 
-/** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
+/** Resolve chat channel metadata for bundled or actively registered plugin channels. */
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
   return expectDefined(resolveSdkChatChannelMeta(id), `chat channel metadata: ${id}`);
 }
