@@ -1633,14 +1633,14 @@ describe("tui command handlers", () => {
         });
 
         if (capture === "before") {
-          bufferedSubmit("must remain in the editor");
+          bufferedSubmit.submit("must remain in the editor");
         }
         const transitioning = harness.handleCommand(`/${command}`);
         await Promise.resolve();
         expect(command === "new" ? createSession : resetSession).toHaveBeenCalledOnce();
 
         if (capture === "during") {
-          bufferedSubmit("must remain in the editor");
+          bufferedSubmit.submit("must remain in the editor");
         }
         transitionResult.resolve({
           ok: true,
