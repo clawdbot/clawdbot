@@ -172,7 +172,53 @@ describe("sendMessageDiscord", () => {
     expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
       Routes.channelMessages("t1"),
     );
-    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({ content: "a" });
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toMatchObject({
+      content: "a",
+      enforce_nonce: true,
+    });
+  });
+
+  it("keeps sub-limit multi-line forum content in one starter message", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    const content = Array.from({ length: 18 }, (_, index) => `line ${index + 1}`).join("\n");
+
+    await createThreadDiscord("chan1", { name: "thread", content }, discordClientOpts(rest));
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      message: { content },
+    });
+  });
+
+  it("reports a delivered forum starter when a continuation chunk fails", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", message: { id: "starter1", channel_id: "t1" } })
+      .mockRejectedValueOnce(new Error("missing access"));
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "a".repeat(2001) },
+        discordClientOpts(rest),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
+      starterMessageDelivered: true,
+      deliveredChunkCount: 1,
+      deliveredMessageIds: ["starter1"],
+      failedChunkIndex: 1,
+      totalChunkCount: 2,
+    });
   });
 
   it("inherits default_auto_archive_duration for forum threads", async () => {
@@ -330,8 +376,9 @@ describe("sendMessageDiscord", () => {
     expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
       Routes.channelMessages("t1"),
     );
-    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toMatchObject({
       content: "Hello thread!",
+      enforce_nonce: true,
     });
   });
 
@@ -347,13 +394,86 @@ describe("sendMessageDiscord", () => {
     expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
       Routes.channelMessages("t1"),
     );
-    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toMatchObject({
       content: "a".repeat(2000),
+      enforce_nonce: true,
     });
     expect(requestPath(postMock as unknown as MockCallSource, 2)).toBe(
       Routes.channelMessages("t1"),
     );
-    expect(requestBody(postMock as unknown as MockCallSource, 2)).toEqual({ content: "a" });
+    expect(requestBody(postMock as unknown as MockCallSource, 2)).toMatchObject({
+      content: "a",
+      enforce_nonce: true,
+    });
+  });
+
+  it("keeps sub-limit multi-line non-forum content in one initial message", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1", channel_id: "t1" });
+    const content = Array.from({ length: 18 }, (_, index) => `line ${index + 1}`).join("\n");
+
+    await createThreadDiscord("chan1", { name: "thread", content }, discordClientOpts(rest));
+
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toMatchObject({ content });
+  });
+
+  it("reports delivered non-forum chunks when a later chunk fails", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "t1" })
+      .mockRejectedValueOnce(new Error("missing access"));
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "a".repeat(4001) },
+        discordClientOpts(rest),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
+      starterMessageDelivered: false,
+      deliveredChunkCount: 1,
+      deliveredMessageIds: ["msg1"],
+      failedChunkIndex: 1,
+      totalChunkCount: 3,
+    });
+  });
+
+  it("retries continuation sends with a stable nonce per chunk", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "t1" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "t1" });
+
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", content: "a".repeat(2001) },
+      {
+        ...discordClientOpts(rest),
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      },
+    );
+
+    expect(postMock).toHaveBeenCalledTimes(4);
+    const firstAttempt = requestBody(postMock as unknown as MockCallSource, 1);
+    const retryAttempt = requestBody(postMock as unknown as MockCallSource, 2);
+    const nextChunk = requestBody(postMock as unknown as MockCallSource, 3);
+    expect(firstAttempt.enforce_nonce).toBe(true);
+    expect(retryAttempt.nonce).toBe(firstAttempt.nonce);
+    expect(nextChunk.enforce_nonce).toBe(true);
+    expect(nextChunk.nonce).not.toBe(firstAttempt.nonce);
   });
 
   it("keeps created non-forum thread details when initial message send fails", async () => {
@@ -401,8 +521,9 @@ describe("sendMessageDiscord", () => {
     expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
       Routes.channelMessages("t1"),
     );
-    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toMatchObject({
       content: "Discussion here",
+      enforce_nonce: true,
     });
   });
 

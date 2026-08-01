@@ -351,12 +351,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult({ ok: true, thread });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
+          const initialMessageDelivery = error.initialMessageDelivery;
           return jsonResult({
             ok: true,
             partial: true,
             thread: error.thread,
-            warning: "Discord thread was created, but sending the initial message failed.",
+            warning:
+              initialMessageDelivery && initialMessageDelivery.deliveredChunkCount > 0
+                ? "Discord thread was created, but its initial content was only partially delivered."
+                : "Discord thread was created, but sending the initial message failed.",
             initialMessageError: error.initialMessageError,
+            ...(initialMessageDelivery ? { initialMessageDelivery } : {}),
           });
         }
         throw error;

@@ -3,7 +3,6 @@ import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   createThread,
   deleteChannelMessage,
   editChannelMessage,
@@ -18,7 +17,12 @@ import {
   unpinChannelMessage,
 } from "./internal/discord.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
-import { buildDiscordTextChunks, resolveDiscordRest } from "./send.shared.js";
+import {
+  buildDiscordTextChunks,
+  createDiscordClient,
+  resolveDiscordRest,
+  sendDiscordText,
+} from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -28,6 +32,28 @@ import type {
   DiscordThreadList,
 } from "./send.types.js";
 
+const DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES = Number.MAX_SAFE_INTEGER;
+
+type DiscordThreadInitialMessageDelivery = Readonly<{
+  starterMessageDelivered: boolean;
+  deliveredChunkCount: number;
+  deliveredMessageIds: readonly string[];
+  failedChunkIndex: number;
+  totalChunkCount: number;
+}>;
+
+function resolveDiscordThreadStarterMessageId(thread: APIChannel): string {
+  const starterMessage = "message" in thread ? thread.message : undefined;
+  if (
+    starterMessage &&
+    typeof starterMessage === "object" &&
+    "id" in starterMessage &&
+    typeof starterMessage.id === "string"
+  ) {
+    return starterMessage.id;
+  }
+  return thread.id;
+}
 function assertDiscordResponseArray<T>(value: unknown, label: string): T[] {
   if (!Array.isArray(value)) {
     throw new Error(`Unexpected Discord response for ${label}: expected array.`);
@@ -50,15 +76,28 @@ function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number |
 }
 
 export class DiscordThreadInitialMessageError extends Error {
+  readonly initialMessageDelivery?: DiscordThreadInitialMessageDelivery;
   readonly initialMessageError: string;
   readonly thread: APIChannel;
 
-  constructor(thread: APIChannel, error: unknown) {
+  constructor(
+    thread: APIChannel,
+    error: unknown,
+    initialMessageDelivery?: DiscordThreadInitialMessageDelivery,
+  ) {
     const initialMessageError = formatErrorMessage(error);
-    super(
-      `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
-    );
+    const deliveryFailure =
+      initialMessageDelivery && initialMessageDelivery.deliveredChunkCount > 0
+        ? "Discord thread was created, but its initial content was only partially delivered"
+        : "Discord thread was created, but sending the initial message failed";
+    super(`${deliveryFailure}: ${initialMessageError}`);
     this.name = "DiscordThreadInitialMessageError";
+    this.initialMessageDelivery = initialMessageDelivery
+      ? {
+          ...initialMessageDelivery,
+          deliveredMessageIds: [...initialMessageDelivery.deliveredMessageIds],
+        }
+      : undefined;
     this.initialMessageError = initialMessageError;
     this.thread = thread;
   }
@@ -161,7 +200,7 @@ export async function createThreadDiscord(
   payload: DiscordThreadCreate,
   opts: DiscordReactOpts,
 ) {
-  const rest = resolveDiscordRest(opts);
+  const { rest, request } = createDiscordClient(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
@@ -190,7 +229,9 @@ export async function createThreadDiscord(
     : payload.content?.trim()
       ? payload.content
       : "";
-  const initialMessageChunks = buildDiscordTextChunks(initialMessageContent);
+  const initialMessageChunks = buildDiscordTextChunks(initialMessageContent, {
+    maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
+  });
   if (isForumLike) {
     const starterContent = initialMessageChunks[0] ?? payload.name;
     body.message = { content: starterContent };
@@ -210,14 +251,29 @@ export async function createThreadDiscord(
   // create request and deliver any remainder after Discord returns the new thread.
   const followupChunks = isForumLike ? initialMessageChunks.slice(1) : initialMessageChunks;
   if (followupChunks.length && "id" in thread) {
-    try {
-      for (const content of followupChunks) {
-        await createChannelMessage(rest, thread.id, {
-          body: { content },
+    const deliveredMessageIds = isForumLike ? [resolveDiscordThreadStarterMessageId(thread)] : [];
+    let deliveredChunkCount = isForumLike ? 1 : 0;
+    const firstFollowupChunkIndex = isForumLike ? 1 : 0;
+    for (const [followupIndex, content] of followupChunks.entries()) {
+      try {
+        const result = await sendDiscordText({
+          rest,
+          request,
+          channelId: thread.id,
+          text: content,
+          maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
+        });
+        deliveredMessageIds.push(...result.platformMessageIds);
+        deliveredChunkCount += 1;
+      } catch (error) {
+        throw new DiscordThreadInitialMessageError(thread, error, {
+          starterMessageDelivered: isForumLike,
+          deliveredChunkCount,
+          deliveredMessageIds,
+          failedChunkIndex: firstFollowupChunkIndex + followupIndex,
+          totalChunkCount: initialMessageChunks.length,
         });
       }
-    } catch (error) {
-      throw new DiscordThreadInitialMessageError(thread, error);
     }
   }
 

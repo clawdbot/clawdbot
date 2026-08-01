@@ -2527,6 +2527,48 @@ describe("handleDiscordMessagingAction", () => {
       initialMessageError: "missing access",
     });
   });
+
+  it("returns delivery progress when Discord only delivers part of the initial content", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("missing access"),
+        {
+          starterMessageDelivered: true,
+          deliveredChunkCount: 1,
+          deliveredMessageIds: ["starter1"],
+          failedChunkIndex: 1,
+          totalChunkCount: 2,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning: "Discord thread was created, but its initial content was only partially delivered.",
+      initialMessageError: "missing access",
+      initialMessageDelivery: {
+        starterMessageDelivered: true,
+        deliveredChunkCount: 1,
+        deliveredMessageIds: ["starter1"],
+        failedChunkIndex: 1,
+        totalChunkCount: 2,
+      },
+    });
+  });
 });
 
 describe("handleDiscordGuildAction", () => {
