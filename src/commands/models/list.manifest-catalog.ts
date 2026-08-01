@@ -3,6 +3,7 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import type { ManifestModelCatalogRowSelection } from "../../model-catalog/manifest-planner.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -13,11 +14,12 @@ import {
   type PluginRegistrySnapshot,
 } from "../../plugins/plugin-registry.js";
 
-function loadManifestCatalogRowsForPluginIds(params: {
+function planManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
   registry: PluginManifestRegistry;
   pluginIds?: readonly string[];
   providerFilter?: string;
+  selection?: ManifestModelCatalogRowSelection;
 }): readonly NormalizedModelCatalogRow[] {
   if (params.pluginIds && params.pluginIds.length === 0) {
     return [];
@@ -33,7 +35,7 @@ function loadManifestCatalogRowsForPluginIds(params: {
     registry,
     config: params.cfg,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
-    selection: "static",
+    ...(params.selection ? { selection: params.selection } : {}),
   }).rows;
 }
 
@@ -72,12 +74,12 @@ function resolveDeclaredModelCatalogPluginIds(params: {
   });
 }
 
-/** Loads authoritative static manifest catalog rows for model-list output. */
-export function loadStaticManifestCatalogRowsForList(params: {
+function loadManifestCatalogRowsForListSelection(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
+  selection?: ManifestModelCatalogRowSelection;
 }): readonly NormalizedModelCatalogRow[] {
   const providerFilter = params.providerFilter
     ? normalizeModelCatalogProviderId(params.providerFilter)
@@ -90,12 +92,13 @@ export function loadStaticManifestCatalogRowsForList(params: {
     });
   const index = snapshot.index;
   if (!providerFilter) {
-    return loadManifestCatalogRowsForPluginIds({
+    return planManifestCatalogRowsForPluginIds({
       cfg: params.cfg,
       registry: snapshot.manifestRegistry,
+      ...(params.selection ? { selection: params.selection } : {}),
     });
   }
-  const conventionRows = loadManifestCatalogRowsForPluginIds({
+  const conventionRows = planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
     registry: snapshot.manifestRegistry,
     pluginIds: resolveConventionModelCatalogPluginIds({
@@ -104,11 +107,12 @@ export function loadStaticManifestCatalogRowsForList(params: {
       providerFilter,
     }),
     providerFilter,
+    ...(params.selection ? { selection: params.selection } : {}),
   });
   if (conventionRows.length > 0) {
     return conventionRows;
   }
-  return loadManifestCatalogRowsForPluginIds({
+  return planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
     registry: snapshot.manifestRegistry,
     pluginIds: resolveDeclaredModelCatalogPluginIds({
@@ -117,5 +121,26 @@ export function loadStaticManifestCatalogRowsForList(params: {
       providerFilter,
     }),
     providerFilter,
+    ...(params.selection ? { selection: params.selection } : {}),
   });
+}
+
+/** Loads manifest catalog rows without importing provider runtimes. */
+export function loadManifestCatalogRowsForList(params: {
+  cfg: OpenClawConfig;
+  providerFilter?: string;
+  env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): readonly NormalizedModelCatalogRow[] {
+  return loadManifestCatalogRowsForListSelection(params);
+}
+
+/** Loads authoritative static manifest catalog rows for model-list output. */
+export function loadStaticManifestCatalogRowsForList(params: {
+  cfg: OpenClawConfig;
+  providerFilter?: string;
+  env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): readonly NormalizedModelCatalogRow[] {
+  return loadManifestCatalogRowsForListSelection({ ...params, selection: "static" });
 }

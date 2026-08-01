@@ -22,7 +22,6 @@ import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type {
   ModelListAuthEvaluation,
@@ -37,9 +36,9 @@ import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
-type ScopedModelCatalogModule =
-  typeof import("../../agents/prepared-model-runtime.scoped-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
+type ScopedModelCatalogModule = typeof import("./list.scoped-catalog.js");
 
 type RowFilter = {
   provider?: string;
@@ -67,10 +66,13 @@ const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
   () => import("../../agents/prepared-model-catalog.js"),
 );
 const scopedModelCatalogModuleLoader = createLazyImportLoader<ScopedModelCatalogModule>(
-  () => import("../../agents/prepared-model-runtime.scoped-catalog.js"),
+  () => import("./list.scoped-catalog.js"),
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
   () => import("../../agents/embedded-agent-runner/model.js"),
+);
+const providerRuntimeModuleLoader = createLazyImportLoader<ProviderRuntimeModule>(
+  () => import("../../plugins/provider-runtime.js"),
 );
 function loadPreparedModelCatalogModule(): Promise<ModelCatalogModule> {
   return modelCatalogModuleLoader.load();
@@ -266,10 +268,11 @@ function shouldSuppressListModel(params: {
   });
 }
 
-function normalizeListRowWithProviderPlugin(params: {
+async function normalizeListRowWithProviderPlugin(params: {
   model: ListRowModel;
   context: RowBuilderContext;
-}): ListRowModel {
+}): Promise<ListRowModel> {
+  const { normalizeProviderResolvedModelWithPlugin } = await providerRuntimeModuleLoader.load();
   const normalized = normalizeProviderResolvedModelWithPlugin({
     provider: params.model.provider,
     config: params.context.cfg,
@@ -317,7 +320,7 @@ async function appendVisibleRow(params: {
     return false;
   }
   const model = params.normalizeWithProviderPlugin
-    ? normalizeListRowWithProviderPlugin({
+    ? await normalizeListRowWithProviderPlugin({
         model: params.model,
         context: params.context,
       })
@@ -468,18 +471,12 @@ export async function loadListModelCatalogSnapshot(
 ): Promise<ModelCatalogSnapshot> {
   const workspaceDir = context.workspaceDir ?? context.metadataSnapshot?.workspaceDir;
   if (context.providerDiscoveryProviderIds) {
-    const { prepareScopedReadOnlyModelCatalog } = await loadScopedModelCatalogModule();
-    return prepareScopedReadOnlyModelCatalog(
-      {
-        config: context.cfg,
-        ...(context.agentId ? { agentId: context.agentId } : {}),
-        agentDir: context.agentDir,
-        inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
-        ...(workspaceDir ? { workspaceDir } : {}),
-        readOnly: true,
-      },
-      context.providerDiscoveryProviderIds,
-    );
+    const { loadScopedListModelCatalogSnapshot } = await loadScopedModelCatalogModule();
+    return loadScopedListModelCatalogSnapshot({
+      cfg: context.cfg,
+      providerIds: context.providerDiscoveryProviderIds,
+      ...(context.metadataSnapshot ? { metadataSnapshot: context.metadataSnapshot } : {}),
+    });
   }
   const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
   return loadPreparedModelCatalogSnapshot({
@@ -723,21 +720,17 @@ export async function appendConfiguredRows(params: {
       }
       continue;
     }
-    // Normalize before the availability decision so the discovered-keys check
-    // uses the same canonical key the registry rows carry.
-    const model = normalizeListRowWithProviderPlugin({
-      model: resolvedModel,
-      context: params.context,
-    });
+    // Registry and catalog sources already carry canonical ids. Provider
+    // runtime normalization is reserved for explicit models.providers rows.
     await appendVisibleRow({
       rows: params.rows,
-      model,
+      model: resolvedModel,
       key: entry.key,
       context: params.context,
       ...(routeIndex ? { routeIndex } : {}),
       configuredEntry: entry,
       allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
-        modelKey(model.provider, model.id),
+        modelKey(resolvedModel.provider, resolvedModel.id),
       ),
     });
   }

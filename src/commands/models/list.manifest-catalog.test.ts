@@ -119,6 +119,28 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     ).toEqual(["moonshot/kimi-k2.6"]);
   });
 
+  it("loads runtime manifest rows for an explicitly scoped lightweight view", async () => {
+    const { loadManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    const manifestRegistry = {
+      plugins: [openaiRuntimePlugin, moonshotPlugin],
+      diagnostics: [],
+    };
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+    };
+
+    expect(
+      loadManifestCatalogRowsForList({
+        cfg: {},
+        metadataSnapshot: metadataSnapshot as unknown as Parameters<
+          typeof loadManifestCatalogRowsForList
+        >[0]["metadataSnapshot"],
+      }).map((row) => row.ref),
+    ).toEqual(["moonshot/kimi-k2.6", "openai/gpt-known"]);
+  });
+
   it("does not expose runtime overlay rows as static manifest models", async () => {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {

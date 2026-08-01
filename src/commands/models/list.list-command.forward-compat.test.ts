@@ -276,12 +276,13 @@ function installModelsListCommandForwardCompatMocks() {
     },
   }));
 
-  vi.doMock("../../agents/prepared-model-runtime.scoped-catalog.js", () => ({
-    prepareScopedReadOnlyModelCatalog: async (
-      _input: unknown,
-      providerDiscoveryProviderIds: readonly string[],
-    ) => {
-      const entries = await mocks.loadModelCatalog({ providerDiscoveryProviderIds });
+  vi.doMock("./list.scoped-catalog.js", () => ({
+    loadScopedListModelCatalogSnapshot: async ({
+      providerIds,
+    }: {
+      providerIds: readonly string[];
+    }) => {
+      const entries = await mocks.loadModelCatalog({ providerDiscoveryProviderIds: providerIds });
       return { entries, routeVariants: entries };
     },
   }));
