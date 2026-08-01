@@ -155,6 +155,10 @@ vi.mock("../agents/agent-model-discovery.js", () => {
       return modelRegistryState.available;
     }
 
+    getProviderMetadataOwners() {
+      return undefined;
+    }
+
     hasConfiguredAuth(model: { provider: string; id: string }) {
       return modelRegistryState.available.some(
         (available) => available.provider === model.provider && available.id === model.id,
