@@ -46,6 +46,43 @@ const env = {
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
+export const STATE_SCHEMA_INLINE_PLUGIN_NAME = "openclaw:inline-state-schemas";
+
+const STATE_SCHEMA_MODULES = [
+  {
+    modulePath: "src/state/openclaw-state-schema.ts",
+    schemaPath: "src/state/openclaw-state-schema.sql",
+    exportName: "OPENCLAW_STATE_SCHEMA_SQL",
+  },
+  {
+    modulePath: "src/state/openclaw-agent-schema.ts",
+    schemaPath: "src/state/openclaw-agent-schema.sql",
+    exportName: "OPENCLAW_AGENT_SCHEMA_SQL",
+  },
+] as const;
+
+/** Inline canonical schema bytes so packaged database opens need no SQL asset. */
+export function createStateSchemaInlinePlugin(rootDir: string = process.cwd()) {
+  const schemasByModulePath = new Map(
+    STATE_SCHEMA_MODULES.map((schema) => [path.resolve(rootDir, schema.modulePath), schema]),
+  );
+
+  return {
+    name: STATE_SCHEMA_INLINE_PLUGIN_NAME,
+    load(this: { addWatchFile(id: string): void }, id: string) {
+      const schema = schemasByModulePath.get(path.resolve(id));
+      if (!schema) {
+        return null;
+      }
+      const schemaPath = path.resolve(rootDir, schema.schemaPath);
+      this.addWatchFile(schemaPath);
+      return {
+        code: `export const ${schema.exportName} = ${JSON.stringify(fs.readFileSync(schemaPath, "utf8"))};\n`,
+        moduleType: "js" as const,
+      };
+    },
+  };
+}
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -680,6 +717,7 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
+      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),

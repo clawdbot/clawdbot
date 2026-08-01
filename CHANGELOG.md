@@ -58,6 +58,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
+- **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.
 - **Microsoft Teams message-tool replies:** keep automatic live previews from duplicating a message already delivered to the current Teams conversation, while preserving distinct follow-up text and cross-conversation sends. Fixes #116397. (#116398) Thanks @a-tokyo.
 - **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
 - **Control UI sharing connection isolation:** discard stale visibility and membership mutation results after switching gateways or accounts so previous-connection refreshes and errors cannot update the replacement connection. Fixes #116800. Thanks @shakkernerd.

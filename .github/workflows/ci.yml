@@ -3447,6 +3447,12 @@ jobs:
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
+      - name: Setup Node environment for native resources
+        if: needs.preflight.outputs.compatibility_target != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
       # above is evicted so quickly under the repo quota that it rarely
