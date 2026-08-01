@@ -1904,6 +1904,34 @@ describe("runWithModelFallback", () => {
     );
   });
 
+  it("preserves a different runtime's host-policy denial", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
+      harnessId: "codex",
+    });
+    const hostPolicyError = new Error("exec denied: host=gateway security=deny");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(preflightError)
+      .mockRejectedValueOnce(hostPolicyError);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-5.5",
+        fallbacksOverride: ["anthropic/claude-sonnet-4-6"],
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          provider === "openai" ? "codex" : "openclaw",
+        run,
+      }),
+    ).rejects.toBe(hostPolicyError);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+  });
+
   it("keeps an unresolved runtime eligible after a scoped preflight", async () => {
     const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
       harnessId: "codex",

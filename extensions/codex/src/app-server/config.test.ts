@@ -2653,9 +2653,10 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       name: "AgentHarnessPreflightError",
       harnessId: "codex",
       message: expect.stringContaining(
-        "Run `openclaw approvals get` locally, or add `--gateway` or `--node <id|name|ip>` for the actual execution host",
+        "inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`",
       ),
     });
+    expect((error as Error).message).not.toContain("--node");
   });
 
   it("applies host exec approval ask floors before starting Codex app-server", () => {

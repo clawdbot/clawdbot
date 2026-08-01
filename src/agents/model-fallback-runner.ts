@@ -520,6 +520,8 @@ async function runWithModelFallbackInternal<T>(
         error: err,
         ...attemptContext,
       });
+      // Scoping changes candidate selection only. The next candidate still enters
+      // its canonical runtime path, which owns its normal execution authority.
       i = nextEligibleIndex - 1;
       continue;
     }
