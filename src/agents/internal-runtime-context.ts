@@ -15,10 +15,10 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
-  "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Header for context attached to the immediately preceding user message. */
+  "Internal metadata only. Do not answer, summarize, or describe this block. Use it only to interpret the next user-authored message, and answer that message.";
+/** Header for context attached immediately before the active user message. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the immediately preceding user message.";
+  "OpenClaw internal metadata for the next user-authored message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
