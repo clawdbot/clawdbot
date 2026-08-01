@@ -1,16 +1,25 @@
 // OpenClaw gateway tests cover activation serialization and chat sessions.
 
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "../../system-agent/system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  readLastSystemAgentAuditEntry,
+} from "../../system-agent/system-agent.test-helpers.js";
 import type {
   SystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceDeps,
@@ -18,6 +27,7 @@ import type {
 import { createDeferred } from "../../test-utils/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import {
   systemAgentHandlers,
   runExclusiveSystemAgentSetupActivation,
@@ -28,6 +38,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
   detectSetupInference: vi.fn(),
+  resolvePersistentApplyInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
 const setupInferenceDetectionMocks = vi.hoisted(() => ({
@@ -59,6 +70,7 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
+  resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
 }));
 vi.mock("../../system-agent/setup-inference-detection.js", () => ({
@@ -122,6 +134,7 @@ const verifiedConfig: OpenClawConfig = {
 };
 let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
   if (!verifiedInference) {
@@ -197,6 +210,9 @@ beforeEach(async () => {
     latencyMs: 10,
     binding: verifiedInference,
   });
+  setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
+    requireVerifiedInferenceFixture().configuredRoute,
+  );
   setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
     exists: true,
     valid: true,
@@ -230,6 +246,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
+  setupInferenceMocks.resolvePersistentApplyInference.mockReset();
   setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
@@ -241,7 +258,9 @@ afterEach(() => {
   onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
+  resetPluginStateStoreForTests();
   resetCommandQueueStateForTest();
+  vi.unstubAllEnvs();
 });
 
 async function callChat(
@@ -815,20 +834,34 @@ describe("openclaw.chat", () => {
     expect((await invoke({ limit: 501 }))?.ok).toBe(false);
   });
 
-  it("surfaces delegated proposals without letting the agent arm them", async () => {
-    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
-    const proposalHash = "a".repeat(64);
-    const engine = makeVerifiedEngine();
+  it("tracks approved delegated Gateway restarts until their completion drains", async () => {
+    const operation = { kind: "gateway-restart" as const };
+    const approvalStarted = createDeferred();
+    const releaseApproval = createDeferred();
+    const stateDir = systemAgentTempDirs.make("openclaw-approved-gateway-restart-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
+    const runGatewayRestart = vi.fn(async () => {
+      approvalStarted.resolve();
+      await releaseApproval.promise;
+      return true;
+    });
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      surface: "gateway",
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: { ...requireVerifiedInferenceDeps(), runGatewayRestart },
+    });
+    engine.propose(operation);
+    const proposalHash = expectDefined(
+      engine.getPendingOperatorProposal(),
+      "approved Gateway restart proposal invariant",
+    ).hash;
     const handle = vi
       .spyOn(engine, "handle")
       .mockResolvedValue({ text: "Approval pending.", action: "none" });
-    vi.spyOn(engine, "getPendingOperatorProposal").mockReturnValue({
-      operation,
-      hash: proposalHash,
-    });
-    const resolveOperatorApproval = vi
-      .spyOn(engine, "resolveOperatorApproval")
-      .mockResolvedValue(null);
+    const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
     const sessions = new Map<string, SystemAgentChatSession>([
       [
         "delegate-1",
@@ -851,12 +884,30 @@ describe("openclaw.chat", () => {
       hasExecApprovalClients: () => true,
     } as unknown as GatewayRequestContext;
 
-    const first = await callChat(context, {
-      sessionId: "delegate-1",
-      message: "Change port.",
-      context: { page: "channels" },
-      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    const requestResponses = makeRespond();
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "delegated-gateway-restart",
+        method: "openclaw.chat",
+        params: {
+          sessionId: "delegate-1",
+          message: "Restart Gateway.",
+          context: { page: "channels" },
+          delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        },
+      },
+      respond: requestResponses.respond,
+      client: {
+        ...defaultClient,
+        connect: { ...defaultClient.connect, role: "operator", scopes: ["operator.admin"] },
+      } as GatewayClient,
+      isWebchatConnect: () => false,
+      context,
+      extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
     });
+    const first = expectDefined(requestResponses.calls[0], "delegated Gateway response invariant");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     const proposalId = (first.payload as { proposalId?: string }).proposalId;
 
     expect(first.payload).toMatchObject({
@@ -875,7 +926,7 @@ describe("openclaw.chat", () => {
       { dropIfSlow: true },
     );
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
-    expect(handle).toHaveBeenNthCalledWith(1, "Change port.");
+    expect(handle).toHaveBeenNthCalledWith(1, "Restart Gateway.");
 
     await callChat(context, {
       sessionId: "delegate-1",
@@ -885,9 +936,35 @@ describe("openclaw.chat", () => {
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
 
     manager.resolve(proposalId!, "allow-once", "operator-ui");
+    await approvalStarted.promise;
+    try {
+      expect(getCommandLaneSnapshot(CommandLane.SystemAgent)).toMatchObject({
+        activeCount: 1,
+        queuedCount: 0,
+      });
+      const restartPreflight = createSafeGatewayRestartPreflight();
+      expect(restartPreflight.safe).toBe(false);
+      expect(restartPreflight.counts.queueSize).toBe(1);
+      expect(restartPreflight.blockers).toContainEqual(
+        expect.objectContaining({ kind: "queue", count: 1 }),
+      );
+    } finally {
+      releaseApproval.resolve();
+    }
     await vi.waitFor(() => {
       expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+      expect(runGatewayRestart).toHaveBeenCalledOnce();
+      expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
     });
+    await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
+      text: expect.stringContaining("[openclaw] done: gateway.restart"),
+    });
+    expect(readLastSystemAgentAuditEntry()).toMatchObject({
+      operation: "gateway.restart",
+      summary: "Scheduled Gateway restart",
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(createSafeGatewayRestartPreflight().counts.queueSize).toBe(0);
   });
 
   it("drops a failed session and requires fresh inference on retry", async () => {

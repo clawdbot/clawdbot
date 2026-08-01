@@ -7,6 +7,7 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
+import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
@@ -142,6 +143,12 @@ const mockConfig = vi.hoisted(() => {
     ),
   };
 });
+const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
+  runDaemonStart: vi.fn(async () => {}),
+  runDaemonStop: vi.fn(async () => {}),
+  runDaemonRestart: mockDaemonRestart,
+}));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
     command,
@@ -191,6 +198,7 @@ describe("parseSystemAgentOperation", () => {
 
   beforeEach(() => {
     mockConfig.reset();
+    mockDaemonRestart.mockClear();
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
@@ -444,7 +452,7 @@ describe("parseSystemAgentOperation", () => {
     const runGatewayRestart = vi.fn(async () => {});
 
     const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart },
+      deps: { runGatewayRestart, setupSurface: "gateway" },
     });
 
     expectRecordFields(result as unknown as Record<string, unknown>, {
@@ -453,6 +461,40 @@ describe("parseSystemAgentOperation", () => {
     });
     expect(lines.join("\n")).toContain("Plan: restart the Gateway");
     expect(runGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { surface: "gateway" as const, options: { safe: true } },
+    { surface: "cli" as const, options: undefined },
+  ])(
+    "uses the appropriate restart lifecycle for the $surface surface",
+    async ({ surface, options }) => {
+      await runGatewayLifecycle("restart", surface);
+
+      expect(mockDaemonRestart).toHaveBeenCalledWith(options);
+    },
+  );
+
+  it.each([
+    { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
+    { surface: "cli" as const, summary: "Restarted Gateway" },
+  ])("records an approved $surface restart truthfully", async ({ surface, summary }) => {
+    const tempDir = opTempDirs.make("openclaw-restart-scheduled-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const runGatewayRestart = vi.fn(async () => true);
+
+    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
+      approved: true,
+      deps: { runGatewayRestart, setupSurface: surface },
+    });
+
+    expect(result.applied).toBe(true);
+    expect(runGatewayRestart).toHaveBeenCalledOnce();
+    if (surface === "gateway") {
+      expect(lines.join("\n")).toContain(summary);
+    }
+    expectAuditRecord(readLastAuditEntry(), { operation: "gateway.restart", summary }, {});
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {

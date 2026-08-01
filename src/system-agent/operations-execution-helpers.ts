@@ -94,6 +94,7 @@ export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
 
 export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
+  surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
@@ -106,7 +107,8 @@ export async function runGatewayLifecycle(
     await lifecycle.runDaemonStop({ force: true });
     return;
   }
-  return await lifecycle.runDaemonRestart();
+  // Gateway-hosted operations must finish and drain before restarting their owner.
+  return await lifecycle.runDaemonRestart(surface === "gateway" ? { safe: true } : undefined);
 }
 
 export async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
