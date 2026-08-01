@@ -115,7 +115,7 @@ export function buildSlackProgressCommentaryRun(
     ].join(" "),
     matchText: finalMarker,
     settleObservedMs: 3_000,
-    verifyObserved: ({ finalMessage, messages }) => {
+    verifyObserved: ({ finalMessage, messages, nativeTaskUpdates = [] }) => {
       if (!finalMessage.ts) {
         throw new Error("Slack progress commentary final message had no ts");
       }
@@ -143,13 +143,20 @@ export function buildSlackProgressCommentaryRun(
           .filter((message) => hasSlackCommentaryLaneMarker(message, commentaryMarker))
           .map((message) => message.ts),
       );
+      const nativeCommentaryTaskObserved = nativeTaskUpdates.some(
+        (update) => update.title.trim() === commentaryMarker,
+      );
       if (
         expectation.commentary === "lane" &&
+        !nativeCommentaryTaskObserved &&
         (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
       ) {
-        throw new Error("expected commentary in the Slack progress commentary lane");
+        throw new Error("expected commentary in a native Slack task update lane");
       }
-      if (expectation.commentary !== "lane" && commentaryLaneTimestamps.size !== 0) {
+      if (
+        expectation.commentary !== "lane" &&
+        (nativeCommentaryTaskObserved || commentaryLaneTimestamps.size !== 0)
+      ) {
         throw new Error(
           expectation.commentary === "headline"
             ? "expected the preamble as the Slack progress status headline"

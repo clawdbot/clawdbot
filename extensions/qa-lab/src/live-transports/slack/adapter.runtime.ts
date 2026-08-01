@@ -26,6 +26,7 @@ import {
   listSlackThreadMessages,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
+import { startSlackQaRecordingProxy } from "./slack-live.recording-proxy.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
@@ -121,6 +122,7 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
+  let recordingProxy: Awaited<ReturnType<typeof startSlackQaRecordingProxy>>;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
       getSlackIdentity(runtimeEnv.driverBotToken),
@@ -129,6 +131,7 @@ export async function createSlackQaTransportAdapter(
     if (driverIdentity.userId === sutIdentity.userId) {
       throw new Error("Slack QA requires two distinct bots for driver and SUT.");
     }
+    recordingProxy = await startSlackQaRecordingProxy();
   } catch (error) {
     try {
       await heartbeat.stop();
@@ -272,6 +275,7 @@ export async function createSlackQaTransportAdapter(
         sutAppToken: runtimeEnv.sutAppToken,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
+    createRuntimeEnvPatch: () => ({ SLACK_API_URL: recordingProxy.apiUrl }),
     prepareFlow: createSlackQaScenarioEnvironment({
       accountId,
       channelId: runtimeEnv.channelId,
@@ -282,6 +286,7 @@ export async function createSlackQaTransportAdapter(
       sutIdentity,
       sutReadClient: sutClient,
       sutWriteClient,
+      readNativeTaskUpdates: recordingProxy.nativeTaskUpdates,
     }).prepareFlow,
     waitReady: async ({ gateway }) =>
       await waitForSlackChannelStable(gateway as never, accountId, "connected"),
@@ -302,11 +307,15 @@ export async function createSlackQaTransportAdapter(
       pollingAbort.abort();
     },
     async cleanupAfterGatewayStop() {
-      // Lease release must still run when heartbeat shutdown reports an error.
+      // Lease release must still run when proxy or heartbeat shutdown reports an error.
       try {
-        await heartbeat.stop();
+        await recordingProxy.stop();
       } finally {
-        await lease.release();
+        try {
+          await heartbeat.stop();
+        } finally {
+          await lease.release();
+        }
       }
     },
   };

@@ -670,10 +670,7 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text: testCase.commentaryStyle === "lane" ? "Working…" : commentaryMarker,
-                ...(testCase.commentaryStyle === "lane"
-                  ? { blockText: ["Update", commentaryMarker] }
-                  : {}),
+                text: commentaryMarker,
                 ts: testCase.commentaryTs,
               },
             ]
@@ -692,9 +689,43 @@ describe("Slack live QA runtime helpers", () => {
         verifyObserved({
           finalMessage: { text: finalMarker, ts: "2.000000" },
           messages,
+          nativeTaskUpdates:
+            testCase.commentaryStyle === "lane"
+              ? [
+                  {
+                    id: "item_fixture",
+                    method: "chat.startStream",
+                    status: "in_progress",
+                    title: commentaryMarker,
+                  },
+                ]
+              : [],
         }),
       ).toContain("verified");
     }
+  });
+
+  it("requires the commentary marker in a native task update for the lane scenario", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!commentaryMarker || !finalMarker || !verifyObserved) {
+      throw new Error("missing Slack native commentary verifier");
+    }
+
+    expect(() =>
+      verifyObserved({
+        finalMessage: { text: finalMarker, ts: "2.000000" },
+        messages: [
+          { channelId: "C123456789", text: commentaryMarker, ts: "1.500000" },
+          { channelId: "C123456789", text: finalMarker, ts: "2.000000" },
+        ],
+        nativeTaskUpdates: [],
+      }),
+    ).toThrow("native Slack task update lane");
   });
 
   it("rejects commentary when false and mismatched tool progress", () => {
@@ -1167,7 +1198,10 @@ describe("Slack live QA runtime helpers", () => {
         ? [
             {
               blocks: storedPayload.blocks,
-              text: storedPayload.text,
+              text:
+                typeof storedPayload.text === "string"
+                  ? storedPayload.text.replace(/\s+/gu, " ")
+                  : storedPayload.text,
               ts: "2.000000",
               user: "U999999999",
             },
@@ -1203,15 +1237,57 @@ describe("Slack live QA runtime helpers", () => {
     const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
     expect(fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(fallbackText.split("\n")).toContain(probe.finalRowText);
-    expect(result.message).toMatchObject({
-      text: fallbackText,
-      ts: "2.000000",
-      user: "U999999999",
-    });
+    expect(result.message).toMatchObject({ ts: "2.000000", user: "U999999999" });
+    expect(result.message.text).toBe(fallbackText.replace(/\s+/gu, " "));
     expect(result.details).toContain("first API failure=invalid_blocks");
     expect(result.details).toContain("fallback formatting disabled=true");
     expect(result.details).toContain("complete delivery=true");
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
+  });
+
+  it("bounds invalid_blocks readback diagnostics while showing the observed text", async () => {
+    const malformedReadback = `BROKEN-${"x".repeat(2_000)}`;
+    const postMessage = vi.fn(async () => ({
+      channel: "C123456789",
+      ok: true,
+      ts: "2.000000",
+    }));
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const error = await testing
+      .runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: {
+          conversations: {
+            history: vi.fn(async () => ({
+              messages: [{ text: malformedReadback, ts: "2.000000", user: "U999999999" }],
+            })),
+          },
+        } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(`${malformedReadback.length} characters`);
+    expect(message).toContain('actual="BROKEN-');
+    expect(message).toContain("…");
+    expect(message.length).toBeLessThan(700);
   });
 
   it("reports the real Slack error when the fallback request fails", async () => {

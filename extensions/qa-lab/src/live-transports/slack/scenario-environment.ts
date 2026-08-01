@@ -9,6 +9,7 @@ import {
 import { buildSlackQaConfig } from "./slack-live.config.js";
 import type {
   SlackAuthIdentity,
+  SlackQaNativeTaskUpdate,
   SlackObservedMessage,
   SlackQaScenarioImplementation,
   SlackQaScenarioContext,
@@ -33,6 +34,7 @@ export type SlackQaScenarioEnvironment = {
   context: Omit<SlackQaScenarioContext, "sentTs">;
   gatewayDebugDirPath: string;
   observedMessages: SlackObservedMessage[];
+  readNativeTaskUpdates: () => SlackQaNativeTaskUpdate[];
   outputDir: string;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
@@ -59,6 +61,7 @@ export function createSlackQaScenarioEnvironment(params: {
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
+  readNativeTaskUpdates: () => SlackQaNativeTaskUpdate[];
   sutAppToken: string;
   sutBotToken: string;
   sutIdentity: SlackAuthIdentity;
@@ -121,6 +124,7 @@ export function createSlackQaScenarioEnvironment(params: {
         context,
         gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
         observedMessages,
+        readNativeTaskUpdates: params.readNativeTaskUpdates,
         outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,

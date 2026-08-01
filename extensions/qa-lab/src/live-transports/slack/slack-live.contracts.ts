@@ -121,9 +121,17 @@ export type SlackQaMessageScenarioRun = {
   verifyObserved?: (params: {
     finalMessage: SlackMessage;
     messages: readonly SlackObservedMessage[];
+    nativeTaskUpdates?: readonly SlackQaNativeTaskUpdate[];
   }) => string | void;
   beforeRun?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<SlackQaBeforeRunResult>;
   afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
+};
+
+export type SlackQaNativeTaskUpdate = {
+  id: string;
+  method: "chat.appendStream" | "chat.startStream" | "chat.stopStream";
+  status?: string;
+  title: string;
 };
 
 type SlackQaDirectTransportScenarioRun = {
