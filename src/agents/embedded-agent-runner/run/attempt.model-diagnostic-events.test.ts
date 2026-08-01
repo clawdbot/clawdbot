@@ -284,6 +284,50 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         transport: "http",
       },
     });
+    expect(events[0]?.status).toBeUndefined();
+  });
+
+  it("records provider response status and preserves the original response callback", async () => {
+    const originalOnResponse = vi.fn(async () => undefined);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        return options?.onResponse?.({ status: 200, headers: { "x-request-id": "req-1" } }, model);
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-status",
+        provider: "openai",
+        model: "gpt-5.6",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-status",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      await wrapped(
+        { id: "gpt-5.6" } as never,
+        {} as never,
+        {
+          onResponse: originalOnResponse,
+        } as never,
+      );
+    });
+
+    expect(originalOnResponse).toHaveBeenCalledWith(
+      { status: 200, headers: { "x-request-id": "req-1" } },
+      { id: "gpt-5.6" },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      ok: true,
+      status: 200,
+    });
   });
 
   it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
@@ -357,6 +401,39 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         model: "claude-sonnet-4-6",
         transport: "sse",
       },
+    });
+  });
+
+  it("records a non-2xx provider response on a failed model call", async () => {
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        void options?.onResponse?.({ status: 429, headers: {} }, model);
+        throw new Error("rate limited");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-http-error",
+        provider: "openai",
+        model: "gpt-5.6",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-http-error",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      expect(() => wrapped({} as never, {} as never, {} as never)).toThrow("rate limited");
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      ok: false,
+      status: 429,
     });
   });
 

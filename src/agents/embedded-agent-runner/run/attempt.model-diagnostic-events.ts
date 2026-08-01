@@ -88,6 +88,7 @@ type ModelCallUsage = NonNullable<
 >;
 type ModelCallObservationState = {
   requestPayloadBytes?: number;
+  responseStatus?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
   modelContent?: DiagnosticModelCallContent;
@@ -432,6 +433,7 @@ function emitProviderRequestTimelineEvent(
   startedAt: number,
   durationMs: number,
   ok: boolean,
+  responseStatus: number | undefined,
 ): void {
   const provider = boundedTimelineAttribute(eventBase.provider);
   const model = boundedTimelineAttribute(eventBase.model);
@@ -447,6 +449,7 @@ function emitProviderRequestTimelineEvent(
     provider,
     operation: api ?? transport ?? "model.call",
     ok,
+    ...(responseStatus !== undefined ? { status: responseStatus } : {}),
     attributes: {
       ...(model ? { model } : {}),
       ...(api ? { api } : {}),
@@ -578,7 +581,7 @@ function emitModelCallCompleted(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true, state.responseStatus);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.completed",
@@ -610,7 +613,7 @@ function emitModelCallError(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, state.responseStatus);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.error",
@@ -640,6 +643,7 @@ function withDiagnosticRequestContext(
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
+  const originalOnResponse = options?.onResponse;
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
     if (!originalOnPayload) {
       assignRequestPayloadBytes(state, payload);
@@ -655,12 +659,19 @@ function withDiagnosticRequestContext(
     assignRequestPayloadBytes(state, result ?? payload);
     return result;
   };
+  const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
+    // Retrying providers can expose several responses; the terminal request status
+    // is the latest response observed before the model call completes or fails.
+    state.responseStatus = response.status;
+    return originalOnResponse?.(response, model);
+  };
 
   if (!traceparent) {
     return {
       ...options,
       requestId: callId,
       onPayload,
+      onResponse,
     };
   }
 
@@ -677,6 +688,7 @@ function withDiagnosticRequestContext(
     requestId: callId,
     headers,
     onPayload,
+    onResponse,
   };
 }
 
