@@ -16,9 +16,12 @@ function systemdEscapeArg(value: string): string {
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
-  // systemd ExecStart/Environment parsing honors backslash escapes inside
-  // quotes; match that contract for round-trip parser tests.
-  return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
+  // systemd ExecStart/Environment parsing consumes one backslash before the next
+  // character, so every backslash and quote must be escaped for the value to
+  // survive the round-trip byte-for-byte. Escaping only backslash pairs left a
+  // lone backslash unescaped, and the reader then swallowed the byte after it.
+  const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return `"${escaped}"`;
 }
 
 function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
@@ -110,28 +113,18 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
     return null;
   }
 
-  const unquoted = (() => {
-    const quote = trimmed[0];
-    if (!((quote === '"' || quote === "'") && trimmed.endsWith(quote))) {
-      return trimmed;
-    }
-    let out = "";
-    let escapeNext = false;
-    // systemd quote parsing consumes one backslash before the next character.
-    for (const ch of trimmed.slice(1, -1)) {
-      if (escapeNext) {
-        out += ch;
-        escapeNext = false;
-        continue;
-      }
-      if (ch === "\\\\") {
-        escapeNext = true;
-        continue;
-      }
-      out += ch;
-    }
-    return out;
-  })();
+  const quote = trimmed[0];
+  const isQuoted = (quote === '"' || quote === "'") && trimmed.endsWith(quote);
+  // Unquote with the shared splitter every other reader in this module uses. The
+  // local copy of that loop compared one character against a two-character
+  // literal, so it never consumed an escape and handed back the raw bytes.
+  const unquoted = isQuoted
+    ? (splitArgsPreservingQuotes(trimmed, {
+        escapeMode: "backslash",
+        quoteChars: ['"', "'"],
+        quoteStart: "item-start",
+      })[0] ?? "")
+    : trimmed;
 
   const eq = unquoted.indexOf("=");
   if (eq <= 0) {
