@@ -2417,7 +2417,9 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve_release_target.outputs.sha }}
-    secrets: inherit
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: read
       packages: write

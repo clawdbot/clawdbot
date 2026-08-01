@@ -11,6 +11,11 @@ on:
         description: Full immutable commit SHA resolved from tag
         required: true
         type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 concurrency:
   group: docker-release-publish-${{ inputs.tag }}

@@ -317,6 +317,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
       PREFLIGHT_RUN_ID: "111",
+      PUBLISH_DOCKER_ONLY: "false",
       PUBLISH_OPENCLAW_NPM: "true",
       RELEASE_NPM_DIST_TAG: "beta",
       RELEASE_PROFILE: "beta",
@@ -3760,11 +3761,14 @@ describe("package artifact reuse", () => {
     const createReleaseIndex = publishRun.lastIndexOf("create_or_update_github_release");
     const verifyReleaseIndex = publishRun.lastIndexOf("verify_published_release");
     const appendProofIndex = publishRun.lastIndexOf("append_release_proof_to_github_release");
-    const publishReleaseIndex = publishRun.lastIndexOf("publish_github_release");
+    const finalizeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "finalize_github_release");
+    const finalizeRelease = workflowStep(finalizeJob, "Publish the verified draft release");
     expect(createReleaseIndex).toBeGreaterThanOrEqual(0);
     expect(verifyReleaseIndex).toBeGreaterThan(createReleaseIndex);
     expect(appendProofIndex).toBeGreaterThan(verifyReleaseIndex);
-    expect(publishReleaseIndex).toBeGreaterThan(appendProofIndex);
+    expect(finalizeJob.needs).toEqual(["publish", "publish_docker"]);
+    expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
+    expect(finalizeRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
@@ -3834,12 +3838,9 @@ describe("package artifact reuse", () => {
     const promoteWindowsCall = releaseWorkflow.lastIndexOf(
       "\n              if promote_windows_release_assets; then\n",
     );
-    const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
-    );
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteWindowsCall).toBeGreaterThan(createDraftCall);
-    expect(publishReleaseCall).toBeGreaterThan(promoteWindowsCall);
+    expect(releaseWorkflow).toContain("finalize_github_release:");
 
     expect(windowsWorkflow).not.toContain("default: latest");
     expect(windowsWorkflow).toContain("expected_installer_digests:");
@@ -3970,12 +3971,9 @@ describe("package artifact reuse", () => {
     const promoteAndroidCall = releaseWorkflow.lastIndexOf(
       "\n              if promote_android_release_asset; then\n",
     );
-    const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
-    );
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteAndroidCall).toBeGreaterThan(createDraftCall);
-    expect(publishReleaseCall).toBeGreaterThan(promoteAndroidCall);
+    expect(releaseWorkflow).toContain("finalize_github_release:");
 
     expect(androidDocs).toContain("github.com/openclaw/openclaw/releases");
     expect(androidDocs).not.toContain("releases/latest/download/OpenClaw-Android.apk");

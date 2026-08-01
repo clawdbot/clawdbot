@@ -51,6 +51,7 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, string>;
   permissions?: PermissionMap;
+  secrets?: Record<string, string> | "inherit";
   steps?: WorkflowStep[];
   uses?: string;
   with?: Record<string, boolean | number | string>;
@@ -59,9 +60,11 @@ type WorkflowJob = {
 type Workflow = {
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    push?: unknown;
     workflow_call?: {
       inputs?: Record<string, WorkflowInput>;
       outputs?: Record<string, { description?: string; value?: string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: { inputs?: Record<string, WorkflowInput> };
   };
@@ -990,6 +993,10 @@ describe("release validation no-push transport", () => {
       tag: { required: true, type: "string" },
       release_sha: { required: true, type: "string" },
     });
+    expect(dockerRelease.on?.workflow_call?.secrets).toEqual({
+      DOCKERHUB_USERNAME: { required: true },
+      DOCKERHUB_TOKEN: { required: true },
+    });
 
     const callers = readdirSync(".github/workflows")
       .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
@@ -1011,6 +1018,10 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.with).toEqual({
       tag: "${{ inputs.tag }}",
       release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
+    });
+    expect(dockerCall.secrets).toEqual({
+      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
+      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
     });
     expect(
       step(

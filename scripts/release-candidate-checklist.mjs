@@ -680,8 +680,8 @@ export function validateCandidateCheckout({
  * Keeps release validation pre-publication: the final immutable tag is created
  * only after this helper has recorded green evidence for the frozen SHA.
  */
-export function assertPlannedReleaseTagIsAbsent(tag, remoteTagExists) {
-  if (remoteTagExists(tag)) {
+export function assertPlannedReleaseTagIsAbsent(tag, checkRemoteTagExists) {
+  if (checkRemoteTagExists(tag)) {
     throw new Error(
       `release candidate tag ${tag} already exists; validate a new patch instead of reusing a published tag`,
     );
