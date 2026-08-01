@@ -5,11 +5,11 @@ import {
   setPageShareSink,
 } from "./page-share.js";
 
-function createSink() {
+function createSink(sessionKey = "agent:main:main") {
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const resolveDefaultAgentId = vi.fn(() => "main");
-  const resolveMainSessionKey = vi.fn(() => "agent:main:main");
+  const resolveMainSessionKey = vi.fn(() => sessionKey);
   const sink = {
     enqueueSystemEvent,
     requestHeartbeat,
@@ -30,14 +30,14 @@ afterEach(() => {
 });
 
 describe("page share delivery", () => {
-  it("formats metadata, keeps the note trusted, and wraps selected page text", async () => {
+  it("formats metadata, keeps the note trusted, and wakes a scoped session", async () => {
     const {
       enqueueSystemEvent,
       requestHeartbeat,
       resolveDefaultAgentId,
       resolveMainSessionKey,
       sink,
-    } = createSink();
+    } = createSink("agent:ops:main");
     setPageShareSink(sink);
 
     await deliverPageShare({
@@ -49,10 +49,10 @@ describe("page share delivery", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+    expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(resolveMainSessionKey).toHaveBeenCalledOnce();
     const [text, options] = enqueueSystemEvent.mock.calls[0] as [string, { sessionKey: string }];
-    expect(options).toEqual({ sessionKey: "agent:main:main" });
+    expect(options).toEqual({ sessionKey: "agent:ops:main" });
     expect(text).toContain(
       "Page shared from the OpenClaw Chrome extension.\nNote: Summarize for me",
     );
@@ -71,8 +71,28 @@ describe("page share delivery", () => {
       source: "notifications-event",
       intent: "immediate",
       reason: "wake",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+    });
+  });
+
+  it("supplies the default agent for the global session", async () => {
+    const { requestHeartbeat, resolveDefaultAgentId, sink } = createSink("global");
+    setPageShareSink(sink);
+
+    await deliverPageShare({
+      url: "https://example.com",
+      title: "Example",
+      content: "full page content",
+    });
+
+    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+    expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
       heartbeat: { target: "last" },
     });
   });

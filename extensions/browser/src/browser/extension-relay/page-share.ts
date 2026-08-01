@@ -17,7 +17,7 @@ type PageShareSink = {
     source: "notifications-event";
     intent: "immediate";
     reason: "wake";
-    agentId: string;
+    agentId?: string;
     sessionKey: string;
     heartbeat: { target: "last" };
   }): unknown;
@@ -62,16 +62,13 @@ export async function deliverPageShare(payload: PageSharePayload): Promise<void>
   ].join("\n");
   const text = `${header}\n\n${wrapped}`;
 
-  // Enqueue and wake the same session. The targeted system-event shape remains
-  // resolvable in global scope when periodic heartbeats are intentionally disabled.
-  const agentId = sink.resolveDefaultAgentId();
   const sessionKey = sink.resolveMainSessionKey();
   await sink.enqueueSystemEvent(text, { sessionKey });
   await sink.requestHeartbeat({
     source: "notifications-event",
     intent: "immediate",
     reason: "wake",
-    agentId,
+    ...(sessionKey === "global" ? { agentId: sink.resolveDefaultAgentId() } : {}),
     sessionKey,
     heartbeat: { target: "last" },
   });
