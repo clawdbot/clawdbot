@@ -181,8 +181,9 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
   }
   // Buffer.from silently drops out-of-alphabet characters, which would render
   // corrupted HTML without any error. Canonicalize first and reject outright.
-  const canonicalBlob = canonicalizeBase64(content.blob);
-  if (!canonicalBlob) {
+  // An empty blob is a valid zero-byte resource, not malformed content.
+  const canonicalBlob = content.blob === "" ? "" : canonicalizeBase64(content.blob);
+  if (canonicalBlob === undefined) {
     throw new Error("MCP App resource returned malformed base64 blob content");
   }
   const decoded = Buffer.from(canonicalBlob, "base64");
