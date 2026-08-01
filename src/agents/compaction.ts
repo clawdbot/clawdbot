@@ -42,7 +42,9 @@ const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
 
-type CompactionSummaryResult = { kind: "summary"; text: string };
+type CompactionSummaryResult =
+  | { kind: "summary"; text: string }
+  | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const MERGE_SUMMARIES_INSTRUCTIONS = [

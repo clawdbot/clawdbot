@@ -2272,6 +2272,54 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.summary).not.toContain("Old duplicated section");
   });
 
+  it("preserves the prior summary when staged summarization returns a generic fallback", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue({
+      kind: "generic-fallback",
+      text: "Context contained 4 messages. Summary unavailable due to size limits.",
+    });
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "latest ask status", timestamp: 1 }],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "## Goal\nKnown context that must survive the outage.",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("Known context that must survive the outage.");
+    expect(result.compaction?.summary).toContain("Summary unavailable due to size limits.");
+  });
+
   it("falls back to LLM when provider throws a provider-side AbortError with signal not aborted", async () => {
     // Reproduce the undici AbortError("This operation was aborted") shape that
     // arrives when the compaction provider's HTTP connection drops mid-stream while

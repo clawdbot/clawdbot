@@ -286,13 +286,19 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
  * Only called when no compaction provider is available or the provider failed.
  */
 async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]): Promise<string> {
-  return (
-    await compactionSafeguardDeps.summarizeInStages({
-      ...params,
-      messages: prependPreviousSummaryForRedistill(params),
-      previousSummary: undefined,
-    })
-  ).text;
+  const result = await compactionSafeguardDeps.summarizeInStages({
+    ...params,
+    messages: prependPreviousSummaryForRedistill(params),
+    previousSummary: undefined,
+  });
+  if (result.kind === "summary") {
+    return result.text;
+  }
+
+  // A generic fallback means redistillation never happened. Preserve the
+  // known summary verbatim so a temporary model outage cannot erase it.
+  const previousSummary = params.previousSummary?.trim();
+  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
