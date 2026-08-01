@@ -17,6 +17,7 @@ const {
   registerWebhookTargetWithPluginRouteMock,
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
+  logLineChannelQuotaMock,
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
@@ -29,6 +30,7 @@ const {
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
   runDetachedWebhookWorkMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
+  logLineChannelQuotaMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
@@ -136,6 +138,7 @@ vi.mock("./send.js", () => ({
   createLocationMessage: vi.fn(),
   createQuickReplyItems: vi.fn(),
   getUserDisplayName: vi.fn(),
+  logLineChannelQuota: logLineChannelQuotaMock,
   pushMessagesLine: vi.fn(),
   replyMessageLine: vi.fn(),
   showLoadingAnimation: vi.fn(),
@@ -179,6 +182,7 @@ describe("monitorLineProvider lifecycle", () => {
       .mockReset()
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
+    logLineChannelQuotaMock.mockClear();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")
         ? params.target.path
@@ -260,6 +264,10 @@ describe("monitorLineProvider lifecycle", () => {
     expect(registration.route.pluginId).toBe("line");
     expect(registration.route).not.toHaveProperty("path");
     expect(registration.route).not.toHaveProperty("replaceExisting");
+    expect(logLineChannelQuotaMock).toHaveBeenCalledExactlyOnceWith({
+      cfg: {} as OpenClawConfig,
+      accountId: "work",
+    });
     await monitor.stop();
   });
 
@@ -315,6 +323,22 @@ describe("monitorLineProvider lifecycle", () => {
     const registration = requireWebhookRegistration();
     expect(registration.target.accountId).toBe("work");
     expect(registration.route.accountId).toBe("work");
+    expect(logLineChannelQuotaMock).toHaveBeenCalledExactlyOnceWith({
+      cfg: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                channelAccessToken: "work-token",
+                channelSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+    });
 
     await monitor.stop();
   });

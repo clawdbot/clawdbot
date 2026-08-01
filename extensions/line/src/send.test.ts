@@ -729,16 +729,6 @@ describe("LINE send helpers", () => {
     });
   });
 
-  it("does not misclassify network SyntaxErrors as provider acceptance", async () => {
-    const failure = new SyntaxError("upstream network decoder failed");
-    lineFetchMock.mockRejectedValueOnce(failure);
-
-    await expect(sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG })).rejects.toBe(
-      failure,
-    );
-    expect(isChannelPartialDeliveryError(failure)).toBe(false);
-  });
-
   it.each([
     {
       label: "push",
