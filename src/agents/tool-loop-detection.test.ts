@@ -1055,37 +1055,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("blocks changing normal non-zero exec exits at the critical no-progress threshold", () => {
-      const state = createState();
-      const params = { command: "openclaw flaky-helper" };
-
-      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
-        recordSuccessfulCall(
-          state,
-          "exec",
-          params,
-          {
-            content: [{ type: "text", text: `Command failed: attempt ${index}` }],
-            details: {
-              status: "completed",
-              exitCode: 1,
-              durationMs: 100 + index,
-              aggregated: `Command failed: attempt ${index}`,
-            },
-          },
-          index,
-        );
-      }
-
-      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("generic_repeat");
-      }
-    });
-
-    it("blocks changing normal non-zero exec exits at the global no-progress threshold", () => {
+    it("keeps changing completed non-zero exec output below the global no-progress breaker", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -1108,10 +1078,115 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
-      expect(loopResult).toMatchObject({
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("blocks changing structured exec failures at the global no-progress threshold", () => {
+      const state = createState();
+      const params = { command: "openclaw missing-helper" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Command not found: attempt ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: 127,
+              exitSignal: null,
+              exitReason: "exit",
+              failureKind: "shell-command-not-found",
+              timedOut: false,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
         stuck: true,
         level: "critical",
         detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it.each([
+      { label: "runtime errors", failureKind: "runtime-error" },
+      { label: "approval failures", failureKind: "approval_required" },
+      { label: "failures without a structured kind", failureKind: undefined },
+    ])("keeps changing $label below the global no-progress breaker", ({ failureKind }) => {
+      const state = createState();
+      const params = { command: "openclaw flaky-helper" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Failure ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              ...(failureKind ? { failureKind } : {}),
+              timedOut: false,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it("keeps materially different structured exec failures distinct", () => {
+      const state = createState();
+      const params = { command: "openclaw flaky-helper" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const timedOut = index % 2 === 0;
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Failure ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              exitSignal: timedOut ? null : "SIGTERM",
+              exitReason: timedOut ? "overall-timeout" : "signal",
+              failureKind: timedOut ? "overall-timeout" : "signal",
+              timedOut,
+              noOutputTimedOut: false,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
         count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
       });
     });

@@ -158,6 +158,15 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+const STRUCTURED_EXEC_FAILURE_KINDS = new Set([
+  "shell-command-not-found",
+  "shell-not-executable",
+  "overall-timeout",
+  "no-output-timeout",
+  "signal",
+  "aborted",
+]);
+
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
@@ -172,28 +181,33 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   }
 
   const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
+  const failureKind = stringField(details.failureKind);
   const stableOutcome = {
     status,
     exitCode,
+    exitSignal:
+      typeof details.exitSignal === "string" || typeof details.exitSignal === "number"
+        ? details.exitSignal
+        : null,
+    exitReason: stringField(details.exitReason),
+    failureKind,
     timedOut: details.timedOut === true,
+    noOutputTimedOut: details.noOutputTimedOut === true,
   };
 
-  if (status === "completed") {
-    // Normal non-zero exits are completed outcomes, but their diagnostics are
-    // failure noise and must not reset the no-progress streak.
-    if (exitCode !== null && exitCode !== 0) {
-      return digestStable(stableOutcome);
-    }
-    return digestStable({
-      ...stableOutcome,
-      output: nonEmptyStringField(details.aggregated) ?? text,
-    });
+  // Failed outcomes carry producer-owned facts that distinguish failure modes.
+  // Diagnostic text may contain volatile runtime details that are not progress.
+  if (status === "failed" && failureKind && STRUCTURED_EXEC_FAILURE_KINDS.has(failureKind)) {
+    return digestStable(stableOutcome);
   }
 
-  // Failed exec diagnostics vary between attempts without proving progress; hash only stable
-  // execution facts so repeated failures can reach the loop guards.
-  if (status === "failed") {
-    return digestStable(stableOutcome);
+  if (status === "completed" || status === "failed") {
+    return digestStable({
+      status,
+      exitCode,
+      timedOut: details.timedOut === true,
+      output: nonEmptyStringField(details.aggregated) ?? text,
+    });
   }
 
   if (status === "approval-pending" || status === "approval-unavailable") {

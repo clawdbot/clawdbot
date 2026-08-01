@@ -72,9 +72,13 @@ You can also enable the global rolling-history detectors in **Settings -> Labs**
 | --------- | ------- | ------------------------------------------------------------------------------------------------- |
 | `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
-For `exec`, no-progress hashing compares stable command outcomes (status,
-exit code, timed-out flag, output) and ignores volatile runtime metadata such
-as duration, PID, session ID, and working directory. Outbound message-send
+For `exec`, no-progress hashing compares stable command outcomes. Completed
+commands include their output. Failed process outcomes with a specific
+structured failure kind use exit facts such as status, exit code, signal,
+failure kind, and timeout state without volatile diagnostic text. Broad
+runtime errors and unclassified failures keep their output in the hash so
+distinct failures do not collapse together. Runtime metadata such as duration,
+PID, session ID, and working directory is ignored. Outbound message-send
 results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so a "sent" result does not look identical to a different "sent"
 result. When a run id is available, history is evaluated only within that run,
