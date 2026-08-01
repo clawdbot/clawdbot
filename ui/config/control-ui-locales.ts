@@ -11,7 +11,11 @@ import { en } from "../src/i18n/locales/en.ts";
 
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
 const resolvedLocaleModulePrefix = `\0${localeModulePrefix}`;
-const i18nAssetsDir = fileURLToPath(new URL("../src/i18n/.i18n/", import.meta.url));
+// Vitest rewrites new URL(relative, import.meta.url) to browser self.location.
+const i18nAssetsDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../src/i18n/.i18n",
+);
 const locales = new Set(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
 
 export function controlUiLocaleModulesPlugin(): Plugin {
