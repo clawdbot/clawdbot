@@ -462,6 +462,12 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       },
+      {
+        id: "gatewayHealthJsonFirstDevice",
+        name: "gateway health --json (first device)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
       { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
       {
         id: "healthJson",
@@ -485,16 +491,18 @@ describe("bench-cli-startup", () => {
     expect(testing.parseGatewayPortEnv("::1")).toBe(32123);
     expect(testing.parseGatewayPortEnv("[::1]")).toBe(32123);
 
-    expect(
-      withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
-        testing.buildConfigFixture({
-          id: "gatewayHealthJson",
-          name: "gateway health --json",
-          args: ["gateway", "health", "--json"],
-          presets: ["real"],
-        }),
-      ),
-    ).toMatchObject({ gateway: { port: 45678 } });
+    for (const id of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
+          testing.buildConfigFixture({
+            id,
+            name: "gateway health --json",
+            args: ["gateway", "health", "--json"],
+            presets: [],
+          }),
+        ),
+      ).toMatchObject({ gateway: { port: 45678 } });
+    }
 
     for (const invalid of ["45678abc", "127.0.0.1:45678abc"]) {
       expect(() =>
