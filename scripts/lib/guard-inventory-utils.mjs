@@ -1,9 +1,12 @@
 // Shared parsing, diffing, and reporting helpers for inventory guard scripts.
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 const parsedTypeScriptSourceCache = new Map();
 const sourceTextCache = new Map();
+const require = createRequire(import.meta.url);
+let cachedTypeScript;
 
 /** Convert an absolute file path to a repo-relative POSIX path. */
 export function normalizeRepoPath(repoRoot, filePath) {
@@ -24,50 +27,53 @@ export function resolveRepoSpecifier(repoRoot, specifier, importerFile) {
 /** Visit static and dynamic module specifiers in a parsed TypeScript source file. */
 export function visitModuleSpecifiers(ts, sourceFile, visit, options = {}) {
   function walk(node) {
+    let kind;
+    let specifierNode;
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      visit({
-        kind: "import",
-        node,
-        specifier: node.moduleSpecifier.text,
-        specifierNode: node.moduleSpecifier,
-      });
+      kind = "import";
+      specifierNode = node.moduleSpecifier;
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {
-      visit({
-        kind: "export",
-        node,
-        specifier: node.moduleSpecifier.text,
-        specifierNode: node.moduleSpecifier,
-      });
+      kind = "export";
+      specifierNode = node.moduleSpecifier;
     } else if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteral(node.arguments[0])
+      node.arguments.length >= 1 &&
+      ts.isStringLiteralLike(node.arguments[0])
     ) {
-      visit({
-        kind: "dynamic-import",
-        node,
-        specifier: node.arguments[0].text,
-        specifierNode: node.arguments[0],
-      });
+      kind = "dynamic-import";
+      specifierNode = node.arguments[0];
+    } else if (
+      options.includeImportTypes &&
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteralLike(node.argument.literal)
+    ) {
+      kind = "dynamic-import";
+      specifierNode = node.argument.literal;
     } else if (
       options.includeCommonJs &&
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === "require" &&
-      node.arguments.length === 1 &&
+      node.arguments.length >= 1 &&
       ts.isStringLiteralLike(node.arguments[0])
     ) {
-      visit({
-        kind: "commonjs-require",
-        node,
-        specifier: node.arguments[0].text,
-        specifierNode: node.arguments[0],
-      });
+      kind = "commonjs-require";
+      specifierNode = node.arguments[0];
+    } else if (
+      options.includeCommonJs &&
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
+      kind = "commonjs-require";
+      specifierNode = node.moduleReference.expression;
     } else if (
       options.includeImportMetaUrl &&
       ts.isNewExpression(node) &&
@@ -81,14 +87,13 @@ export function visitModuleSpecifiers(ts, sourceFile, visit, options = {}) {
       node.arguments[1].expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
       node.arguments[1].expression.name.text === "meta"
     ) {
-      visit({
-        kind: "import-meta-url",
-        node,
-        specifier: node.arguments[0].text,
-        specifierNode: node.arguments[0],
-      });
+      kind = "import-meta-url";
+      specifierNode = node.arguments[0];
     }
 
+    if (specifierNode) {
+      visit({ kind, node, specifier: specifierNode.text, specifierNode });
+    }
     ts.forEachChild(node, walk);
   }
 
@@ -114,43 +119,66 @@ export function writeLine(stream, text) {
   stream.write(`${text}\n`);
 }
 
-/** Collect import/export/dynamic-import references from source text without full parsing. */
-export function collectModuleReferencesFromSource(source) {
-  const lineStarts = computeLineStarts(source);
-  const isCodePosition = createCodePositionChecker(source);
-  const references = [];
-  const push = (kind, specifier, position, syntaxPosition) => {
-    if (!isCodePosition(syntaxPosition)) {
-      return;
-    }
-    references.push({
-      kind,
-      line: lineFromPosition(lineStarts, position),
-      specifier,
-    });
-  };
+/** Lexically reject clean files before parsing candidate module-boundary violations. */
+export function collectModuleReferencesFromSource(source, options = {}) {
+  const ts = options.ts ?? (cachedTypeScript ??= require("typescript"));
+  const acceptSpecifier = options.acceptSpecifier ?? (() => true);
+  const candidates = ts.preProcessFile(source, true, true).importedFiles;
+  const mayContainImportMetaUrl =
+    source.includes("new") &&
+    source.includes("import") &&
+    source.includes("meta") &&
+    [
+      ...source.matchAll(
+        /\bnew(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)+[A-Za-z_$\\][\w$\\{}]*(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*\((?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*(["'\x60])((?:\\[\s\S]|(?!\1)[^\\])*)\1/gu,
+      ),
+    ].some((match) => match[2].includes("\\") || acceptSpecifier(match[2]));
+  // The TypeScript preprocessor visits imports, but not require calls, in template expressions.
+  const mayContainEmbeddedRequire =
+    source.includes("$") &&
+    source.includes("{") &&
+    source.includes("require") &&
+    [
+      ...source.matchAll(
+        /\brequire(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*\((?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*(["'\x60])((?:\\[\s\S]|(?!\1)[^\\])*)\1/gu,
+      ),
+    ].some((match) => match[2].includes("\\") || acceptSpecifier(match[2]));
+  // TypeScript's lexical preprocessor omits namespace re-exports, so never drop that edge.
+  const mayContainNamespaceExport =
+    /\bexport(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*(?:type(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*)?\*(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*as\b/u.test(
+      source,
+    );
+  if (
+    !candidates.some(({ fileName }) => acceptSpecifier(fileName)) &&
+    !mayContainImportMetaUrl &&
+    !mayContainEmbeddedRequire &&
+    !mayContainNamespaceExport
+  ) {
+    return [];
+  }
 
-  for (const match of source.matchAll(/\bimport\s*\(\s*(["'])([^"']+)\1/g)) {
-    push("dynamic-import", match[2], match.index + match[0].lastIndexOf(match[1]), match.index);
-  }
-  for (const match of source.matchAll(/^\s*import\s*(["'])([^"']+)\1/gm)) {
-    push(
-      "import",
-      match[2],
-      match.index + match[0].lastIndexOf(match[1]),
-      match.index + match[0].indexOf("import"),
-    );
-  }
-  for (const match of source.matchAll(
-    /^\s*(import|export)\s+(?:type\s+)?[^;"']*?\bfrom\s*(["'])([^"']+)\2/gm,
-  )) {
-    push(
-      match[1],
-      match[3],
-      match.index + match[0].lastIndexOf(match[2]),
-      match.index + match[0].indexOf(match[1]),
-    );
-  }
+  const sourceFile = ts.createSourceFile(
+    options.fileName ?? "source.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const references = [];
+  visitModuleSpecifiers(
+    ts,
+    sourceFile,
+    ({ kind, specifier, specifierNode }) => {
+      if (acceptSpecifier(specifier)) {
+        references.push({
+          kind,
+          line:
+            sourceFile.getLineAndCharacterOfPosition(specifierNode.getStart(sourceFile)).line + 1,
+          specifier,
+        });
+      }
+    },
+    { includeCommonJs: true, includeImportMetaUrl: true, includeImportTypes: true },
+  );
 
   return references.toSorted(
     (left, right) =>
@@ -158,77 +186,6 @@ export function collectModuleReferencesFromSource(source) {
       left.kind.localeCompare(right.kind) ||
       left.specifier.localeCompare(right.specifier),
   );
-}
-
-function createCodePositionChecker(source) {
-  const codePositions = new Uint8Array(source.length);
-
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    const next = source[index + 1];
-
-    if (char === "/" && next === "/") {
-      index += 2;
-      while (index < source.length && source.charCodeAt(index) !== 10) {
-        index += 1;
-      }
-      index -= 1;
-      continue;
-    }
-
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
-        index += 1;
-      }
-      index += 1;
-      continue;
-    }
-
-    if (char === "'" || char === '"' || char === "`") {
-      const quote = char;
-      index += 1;
-      while (index < source.length) {
-        if (source[index] === "\\") {
-          index += 2;
-          continue;
-        }
-        if (source[index] === quote) {
-          break;
-        }
-        index += 1;
-      }
-      continue;
-    }
-
-    codePositions[index] = 1;
-  }
-
-  return (position) => codePositions[position] === 1;
-}
-
-function computeLineStarts(source) {
-  const lineStarts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      lineStarts.push(index + 1);
-    }
-  }
-  return lineStarts;
-}
-
-function lineFromPosition(lineStarts, position) {
-  let low = 0;
-  let high = lineStarts.length - 1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    if (lineStarts[middle] <= position) {
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return high + 1;
 }
 
 /** Memoize an async factory while resetting the cache after failures. */
