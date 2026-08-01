@@ -163,6 +163,8 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
+const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
+  await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 
@@ -173,6 +175,75 @@ beforeEach(() => {
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
+  it("imports and materializes only configured and auth-candidate providers", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+
+    await prepareScopedReadOnlyModelCatalog(
+      {
+        agentId: "default",
+        agentDir: "/tmp/prepared-static-agent",
+        config,
+        inheritedAuthDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+        env: {},
+        readOnly: true,
+      },
+      ["anthropic", "local-runtime"],
+    );
+
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        staticCatalogProviderIds: ["anthropic", "local-runtime", "openai"],
+      }),
+    );
+    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-static-agent",
+      expect.objectContaining({
+        providerDiscoveryEntriesOnly: true,
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+      }),
+    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("uses live provider catalogs for an explicit read-only list scope", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+
+    await prepareScopedReadOnlyLiveModelCatalog(
+      {
+        agentId: "default",
+        agentDir: "/tmp/prepared-live-agent",
+        config,
+        inheritedAuthDir: "/tmp/prepared-live-agent",
+        workspaceDir: "/tmp/prepared-live-workspace",
+        env: {},
+        readOnly: true,
+      },
+      ["anthropic"],
+    );
+
+    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-live-agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic"],
+        providerDiscoveryTimeoutMs: expect.any(Number),
+      }),
+    );
+    expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ providerDiscoveryEntriesOnly: true }),
+    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
   it("does not publish a static catalog generation superseded while its hook is running", async () => {
     const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };

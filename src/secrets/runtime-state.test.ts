@@ -39,6 +39,40 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
 
+type PreparedSnapshotOverrides = Omit<
+  Partial<PreparedSecretsRuntimeSnapshot>,
+  "authStoreCredentialsRevision" | "webTools"
+>;
+
+function preparedSnapshot(
+  overrides: PreparedSnapshotOverrides = {},
+): PreparedSecretsRuntimeSnapshot {
+  return {
+    sourceConfig: {},
+    config: {},
+    authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    warnings: [],
+    webTools: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    ...overrides,
+  };
+}
+
+function preparedGatewayAuthSnapshot(
+  agentDir: string,
+  port: number,
+  store: PreparedSecretsRuntimeSnapshot["authStores"][number]["store"],
+): PreparedSecretsRuntimeSnapshot {
+  return preparedSnapshot({
+    config: { gateway: { port } },
+    authStores: [{ agentDir, store }],
+  });
+}
+
 describe("secrets runtime state", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,18 +115,11 @@ describe("secrets runtime state", () => {
   });
 
   it("exposes the active config pair for hot paths without requiring the full snapshot", () => {
-    const snapshot: PreparedSecretsRuntimeSnapshot = {
+    const snapshot = preparedSnapshot({
       sourceConfig: { agents: { list: [{ id: "source" }] } },
       config: { agents: { list: [{ id: "runtime" }] } },
       authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    };
+    });
 
     activateSecretsRuntimeSnapshotState({
       snapshot,
@@ -115,18 +142,11 @@ describe("secrets runtime state", () => {
       provider: "default",
       id: "OPENCLAW_DEBUG_AUTH_TOKEN",
     };
-    const snapshot: PreparedSecretsRuntimeSnapshot = {
+    const snapshot = preparedSnapshot({
       sourceConfig: { gateway: { auth: { mode: "token", token: secretRef } } },
       config: { gateway: { auth: { mode: "token", token: "resolved-debug-token" } } },
       authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    };
+    });
     activateSecretsRuntimeSnapshotState({
       snapshot,
       refreshContext: null,
@@ -157,18 +177,11 @@ describe("secrets runtime state", () => {
     const initialConfig = { gateway: { port: 19_030 } } satisfies OpenClawConfig;
     const concurrentConfig = { gateway: { port: 19_031 } } satisfies OpenClawConfig;
     activateSecretsRuntimeSnapshotState({
-      snapshot: {
+      snapshot: preparedSnapshot({
         sourceConfig: initialConfig,
         config: initialConfig,
         authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      },
+      }),
       refreshContext: null,
       refreshHandler: null,
     });
@@ -201,18 +214,11 @@ describe("secrets runtime state", () => {
       },
     } satisfies OpenClawConfig;
     activateSecretsRuntimeSnapshotState({
-      snapshot: {
+      snapshot: preparedSnapshot({
         sourceConfig: initialSource,
         config: runtimeConfig,
         authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      },
+      }),
       refreshContext: null,
       refreshHandler: null,
       runtimeSourceConfig: initialSource,
@@ -273,8 +279,7 @@ describe("secrets runtime state", () => {
       },
       agentDir,
     );
-    const snapshot: PreparedSecretsRuntimeSnapshot = {
-      sourceConfig: {},
+    const snapshot = preparedSnapshot({
       config: {},
       authStores: [
         {
@@ -286,14 +291,7 @@ describe("secrets runtime state", () => {
           },
         },
       ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    };
+    });
     setRuntimeAuthProfileStoreSnapshot(
       {
         version: 1,
@@ -318,28 +316,13 @@ describe("secrets runtime state", () => {
 
   it("removes candidate-only auth profiles when rolling config back", () => {
     const agentDir = "/tmp/openclaw-auth-rollback-cas";
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-            },
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -392,18 +375,11 @@ describe("secrets runtime state", () => {
       profiles: AuthProfileStore["profiles"],
       port: number,
       state: Pick<AuthProfileStore, "order" | "lastGood" | "usageStats"> = {},
-    ): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [{ agentDir, store: { version: 1, profiles, ...state } }],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+    ) =>
+      preparedSnapshot({
+        config: { gateway: { port } },
+        authStores: [{ agentDir, store: { version: 1, profiles, ...state } }],
+      });
     const predecessorProfiles = {
       "provider-a:default": profile("provider-a", "a-old"),
       "provider-b:default": profile("provider-b", "b-old"),
@@ -492,28 +468,13 @@ describe("secrets runtime state", () => {
   it("preserves an auth rotation captured by the candidate", () => {
     const finalKey = "sk-candidate";
     const agentDir = "/tmp/openclaw-auth-rollback-sk-candidate";
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-            },
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -607,35 +568,15 @@ describe("secrets runtime state", () => {
         provider,
         key,
       });
-      const snapshot = (
-        aKey: string | null,
-        bKey: string,
-        port: number,
-        aExternal = false,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                ...(aKey === null ? {} : { "provider-a:default": profile("provider-a", aKey) }),
-                "provider-b:default": profile("provider-b", bKey),
-              },
-              runtimeExternalProfileIds: aExternal ? ["provider-a:default"] : undefined,
-            },
+      const snapshot = (aKey: string | null, bKey: string, port: number, aExternal = false) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            ...(aKey === null ? {} : { "provider-a:default": profile("provider-a", aKey) }),
+            "provider-b:default": profile("provider-b", bKey),
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeExternalProfileIds: aExternal ? ["provider-a:default"] : undefined,
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot(baselineAKey, "b-old", 19_001),
         refreshContext: null,
@@ -690,29 +631,14 @@ describe("secrets runtime state", () => {
     { label: "inherited profile", runtimeLocalProfileIds: [], expected: "sk-candidate" },
   ])("uses the effective owner token for a $label", ({ runtimeLocalProfileIds, expected }) => {
     const agentDir = `/tmp/openclaw-auth-effective-owner-${runtimeLocalProfileIds.length}`;
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-            },
-            runtimeLocalProfileIds,
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+        runtimeLocalProfileIds,
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -755,27 +681,12 @@ describe("secrets runtime state", () => {
       profiles: AuthProfileStore["profiles"],
       externalProfileIds: string[],
       port: number,
-    ): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles,
-            runtimeExternalProfileIds: externalProfileIds,
-          },
-        },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+    ) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles,
+        runtimeExternalProfileIds: externalProfileIds,
+      });
     const profileX = {
       type: "api_key" as const,
       provider: "openai",
@@ -833,34 +744,15 @@ describe("secrets runtime state", () => {
     "handles baseline external to $candidateOwner with mutation=$mutateCandidateOwner",
     ({ candidateOwner, mutateCandidateOwner }) => {
       const agentDir = `/tmp/openclaw-auth-external-to-${candidateOwner}-${mutateCandidateOwner}`;
-      const snapshot = (
-        key: string,
-        owner: "external" | "inherited" | "local",
-        port: number,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:x": { type: "api_key", provider: "openai", key },
-              },
-              runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-              runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
-            },
+      const snapshot = (key: string, owner: "external" | "inherited" | "local", port: number) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            "openai:x": { type: "api_key", provider: "openai", key },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
+          runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot("sk-external-old", "external", 19_001),
         refreshContext: null,
@@ -919,40 +811,22 @@ describe("secrets runtime state", () => {
         key: string | null,
         owner: "external" | "inherited" | "local",
         port: number,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                ...(key === null
-                  ? {}
-                  : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
-                "anthropic:stable": {
-                  type: "api_key",
-                  provider: "anthropic",
-                  key: "sk-stable",
-                },
-              },
-              runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-              runtimeLocalProfileIds: [
-                "anthropic:stable",
-                ...(owner === "local" ? ["openai:x"] : []),
-              ],
+      ) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            ...(key === null
+              ? {}
+              : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
+            "anthropic:stable": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-stable",
             },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
+          runtimeLocalProfileIds: ["anthropic:stable", ...(owner === "local" ? ["openai:x"] : [])],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot(
           baselineOwner === "absent" ? null : "sk-baseline",
@@ -1003,40 +877,22 @@ describe("secrets runtime state", () => {
         key: string | null,
         owner: "external" | "inherited" | "local",
         port: number,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                ...(key === null
-                  ? {}
-                  : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
-                "anthropic:stable": {
-                  type: "api_key",
-                  provider: "anthropic",
-                  key: "sk-stable",
-                },
-              },
-              runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-              runtimeLocalProfileIds: [
-                "anthropic:stable",
-                ...(owner === "local" ? ["openai:x"] : []),
-              ],
+      ) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            ...(key === null
+              ? {}
+              : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
+            "anthropic:stable": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-stable",
             },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
+          runtimeLocalProfileIds: ["anthropic:stable", ...(owner === "local" ? ["openai:x"] : [])],
+        });
       const baseline = snapshot(
         baselineOwner === "absent" ? null : "sk-baseline",
         baselineOwner === "local" ? "local" : "inherited",
@@ -1088,34 +944,15 @@ describe("secrets runtime state", () => {
     "preserves $currentOwner owner metadata when bytes equal the $candidateOwner candidate",
     ({ candidateOwner, currentOwner }) => {
       const agentDir = `/tmp/openclaw-auth-${candidateOwner}-${currentOwner}-equal-bytes`;
-      const snapshot = (
-        key: string,
-        owner: "external" | "local",
-        port: number,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:x": { type: "api_key", provider: "openai", key },
-              },
-              runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-              runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
-            },
+      const snapshot = (key: string, owner: "external" | "local", port: number) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            "openai:x": { type: "api_key", provider: "openai", key },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
+          runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot("sk-old", candidateOwner, 19_001),
         refreshContext: null,
@@ -1159,28 +996,13 @@ describe("secrets runtime state", () => {
 
   it("preserves an authoritative empty external overlay on rollback", () => {
     const agentDir = "/tmp/openclaw-auth-authoritative-empty-external";
-    const snapshot = (authoritative: boolean, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {},
-            runtimeExternalProfileIds: [],
-            runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
-          },
-        },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+    const snapshot = (authoritative: boolean, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {},
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot(true, 19_001),
       refreshContext: null,
@@ -1214,35 +1036,16 @@ describe("secrets runtime state", () => {
 
   it("does not import rejected external authority from a selected current credential", () => {
     const agentDir = "/tmp/openclaw-auth-rejected-external-authority";
-    const snapshot = (
-      key: string,
-      authoritative: boolean,
-      port: number,
-    ): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:x": { type: "api_key", provider: "openai", key },
-            },
-            runtimeLocalProfileIds: ["openai:x"],
-            runtimeExternalProfileIds: [],
-            runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
-          },
+    const snapshot = (key: string, authoritative: boolean, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:x": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+        runtimeLocalProfileIds: ["openai:x"],
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", false, 19_001),
       refreshContext: null,
@@ -1282,29 +1085,14 @@ describe("secrets runtime state", () => {
     { current: "sk-external-refresh", expected: "sk-external-refresh" },
   ])("keeps external profile ownership separate from main mutations", ({ current, expected }) => {
     const agentDir = `/tmp/openclaw-auth-external-owner-${current}`;
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:external": { type: "api_key", provider: "openai", key },
-            },
-            runtimeExternalProfileIds: ["openai:external"],
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:external": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+        runtimeExternalProfileIds: ["openai:external"],
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -1345,34 +1133,19 @@ describe("secrets runtime state", () => {
 
   it("removes a rejected candidate credential when its bounded lineage was evicted", () => {
     const agentDir = "/tmp/openclaw-auth-evicted-lineage";
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-              "anthropic:stable": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "sk-stable",
-              },
-            },
-            runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
+          "anthropic:stable": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-stable",
           },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+        runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -1420,33 +1193,14 @@ describe("secrets runtime state", () => {
         id: "OPENAI_API_KEY",
       };
       const candidateRef = { ...previousRef, id: "OPENAI_API_KEY_NEXT" };
-      const snapshot = (
-        key: string,
-        keyRef: typeof previousRef,
-        port: number,
-      ): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:default": { type: "api_key", provider: "openai", key, keyRef },
-              },
-              runtimeLocalProfileIds: ["openai:default"],
-            },
+      const snapshot = (key: string, keyRef: typeof previousRef, port: number) =>
+        preparedGatewayAuthSnapshot(agentDir, port, {
+          version: 1,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", key, keyRef },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          runtimeLocalProfileIds: ["openai:default"],
+        });
       try {
         saveAuthProfileStore(
           snapshot("sk-old", previousRef, 19_001).authStores[0]!.store,
@@ -1579,36 +1333,29 @@ describe("secrets runtime state", () => {
       expectMissing,
     }) => {
       const agentDir = `/tmp/openclaw-auth-store-removal-${label}`;
-      const snapshot = (includeStore: boolean, port: number): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {},
-        config: { gateway: { port } },
-        authStores: includeStore
-          ? [
-              {
-                agentDir,
-                store: {
-                  version: 1,
-                  profiles: {
-                    "openai:default": {
-                      type: "api_key",
-                      provider: "openai",
-                      key: "sk-old",
+      const snapshot = (includeStore: boolean, port: number) =>
+        preparedSnapshot({
+          config: { gateway: { port } },
+          authStores: includeStore
+            ? [
+                {
+                  agentDir,
+                  store: {
+                    version: 1,
+                    profiles: {
+                      "openai:default": {
+                        type: "api_key",
+                        provider: "openai",
+                        key: "sk-old",
+                      },
                     },
+                    runtimeLocalProfileIds: inheritsMainProfile ? [] : ["openai:default"],
+                    runtimeInheritsMainState: inheritsMainState,
                   },
-                  runtimeLocalProfileIds: inheritsMainProfile ? [] : ["openai:default"],
-                  runtimeInheritsMainState: inheritsMainState,
                 },
-              },
-            ]
-          : [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+              ]
+            : [],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot(true, 19_001),
         refreshContext: null,
@@ -1656,35 +1403,28 @@ describe("secrets runtime state", () => {
 
   it("does not resurrect a baseline external store after a new main profile is added", () => {
     const agentDir = "/tmp/openclaw-auth-external-store-omission-mutation";
-    const snapshot = (includeStore: boolean, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: includeStore
-        ? [
-            {
-              agentDir,
-              store: {
-                version: 1,
-                profiles: {
-                  "openai:x": {
-                    type: "api_key",
-                    provider: "openai",
-                    key: "sk-external",
+    const snapshot = (includeStore: boolean, port: number) =>
+      preparedSnapshot({
+        config: { gateway: { port } },
+        authStores: includeStore
+          ? [
+              {
+                agentDir,
+                store: {
+                  version: 1,
+                  profiles: {
+                    "openai:x": {
+                      type: "api_key",
+                      provider: "openai",
+                      key: "sk-external",
+                    },
                   },
+                  runtimeExternalProfileIds: ["openai:x"],
                 },
-                runtimeExternalProfileIds: ["openai:x"],
               },
-            },
-          ]
-        : [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+            ]
+          : [],
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot(true, 19_001),
       refreshContext: null,
@@ -1721,28 +1461,13 @@ describe("secrets runtime state", () => {
 
   it("does not resurrect an auth store cleared after candidate activation", () => {
     const agentDir = "/tmp/openclaw-auth-post-activation-clear";
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-            },
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_001),
       refreshContext: null,
@@ -1783,32 +1508,13 @@ describe("secrets runtime state", () => {
       id: "OPENAI_API_KEY",
     };
     const candidateRef = changedRef ? { ...previousRef, id: "OPENAI_API_KEY_NEXT" } : previousRef;
-    const snapshot = (
-      key: string,
-      keyRef: typeof previousRef,
-      port: number,
-    ): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key, keyRef },
-            },
-          },
+    const snapshot = (key: string, keyRef: typeof previousRef, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key, keyRef },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", previousRef, 19_001),
       refreshContext: null,
@@ -1852,28 +1558,13 @@ describe("secrets runtime state", () => {
 
   it("preserves live credentials when the captured predecessor is stale", () => {
     const agentDir = "/tmp/openclaw-auth-stale-predecessor-rollback";
-    const snapshot = (key: string, port: number): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {},
-      config: { gateway: { port } },
-      authStores: [
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key },
-            },
-          },
+    const snapshot = (key: string, port: number) =>
+      preparedGatewayAuthSnapshot(agentDir, port, {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
         },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot("sk-old", 19_011),
       refreshContext: null,
@@ -1948,40 +1639,34 @@ describe("secrets runtime state", () => {
       runtimePort: number;
       apiKey: string;
       keyRef: string | typeof previousKeyRef;
-    }): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: {
-        gateway: { port: params.sourcePort },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: params.keyRef,
-              models: [],
+    }) =>
+      preparedSnapshot({
+        sourceConfig: {
+          gateway: { port: params.sourcePort },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: params.keyRef,
+                models: [],
+              },
             },
           },
         },
-      },
-      config: {
-        gateway: { port: params.runtimePort },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: params.apiKey,
-              models: [],
+        config: {
+          gateway: { port: params.runtimePort },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: params.apiKey,
+                models: [],
+              },
             },
           },
         },
-      },
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: { providerSource: "none", diagnostics: [] },
-        fetch: { providerSource: "none", diagnostics: [] },
-        diagnostics: [],
-      },
-    });
+        authStores: [],
+      });
     activateSecretsRuntimeSnapshotState({
       snapshot: snapshot({
         sourcePort: 19_021,
@@ -2092,61 +1777,51 @@ describe("secrets runtime state", () => {
     "restores resolved values when a same-ref $label was rejected",
     ({ keyRef, previousSourceConfig, candidateSourceConfig, evictLineage }) => {
       const agentDir = `/tmp/openclaw-auth-provider-dependency-${keyRef.provider}`;
-      const snapshot = (params: {
-        sourceConfig: OpenClawConfig;
-        apiKey: string;
-        port: number;
-      }): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {
-          ...params.sourceConfig,
-          gateway: { port: params.port },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: keyRef,
-                models: [],
-              },
-            },
-          },
-        },
-        config: {
-          ...params.sourceConfig,
-          gateway: { port: params.port },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: params.apiKey,
-                models: [],
-              },
-            },
-          },
-        },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:default": {
-                  type: "api_key",
-                  provider: "openai",
-                  keyRef,
-                  key: params.apiKey,
+      const snapshot = (params: { sourceConfig: OpenClawConfig; apiKey: string; port: number }) =>
+        preparedSnapshot({
+          sourceConfig: {
+            ...params.sourceConfig,
+            gateway: { port: params.port },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: keyRef,
+                  models: [],
                 },
               },
             },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          config: {
+            ...params.sourceConfig,
+            gateway: { port: params.port },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: params.apiKey,
+                  models: [],
+                },
+              },
+            },
+          },
+          authStores: [
+            {
+              agentDir,
+              store: {
+                version: 1,
+                profiles: {
+                  "openai:default": {
+                    type: "api_key",
+                    provider: "openai",
+                    keyRef,
+                    key: params.apiKey,
+                  },
+                },
+              },
+            },
+          ],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot({ sourceConfig: previousSourceConfig, apiKey: "sk-old", port: 19_031 }),
         refreshContext: null,
@@ -2233,39 +1908,33 @@ describe("secrets runtime state", () => {
         owner: "inherited" | "local";
         providerPath: string;
         port: number;
-      }): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {
-          gateway: { port: params.port },
-          secrets: {
-            providers: { vault: { source: "file", path: params.providerPath } },
-          },
-        },
-        config: { gateway: { port: params.port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:default": {
-                  type: "api_key",
-                  provider: "openai",
-                  key: params.key,
-                  keyRef,
-                },
-              },
-              runtimeLocalProfileIds: params.owner === "local" ? ["openai:default"] : [],
+      }) =>
+        preparedSnapshot({
+          sourceConfig: {
+            gateway: { port: params.port },
+            secrets: {
+              providers: { vault: { source: "file", path: params.providerPath } },
             },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          config: { gateway: { port: params.port } },
+          authStores: [
+            {
+              agentDir,
+              store: {
+                version: 1,
+                profiles: {
+                  "openai:default": {
+                    type: "api_key",
+                    provider: "openai",
+                    key: params.key,
+                    keyRef,
+                  },
+                },
+                runtimeLocalProfileIds: params.owner === "local" ? ["openai:default"] : [],
+              },
+            },
+          ],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot({
           key: "sk-old",
@@ -2357,34 +2026,28 @@ describe("secrets runtime state", () => {
         keyRef: SecretRef;
         port: number;
         sourceConfig: OpenClawConfig;
-      }): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: { ...params.sourceConfig, gateway: { port: params.port } },
-        config: { gateway: { port: params.port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:default": {
-                  type: "api_key",
-                  provider: "openai",
-                  key: params.key,
-                  keyRef: params.keyRef,
+      }) =>
+        preparedSnapshot({
+          sourceConfig: { ...params.sourceConfig, gateway: { port: params.port } },
+          config: { gateway: { port: params.port } },
+          authStores: [
+            {
+              agentDir,
+              store: {
+                version: 1,
+                profiles: {
+                  "openai:default": {
+                    type: "api_key",
+                    provider: "openai",
+                    key: params.key,
+                    keyRef: params.keyRef,
+                  },
                 },
+                runtimeLocalProfileIds: ["openai:default"],
               },
-              runtimeLocalProfileIds: ["openai:default"],
             },
-          },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          ],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot({
           key: "sk-old",
@@ -2448,61 +2111,51 @@ describe("secrets runtime state", () => {
     "invalidates an absent-profile $currentOwner upsert under a rejected provider",
     (currentOwner) => {
       const agentDir = `/tmp/openclaw-auth-provider-absent-upsert-${currentOwner}`;
-      const snapshot = (params: {
-        includeProfile: boolean;
-        providerPath: string;
-        port: number;
-      }): PreparedSecretsRuntimeSnapshot => ({
-        sourceConfig: {
-          gateway: { port: params.port },
-          secrets: {
-            providers: { vault: { source: "file", path: params.providerPath } },
-          },
-        },
-        config: { gateway: { port: params.port } },
-        authStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {
-                "anthropic:stable": {
-                  type: "api_key",
-                  provider: "anthropic",
-                  key: "sk-stable",
-                },
-                ...(params.includeProfile
-                  ? {
-                      "openai:default": {
-                        type: "api_key" as const,
-                        provider: "openai",
-                        key: "sk-current",
-                        keyRef: {
-                          source: "file" as const,
-                          provider: "vault",
-                          id: "openai-b",
-                        },
-                      },
-                    }
-                  : {}),
-              },
-              runtimeExternalProfileIds:
-                params.includeProfile && currentOwner === "external" ? ["openai:default"] : [],
-              runtimeLocalProfileIds: [
-                "anthropic:stable",
-                ...(params.includeProfile && currentOwner === "local" ? ["openai:default"] : []),
-              ],
+      const snapshot = (params: { includeProfile: boolean; providerPath: string; port: number }) =>
+        preparedSnapshot({
+          sourceConfig: {
+            gateway: { port: params.port },
+            secrets: {
+              providers: { vault: { source: "file", path: params.providerPath } },
             },
           },
-        ],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {
-          search: { providerSource: "none", diagnostics: [] },
-          fetch: { providerSource: "none", diagnostics: [] },
-          diagnostics: [],
-        },
-      });
+          config: { gateway: { port: params.port } },
+          authStores: [
+            {
+              agentDir,
+              store: {
+                version: 1,
+                profiles: {
+                  "anthropic:stable": {
+                    type: "api_key",
+                    provider: "anthropic",
+                    key: "sk-stable",
+                  },
+                  ...(params.includeProfile
+                    ? {
+                        "openai:default": {
+                          type: "api_key" as const,
+                          provider: "openai",
+                          key: "sk-current",
+                          keyRef: {
+                            source: "file" as const,
+                            provider: "vault",
+                            id: "openai-b",
+                          },
+                        },
+                      }
+                    : {}),
+                },
+                runtimeExternalProfileIds:
+                  params.includeProfile && currentOwner === "external" ? ["openai:default"] : [],
+                runtimeLocalProfileIds: [
+                  "anthropic:stable",
+                  ...(params.includeProfile && currentOwner === "local" ? ["openai:default"] : []),
+                ],
+              },
+            },
+          ],
+        });
       activateSecretsRuntimeSnapshotState({
         snapshot: snapshot({
           includeProfile: false,

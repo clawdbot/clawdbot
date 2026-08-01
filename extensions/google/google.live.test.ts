@@ -6,10 +6,12 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
+import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
@@ -64,6 +66,33 @@ function hasTrustedFfmpegForLiveVoiceNote(): boolean {
     }
     throw error;
   }
+}
+
+async function waitForGoogleLive(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 45_000,
+  describeState?: () => unknown,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      const state = describeState?.();
+      throw new Error(
+        `Google live timeout waiting for ${label}${state === undefined ? "" : ` (${JSON.stringify(state)})`}`,
+      );
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+}
+
+function shortGoogleLiveError(error: Error): string {
+  return error.message
+    .replace(/https?:\/\/\S+/giu, "<url>")
+    .replace(/\b[A-Za-z0-9_-]{24,}\b/gu, "<id>")
+    .slice(0, 200);
 }
 
 const registerGooglePlugin = () =>
@@ -176,6 +205,91 @@ describeLive("google plugin live", () => {
     expect(normalized).toContain("google");
     expect(normalized).toContain("pineapple");
   }, 180_000);
+
+  it("talks back when ready owns the realtime session", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const finalAssistantTranscripts: string[] = [];
+    const errors: Error[] = [];
+    const closeReasons: string[] = [];
+    const eventTypeCounts = new Map<string, number>();
+    let outputAudioBytes = 0;
+    let assistantPartialCount = 0;
+    let lastAssistantOutputAt = 0;
+    let readyCount = 0;
+    const bridge: RealtimeVoiceBridge = provider.createBridge({
+      providerConfig: { apiKey: GOOGLE_API_KEY },
+      instructions: "Reply briefly and plainly.",
+      onAudio: (audio) => {
+        outputAudioBytes += audio.byteLength;
+        lastAssistantOutputAt = Date.now();
+      },
+      onClearAudio: () => {},
+      onTranscript: (role, text, isFinal) => {
+        if (role !== "assistant") {
+          return;
+        }
+        if (isFinal) {
+          finalAssistantTranscripts.push(text);
+        } else {
+          assistantPartialCount += 1;
+        }
+        lastAssistantOutputAt = Date.now();
+      },
+      onEvent: (event) => {
+        eventTypeCounts.set(event.type, (eventTypeCounts.get(event.type) ?? 0) + 1);
+      },
+      onReady: () => {
+        readyCount += 1;
+        bridge.triggerGreeting?.("Reply with exactly: OpenClaw Google realtime ready.");
+      },
+      onError: (error) => errors.push(error),
+      onClose: (reason) => closeReasons.push(reason),
+    });
+    const describeState = () => ({
+      readyCount,
+      connected: bridge.isConnected(),
+      outputAudioBytes,
+      assistantPartialCount,
+      assistantIdleMs: lastAssistantOutputAt === 0 ? 0 : Date.now() - lastAssistantOutputAt,
+      assistantFinalCount: finalAssistantTranscripts.length,
+      errors: errors.map(shortGoogleLiveError),
+      closeReasons,
+      eventTypeCounts: Object.fromEntries(
+        [...eventTypeCounts.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+      ),
+    });
+
+    try {
+      await bridge.connect();
+      // Gemini 3.1 can omit transcription.finished. Wait for output to go idle
+      // before close terminalizes the buffered transcript.
+      await waitForGoogleLive(
+        "assistant response drain",
+        () =>
+          outputAudioBytes > 0 &&
+          assistantPartialCount > 0 &&
+          Date.now() - lastAssistantOutputAt >= 1_000,
+        45_000,
+        describeState,
+      );
+      expect(readyCount).toBe(1);
+      expect(bridge.isConnected()).toBe(true);
+      expect(outputAudioBytes).toBeGreaterThan(0);
+      expect(assistantPartialCount).toBeGreaterThan(0);
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+    }
+
+    await waitForGoogleLive(
+      "final transcript and clean close",
+      () => finalAssistantTranscripts.length > 0 && closeReasons.length === 1,
+      5_000,
+      describeState,
+    );
+    expect(finalAssistantTranscripts.some((text) => text.trim().length > 0)).toBe(true);
+    expect(closeReasons).toEqual(["completed"]);
+  }, 120_000);
 
   it("runs Gemini web search through the registered provider tool", async () => {
     const provider = createGeminiWebSearchProvider();

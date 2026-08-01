@@ -1405,6 +1405,28 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
   }
 });
 
+test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
+  const workspace = await makeNonGitTempDir("openclaw-session-unborn-workspace-");
+  await execFileAsync("git", ["init", workspace]);
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  try {
+    const created = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "agent workspace is not a git checkout",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
 test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;

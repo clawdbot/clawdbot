@@ -2020,6 +2020,54 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("finalizes an attachment-only assistant reply instead of dropping it", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-external-image",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            data: "secret-image",
+            url: "file:///Users/operator/private/image.png",
+          },
+        ],
+      },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Attached image", "run-external-image");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it.each(["input_text", "output_text"] as const)(
+    "does not preserve canonical %s as an attachment in the optimistic projection",
+    (type) => {
+      const { state, chatLog, handleChatEvent } = createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+      handleChatEvent({
+        runId: `run-${type}`,
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { role: "assistant", content: [{ type, text: "One visible reply." }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("One visible reply.", `run-${type}`);
+      expect(state.sessionProjection?.entries[0]?.message).toMatchObject({
+        role: "assistant",
+        content: "One visible reply.",
+      });
+    },
+  );
+
   it("preserves the assembled delta-only final across an older history snapshot", () => {
     const { state, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-streamed-final" },
@@ -2829,6 +2877,74 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted: cancelled by user");
     expect(state.activeChatRunId).toBeNull();
   });
+
+  it("ignores an attachment final that arrives after the run was aborted", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-abort-late-final" },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "image", data: "secret-image" }],
+    };
+
+    handleChatEvent({
+      runId: "run-abort-late-final",
+      sessionKey: state.currentSessionKey,
+      seq: 1,
+      state: "aborted",
+      errorMessage: "cancelled by user",
+      message,
+    });
+    handleChatEvent({
+      runId: "run-abort-late-final",
+      sessionKey: state.currentSessionKey,
+      seq: 2,
+      state: "final",
+      message,
+    });
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted: cancelled by user");
+    expect(state.sessionProjection?.runs["run-abort-late-final"]?.status).toBe("aborted");
+  });
+
+  it.each([
+    {
+      name: "abort",
+      terminal: { state: "aborted" as const, errorMessage: "cancelled by user" },
+      expectedStatus: "aborted",
+    },
+    {
+      name: "error",
+      terminal: { state: "error" as const, errorMessage: "provider failed" },
+      expectedStatus: "error",
+    },
+  ])(
+    "renders a text-bearing recovered final after a message-less $name",
+    ({ terminal, expectedStatus }) => {
+      const runId = `run-recovered-${expectedStatus}`;
+      const { state, chatLog, handleChatEvent } = createHandlersHarness({
+        state: { activeChatRunId: runId },
+      });
+
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        seq: 1,
+        ...terminal,
+      });
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        seq: 2,
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "Recovered reply." }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Recovered reply.", runId);
+      expect(state.sessionProjection?.runs[runId]?.status).toBe(expectedStatus);
+    },
+  );
 
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({

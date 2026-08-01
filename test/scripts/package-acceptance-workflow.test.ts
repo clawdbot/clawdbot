@@ -4363,9 +4363,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 
-    expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
-    );
+    expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(240);
     expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(

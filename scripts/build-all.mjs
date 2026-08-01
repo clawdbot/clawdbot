@@ -31,6 +31,7 @@ const TSDOWN_SOURCE_EXTENSIONS = [
   ".json5",
   ".mjs",
   ".mts",
+  ".sql",
   ".ts",
   ".tsx",
   ".yaml",

@@ -995,7 +995,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     );
   });
 
-  it("waits for setup completion before draining audio and firing ready", async () => {
+  it("waits for the returned session after setup completion before activating", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
     const provider = buildGoogleRealtimeVoiceProvider();
     const onReady = vi.fn();
     const bridge = provider.createBridge({
@@ -1005,20 +1008,93 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       onReady,
     });
 
-    await bridge.connect();
+    const connect = bridge.connect();
     lastConnectParams().callbacks.onopen();
     bridge.sendAudio(Buffer.from([0xff, 0xff]));
 
-    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(false);
 
     lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
 
+    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(false);
+
+    pendingSession.resolve(connectedSession);
+    await connect;
+
     expect(onReady).toHaveBeenCalledTimes(1);
-    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(1);
-    const audio = sentAudio();
-    expect(typeof audio.data).toBe("string");
-    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
+    expect(bridge.isConnected()).toBe(true);
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
+    const audio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown; mimeType?: unknown }
+      | undefined;
+    expect(typeof audio?.data).toBe("string");
+    expect(audio?.mimeType).toBe("audio/pcm;rate=16000");
+
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not activate a late session after close during setup", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const lateSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+      onClose,
+    });
+
+    const connect = bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    bridge.close();
+    await connect;
+
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(bridge.isConnected()).toBe(false);
+
+    pendingSession.resolve(lateSession);
+    await vi.waitFor(() => {
+      expect(lateSession.close).toHaveBeenCalledTimes(1);
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the session when the ready callback rejects activation", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady: () => {
+        throw new Error("ready callback failed");
+      },
+    });
+
+    const connect = bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    pendingSession.resolve(connectedSession);
+
+    await expect(connect).rejects.toThrow("ready callback failed");
+    expect(connectedSession.close).toHaveBeenCalledTimes(1);
+    expect(bridge.isConnected()).toBe(false);
   });
 
   it("marks the Google audio stream complete after sustained telephony silence", async () => {

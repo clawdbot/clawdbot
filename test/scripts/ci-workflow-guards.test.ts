@@ -2465,6 +2465,14 @@ describe("ci workflow guards", () => {
       const source = readFileSync(workflowPath, "utf8");
       expect(source, workflowPath).not.toContain("build-all-cache-scope:");
     }
+
+    const releaseChecks = parse(
+      readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+    );
+    expect(releaseChecks.jobs.validate_repo_e2e.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    });
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {
@@ -3934,6 +3942,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
     expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
+  it("keeps type-aware oxlint within hosted fork-runner resources", () => {
+    const workflow = readCiWorkflow();
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    ).run;
+
+    expect(checkShardRun).toContain('if [ "$(nproc)" -lt 8 ]; then');
+    expect(checkShardRun).toContain("lint_args=(--split-core --threads=1)");
+    expect(checkShardRun).toContain('pnpm lint "${lint_args[@]}"');
+    expect(checkShardRun).toContain('node scripts/run-oxlint-shards.mjs "${lint_args[@]}"');
   });
 
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {

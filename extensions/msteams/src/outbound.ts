@@ -301,13 +301,13 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         throw error;
       }
     },
-    sendPoll: async ({ cfg, to, poll, accountId }) => {
+    sendPoll: async ({ cfg, to, poll, accountId, threadId }) => {
       const effectiveAccountId = accountId ?? resolveDefaultMSTeamsAccountId(cfg);
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
         accountId: effectiveAccountId,
-        to,
+        to: resolveMSTeamsThreadTarget(to, threadId),
         question: poll.question,
         options: poll.options,
         maxSelections,

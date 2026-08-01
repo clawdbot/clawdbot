@@ -173,6 +173,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
           speechProviders: ["indexed-speech-provider"],
           realtimeTranscriptionProviders: ["indexed-transcription-provider"],
           realtimeVoiceProviders: ["indexed-voice-provider"],
+          tools: ["indexed_echo", "indexed_search", "indexed_echo"],
           trustedToolPolicies: ["workflow-budget"],
         },
         commandAliases: [{ name: "indexed-demo" }],
@@ -202,12 +203,14 @@ describe("buildPluginRegistrySnapshotReport", () => {
       speechProviderIds: ["indexed-speech-provider"],
       realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
       realtimeVoiceProviderIds: ["indexed-voice-provider"],
+      toolNames: ["indexed_echo", "indexed_search"],
       configSchema: true,
       contracts: {
         agentToolResultMiddleware: ["openclaw", "codex"],
         speechProviders: ["indexed-speech-provider"],
         realtimeTranscriptionProviders: ["indexed-transcription-provider"],
         realtimeVoiceProviders: ["indexed-voice-provider"],
+        tools: ["indexed_echo", "indexed_search", "indexed_echo"],
         trustedToolPolicies: ["workflow-budget"],
       },
       commands: ["indexed-demo"],
@@ -502,6 +505,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       rootDir: makeTempDir(),
       pluginId: "disabled-dependency-demo",
       packageJson: { dependencies: { "missing-required": "1.0.0" } },
+      manifest: { contracts: { tools: ["disabled_demo_tool"] } },
     });
 
     const report = buildPluginRegistrySnapshotReport({
@@ -514,7 +518,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
     const plugin = requirePlugin(report.plugins, fixture.pluginId);
 
-    expectFields(plugin, { enabled: false, status: "disabled" });
+    expectFields(plugin, {
+      enabled: false,
+      status: "disabled",
+      toolNames: ["disabled_demo_tool"],
+    });
     expect(plugin.error).toBeUndefined();
     expect(requireRecord(plugin.dependencyStatus).missing).toEqual(["missing-required"]);
     expect(report.diagnostics).not.toContainEqual(
