@@ -312,4 +312,18 @@ describe("Canvas tool", () => {
     );
     expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
   });
+
+  it("advertises only snapshot controls supported by Canvas nodes", () => {
+    const schema = createCanvasTool().parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties?.outputFormat).toMatchObject({
+      type: "string",
+      enum: ["png", "jpg", "jpeg"],
+    });
+    expect(schema.properties?.maxWidth).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schema.properties?.quality).toMatchObject({ type: "number", minimum: 0, maximum: 1 });
+    expect(schema.properties).not.toHaveProperty("delayMs");
+  });
 });
