@@ -27,7 +27,11 @@ export function buildUsageWithNoCost(params: {
     output,
     cacheRead,
     cacheWrite,
-    totalTokens: params.totalTokens ?? input + output,
+    // Synthesize the aggregate from every known bucket so cache-heavy CLI
+    // transcripts are accounted at their real context instead of input+output
+    // (issue #117470). Matches the shared token-total invariant in
+    // infra/session-cost-usage.types.ts.
+    totalTokens: params.totalTokens ?? input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }

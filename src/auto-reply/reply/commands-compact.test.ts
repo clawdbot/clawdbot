@@ -676,4 +676,69 @@ describe("handleCompactCommand", () => {
     expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(258_000);
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
   });
+
+  it("resolves /compact budget from a stored session override context window (#117470)", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 134_930,
+        tokensAfter: 56_000,
+      },
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        provider: "claude-cli",
+        model: "claude-fable-5",
+        contextTokens: 0,
+        sessionEntry: {
+          sessionId: "fable-session",
+          updatedAt: Date.now(),
+          contextTokens: 1_000_000,
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    // The stored session override (claude-fable-5 with a persisted 1M window)
+    // must drive the manual compaction budget instead of the default model's.
+    expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(1_000_000);
+  });
+
+  it("reports a no-op instead of a successful boundary when terminal compaction has no after-count (#117470)", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 134_930,
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    // Zero-progress compaction with an unknown after-count must surface as a
+    // visible non-success, not a successful boundary with an unknown result.
+    expect(result?.reply?.text).toContain("resulting context unknown");
+  });
 });

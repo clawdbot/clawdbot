@@ -226,6 +226,160 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the stored session model override before native /compact dispatch (#117470)", async () => {
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "⚙️ Compacted" },
+    });
+
+    const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionId: "fable-session",
+        updatedAt: Date.now(),
+        providerOverride: "claude-cli",
+        modelOverride: "claude-fable-5",
+        contextTokens: 1_000_000,
+        agentHarnessId: "claude-cli",
+      },
+    );
+
+    const typing = createTypingController();
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx: buildTestCtx({
+        Body: "/compact",
+        CommandBody: "/compact",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:main",
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "compact",
+          body: "/compact",
+        },
+      }),
+      cfg: markCompleteReplyConfig({
+        session: { store: storePath },
+      } as OpenClawConfig),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    const call = handleCommandsMock.mock.calls[0]?.[0] as
+      | { provider?: string; model?: string; contextTokens?: number }
+      | undefined;
+    // The native slash fast path must forward the persisted session override —
+    // not the configured default — into command handling so /compact selects the
+    // claude-cli harness and the 1M context budget (issue #117470).
+    expect(call?.provider).toBe("claude-cli");
+    expect(call?.model).toMatch(/claude-fable-5/);
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes a bound CLI runtime override to its canonical provider before native /compact dispatch (#117470)", async () => {
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "⚙️ Compacted" },
+    });
+
+    const storePath = path.join(tempDirs.make("openclaw-native-bound-"), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionId: "bound-fable-session",
+        updatedAt: Date.now(),
+        providerOverride: "claude-cli",
+        modelOverride: "claude-fable-5",
+        contextTokens: 1_000_000,
+        agentHarnessId: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-claude-session",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      },
+    );
+
+    const typing = createTypingController();
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx: buildTestCtx({
+        Body: "/compact",
+        CommandBody: "/compact",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:main",
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "compact",
+          body: "/compact",
+        },
+      }),
+      cfg: markCompleteReplyConfig({
+        session: { store: storePath },
+      } as OpenClawConfig),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    const call = handleCommandsMock.mock.calls[0]?.[0] as
+      | { provider?: string; model?: string }
+      | undefined;
+    // A bound claude-cli session must be normalized to its canonical anthropic
+    // provider so provider-keyed harness/context-budget policy is not missed,
+    // matching canonical model selection's bound-CLI regression.
+    expect(call?.provider).toBe("anthropic");
+    expect(call?.model).toMatch(/claude-fable-5/);
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the configured default provider/model for sessions without a stored override", async () => {
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "⚙️ Compacted" },
+    });
+
+    const { result } = await resolveNativeDirectiveCommand("/compact");
+
+    expect(result.handled).toBe(true);
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    const call = handleCommandsMock.mock.calls[0]?.[0] as
+      | { provider?: string; model?: string }
+      | undefined;
+    expect(call?.provider).toBe("openai");
+    expect(call?.model).toBe("gpt-5.5");
+  });
+
   it("handles authorized text slash commands before model dispatch", async () => {
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,

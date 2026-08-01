@@ -301,9 +301,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
           ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
-            : "Compacted"
+          : result.result?.tokensAfter == null
+            ? "Compaction finished (resulting context unknown)"
+            : result.result?.tokensBefore
+              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+              : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (result.ok && result.compacted) {
