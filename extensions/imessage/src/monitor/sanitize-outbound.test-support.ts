@@ -63,25 +63,37 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
   });
 
-  it("keeps a bare 'user:' mapping key inside a fenced code block", () => {
-    const text =
-      "```yaml\n- name: ensure account\n  user:\n    name: alice\n    state: present\n```";
-    // The role-turn stripper must not treat a YAML mapping key as a leaked turn
-    // boundary; deleting `user:` silently reparents its children under the item.
-    expect(sanitizeOutboundText(text)).toBe(text);
-  });
-
-  it("keeps bare 'system:'/'assistant:' mapping keys inside a fenced code block", () => {
-    const text = "```yaml\nsystem:\n  role: primary\nassistant:\n  role: helper\n```";
-    expect(sanitizeOutboundText(text)).toBe(text);
-  });
-
-  it("still strips a leaked role marker outside a code block while keeping the fenced one", () => {
-    const text = "assistant:\n```yaml\nuser:\n  name: alice\n```";
-    const result = sanitizeOutboundText(text);
-    // Leaked standalone marker in prose is removed; the fenced key survives.
-    expect(result).not.toMatch(/^assistant:$/m);
-    expect(result).toContain("```yaml\nuser:\n  name: alice\n```");
+  it.each([
+    {
+      name: "backtick fence preserves user while stripping prose user",
+      input: "user:\n```yaml\nuser:\n  name: alice\n```",
+      expected: "```yaml\nuser:\n  name: alice\n```",
+    },
+    {
+      name: "tilde fence preserves system while stripping prose system",
+      input: "system:\n~~~yaml\nsystem:\n  enabled: true\n~~~",
+      expected: "~~~yaml\nsystem:\n  enabled: true\n~~~",
+    },
+    {
+      name: "indented code preserves assistant while stripping prose assistant",
+      input: "keep\n\nassistant:\n\n    assistant:\n    enabled: true",
+      expected: "keep\n\n    assistant:\n    enabled: true",
+    },
+    {
+      name: "unterminated fence preserves every marker family after offset shifts",
+      input: [
+        "#+#+#",
+        "assistant to=final",
+        "user:",
+        "```text",
+        "#+#+#",
+        "assistant to=tool",
+        "user:",
+      ].join("\n"),
+      expected: ["```text", "#+#+#", "assistant to=tool", "user:"].join("\n"),
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expect(sanitizeOutboundText(input)).toBe(expected);
   });
 
   it("handles combined internal markers in one message", () => {
