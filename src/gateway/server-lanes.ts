@@ -1,6 +1,7 @@
 import {
   enableSessionSuspensionTimersForGatewayStart,
-  getCleanupSuspendedLaneIdsForGatewayPublication,
+  getSuspendedLaneIdsForGatewayPublication,
+  setGatewayLaneResumeConcurrencies,
 } from "../agents/session-suspension.js";
 // Gateway command-lane concurrency applier.
 // Pushes config-derived agent/cron limits into the process command queue.
@@ -50,27 +51,19 @@ export function applyGatewayLaneConcurrency(
   concurrency: GatewayLaneConcurrency,
   opts: { gatewayStart?: boolean } = {},
 ): void {
+  setGatewayLaneResumeConcurrencies({
+    [CommandLane.Cron]: concurrency.cron,
+    [CommandLane.CronNested]: concurrency.cron,
+    [CommandLane.HookDispatch]: concurrency.hookDispatch,
+    [CommandLane.Main]: concurrency.main,
+    [CommandLane.Nested]: 1,
+    [CommandLane.Subagent]: concurrency.subagent,
+  });
   // Lane ids are open strings (plugins mint their own); narrow once so the
   // gateway-managed cases compare within the enum.
   const suspendedLaneIds: ReadonlySet<string> = opts.gatewayStart
-    ? enableSessionSuspensionTimersForGatewayStart((laneId, savedResumeConcurrency) => {
-        switch (laneId as CommandLane) {
-          case CommandLane.Cron:
-          case CommandLane.CronNested:
-            return concurrency.cron;
-          case CommandLane.HookDispatch:
-            return concurrency.hookDispatch;
-          case CommandLane.Main:
-            return concurrency.main;
-          case CommandLane.Nested:
-            return 1;
-          case CommandLane.Subagent:
-            return concurrency.subagent;
-          default:
-            return savedResumeConcurrency;
-        }
-      })
-    : getCleanupSuspendedLaneIdsForGatewayPublication();
+    ? enableSessionSuspensionTimersForGatewayStart()
+    : getSuspendedLaneIdsForGatewayPublication();
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
   if (!suspendedLaneIds.has(CommandLane.Cron)) {
