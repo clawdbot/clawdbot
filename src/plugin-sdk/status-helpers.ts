@@ -43,12 +43,17 @@ type RuntimeLifecycleSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  ingressUnavailable?: true | null;
   terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean | null;
+  activeRuns?: number | null;
+  lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
 };
 
 type StatusSnapshotExtra = Record<string, unknown>;
@@ -398,7 +403,17 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    // Absence means unknown; only a recorded ingress failure crosses the projection.
+    ...(runtime?.ingressUnavailable === true ? { ingressUnavailable: true as const } : {}),
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
+    ...(typeof runtime?.busy === "boolean" ? { busy: runtime.busy } : {}),
+    ...(typeof runtime?.activeRuns === "number" ? { activeRuns: runtime.activeRuns } : {}),
+    ...(typeof runtime?.lastRunActivityAt === "number"
+      ? { lastRunActivityAt: runtime.lastRunActivityAt }
+      : {}),
+    ...(typeof runtime?.activeRunStartedAt === "number"
+      ? { activeRunStartedAt: runtime.activeRunStartedAt }
+      : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }
