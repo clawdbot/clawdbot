@@ -1,5 +1,5 @@
 /**
- * Frozen CUA Driver 0.14.1 desktop contract used by the CUA fulfiller tests.
+ * Frozen CUA Driver 0.14.1 desktop contract fixtures used by the CUA fulfiller tests.
  *
  * Evidence: cua-driver-rs-v0.14.1 (41ae29b44b49b68c6e01c934fffbbe74d22e26fb)
  * and @trycua/cua-driver@0.14.1. The SDK declarations name these methods with

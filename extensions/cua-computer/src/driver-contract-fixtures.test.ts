@@ -11,7 +11,7 @@ import {
   CUA_DRIVER_0141_SDK_DESKTOP_SCOPE,
   CUA_DRIVER_0141_SDK_FIXTURES,
   CUA_DRIVER_0141_UNSUPPORTED_COMPUTER_ACT_ACTIONS,
-} from "./driver-contract-fixtures.test-data.js";
+} from "./driver-contract-fixtures.test-fixtures.js";
 
 describe("cua-driver 0.14.1 computer.act parity fixtures", () => {
   it("pins the released CUA driver identity and SDK desktop-scope representation", () => {

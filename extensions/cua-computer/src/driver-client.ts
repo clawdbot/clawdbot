@@ -137,7 +137,7 @@ class DirectCuaDriverSession implements CuaDriverSession {
       failure ??= error;
     }
     if (failure) {
-      throw failure;
+      throw failure instanceof Error ? failure : new Error("CUA Driver cleanup failed", { cause: failure });
     }
   }
 }
