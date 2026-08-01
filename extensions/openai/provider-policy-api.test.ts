@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeModelCatalogId,
+  projectConfiguredModelRow,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -13,6 +14,51 @@ describe("OpenAI provider policy artifact", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("skips runtime normalization for canonical Responses rows", () => {
+    expect(
+      projectConfiguredModelRow({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:8080/v1",
+          input: ["text"],
+          name: "GPT-5.5",
+          reasoning: true,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 96_000,
+          maxTokens: 128_000,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["openai-completions", "https://api.openai.com/v1"],
+    ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+  ] as const)("keeps runtime normalization for %s rows", (api, baseUrl) => {
+    expect(
+      projectConfiguredModelRow({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          api,
+          baseUrl,
+          input: ["text"],
+          name: "GPT-5.5",
+          reasoning: true,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 96_000,
+          maxTokens: 128_000,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("normalizes the legacy Codex model alias at the provider boundary", () => {

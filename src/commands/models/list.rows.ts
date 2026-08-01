@@ -21,7 +21,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type {
   ModelListAuthEvaluation,
@@ -29,6 +28,7 @@ import type {
   ModelListAuthRef,
 } from "./list.auth-index.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
+import { normalizeConfiguredProviderListRow } from "./list.model-projection.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
@@ -37,7 +37,6 @@ import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
-type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 type ScopedModelCatalogModule = typeof import("./list.scoped-catalog.js");
 
 type RowFilter = {
@@ -70,9 +69,6 @@ const scopedModelCatalogModuleLoader = createLazyImportLoader<ScopedModelCatalog
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
   () => import("../../agents/embedded-agent-runner/model.js"),
-);
-const providerRuntimeModuleLoader = createLazyImportLoader<ProviderRuntimeModule>(
-  () => import("../../plugins/provider-runtime.js"),
 );
 function loadPreparedModelCatalogModule(): Promise<ModelCatalogModule> {
   return modelCatalogModuleLoader.load();
@@ -268,41 +264,6 @@ function shouldSuppressListModel(params: {
   });
 }
 
-async function normalizeListRowWithProviderPlugin(params: {
-  model: ListRowModel;
-  context: RowBuilderContext;
-}): Promise<ListRowModel> {
-  const { normalizeProviderResolvedModelWithPlugin } = await providerRuntimeModuleLoader.load();
-  const normalized = normalizeProviderResolvedModelWithPlugin({
-    provider: params.model.provider,
-    config: params.context.cfg,
-    workspaceDir: params.context.workspaceDir,
-    pluginMetadataSnapshot: params.context.metadataSnapshot,
-    context: {
-      config: params.context.cfg,
-      agentDir: params.context.agentDir,
-      workspaceDir: params.context.workspaceDir,
-      provider: params.model.provider,
-      modelId: params.model.id,
-      model: params.model as ProviderRuntimeModel,
-    },
-  });
-  if (!normalized) {
-    return params.model;
-  }
-  return {
-    ...params.model,
-    id: normalized.id,
-    name: normalized.name,
-    provider: normalized.provider,
-    api: normalized.api ?? params.model.api,
-    baseUrl: normalized.baseUrl ?? params.model.baseUrl,
-    input: toListRowInput(normalized.input),
-    contextWindow: normalized.contextWindow,
-    contextTokens: normalized.contextTokens,
-  };
-}
-
 async function appendVisibleRow(params: {
   rows: ModelRow[];
   model: ListRowModel;
@@ -320,7 +281,7 @@ async function appendVisibleRow(params: {
     return false;
   }
   const model = params.normalizeWithProviderPlugin
-    ? await normalizeListRowWithProviderPlugin({
+    ? await normalizeConfiguredProviderListRow({
         model: params.model,
         context: params.context,
       })

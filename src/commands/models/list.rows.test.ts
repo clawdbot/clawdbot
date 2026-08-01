@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalogSnapshot: vi.fn(),
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
+  resolveProviderPolicySurface: vi.fn(() => null),
   shouldSuppressBuiltInModel: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
@@ -28,6 +29,10 @@ vi.mock("./list.scoped-catalog.js", () => ({
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
+}));
+
+vi.mock("../../plugins/provider-public-artifacts.js", () => ({
+  resolveProviderPolicySurface: mocks.resolveProviderPolicySurface,
 }));
 
 import {
@@ -738,6 +743,50 @@ describe("prepared provider catalog projection", () => {
 });
 
 describe("appendConfiguredProviderRows", () => {
+  it("skips provider runtime normalization when lightweight policy proves the row canonical", async () => {
+    mocks.resolveProviderPolicySurface.mockReturnValueOnce({
+      projectConfiguredModelRow: () => null,
+    } as never);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredProviderRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:8080/v1",
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 96_000,
+                    maxTokens: 128_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex,
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { provider: "openai", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
+    expect(requireOnlyRow(rows).input).toBe("text");
+  });
+
   it("keeps provider normalization for configured provider models", async () => {
     mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
       provider: "anthropic",

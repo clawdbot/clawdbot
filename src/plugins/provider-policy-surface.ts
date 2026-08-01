@@ -12,6 +12,7 @@ import type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -23,6 +24,15 @@ import {
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
+
+export type ProviderProjectConfiguredModelRowContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+};
 
 /** Provider policy hooks loaded from bundled plugin public artifacts. */
 export type BundledProviderPolicySurface = {
@@ -40,6 +50,9 @@ export type BundledProviderPolicySurface = {
   normalizeModelCatalogId?: (
     ctx: ProviderNormalizeModelCatalogIdContext,
   ) => string | null | undefined;
+  projectConfiguredModelRow?: (
+    ctx: ProviderProjectConfiguredModelRowContext,
+  ) => ProviderRuntimeModel | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -51,7 +64,8 @@ function hasProviderPolicyHook(
     typeof mod.resolveConfigApiKey === "function" ||
     typeof mod.resolveThinkingProfile === "function" ||
     typeof mod.resolveModelRoutes === "function" ||
-    typeof mod.normalizeModelCatalogId === "function"
+    typeof mod.normalizeModelCatalogId === "function" ||
+    typeof mod.projectConfiguredModelRow === "function"
   );
 }
 
