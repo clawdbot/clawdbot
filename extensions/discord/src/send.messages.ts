@@ -18,6 +18,11 @@ import {
 } from "./internal/discord.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
+  classifyDiscordDeliveryFailure,
+  recordDiscordMessageCreateAmbiguity,
+  type DiscordRetryRunner,
+} from "./retry.js";
+import {
   buildDiscordTextChunks,
   createDiscordClient,
   resolveDiscordRest,
@@ -38,6 +43,7 @@ type DiscordThreadInitialMessageDelivery = Readonly<{
   starterMessageDelivered: boolean;
   deliveredChunkCount: number;
   deliveredMessageIds: readonly string[];
+  failedChunkDelivery: "not_delivered" | "unknown";
   failedChunkIndex: number;
   totalChunkCount: number;
 }>;
@@ -90,7 +96,7 @@ export class DiscordThreadInitialMessageError extends Error {
       initialMessageDelivery && initialMessageDelivery.deliveredChunkCount > 0
         ? "Discord thread was created, but its initial content was only partially delivered"
         : "Discord thread was created, but sending the initial message failed";
-    super(`${deliveryFailure}: ${initialMessageError}`);
+    super(`${deliveryFailure}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
     this.initialMessageDelivery = initialMessageDelivery
       ? {
@@ -255,10 +261,24 @@ export async function createThreadDiscord(
     let deliveredChunkCount = isForumLike ? 1 : 0;
     const firstFollowupChunkIndex = isForumLike ? 1 : 0;
     for (const [followupIndex, content] of followupChunks.entries()) {
+      let chunkMayHaveDelivered = false;
+      const trackedRequest: DiscordRetryRunner = (fn, label, options) =>
+        request(
+          async () => {
+            try {
+              return await fn();
+            } catch (error) {
+              chunkMayHaveDelivered ||= classifyDiscordDeliveryFailure(error) === "ambiguous";
+              throw error;
+            }
+          },
+          label,
+          options,
+        );
       try {
         const result = await sendDiscordText({
           rest,
-          request,
+          request: trackedRequest,
           channelId: thread.id,
           text: content,
           maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
@@ -266,10 +286,19 @@ export async function createThreadDiscord(
         deliveredMessageIds.push(...result.platformMessageIds);
         deliveredChunkCount += 1;
       } catch (error) {
+        const finalFailure = classifyDiscordDeliveryFailure(error);
+        const failedChunkDelivery =
+          chunkMayHaveDelivered || finalFailure === "ambiguous" || finalFailure === "unknown"
+            ? "unknown"
+            : "not_delivered";
+        if (failedChunkDelivery === "unknown") {
+          recordDiscordMessageCreateAmbiguity(error);
+        }
         throw new DiscordThreadInitialMessageError(thread, error, {
           starterMessageDelivered: isForumLike,
           deliveredChunkCount,
           deliveredMessageIds,
+          failedChunkDelivery,
           failedChunkIndex: firstFollowupChunkIndex + followupIndex,
           totalChunkCount: initialMessageChunks.length,
         });

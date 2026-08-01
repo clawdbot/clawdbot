@@ -3,6 +3,7 @@ import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
+import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
@@ -198,7 +199,7 @@ describe("sendMessageDiscord", () => {
     getMock.mockResolvedValue({ type: ChannelType.GuildForum });
     postMock
       .mockResolvedValueOnce({ id: "t1", message: { id: "starter1", channel_id: "t1" } })
-      .mockRejectedValueOnce(new Error("missing access"));
+      .mockRejectedValueOnce(Object.assign(new Error("missing access"), { status: 403 }));
 
     let thrown: unknown;
     try {
@@ -216,6 +217,42 @@ describe("sendMessageDiscord", () => {
       starterMessageDelivered: true,
       deliveredChunkCount: 1,
       deliveredMessageIds: ["starter1"],
+      failedChunkDelivery: "not_delivered",
+      failedChunkIndex: 1,
+      totalChunkCount: 2,
+    });
+  });
+
+  it("reports an exhausted ambiguous forum continuation as unknown delivery", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    const ambiguous = Object.assign(new Error("response lost"), { status: 502 });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", message: { id: "starter1", channel_id: "t1" } })
+      .mockRejectedValue(ambiguous);
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "a".repeat(2001) },
+        {
+          ...discordClientOpts(rest),
+          retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(hasDiscordMessageCreateAmbiguity(thrown)).toBe(true);
+    expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
+      starterMessageDelivered: true,
+      deliveredChunkCount: 1,
+      deliveredMessageIds: ["starter1"],
+      failedChunkDelivery: "unknown",
       failedChunkIndex: 1,
       totalChunkCount: 2,
     });
@@ -425,7 +462,7 @@ describe("sendMessageDiscord", () => {
     postMock
       .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
       .mockResolvedValueOnce({ id: "msg1", channel_id: "t1" })
-      .mockRejectedValueOnce(new Error("missing access"));
+      .mockRejectedValueOnce(Object.assign(new Error("missing access"), { status: 403 }));
 
     let thrown: unknown;
     try {
@@ -443,6 +480,43 @@ describe("sendMessageDiscord", () => {
       starterMessageDelivered: false,
       deliveredChunkCount: 1,
       deliveredMessageIds: ["msg1"],
+      failedChunkDelivery: "not_delivered",
+      failedChunkIndex: 1,
+      totalChunkCount: 3,
+    });
+  });
+
+  it("reports an exhausted ambiguous non-forum chunk as unknown delivery", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    const ambiguous = Object.assign(new Error("response lost"), { status: 502 });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "t1" })
+      .mockRejectedValue(ambiguous);
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "a".repeat(4001) },
+        {
+          ...discordClientOpts(rest),
+          retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(postMock).toHaveBeenCalledTimes(4);
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(hasDiscordMessageCreateAmbiguity(thrown)).toBe(true);
+    expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
+      starterMessageDelivered: false,
+      deliveredChunkCount: 1,
+      deliveredMessageIds: ["msg1"],
+      failedChunkDelivery: "unknown",
       failedChunkIndex: 1,
       totalChunkCount: 3,
     });
