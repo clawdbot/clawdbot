@@ -13,13 +13,7 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import {
-  hasNonzeroUsage,
-  normalizeUsage,
-  toOpenAiChatCompletionsUsage,
-  type NormalizedUsage,
-  type OpenAiChatCompletionsUsage,
-} from "../agents/usage.js";
+import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
@@ -67,6 +61,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -766,41 +761,11 @@ function resolveAgentResponseCommentary(result: unknown): string {
     .join("\n\n");
 }
 
-type AgentUsageMeta = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
 type PendingToolCall = {
   id?: unknown;
   name?: unknown;
   arguments?: unknown;
 };
-
-function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
-  const agentMeta = (
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: AgentUsageMeta;
-          lastCallUsage?: AgentUsageMeta;
-        };
-      };
-    } | null
-  )?.meta?.agentMeta;
-  const primary = normalizeUsage(agentMeta?.usage);
-  if (hasNonzeroUsage(primary)) {
-    return primary;
-  }
-  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
-  if (hasNonzeroUsage(fallback)) {
-    return fallback;
-  }
-  return primary ?? fallback;
-}
 
 function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   stopReason: string | undefined;

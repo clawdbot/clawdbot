@@ -1135,7 +1135,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
-          usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
+          usage: {
+            input: 3,
+            output: 5,
+            cacheRead: 1,
+            cacheWrite: 2,
+            reasoningTokens: 4,
+            total: 7,
+          },
+          lastCallUsage: { input: 100, output: 100, total: 200 },
         },
       });
       const resUsage = await postResponses(port, {
@@ -1145,7 +1153,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       expect(resUsage.status).toBe(200);
       const usageJson = (await resUsage.json()) as Record<string, unknown>;
-      expect(usageJson.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+      expect(usageJson.usage).toEqual({
+        input_tokens: 6,
+        input_tokens_details: { cached_tokens: 1, cache_write_tokens: 2 },
+        output_tokens: 5,
+        output_tokens_details: { reasoning_tokens: 4 },
+        total_tokens: 11,
+      });
       await ensureResponseConsumed(resUsage);
 
       mockAgentOnce([{ text: "hello" }]);
@@ -1158,6 +1172,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const shapeJson = (await resShape.json()) as Record<string, unknown>;
       expect(shapeJson.object).toBe("response");
       expect(shapeJson.status).toBe("completed");
+      expect(shapeJson.usage).toEqual({
+        input_tokens: 0,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 0,
+      });
       expect(Array.isArray(shapeJson.output)).toBe(true);
 
       const output = shapeJson.output as Array<Record<string, unknown>>;
@@ -1279,6 +1300,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it.each([
+    { name: "missing aggregate", usage: undefined },
+    { name: "zero aggregate", usage: { input: 0, output: 0, total: 0 } },
+  ])("uses last-call usage in the terminal SSE response for $name", async ({ usage }) => {
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {
+        agentMeta: {
+          ...(usage ? { usage } : {}),
+          lastCallUsage: {
+            input: 4,
+            output: 3,
+            cacheRead: 2,
+            cacheWrite: 1,
+            reasoningTokens: 2,
+            total: 9,
+          },
+        },
+      },
+    } as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const response = await client.responses
+      .stream({
+        model: "openclaw",
+        input: "hi",
+      })
+      .finalResponse();
+
+    expect(response.status).toBe("completed");
+    expect(response.usage).toEqual({
+      input_tokens: 7,
+      input_tokens_details: { cached_tokens: 2, cache_write_tokens: 1 },
+      output_tokens: 3,
+      output_tokens_details: { reasoning_tokens: 2 },
+      total_tokens: 10,
+    });
   });
 
   it("flushes same-turn assistant microtasks before completing an official SDK stream", async () => {

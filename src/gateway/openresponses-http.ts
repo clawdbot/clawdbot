@@ -12,6 +12,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
+import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -70,6 +71,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -342,43 +344,11 @@ function applyToolChoice(params: {
 export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function createEmptyUsage(): Usage {
-  return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-}
-
-function toUsage(
-  value:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): Usage {
-  if (!value) {
-    return createEmptyUsage();
-  }
-  const input = value.input ?? 0;
-  const output = value.output ?? 0;
-  const cacheRead = value.cacheRead ?? 0;
-  const cacheWrite = value.cacheWrite ?? 0;
-  const total = value.total ?? input + output + cacheRead + cacheWrite;
-  return {
-    input_tokens: Math.max(0, input),
-    output_tokens: Math.max(0, output),
-    total_tokens: Math.max(0, total),
-  };
+  return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
-  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
-  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
-  return toUsage(
-    usage as
-      | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number }
-      | undefined,
-  );
+  return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
 }
 
 type PendingToolCall = { id: string; name: string; arguments: string };
