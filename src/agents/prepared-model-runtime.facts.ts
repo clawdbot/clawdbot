@@ -225,15 +225,14 @@ export async function prepareWorkspaceBuildGroup(
   }
   const env = input.env ?? process.env;
   const runtimePluginStartedAt = performance.now();
-  const runtimePluginRegistry =
-    catalogMode === "live" && !input.readOnly
-      ? loadAgentRuntimePluginRegistryHandle({
-          config: input.config,
-          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-          ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          selections: input.runtimePluginSelections,
-        })
-      : undefined;
+  const runtimePluginRegistry = !input.readOnly
+    ? loadAgentRuntimePluginRegistryHandle({
+        config: input.config,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        selections: input.runtimePluginSelections,
+      })
+    : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();

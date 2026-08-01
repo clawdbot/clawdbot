@@ -2426,6 +2426,26 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     mockQueuedRouteAwareModel();
   });
 
+  it("uses the acquired gateway runtime generation for queued model resolution", async () => {
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        allowGatewaySubagentBinding: true,
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
+
+    const snapshot = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value
+      ? (await acquireAgentRunPreparedModelRuntimeMock.mock.results[0].value).snapshot
+      : undefined;
+    expect(snapshot).toBeDefined();
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
+      authStorage: {},
+      modelRegistry: {},
+      preparedModelRuntime: snapshot,
+    });
+  });
+
   it("disposes the context engine once when route materialization rejects", async () => {
     const dispose = vi.fn(async () => {});
     const authStorage = { setRuntimeApiKey: vi.fn() };
@@ -3467,7 +3487,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual({
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
       authProfileMode: "api_key",
     });
   });

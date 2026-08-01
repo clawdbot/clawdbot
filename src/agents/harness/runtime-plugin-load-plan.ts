@@ -146,6 +146,19 @@ function resolveSelectedRuntime(selection: AgentHarnessPluginSelection, config?:
       }).runtime;
 }
 
+/** Returns whether a selection needs a plugin-owned harness in its prepared generation. */
+export function requiresAgentHarnessPluginSelection(
+  selection: AgentHarnessPluginSelection,
+  config?: OpenClawConfig,
+): boolean {
+  const runtime = resolveSelectedRuntime(selection, config);
+  return (
+    !isDefaultAgentRuntimeId(runtime) &&
+    runtime !== OPENCLAW_AGENT_RUNTIME_ID &&
+    !isCliRuntimeAliasForProvider({ runtime, provider: selection.provider, cfg: config })
+  );
+}
+
 /** Folds selected harness and memory owners into one deterministic plugin load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
@@ -165,11 +178,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   const forceActivatedPluginIds = [...memoryPluginIds];
   for (const selection of params.selections) {
     const runtime = resolveSelectedRuntime(selection, config);
-    if (
-      isDefaultAgentRuntimeId(runtime) ||
-      runtime === OPENCLAW_AGENT_RUNTIME_ID ||
-      isCliRuntimeAliasForProvider({ runtime, provider: selection.provider, cfg: config })
-    ) {
+    if (!requiresAgentHarnessPluginSelection(selection, config)) {
       continue;
     }
     const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({

@@ -68,7 +68,7 @@ export const resolveModelMock: Mock<
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
+  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown, _options?: unknown) =>
     resolveModelMock(provider, modelId, agentDir, cfg),
 );
 export const sessionCompactImpl = vi.fn(async () => ({
@@ -584,8 +584,13 @@ export function resetCompactHooksHarnessMocks(): void {
   }));
   resolveModelAsyncMock.mockReset();
   resolveModelAsyncMock.mockImplementation(
-    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
-      resolveModelMock(provider, modelId, agentDir, cfg),
+    async (
+      provider: string,
+      modelId: string,
+      agentDir?: string,
+      cfg?: unknown,
+      _options?: unknown,
+    ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });

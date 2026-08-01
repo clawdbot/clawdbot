@@ -28,7 +28,10 @@ import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isOpenAIProvider } from "../openai-routing.js";
-import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { SessionManager } from "../sessions/index.js";
@@ -358,6 +361,7 @@ async function compactEmbeddedAgentSessionImpl(
         contextEngine,
         agentDir,
         resolvedWorkspaceDir,
+        lease.snapshot,
         () => {
           disposeContextEngineOnExit = false;
         },
@@ -380,6 +384,7 @@ async function compactResolvedContextEngine(
   contextEngine: ContextEngine,
   agentDir: string,
   resolvedWorkspaceDir: string,
+  preparedModelRuntime: PreparedModelRuntimeSnapshot,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = await resolveAgentRunSessionTarget(params);
@@ -423,6 +428,7 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
+    const preparedStores = preparedModelRuntime.createStores();
     // Ensure the policy-selected harness plugin so selection can pick implicit codex.
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -439,13 +445,11 @@ async function compactResolvedContextEngine(
       model: ceModel,
       authStorage,
       modelRegistry,
-    } = await resolveModelAsync(
-      ceRuntimeProvider,
-      ceModelId,
-      agentDir,
-      params.config,
-      initialModelAuth,
-    );
+    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config, {
+      ...initialModelAuth,
+      ...preparedStores,
+      preparedModelRuntime,
+    });
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).

@@ -9,6 +9,7 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { requiresAgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
@@ -151,6 +152,7 @@ export function normalizePreparedModelRuntimeInput(
   const {
     inheritedAuthDir: _inheritedAuthDir,
     readOnly,
+    runtimePluginSelections: _runtimePluginSelections,
     skipCredentials,
     workspaceDir: _workspaceDir,
     ...rest
@@ -163,6 +165,7 @@ export function normalizePreparedModelRuntimeInput(
   const runtimePluginSelections = input.runtimePluginSelections
     ? Object.freeze(
         [...input.runtimePluginSelections]
+          .filter((selection) => requiresAgentHarnessPluginSelection(selection, input.config))
           .map((selection) => Object.freeze({ ...selection }))
           .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
       )

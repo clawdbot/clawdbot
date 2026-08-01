@@ -316,7 +316,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     });
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         providerDiscoveryProviderIds: ["openai"],
@@ -363,8 +363,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
       workspaceDir: "/tmp/prepared-static-workspace",
     });
     expect(snapshot?.configuredRuntimeModels).toHaveLength(1);
+    expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
-    expect(snapshot?.mediaCapabilityProviders).toBeUndefined();
+    expect(snapshot?.mediaCapabilityProviders).toBeDefined();
     const fullCatalog = await snapshot?.loadFullModelCatalog?.();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(
@@ -380,7 +381,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeProviderPluginAugmentation: true }),
     );
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.buildPreparedModelCatalogSnapshot.mock.invocationCallOrder[0]!,
     );
