@@ -1653,12 +1653,14 @@ describe("subagent registry seam flow", () => {
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
       resolveWait = resolve;
     });
-    const staleWriteLock = vi.fn(async <T>(operation: () => Promise<T> | T) => {
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
       return await operation();
-    });
+    };
     const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
 
@@ -1676,7 +1678,7 @@ describe("subagent registry seam flow", () => {
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: staleWriteLock },
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
       async () => {
         mod.registerSubagentRun({
           runId: "run-detached-requester-owner",
