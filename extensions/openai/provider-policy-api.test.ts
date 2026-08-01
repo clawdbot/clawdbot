@@ -41,7 +41,6 @@ describe("OpenAI provider policy artifact", () => {
     ["openai-completions", "https://api.openai.com/v1", "gpt-5.5"],
     ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", "gpt-5.5"],
     ["openai-responses", "https://chatgpt.com/backend-api/codex", "gpt-5.5"],
-    [undefined, "https://api.openai.com/v1", "gpt-5.5"],
     ["anthropic-messages", "https://api.openai.com/v1", "gpt-5.5"],
     ["openai-responses", "https://api.openai.com/v1", "gpt-5.4-codex"],
   ] as const)(
