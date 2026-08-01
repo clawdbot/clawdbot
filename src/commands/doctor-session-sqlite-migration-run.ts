@@ -1,10 +1,12 @@
 /** Manifest and restore helpers for doctor-owned session SQLite migrations. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { VERSION } from "../version.js";
 import type {
@@ -51,6 +53,7 @@ type SessionSqliteMigrationManifest = {
   openClawVersion: string;
   restore?: {
     attemptedAt: string;
+    consumedArchives?: string[];
     conflicts: DoctorSessionSqliteRestoreConflict[];
     restoredFiles: string[];
     skippedFiles: string[];
@@ -139,6 +142,7 @@ const MigrationManifestSchema = z
     restore: z
       .object({
         attemptedAt: z.string().min(1),
+        consumedArchives: z.array(AbsolutePathSchema).optional(),
         conflicts: z.array(RestoreConflictSchema),
         restoredFiles: z.array(AbsolutePathSchema),
         skippedFiles: z.array(AbsolutePathSchema),
@@ -293,18 +297,12 @@ export function restoreSessionSqliteMigrationRuns(params: {
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
 }): DoctorSessionSqliteRestoreReport {
   const restoreReport: DoctorSessionSqliteRestoreReport = emptyRestoreReport();
-  // Oldest run first, so the winner lookup prefers the earliest surviving archive.
-  const manifestPaths = listSessionSqliteMigrationManifestPaths(params.env).toReversed();
-  const winningArchives = resolveWinningRestoreArchives(manifestPaths, params.trustedTargets);
-  for (const manifestPath of manifestPaths) {
-    const manifest = readSessionSqliteMigrationManifest(manifestPath);
-    if (!manifest) {
-      continue;
-    }
-    const targetManifests = filterRestoreManifestTargets(manifest, params.trustedTargets);
-    if (targetManifests.length === 0) {
-      continue;
-    }
+  const contexts = loadRestoreManifestContexts(
+    listSessionSqliteMigrationManifestPaths(params.env).toReversed(),
+    params.trustedTargets,
+  );
+  const restorePlan = createRestorePlan(contexts);
+  for (const { manifest, manifestPath, targets } of contexts) {
     const manifestRestoreReport: DoctorSessionSqliteRestoreReport = {
       ...emptyRestoreReport(),
       manifestPaths: [manifestPath],
@@ -312,9 +310,10 @@ export function restoreSessionSqliteMigrationRuns(params: {
     restoreReport.manifestPaths.push(manifestPath);
     restoreSessionSqliteMigrationManifest(
       manifest,
-      targetManifests,
+      manifestPath,
+      targets,
       manifestRestoreReport,
-      winningArchives,
+      restorePlan,
     );
     restoreReport.conflicts.push(...manifestRestoreReport.conflicts);
     restoreReport.restoredFiles.push(...manifestRestoreReport.restoredFiles);
@@ -324,37 +323,314 @@ export function restoreSessionSqliteMigrationRuns(params: {
   return restoreReport;
 }
 
-/**
- * Pick the one archive that may reclaim each destination, keyed by source path.
- * Several runs can archive the same path once a legacy writer recreates it, and restore refuses to
- * overwrite an existing source. Without this the iteration order alone decided the winner, so a
- * recreated empty index could beat the only pre-migration copy. Runs arrive oldest-first, and a
- * later run can only have archived content created after the earlier run moved the original away.
- */
-function resolveWinningRestoreArchives(
+type RestoreManifestContext = {
+  manifest: SessionSqliteMigrationManifest;
+  manifestPath: string;
+  targets: SessionSqliteMigrationTargetManifest[];
+};
+
+type RestoreArchiveSnapshot = {
+  digest: string;
+  legacyEntryCount?: number;
+  size: number;
+};
+
+type RestoreMovePlan =
+  | { action: "conflict"; reason: string }
+  | { action: "restore"; snapshot: RestoreArchiveSnapshot }
+  | { action: "skip-consumed" }
+  | { action: "skip-superseded" }
+  | { action: "standard" };
+
+function loadRestoreManifestContexts(
   manifestPaths: readonly string[],
   trustedTargets: readonly SessionSqliteMigrationTargetInput[],
-): Map<string, string> {
-  const winners = new Map<string, string>();
+): RestoreManifestContext[] {
+  const contexts: RestoreManifestContext[] = [];
   for (const manifestPath of manifestPaths) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
     if (!manifest) {
       continue;
     }
-    for (const target of filterRestoreManifestTargets(manifest, trustedTargets)) {
+    const targets = filterRestoreManifestTargets(manifest, trustedTargets);
+    if (targets.length > 0) {
+      contexts.push({ manifest, manifestPath, targets });
+    }
+  }
+  return contexts;
+}
+
+/**
+ * Resolve every duplicate destination before moving an archive. A missing archive only disappears
+ * from the conflict set when its own manifest proves that an earlier restore consumed it.
+ */
+function createRestorePlan(
+  contexts: readonly RestoreManifestContext[],
+): Map<string, RestoreMovePlan> {
+  const plan = new Map<string, RestoreMovePlan>();
+  const candidatesBySource = new Map<
+    string,
+    Array<{
+      consumed: boolean;
+      context: RestoreManifestContext;
+      move: SessionSqliteMigrationMove;
+    }>
+  >();
+  for (const context of contexts) {
+    const consumedArchives = collectRecordedConsumedArchives(context.manifest);
+    for (const target of context.targets) {
       for (const move of uniqueRestoreMoves(target)) {
-        // Match what restoreMigrationMove will accept, so an unusable archive cannot claim a
-        // destination and block a later run that still holds a restorable copy.
-        if (
-          !winners.has(move.sourcePath) &&
-          isRegularFileWithoutFollowingSymlinks(move.archivePath)
-        ) {
-          winners.set(move.sourcePath, move.archivePath);
-        }
+        const candidates = candidatesBySource.get(move.sourcePath) ?? [];
+        candidates.push({
+          consumed: consumedArchives.has(move.archivePath),
+          context,
+          move,
+        });
+        candidatesBySource.set(move.sourcePath, candidates);
       }
     }
   }
-  return winners;
+
+  for (const [sourcePath, candidates] of candidatesBySource) {
+    if (fs.existsSync(sourcePath) || candidates.length === 1) {
+      for (const candidate of candidates) {
+        plan.set(restoreMovePlanKey(candidate.context.manifestPath, candidate.move), {
+          action: "standard",
+        });
+      }
+      continue;
+    }
+
+    const available: Array<{
+      context: RestoreManifestContext;
+      move: SessionSqliteMigrationMove;
+      snapshot: RestoreArchiveSnapshot;
+    }> = [];
+    let blocked = false;
+    for (const candidate of candidates) {
+      const key = restoreMovePlanKey(candidate.context.manifestPath, candidate.move);
+      const inspection = inspectRestoreArchive(candidate.move);
+      if (inspection.state === "available") {
+        available.push({ ...candidate, snapshot: inspection.snapshot });
+        continue;
+      }
+      if (inspection.state === "missing" && candidate.consumed) {
+        plan.set(key, { action: "skip-consumed" });
+        continue;
+      }
+      blocked = true;
+      plan.set(key, {
+        action: "conflict",
+        reason:
+          inspection.state === "missing"
+            ? "archive is missing without a recorded prior restore; refusing another candidate"
+            : inspection.reason,
+      });
+    }
+
+    if (blocked) {
+      for (const candidate of available) {
+        plan.set(restoreMovePlanKey(candidate.context.manifestPath, candidate.move), {
+          action: "conflict",
+          reason:
+            "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
+        });
+      }
+      continue;
+    }
+    if (available.length === 0) {
+      continue;
+    }
+
+    const kinds = new Set(available.map((candidate) => candidate.move.kind));
+    if (kinds.size !== 1) {
+      setRestoreCandidateConflicts(
+        plan,
+        available,
+        "recorded archives disagree on artifact kind; refusing automatic selection",
+      );
+      continue;
+    }
+    const winner = selectRestoreCandidate(available);
+    if (!winner) {
+      setRestoreCandidateConflicts(
+        plan,
+        available,
+        available[0]?.move.kind === "legacy-store"
+          ? "multiple distinct nonempty session indexes require explicit archive selection"
+          : "multiple distinct archives require explicit archive selection",
+      );
+      continue;
+    }
+    for (const candidate of available) {
+      plan.set(
+        restoreMovePlanKey(candidate.context.manifestPath, candidate.move),
+        candidate === winner
+          ? { action: "restore", snapshot: candidate.snapshot }
+          : { action: "skip-superseded" },
+      );
+    }
+  }
+  return plan;
+}
+
+function selectRestoreCandidate<
+  T extends { move: SessionSqliteMigrationMove; snapshot: RestoreArchiveSnapshot },
+>(candidates: readonly T[]): T | undefined {
+  const distinctDigests = new Set(candidates.map((candidate) => candidate.snapshot.digest));
+  if (distinctDigests.size === 1) {
+    return candidates[0];
+  }
+  if (candidates[0]?.move.kind !== "legacy-store") {
+    return undefined;
+  }
+  const nonemptyDigests = new Set(
+    candidates
+      .filter((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
+      .map((candidate) => candidate.snapshot.digest),
+  );
+  if (nonemptyDigests.size === 0) {
+    return candidates[0];
+  }
+  return nonemptyDigests.size === 1
+    ? candidates.find((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
+    : undefined;
+}
+
+function setRestoreCandidateConflicts(
+  plan: Map<string, RestoreMovePlan>,
+  candidates: ReadonlyArray<{
+    context: RestoreManifestContext;
+    move: SessionSqliteMigrationMove;
+  }>,
+  reason: string,
+): void {
+  for (const candidate of candidates) {
+    plan.set(restoreMovePlanKey(candidate.context.manifestPath, candidate.move), {
+      action: "conflict",
+      reason,
+    });
+  }
+}
+
+function restoreMovePlanKey(manifestPath: string, move: SessionSqliteMigrationMove): string {
+  return `${manifestPath}\u0000${migrationMoveKey(move)}`;
+}
+
+function collectRecordedConsumedArchives(manifest: SessionSqliteMigrationManifest): Set<string> {
+  const consumed = new Set(manifest.restore?.consumedArchives ?? []);
+  const restoredSources = new Set(manifest.restore?.restoredFiles ?? []);
+  if (restoredSources.size === 0) {
+    return consumed;
+  }
+  const movesBySource = new Map<string, SessionSqliteMigrationMove[]>();
+  for (const target of manifest.targets) {
+    for (const move of uniqueRestoreMoves(target)) {
+      const moves = movesBySource.get(move.sourcePath) ?? [];
+      moves.push(move);
+      movesBySource.set(move.sourcePath, moves);
+    }
+  }
+  // Older shipped manifests only recorded restored source paths. Preserve that evidence when the
+  // source identifies exactly one archive, then persist the explicit archive path on this run.
+  for (const sourcePath of restoredSources) {
+    const moves = movesBySource.get(sourcePath);
+    if (moves?.length === 1) {
+      consumed.add(moves[0].archivePath);
+    }
+  }
+  return consumed;
+}
+
+type RestoreArchiveInspection =
+  | { state: "available"; snapshot: RestoreArchiveSnapshot }
+  | { state: "invalid"; reason: string }
+  | { state: "missing" };
+
+function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchiveInspection {
+  if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
+    return { state: "invalid", reason: "archive parent is a symbolic link; refusing restore" };
+  }
+  let pathStat: fs.Stats;
+  try {
+    pathStat = fs.lstatSync(move.archivePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? { state: "missing" }
+      : { state: "invalid", reason: "archive could not be inspected; refusing restore" };
+  }
+  if (!pathStat.isFile()) {
+    return { state: "invalid", reason: "archive is not a regular file; refusing restore" };
+  }
+
+  let fd: number | undefined;
+  try {
+    const flags =
+      process.platform === "win32"
+        ? "r"
+        : fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+    fd = fs.openSync(move.archivePath, flags);
+    const descriptorStat = fs.fstatSync(fd);
+    if (
+      !descriptorStat.isFile() ||
+      descriptorStat.dev !== pathStat.dev ||
+      descriptorStat.ino !== pathStat.ino
+    ) {
+      return {
+        state: "invalid",
+        reason: "archive changed while it was inspected; refusing restore",
+      };
+    }
+    const content = readFileDescriptorBoundedSync(fd, descriptorStat.size);
+    const finalPathStat = fs.lstatSync(move.archivePath);
+    if (
+      finalPathStat.dev !== descriptorStat.dev ||
+      finalPathStat.ino !== descriptorStat.ino ||
+      finalPathStat.size !== descriptorStat.size
+    ) {
+      return {
+        state: "invalid",
+        reason: "archive changed while it was inspected; refusing restore",
+      };
+    }
+    let legacyEntryCount: number | undefined;
+    if (move.kind === "legacy-store") {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content.toString("utf-8"));
+      } catch {
+        return {
+          state: "invalid",
+          reason: "session index archive is not valid JSON; refusing automatic selection",
+        };
+      }
+      if (!isRecord(parsed)) {
+        return {
+          state: "invalid",
+          reason: "session index archive is not a JSON object; refusing automatic selection",
+        };
+      }
+      legacyEntryCount = Object.keys(parsed).length;
+    }
+    return {
+      state: "available",
+      snapshot: {
+        digest: createHash("sha256").update(content).digest("hex"),
+        ...(legacyEntryCount === undefined ? {} : { legacyEntryCount }),
+        size: descriptorStat.size,
+      },
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? { state: "missing" }
+      : { state: "invalid", reason: "archive could not be read safely; refusing restore" };
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
 }
 
 export function restoreSessionSqliteMigrationRun(params: {
@@ -385,9 +661,16 @@ export function restoreSessionSqliteMigrationRun(params: {
   }
   restoreSessionSqliteMigrationManifest(
     manifest,
+    params.manifestPath,
     targetManifests,
     restoreReport,
-    resolveWinningRestoreArchives([params.manifestPath], params.trustedTargets),
+    createRestorePlan([
+      {
+        manifest,
+        manifestPath: params.manifestPath,
+        targets: targetManifests,
+      },
+    ]),
   );
   writeSessionSqliteMigrationManifest({ manifest, manifestPath: params.manifestPath });
   return restoreReport;
@@ -543,17 +826,26 @@ function emptyRestoreReport(): DoctorSessionSqliteRestoreReport {
 
 function restoreSessionSqliteMigrationManifest(
   manifest: SessionSqliteMigrationManifest,
+  manifestPath: string,
   targets: readonly SessionSqliteMigrationTargetManifest[],
   restoreReport: DoctorSessionSqliteRestoreReport,
-  winningArchives: ReadonlyMap<string, string>,
+  restorePlan: ReadonlyMap<string, RestoreMovePlan>,
 ): void {
+  const consumedArchives = collectRecordedConsumedArchives(manifest);
   for (const target of targets) {
     for (const move of uniqueRestoreMoves(target)) {
-      restoreMigrationMove(move, restoreReport, winningArchives);
+      restoreMigrationMove({
+        consumedArchives,
+        manifestPath,
+        move,
+        restorePlan,
+        restoreReport,
+      });
     }
   }
   manifest.restore = {
     attemptedAt: new Date().toISOString(),
+    ...(consumedArchives.size > 0 ? { consumedArchives: [...consumedArchives].toSorted() } : {}),
     conflicts: restoreReport.conflicts,
     restoredFiles: restoreReport.restoredFiles,
     skippedFiles: restoreReport.skippedFiles,
@@ -571,25 +863,48 @@ function uniqueRestoreMoves(
   return [...moves.values()];
 }
 
-function restoreMigrationMove(
-  move: SessionSqliteMigrationMove,
-  restoreReport: DoctorSessionSqliteRestoreReport,
-  winningArchives: ReadonlyMap<string, string>,
-): void {
-  const winningArchive = winningArchives.get(move.sourcePath);
-  if (
-    winningArchive !== undefined &&
-    winningArchive !== move.archivePath &&
-    !fs.existsSync(move.archivePath)
-  ) {
-    // Another run's archive owns this destination and this move's archive was already consumed by
-    // an earlier restore, so there is nothing left to recover or to warn about here.
+function restoreMigrationMove(params: {
+  consumedArchives: Set<string>;
+  manifestPath: string;
+  move: SessionSqliteMigrationMove;
+  restorePlan: ReadonlyMap<string, RestoreMovePlan>;
+  restoreReport: DoctorSessionSqliteRestoreReport;
+}): void {
+  const { consumedArchives, manifestPath, move, restorePlan, restoreReport } = params;
+  const planned = restorePlan.get(restoreMovePlanKey(manifestPath, move)) ?? {
+    action: "standard",
+  };
+  if (planned.action === "conflict") {
+    restoreReport.conflicts.push({
+      archivePath: move.archivePath,
+      reason: planned.reason,
+      sourcePath: move.sourcePath,
+    });
+    return;
+  }
+  if (planned.action === "skip-consumed" || planned.action === "skip-superseded") {
     restoreReport.skippedFiles.push(move.sourcePath);
     return;
   }
   const sourceExists = fs.existsSync(move.sourcePath);
   const archiveExists = fs.existsSync(move.archivePath);
   if (!sourceExists && archiveExists) {
+    if (planned.action === "restore") {
+      const inspection = inspectRestoreArchive(move);
+      if (
+        inspection.state !== "available" ||
+        inspection.snapshot.digest !== planned.snapshot.digest ||
+        inspection.snapshot.size !== planned.snapshot.size ||
+        inspection.snapshot.legacyEntryCount !== planned.snapshot.legacyEntryCount
+      ) {
+        restoreReport.conflicts.push({
+          archivePath: move.archivePath,
+          reason: "archive changed after restore planning; refusing restore",
+          sourcePath: move.sourcePath,
+        });
+        return;
+      }
+    }
     if (!isRegularFileWithoutFollowingSymlinks(move.archivePath)) {
       restoreReport.conflicts.push({
         archivePath: move.archivePath,
@@ -618,6 +933,7 @@ function restoreMigrationMove(
       return;
     }
     fs.renameSync(move.archivePath, move.sourcePath);
+    consumedArchives.add(move.archivePath);
     restoreReport.restoredFiles.push(move.sourcePath);
     return;
   }

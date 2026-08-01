@@ -1319,6 +1319,7 @@ describe("runDoctorSessionSqlite", () => {
     const store = createLegacyStore();
     const preMigrationIndex = fs.readFileSync(store.storePath, "utf-8");
     await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+    const emptyArchivePaths: string[] = [];
     // Legacy writers recreate an empty index after a migration archived the real one, so later
     // runs archive that empty file. `persistLegacySessionStore` writes exactly these 3 bytes.
     for (let laterRun = 0; laterRun < 2; laterRun += 1) {
@@ -1327,7 +1328,18 @@ describe("runDoctorSessionSqlite", () => {
         setTimeout(resolve, 2);
       });
       fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
-      await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+      const importReport = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+      const manifest = readMigrationManifest(importReport.migrationRun?.manifestPath);
+      emptyArchivePaths.push(
+        expectDefined(
+          manifest.targets[0]?.plannedMoves.find((move) => move.kind === "legacy-store"),
+          "empty legacy archive move",
+        ).archivePath,
+      );
     }
 
     const restore = await runDoctorSessionSqlite({
@@ -1338,28 +1350,44 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(fs.readFileSync(store.storePath, "utf-8")).toBe(preMigrationIndex);
-    // The losing archives stay on disk and stay visible as conflicts, so an operator can still see
-    // that other copies existed instead of restore quietly picking one.
-    const conflicts = restore.targets[0]?.restore?.conflicts ?? [];
-    expect(conflicts).toHaveLength(2);
-    for (const conflict of conflicts) {
-      expect(conflict.sourcePath).toBe(canonicalTestPath(store.storePath));
-      expect(conflict.reason).toBe("source and archive both exist; refusing to overwrite source");
-      expect(fs.readFileSync(conflict.archivePath, "utf-8")).toBe("{}\n");
+    expect(restore.targets[0]?.restore?.conflicts).toEqual([]);
+    expect(restore.totals.issues).toBe(0);
+    for (const archivePath of emptyArchivePaths) {
+      expect(fs.readFileSync(archivePath, "utf-8")).toBe("{}\n");
     }
   });
 
-  it("keeps a later non-empty archive recoverable instead of dropping it", async () => {
+  it("fails closed when several manifests contain distinct nonempty session indexes", async () => {
     const store = createLegacyStore();
     const preMigrationIndex = fs.readFileSync(store.storePath, "utf-8");
-    await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+    const firstImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const firstArchive = expectDefined(
+      readMigrationManifest(firstImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "first legacy archive move",
+    ).archivePath;
     await new Promise((resolve) => {
       setTimeout(resolve, 2);
     });
     // An older binary can still write real sessions to the legacy store after the migration.
     const laterIndex = `${JSON.stringify({ "agent:main:later": { channel: "cli", chatType: "direct", sessionFile: "session-2.jsonl", sessionId: "session-2", sessionStartedAt: 3000, updatedAt: 4000 } }, null, 2)}\n`;
     fs.writeFileSync(store.storePath, laterIndex, { mode: 0o600 });
-    await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+    const secondImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const secondArchive = expectDefined(
+      readMigrationManifest(secondImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "second legacy archive move",
+    ).archivePath;
 
     const restore = await runDoctorSessionSqlite({
       allAgents: true,
@@ -1368,24 +1396,178 @@ describe("runDoctorSessionSqlite", () => {
       mode: "restore",
     });
 
-    expect(fs.readFileSync(store.storePath, "utf-8")).toBe(preMigrationIndex);
-    const storeConflicts = (restore.targets[0]?.restore?.conflicts ?? []).filter(
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    const restoreReport = expectDefined(
+      restore.targets.find((target) => target.restore)?.restore,
+      "aggregate restore report",
+    );
+    const storeConflicts = restoreReport.conflicts.filter(
       (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
     );
-    expect(storeConflicts).toHaveLength(1);
-    expect(
-      fs.readFileSync(expectDefined(storeConflicts[0], "store conflict").archivePath, "utf-8"),
-    ).toBe(laterIndex);
+    expect(storeConflicts).toHaveLength(2);
+    expect(new Set(storeConflicts.map((conflict) => conflict.reason))).toEqual(
+      new Set(["multiple distinct nonempty session indexes require explicit archive selection"]),
+    );
+    expect(fs.readFileSync(firstArchive, "utf-8")).toBe(preMigrationIndex);
+    expect(fs.readFileSync(secondArchive, "utf-8")).toBe(laterIndex);
+    expect(restore.totals.issues).toBeGreaterThan(0);
+  });
+
+  it("does not hide a missing original archive behind a later empty session index", async () => {
+    const store = createLegacyStore();
+    const firstImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const firstArchive = expectDefined(
+      readMigrationManifest(firstImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "first legacy archive move",
+    ).archivePath;
+    fs.rmSync(firstArchive);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2);
+    });
+    fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
+    const secondImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const secondArchive = expectDefined(
+      readMigrationManifest(secondImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "second legacy archive move",
+    ).archivePath;
+
+    const restore = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: {},
+      env: store.env,
+      mode: "restore",
+    });
+
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    expect(fs.readFileSync(secondArchive, "utf-8")).toBe("{}\n");
+    const restoreReport = expectDefined(
+      restore.targets.find((target) => target.restore)?.restore,
+      "aggregate restore report",
+    );
+    const storeConflicts = restoreReport.conflicts.filter(
+      (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
+    );
+    expect(storeConflicts).toHaveLength(2);
+    expect(storeConflicts.map((conflict) => conflict.reason)).toEqual(
+      expect.arrayContaining([
+        "archive is missing without a recorded prior restore; refusing another candidate",
+        "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
+      ]),
+    );
+  });
+
+  it("does not replace an invalid original archive with a later empty session index", async () => {
+    const store = createLegacyStore();
+    const firstImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const firstArchive = expectDefined(
+      readMigrationManifest(firstImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "first legacy archive move",
+    ).archivePath;
+    fs.writeFileSync(firstArchive, "{broken", { mode: 0o600 });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2);
+    });
+    fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
+    const secondImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const secondArchive = expectDefined(
+      readMigrationManifest(secondImport.migrationRun?.manifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "second legacy archive move",
+    ).archivePath;
+
+    const restore = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: {},
+      env: store.env,
+      mode: "restore",
+    });
+
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    expect(fs.readFileSync(firstArchive, "utf-8")).toBe("{broken");
+    expect(fs.readFileSync(secondArchive, "utf-8")).toBe("{}\n");
+    const restoreReport = expectDefined(
+      restore.targets.find((target) => target.restore)?.restore,
+      "aggregate restore report",
+    );
+    const storeConflicts = restoreReport.conflicts.filter(
+      (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
+    );
+    expect(storeConflicts).toHaveLength(2);
+    expect(storeConflicts.map((conflict) => conflict.reason)).toEqual(
+      expect.arrayContaining([
+        "session index archive is not valid JSON; refusing automatic selection",
+        "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
+      ]),
+    );
   });
 
   it("keeps restore clean when a later migration re-archived an already restored path", async () => {
     const store = createLegacyStore();
-    await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+    const firstImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const firstManifestPath = requireMigrationManifestPath(firstImport.migrationRun?.manifestPath);
+    const firstArchive = expectDefined(
+      readMigrationManifest(firstManifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "first legacy archive move",
+    ).archivePath;
     await runDoctorSessionSqlite({ allAgents: true, cfg: {}, env: store.env, mode: "restore" });
+    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
+      firstArchive,
+    );
+    // Shipped manifests recorded only restored source paths. Exercise the additive-field upgrade
+    // path instead of relying only on provenance written by this version.
+    const shippedManifest = readMigrationManifest(firstManifestPath);
+    if (shippedManifest.restore) {
+      delete shippedManifest.restore.consumedArchives;
+    }
+    fs.writeFileSync(firstManifestPath, `${JSON.stringify(shippedManifest, null, 2)}\n`, {
+      mode: 0o600,
+    });
     await new Promise((resolve) => {
       setTimeout(resolve, 2);
     });
-    await runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
+    const secondImport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const secondManifestPath = requireMigrationManifestPath(
+      secondImport.migrationRun?.manifestPath,
+    );
+    const secondArchive = expectDefined(
+      readMigrationManifest(secondManifestPath).targets[0]?.plannedMoves.find(
+        (move) => move.kind === "legacy-store",
+      ),
+      "second legacy archive move",
+    ).archivePath;
 
     const restore = await runDoctorSessionSqlite({
       allAgents: true,
@@ -1402,6 +1584,12 @@ describe("runDoctorSessionSqlite", () => {
       canonicalTestPath(store.storePath),
     );
     expect(fs.readFileSync(store.storePath, "utf-8")).toContain("agent:main:main");
+    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
+      firstArchive,
+    );
+    expect(readMigrationManifest(secondManifestPath).restore?.consumedArchives).toContain(
+      secondArchive,
+    );
   });
 
   it("rejects malformed restore manifests without throwing", () => {
