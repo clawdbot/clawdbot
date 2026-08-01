@@ -9,7 +9,7 @@ describe("cua-computer plugin registration", () => {
   it("registers the screen and dangerous computer node-host commands", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     plugin.register({
-      pluginConfig: { driverPath: "cua-driver" },
+      pluginConfig: {},
       registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => commands.push(command),
     } as unknown as OpenClawPluginApi);
 
