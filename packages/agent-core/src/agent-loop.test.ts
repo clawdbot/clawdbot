@@ -1943,6 +1943,16 @@ describe("agentLoop tool termination", () => {
 
     expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
 
+    // Invariant: every remaining tool_use must have a matching tool_result.
+    const resultIds = new Set(
+      messages
+        .filter((m) => m.role === "toolResult")
+        .map((m) => (m as Extract<AgentMessage, { role: "toolResult" }>).toolCallId),
+    );
+    for (const call of remainingCalls) {
+      expect(resultIds.has(call.id)).toBe(true);
+    }
+
     // Boundary proof: the turn_end event consumer (persistence / session writer)
     // must observe the cleaned context, not the pre-repair state. Before the fix
     // orphaned tool_c was still present in the emitted message because cleanup ran
@@ -2079,6 +2089,16 @@ describe("agentLoop tool termination", () => {
     ).content.filter((c) => c.type === "toolCall");
     expect(emittedCalls).toHaveLength(2);
     expect(emittedCalls.map((c) => c.name).toSorted()).toEqual(["p_tool_a", "p_tool_b"]);
+
+    // Every remaining tool_use must have a matching tool_result.
+    const pResultIds = new Set(
+      messages
+        .filter((m) => m.role === "toolResult")
+        .map((m) => (m as Extract<AgentMessage, { role: "toolResult" }>).toolCallId),
+    );
+    for (const call of remainingCalls) {
+      expect(pResultIds.has(call.id)).toBe(true);
+    }
 
     expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
   });
