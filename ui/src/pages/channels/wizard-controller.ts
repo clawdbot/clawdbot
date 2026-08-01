@@ -38,7 +38,6 @@ async function requestWithTimeout<T>(
   }
 }
 
-export type ChannelWizardStepOption = NonNullable<WizardStep["options"]>[number];
 export type ChannelWizardStep = WizardStep;
 
 type WizardNextResult = {

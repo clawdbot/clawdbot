@@ -3,15 +3,12 @@
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
-import type {
-  ChannelWizardState,
-  ChannelWizardStep,
-  ChannelWizardStepOption,
-} from "./wizard-controller.ts";
+import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
@@ -29,10 +26,6 @@ type ChannelWizardViewProps = {
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
 };
-
-function stepKeyboardValue(step: ChannelWizardStep): string {
-  return typeof step.initialValue === "string" ? step.initialValue : "";
-}
 
 function stepIsBusy(props: ChannelWizardViewProps): boolean {
   return props.wizard.phase === "step" && props.wizard.busy;
@@ -72,151 +65,20 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   `;
 }
 
-function renderSelectStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
-  const options = step.options ?? [];
-  const selectedIndex = options.findIndex((option) => option.value === step.initialValue);
-  return html`
-    <wa-radio-group
-      class="channels-wizard__options"
-      label=${step.message ?? ""}
-      orientation="vertical"
-      .value=${selectedIndex >= 0 ? String(selectedIndex) : null}
-      ?disabled=${stepIsBusy(props)}
-      @change=${(event: Event) => {
-        const rawIndex = (event.currentTarget as HTMLElement & { value?: string | number | null })
-          .value;
-        const option = options[Number(rawIndex)];
-        if (option) {
-          props.onAnswer(option.value);
-        }
-      }}
-    >
-      ${options.map(
-        (option: ChannelWizardStepOption, index) => html`
-          <wa-radio
-            class="channels-wizard__option"
-            appearance="button"
-            value=${String(index)}
-            .checked=${index === selectedIndex}
-          >
-            <span class="channels-wizard__option-label">${option.label}</span>
-            ${option.hint
-              ? html`<span class="channels-wizard__option-hint">${option.hint}</span>`
-              : nothing}
-          </wa-radio>
-        `,
-      )}
-    </wa-radio-group>
-  `;
-}
-
-function renderMultiselectStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
-  const options = step.options ?? [];
-  const selected = new Set(props.multiselectValues);
-  return html`
-    <div class="channels-wizard__message">${step.message ?? ""}</div>
-    <div class="channels-wizard__options">
-      ${options.map(
-        (option: ChannelWizardStepOption) => html`
-          <button
-            type="button"
-            class="channels-wizard__option"
-            aria-pressed=${selected.has(option.value) ? "true" : "false"}
-            ?disabled=${stepIsBusy(props)}
-            @click=${() => props.onToggleMultiselect(option.value)}
-          >
-            <span class="channels-wizard__option-label">
-              ${selected.has(option.value) ? "☑" : "☐"} ${option.label}
-            </span>
-            ${option.hint
-              ? html`<span class="channels-wizard__option-hint">${option.hint}</span>`
-              : nothing}
-          </button>
-        `,
-      )}
-    </div>
-    <div class="channels-wizard__footer">
-      <button
-        type="button"
-        class="btn primary"
-        ?disabled=${stepIsBusy(props)}
-        @click=${() => props.onAnswer([...props.multiselectValues])}
-      >
-        ${t("channels.setup.continue")}
-      </button>
-    </div>
-  `;
-}
-
-function renderTextStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
-  const submit = (event: Event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const input = form.elements.namedItem("wizard-text") as HTMLInputElement | null;
-    props.onAnswer(input?.value ?? "");
-  };
-  return html`
-    <form @submit=${submit}>
-      <div class="channels-wizard__message">
-        <label for="channel-wizard-text-input">${step.message ?? ""}</label>
-      </div>
-      <input
-        id="channel-wizard-text-input"
-        class="input"
-        style="margin-top: 10px; width: 100%;"
-        name="wizard-text"
-        type=${step.sensitive ? "password" : "text"}
-        autocomplete=${step.sensitive ? "off" : "on"}
-        placeholder=${step.placeholder ?? ""}
-        .value=${stepKeyboardValue(step)}
-        ?disabled=${stepIsBusy(props)}
-      />
-      <div class="channels-wizard__footer" style="margin-top: 12px;">
-        <button type="submit" class="btn primary" ?disabled=${stepIsBusy(props)}>
-          ${t("channels.setup.continue")}
-        </button>
-      </div>
-    </form>
-  `;
-}
-
-function renderConfirmStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
-  return html`
-    <div class="channels-wizard__message">${step.message ?? ""}</div>
-    <div class="channels-wizard__footer">
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${stepIsBusy(props)}
-        @click=${() => props.onAnswer(false)}
-      >
-        ${t("common.no")}
-      </button>
-      <button
-        type="button"
-        class="btn primary"
-        ?disabled=${stepIsBusy(props)}
-        @click=${() => props.onAnswer(true)}
-      >
-        ${t("common.yes")}
-      </button>
-    </div>
-  `;
-}
-
 function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) {
-  switch (step.type) {
-    case "select":
-      return renderSelectStep(step, props);
-    case "multiselect":
-      return renderMultiselectStep(step, props);
-    case "text":
-      return renderTextStep(step, props);
-    case "confirm":
-      return renderConfirmStep(step, props);
-    default:
-      return renderNoteStep(step, props);
+  if (step.type === "note" || step.type === "progress" || step.type === "action") {
+    return renderNoteStep(step, props);
   }
+  return renderWizardStepControls({
+    step,
+    value: step.type === "multiselect" ? props.multiselectValues : step.initialValue,
+    busy: stepIsBusy(props),
+    inputId: "channel-wizard-text-input",
+    presentation: "channels",
+    answerLabel: t("channels.setup.continue"),
+    onValueChange: props.onToggleMultiselect,
+    onAnswer: props.onAnswer,
+  });
 }
 
 function renderWhatsAppLinking(props: ChannelWizardViewProps) {
@@ -285,23 +147,17 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   if (channels.includes("whatsapp")) {
     return renderWhatsAppLinking(props);
   }
-  if (channels.length === 0) {
-    return html`
-      <div class="channels-wizard__message">${t("channels.setup.doneNoChangesTitle")}</div>
-      <div class="channels-wizard__note">${t("channels.setup.doneNoChangesBody")}</div>
-      <div class="channels-wizard__footer">
-        <button type="button" class="btn primary" @click=${() => props.onClose()}>
-          ${t("common.close")}
-        </button>
-      </div>
-    `;
-  }
+  const changed = channels.length > 0;
   return html`
-    <div class="channels-wizard__message">${t("channels.setup.doneTitle")}</div>
-    <div class="channels-wizard__note">${t("channels.setup.doneBody")}</div>
+    <div class="channels-wizard__message">
+      ${t(changed ? "channels.setup.doneTitle" : "channels.setup.doneNoChangesTitle")}
+    </div>
+    <div class="channels-wizard__note">
+      ${t(changed ? "channels.setup.doneBody" : "channels.setup.doneNoChangesBody")}
+    </div>
     <div class="channels-wizard__footer">
       <button type="button" class="btn primary" @click=${() => props.onClose()}>
-        ${t("channels.setup.finish")}
+        ${t(changed ? "channels.setup.finish" : "common.close")}
       </button>
     </div>
   `;
