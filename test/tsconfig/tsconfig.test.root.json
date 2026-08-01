@@ -5,7 +5,12 @@
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/test-root.tsbuildinfo"
   },
-  "include": ["../../test/**/*", "../../src/**/*.d.ts", "../../packages/**/*.d.ts"],
+  "include": [
+    "../../test/**/*",
+    "../../src/**/*.d.ts",
+    "../../packages/**/*.d.ts",
+    "../../ui/**/*.d.ts"
+  ],
   "exclude": [
     "../../node_modules",
     "../../dist",

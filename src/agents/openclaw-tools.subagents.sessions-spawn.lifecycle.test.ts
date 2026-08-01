@@ -85,7 +85,7 @@ function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
 
 async function getDiscordGroupSpawnTool() {
   return await getSessionsSpawnTool({
-    agentSessionKey: "discord:group:req",
+    agentSessionKey: "agent:main:discord:group:req",
     agentChannel: "discord",
   });
 }
@@ -254,7 +254,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
 
@@ -315,7 +315,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
     });
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
     setSessionsSpawnConfigOverride({
@@ -361,7 +361,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
 
@@ -543,13 +543,16 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       "timeout outcome",
       () =>
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
-        getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status === "timeout",
+        getLatestSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome?.status ===
+          "timeout",
     );
     await waitForRunCleanup(childSessionKey);
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
-    expect(getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status).toBe("timeout");
+    expect(getLatestSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome?.status).toBe(
+      "timeout",
+    );
   });
 
   it("sessions_spawn uses the target agent's bound account for a Matrix room-bound route", async () => {
@@ -559,7 +562,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         callId: "call-bound-account",
         agentId: "bot-alpha",
         context: {
-          agentSessionKey: "main",
+          agentSessionKey: "agent:main:main",
           agentChannel: "matrix",
           agentAccountId: "bot-beta",
           agentTo: boundRoom,
@@ -586,7 +589,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const ctx = setupSessionsSpawnGatewayMock({});
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
       agentAccountId: "kev",
     });

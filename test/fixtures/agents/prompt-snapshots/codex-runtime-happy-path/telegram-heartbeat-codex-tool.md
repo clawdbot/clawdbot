@@ -512,7 +512,7 @@ Follow the heartbeat monitor scratch context when provided. Recurring tasks are 
 
 ### Tools: Dynamic Tool Catalog
 
-Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
+Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 
 ## Dynamic Tool Names
 

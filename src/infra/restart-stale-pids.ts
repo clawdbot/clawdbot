@@ -21,7 +21,10 @@ import {
   type WindowsListeningPidsResult,
 } from "./windows-port-pids.js";
 
-const SPAWN_TIMEOUT_MS = 2000;
+// macOS lsof needs seconds on hosts with many mounted volumes; keep that
+// allowance separate so process and ancestor probes retain their tighter bound.
+const INITIAL_LSOF_TIMEOUT_MS = 5000;
+const PROCESS_INSPECTION_TIMEOUT_MS = 2000;
 const STALE_SIGTERM_WAIT_MS = 600;
 const STALE_SIGKILL_WAIT_MS = 400;
 /**
@@ -31,7 +34,7 @@ const STALE_SIGKILL_WAIT_MS = 400;
  * `systemctl restart`). Without this wait the new process races the dying
  * process for the port and systemd enters an EADDRINUSE restart loop.
  *
- * POLL_SPAWN_TIMEOUT_MS is intentionally much shorter than SPAWN_TIMEOUT_MS
+ * POLL_SPAWN_TIMEOUT_MS is intentionally much shorter than the initial scan
  * so that a single slow or hung lsof invocation does not consume the entire
  * polling budget. At 400 ms per call, up to five independent lsof attempts
  * fit within PORT_FREE_TIMEOUT_MS = 2000 ms, each with a definitive outcome.
@@ -154,7 +157,9 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * `/proc/<pid>/status` payloads) — there is no reachable override for
  * runtime callers to mutate.
  */
-export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
+export function getSelfAndAncestorPidsSync(
+  spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
+): Set<number> {
   const pids = new Set<number>([process.pid]);
   const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
@@ -202,7 +207,7 @@ function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: numbe
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
  * a virtual-filesystem access (no disk I/O, no external process), wrapped
  * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
- * with the caller's spawn timeout. Windows only uses the in-memory direct
+ * with the process-inspection timeout. Windows only uses the in-memory direct
  * parent from `process.ppid`.
  */
 function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
@@ -295,7 +300,7 @@ function parsePidsFromLsofOutput(
  * `getSelfAndAncestorPidsSync`).
  */
 function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: number): number[] {
-  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
+  const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
@@ -309,7 +314,7 @@ function filterVerifiedWindowsGatewayPidsResult(
   processArgsResult: (pid: number) => WindowsProcessArgsResult,
   protectedPid?: number,
 ): WindowsListeningPidsResult {
-  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
+  const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   const verified: number[] = [];
   for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
@@ -364,7 +369,8 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(
 
 function findGatewayPidsOnPortWithProtectedPidSync(
   port: number,
-  spawnTimeoutMs: number,
+  lsofTimeoutMs: number,
+  processInspectionTimeoutMs: number,
   options?: CleanStaleGatewayProcessesOptions,
 ): number[] {
   if (process.platform === "win32") {
@@ -375,7 +381,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
     encoding: "utf8",
-    timeout: spawnTimeoutMs,
+    timeout: lsofTimeoutMs,
   });
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
@@ -404,7 +410,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   }
   return parsePidsFromLsofOutput(
     res.stdout,
-    spawnTimeoutMs,
+    processInspectionTimeoutMs,
     resolveProtectedPidAfterEnumeration(options),
   );
 }
@@ -413,11 +419,14 @@ function findGatewayPidsOnPortWithProtectedPidSync(
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
-export function findGatewayPidsOnPortSync(
-  port: number,
-  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
-): number[] {
-  return findGatewayPidsOnPortWithProtectedPidSync(port, spawnTimeoutMs);
+export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number): number[] {
+  // An explicit timeout keeps the existing contract: it bounds every child
+  // process used by this probe. Only the default path splits slow lsof from ps.
+  return findGatewayPidsOnPortWithProtectedPidSync(
+    port,
+    spawnTimeoutMs ?? INITIAL_LSOF_TIMEOUT_MS,
+    spawnTimeoutMs ?? PROCESS_INSPECTION_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -657,7 +666,12 @@ export function cleanStaleGatewayProcessesSync(
             waitForPortFreeSync(port);
             return [];
           })()
-        : findGatewayPidsOnPortWithProtectedPidSync(port, SPAWN_TIMEOUT_MS, options);
+        : findGatewayPidsOnPortWithProtectedPidSync(
+            port,
+            INITIAL_LSOF_TIMEOUT_MS,
+            PROCESS_INSPECTION_TIMEOUT_MS,
+            options,
+          );
     if (stalePids.length === 0) {
       return [];
     }

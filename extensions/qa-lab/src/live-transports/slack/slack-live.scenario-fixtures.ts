@@ -77,6 +77,24 @@ type SlackProgressCommentaryExpectation = {
   toolProgress: "absent" | "draft" | "standalone";
 };
 
+function observedSlackText(message: { blockText?: string[]; text: string }) {
+  return [message.text, ...(message.blockText ?? [])].join("\n");
+}
+
+function hasSlackCommentaryLaneMarker(
+  message: { blockText?: string[]; text: string },
+  marker: string,
+) {
+  if (message.text.includes(`💬 ${marker}`)) {
+    return true;
+  }
+  const blockText = message.blockText ?? [];
+  return (
+    blockText.some((text) => text.trim() === "Update") &&
+    blockText.some((text) => text.includes(marker))
+  );
+}
+
 export function buildSlackProgressCommentaryRun(
   sutUserId: string,
   expectation: SlackProgressCommentaryExpectation,
@@ -104,9 +122,11 @@ export function buildSlackProgressCommentaryRun(
       if ((finalMessage.text ?? "").trim() !== finalMarker) {
         throw new Error("expected the Slack final answer to contain only the final marker");
       }
-      const progressMessages = messages.filter((message) => !message.text.includes(finalMarker));
+      const progressMessages = messages.filter(
+        (message) => !observedSlackText(message).includes(finalMarker),
+      );
       const commentaryMessages = progressMessages.filter((message) =>
-        message.text.includes(commentaryMarker),
+        observedSlackText(message).includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
       const [commentaryTs] = commentaryTimestamps;
@@ -120,7 +140,7 @@ export function buildSlackProgressCommentaryRun(
       }
       const commentaryLaneTimestamps = new Set(
         commentaryMessages
-          .filter((message) => message.text.includes(`💬 ${commentaryMarker}`))
+          .filter((message) => hasSlackCommentaryLaneMarker(message, commentaryMarker))
           .map((message) => message.ts),
       );
       if (
@@ -138,7 +158,7 @@ export function buildSlackProgressCommentaryRun(
       }
       const toolTimestamps = new Set(
         progressMessages
-          .filter((message) => message.text.includes(toolMarker))
+          .filter((message) => observedSlackText(message).includes(toolMarker))
           .map((message) => message.ts),
       );
       if (expectation.toolProgress === "draft") {

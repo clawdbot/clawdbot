@@ -202,24 +202,56 @@ function resolveGoogleRealtimeEnvApiKey(): string | undefined {
 }
 
 const GOOGLE_REALTIME_LAZY_MAX_PENDING_AUDIO_CHUNKS = 320;
+const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES = 128;
+const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES = 256 * 1024;
 
 function createLazyGoogleRealtimeVoiceBridge(
   req: RealtimeVoiceBridgeCreateRequest,
 ): RealtimeVoiceBridge {
   let bridge: RealtimeVoiceBridge | undefined;
   let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
+  let bridgeReady = false;
+  let bridgeClosed = false;
   let closed = false;
   let latestMediaTimestamp: number | undefined;
   let pendingGreeting: string | undefined;
   const pendingAudio: Buffer[] = [];
   const pendingUserMessages: string[] = [];
+  let pendingUserMessageBytes = 0;
+  // Loading and connecting finish on separate async boundaries. Keep close ownership
+  // here so either late completion closes the provider bridge exactly once.
+  const closeBridge = (loadedBridge = bridge) => {
+    if (!loadedBridge || bridgeClosed) {
+      return;
+    }
+    bridgeClosed = true;
+    loadedBridge.close();
+  };
   const loadBridge = async () => {
     if (!bridgePromise) {
       bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
-        provider.createBridge(req),
+        provider.createBridge({
+          ...req,
+          onReady: () => {
+            if (closed) {
+              return;
+            }
+            req.onReady?.();
+            if (closed || !bridge) {
+              return;
+            }
+            bridgeReady = true;
+            // `connect()` and provider readiness are separate lifecycle facts.
+            // Release prompts only after the provider can accept user content.
+            flushPending(bridge);
+          },
+        }),
       );
     }
     bridge = await bridgePromise;
+    if (closed) {
+      closeBridge(bridge);
+    }
     return bridge;
   };
   const requireBridge = () => {
@@ -229,13 +261,18 @@ function createLazyGoogleRealtimeVoiceBridge(
     return bridge;
   };
   const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
+    if (closed) {
+      return;
+    }
     if (typeof latestMediaTimestamp === "number") {
       loadedBridge.setMediaTimestamp(latestMediaTimestamp);
     }
     for (const audio of pendingAudio.splice(0)) {
       loadedBridge.sendAudio(audio);
     }
-    for (const text of pendingUserMessages.splice(0)) {
+    const userMessages = pendingUserMessages.splice(0);
+    pendingUserMessageBytes = 0;
+    for (const text of userMessages) {
       loadedBridge.sendUserMessage?.(text);
     }
     if (pendingGreeting !== undefined) {
@@ -252,45 +289,64 @@ function createLazyGoogleRealtimeVoiceBridge(
     connect: async () => {
       const loadedBridge = await loadBridge();
       if (closed) {
-        loadedBridge.close();
+        closeBridge(loadedBridge);
         return;
       }
       await loadedBridge.connect();
-      flushPending(loadedBridge);
+      if (closed) {
+        closeBridge(loadedBridge);
+      }
     },
     sendAudio: (audio) => {
+      if (closed) {
+        return;
+      }
       if (bridge) {
         bridge.sendAudio(audio);
         return;
       }
-      if (!closed) {
-        if (pendingAudio.length >= GOOGLE_REALTIME_LAZY_MAX_PENDING_AUDIO_CHUNKS) {
-          pendingAudio.shift();
-        }
-        pendingAudio.push(audio);
+      if (pendingAudio.length >= GOOGLE_REALTIME_LAZY_MAX_PENDING_AUDIO_CHUNKS) {
+        pendingAudio.shift();
       }
+      pendingAudio.push(audio);
     },
     setMediaTimestamp: (ts) => {
+      if (closed) {
+        return;
+      }
       latestMediaTimestamp = ts;
       bridge?.setMediaTimestamp(ts);
     },
     sendUserMessage: (text) => {
-      if (bridge) {
+      if (closed) {
+        return;
+      }
+      if (bridgeReady && bridge) {
         bridge.sendUserMessage?.(text);
         return;
       }
-      if (!closed) {
-        pendingUserMessages.push(text);
+      const messageBytes = Buffer.byteLength(text, "utf8");
+      if (
+        pendingUserMessages.length >= GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES ||
+        pendingUserMessageBytes + messageBytes > GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES
+      ) {
+        req.onError?.(
+          new Error("Google realtime voice pending user message queue overflow during startup"),
+        );
+        return;
       }
+      pendingUserMessages.push(text);
+      pendingUserMessageBytes += messageBytes;
     },
     triggerGreeting: (instructions) => {
-      if (bridge) {
+      if (closed) {
+        return;
+      }
+      if (bridgeReady && bridge) {
         bridge.triggerGreeting?.(instructions);
         return;
       }
-      if (!closed) {
-        pendingGreeting = instructions;
-      }
+      pendingGreeting = instructions;
     },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     submitToolResult: (callId, result, options) =>
@@ -298,10 +354,12 @@ function createLazyGoogleRealtimeVoiceBridge(
     acknowledgeMark: () => requireBridge().acknowledgeMark(),
     close: () => {
       closed = true;
+      bridgeReady = false;
       pendingAudio.length = 0;
       pendingUserMessages.length = 0;
+      pendingUserMessageBytes = 0;
       pendingGreeting = undefined;
-      bridge?.close();
+      closeBridge();
     },
     isConnected: () => bridge?.isConnected() ?? false,
   };

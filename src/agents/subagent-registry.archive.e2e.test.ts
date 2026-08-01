@@ -87,8 +87,13 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.test-helpers.js");
+  let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
+  let createSubagentRunRecord: typeof import("./subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
 
   beforeAll(async () => {
+    ({ createCanonicalSubagentRunFixture } =
+      await import("./subagent-registry.persistence.test-support.js"));
+    ({ createSubagentRunRecord } = await import("./subagent-test-fixtures.test-helpers.js"));
     mod = await import("./subagent-registry.test-helpers.js");
   });
 
@@ -99,8 +104,18 @@ describe("subagent registry archive behavior", () => {
       callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       ensureRuntimePluginsLoaded: vi.fn(),
+      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
+        params.completeBatch([params.settledEntry.runId]);
+        return false;
+      }),
       ...overrides,
     });
+  };
+
+  const addCanonicalSubagentRunForTests = (
+    entry: Parameters<typeof mod.addSubagentRunForTests>[0],
+  ) => {
+    mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(createSubagentRunRecord(entry)));
   };
 
   const waitForNoRequesterRuns = async () => {
@@ -281,7 +296,7 @@ describe("subagent registry archive behavior", () => {
       resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
     });
 
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-delete-retry",
       childSessionKey: "agent:main:subagent:delete-retry",
       requesterSessionKey: "agent:main:main",
@@ -312,7 +327,7 @@ describe("subagent registry archive behavior", () => {
 
   it("stabilizes provisional killed tasks before deleting expired tombstones", async () => {
     const now = Date.now();
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-tombstone-expired",
       childSessionKey: "agent:main:subagent:killed-tombstone-expired",
       requesterSessionKey: "agent:main:main",
@@ -350,7 +365,7 @@ describe("subagent registry archive behavior", () => {
   it("retains expired tombstones when provisional task finalization is rejected", async () => {
     const now = Date.now();
     taskRuntimeMocks.finalizeTaskRunByRunId.mockReturnValueOnce([]);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-tombstone-retry",
       childSessionKey: "agent:main:subagent:killed-tombstone-retry",
       requesterSessionKey: "agent:main:main",
@@ -383,7 +398,7 @@ describe("subagent registry archive behavior", () => {
   it("retires expired tombstones when their task row is already gone", async () => {
     const now = Date.now();
     taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-task-missing",
       childSessionKey: "agent:main:subagent:killed-task-missing",
       requesterSessionKey: "agent:main:main",
@@ -419,7 +434,7 @@ describe("subagent registry archive behavior", () => {
       status: "cancelled",
       error: "Cancelled by operator.",
     } as never);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-operator-cancelled",
       childSessionKey: "agent:main:subagent:killed-operator-cancelled",
       requesterSessionKey: "agent:main:main",
@@ -455,7 +470,7 @@ describe("subagent registry archive behavior", () => {
       status: "cancelled",
       error: "Cancelled by operator.",
     } as never);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-grace",
       childSessionKey: "agent:main:subagent:killed-grace",
       requesterSessionKey: "agent:main:main",
@@ -487,7 +502,7 @@ describe("subagent registry archive behavior", () => {
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
     taskRuntimeMocks.finalizeTaskRunByRunId.mockReturnValueOnce([]);
     const now = Date.now();
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-opaque-runtime",
       childSessionKey: "agent:main:subagent:killed-opaque-runtime",
       requesterSessionKey: "agent:main:main",
@@ -525,7 +540,7 @@ describe("subagent registry archive behavior", () => {
         createdAt: now - 11 * 60_000,
       },
     ] as never);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-after-replacement",
       childSessionKey: "agent:main:subagent:replacement",
       requesterSessionKey: "agent:main:main",
@@ -570,7 +585,7 @@ describe("subagent registry archive behavior", () => {
         createdAt: now - 11 * 60_000,
       },
     ] as never);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-after-replacement-direct-kill",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -610,7 +625,7 @@ describe("subagent registry archive behavior", () => {
         createdAt: now - 60_000,
       },
     ] as never);
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-old-generation",
       childSessionKey: "agent:main:subagent:reused-session",
       requesterSessionKey: "agent:main:main",
@@ -640,7 +655,7 @@ describe("subagent registry archive behavior", () => {
 
   it("retires expired keep-mode reconciliation rows without deleting their sessions", async () => {
     const now = Date.now();
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-keep-expired",
       childSessionKey: "agent:main:subagent:killed-keep-expired",
       requesterSessionKey: "agent:main:main",
@@ -675,7 +690,7 @@ describe("subagent registry archive behavior", () => {
   it("stabilizes killed tasks before their configured session archive deadline", async () => {
     const now = Date.now();
     const archiveAtMs = now + 55 * 60_000;
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-retained-session",
       childSessionKey: "agent:main:subagent:killed-retained-session",
       requesterSessionKey: "agent:main:main",
@@ -719,7 +734,7 @@ describe("subagent registry archive behavior", () => {
         throw new Error("plugin load failed");
       }),
     });
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-killed-hook-load-failure",
       childSessionKey: "agent:main:subagent:killed-hook-load-failure",
       requesterSessionKey: "agent:main:main",
@@ -761,7 +776,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
 
-    mod.addSubagentRunForTests({
+    addCanonicalSubagentRunForTests({
       runId: "run-delete-inflight",
       childSessionKey: "agent:main:subagent:delete-inflight",
       requesterSessionKey: "agent:main:main",

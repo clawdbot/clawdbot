@@ -170,6 +170,46 @@
       }
     },
     {
+      "name": "@openclaw/duckduckgo-plugin",
+      "description": "OpenClaw DuckDuckGo plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "duckduckgo",
+          "label": "DuckDuckGo"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "duckduckgo"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "duckduckgo",
+            "label": "DuckDuckGo Search (experimental)",
+            "hint": "Free web search fallback with no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://duckduckgo.com/",
+            "docsUrl": "https://docs.openclaw.ai/tools/duckduckgo-search",
+            "credentialPath": "",
+            "autoDetectOrder": 100
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/duckduckgo-plugin",
+          "npmSpec": "@openclaw/duckduckgo-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/exa-plugin",
       "description": "OpenClaw Exa plugin.",
       "source": "official",

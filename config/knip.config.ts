@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
+  // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
+  "scripts/docker-e2e.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -169,7 +171,6 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
-  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -368,6 +369,17 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Registry facades retain direct registration/reset compatibility seams used by focused
+    // tests; the full-tree scan still audits every named export against those consumers.
+    "src/agents/harness/registry.ts": ["exports"],
+    "src/context-engine/registry.ts": ["exports", "types"],
+    "src/plugins/command-registration.ts": ["exports"],
+    "src/plugins/compaction-provider.ts": ["exports"],
+    "src/plugins/interactive-registry.ts": ["exports"],
+    "src/plugins/loader-module-runtime.ts": ["exports"],
+    "src/plugins/memory-state.ts": ["exports", "types"],
+    "src/plugins/session-discussion-registry.ts": ["exports"],
+    "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],

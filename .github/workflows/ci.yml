@@ -1063,6 +1063,7 @@ jobs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
       gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
+      tui-pty-result: ${{ steps.built_artifact_checks.outputs['tui-pty-result'] }}
     steps:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
@@ -1193,6 +1194,7 @@ jobs:
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
         shell: bash
         run: |
           set -uo pipefail
@@ -1204,6 +1206,7 @@ jobs:
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
             ["gateway-watch"]="skipped"
+            ["tui-pty"]="skipped"
           )
 
           start_check() {
@@ -1254,6 +1257,15 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
+          if [ "$RUN_TUI_PTY" = "true" ]; then
+            start_check "tui-pty" env \
+              NODE_OPTIONS=--max-old-space-size=8192 \
+              OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
+              OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
+              OPENCLAW_VITEST_MAX_WORKERS=2 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+          fi
+
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
               node scripts/check-gateway-watch-regression.mjs --skip-build
@@ -1269,12 +1281,12 @@ jobs:
             wait_checks
           fi
 
-          for name in channels core-support-boundary gateway-watch; do
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
 
           failures=0
-          for name in channels core-support-boundary gateway-watch; do
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -2266,11 +2278,18 @@ jobs:
               # The i18n verify covers keys extracted from every ui/ source,
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
+              lint_args=(--threads=8)
+              if [ "$(nproc)" -lt 8 ]; then
+                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
+                # the core process size and its threads so type-aware oxlint
+                # does not intermittently lose the runner under memory pressure.
+                lint_args=(--split-core --threads=1)
+              fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint --threads=8
+                pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs --threads=8
+                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -3434,6 +3453,12 @@ jobs:
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+
+      - name: Setup Node environment for native resources
+        if: needs.preflight.outputs.compatibility_target != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache

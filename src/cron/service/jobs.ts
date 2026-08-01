@@ -302,9 +302,9 @@ export function applyJobPatch(
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
       if (explicitStaggerMs !== undefined) {
         job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
-      } else if (job.schedule.kind === "cron") {
-        // Preserve an existing explicit stagger when editing only the cron
-        // expression; otherwise a patch could silently change fire timing.
+      } else if (job.schedule.kind === "cron" && job.schedule.expr === patch.schedule.expr) {
+        // Metadata-only resaves keep the existing stagger, but a replacement
+        // expression owns a fresh default and must not inherit stale timing.
         job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);

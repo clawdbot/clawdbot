@@ -29,6 +29,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { readFileWindowFullySync } from "./file-read.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
@@ -434,7 +435,7 @@ export function resolveStaleLegacySessionFile(params: {
     const fd = fs.openSync(targetSessionFile, "r");
     try {
       const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
       if (bytesRead <= 0) {
         return undefined;
       }
@@ -884,8 +885,8 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
-    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
-      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
+      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
     );
     if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
       warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));

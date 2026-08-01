@@ -16,6 +16,7 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
@@ -354,6 +355,36 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
   );
 }
 
+function resolveCurrentSourceMessagingToolPartial(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "currentSourceMessagingToolHeldPartial" | "currentSourceMessagingToolSentTextsNormalized"
+  >,
+  params: {
+    evtType: "text_delta" | "text_start" | "text_end";
+    text: string;
+    visibleDelta: string;
+  },
+): { hold: boolean; text: string } {
+  const held = state.currentSourceMessagingToolHeldPartial;
+  const text =
+    held && params.evtType === "text_delta" && !params.text.startsWith(held)
+      ? `${held}${params.visibleDelta || params.text}`
+      : params.text;
+  const normalized = normalizeTextForComparison(text);
+  if (!normalized) {
+    state.currentSourceMessagingToolHeldPartial = undefined;
+    return { hold: false, text };
+  }
+  // A confirmed current-source tool send already made this prefix visible.
+  // Hold it until the assistant either repeats the sent text or diverges with new content.
+  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
+    (sentText) => sentText === normalized || sentText.startsWith(normalized),
+  );
+  state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
+  return { hold, text };
+}
+
 function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.append(chunk);
@@ -670,8 +701,7 @@ function mergeReplyDirectiveResults(
 }
 
 function parseFullStreamingReplyText(text: string): string {
-  const parsed = parseReplyDirectives(splitTrailingDirective(text).text).text;
-  return stripContinuationSignalFromDisplayText(parsed);
+  return stripContinuationSignalFromDisplayText(parseReplyDirectives(text).text);
 }
 
 function stripContinuationSignalFromDisplayText(text: string): string {
@@ -885,13 +915,16 @@ function resolveStreamingReplyText(params: {
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
   shouldUsePhaseAwareBlockReply: boolean;
 }): string {
-  if (!params.parsedStreamDirectives) {
-    return params.evtType === "text_delta"
-      ? params.previousCleaned
-      : parseFullStreamingReplyText(params.next);
+  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+    return params.previousCleaned;
   }
 
-  return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
+  return (
+    resolveIncrementalStreamingReplyText(params) ??
+    parseFullStreamingReplyText(
+      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
+    )
+  );
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
@@ -1453,14 +1486,23 @@ export function handleMessageUpdate(
     }
 
     if (shouldEmit) {
+      const currentSourcePartial =
+        ctx.params.sourceReplyDeliveryMode !== "message_tool_only"
+          ? resolveCurrentSourceMessagingToolPartial(ctx.state, {
+              evtType,
+              text: displayText,
+              visibleDelta,
+            })
+          : { hold: false, text: displayText };
+      const releaseHeldSnapshot = currentSourcePartial.text !== displayText;
       const data = buildAssistantStreamData({
-        text: displayText,
-        delta: deltaText,
-        replace,
+        text: currentSourcePartial.text,
+        delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
+        replace: releaseHeldSnapshot || replace,
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
+      ctx.emitAssistantStreamData(data, { emitPartialReply: !currentSourcePartial.hold });
       ctx.state.emittedAssistantUpdate = true;
     }
   } else if (shouldPersistRawStreamText) {
@@ -1505,6 +1547,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = {
     buildAssistantStreamData,
     recordPendingAssistantReplyDirectives,
+    resolveCurrentSourceMessagingToolPartial,
     resolveSilentReplyFallbackText,
   };
 }
@@ -1659,7 +1702,7 @@ export function handleMessageEnd(
     if (!trimmedText) {
       return null;
     }
-    const parsed = parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text);
+    const parsed = parseReplyDirectives(trimmedText);
     const displayText = resolveCommentaryDisplayText(parsed.text, { final: true });
     return displayText === parsed.text ? parsed : { ...parsed, text: displayText };
   })();
@@ -1943,6 +1986,27 @@ export function handleMessageEnd(
     return undefined;
   };
 
+  const consumeFinalReplyDirectives = () => {
+    const bufferedResult = ctx.consumeReplyDirectives("", { final: true });
+    if (!hasMedia || !parsedText) {
+      return bufferedResult;
+    }
+    const bufferedRawText = bufferedResult?.text ?? "";
+    const leadingWhitespace = bufferedRawText.match(/^\s+/u)?.[0] ?? "";
+    const strippedBufferedText = bufferedRawText ? splitMediaFromOutput(bufferedRawText).text : "";
+    const bufferedText =
+      leadingWhitespace &&
+      strippedBufferedText &&
+      !strippedBufferedText.startsWith(leadingWhitespace)
+        ? `${leadingWhitespace}${strippedBufferedText}`
+        : strippedBufferedText;
+    return {
+      ...bufferedResult,
+      ...parsedText,
+      text: bufferedText,
+    };
+  };
+
   const hasBufferedBlockReply = ctx.blockChunker
     ? ctx.blockChunker.hasBuffered()
     : ctx.state.blockBuffer.length > 0;
@@ -2008,7 +2072,7 @@ export function handleMessageEnd(
                   ? finalAssistantText
                   : "",
             }
-          : ctx.consumeReplyDirectives("", { final: true }),
+          : consumeFinalReplyDirectives(),
       );
     } else if (finalAssistantText !== textEndDeliveredVisibleText || finalDirectives.hasMetadata) {
       // Skip only an unchanged text_end delivery. Canonical message_end text

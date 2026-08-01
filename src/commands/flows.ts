@@ -17,6 +17,7 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { formatTaskStatusDetail } from "../tasks/task-status.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
@@ -25,7 +26,7 @@ const REV_PAD = 6;
 const CTRL_PAD = 20;
 
 function formatFlowLookupMiss(lookup: string): string {
-  return `TaskFlow not found: ${lookup}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
+  return `TaskFlow not found: ${sanitizeTerminalText(lookup)}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
 }
 
 function truncate(value: string, maxChars: number) {
@@ -47,11 +48,7 @@ function safeFlowDisplayText(value: string | undefined, maxChars?: number): stri
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "n/a";
-  }
-  return truncate(trimmed, maxChars);
+  return safeFlowDisplayText(normalizeOptionalString(value), maxChars);
 }
 
 function formatFlowTimestamp(value: number | undefined | null): string {
@@ -178,7 +175,7 @@ export async function flowsListCommand(
   runtime.log(info(`TaskFlows: ${flows.length}`));
   runtime.log(info(`TaskFlow pressure: ${formatFlowListSummary(flows)}`));
   if (statusFilter) {
-    runtime.log(info(`Status filter: ${statusFilter}`));
+    runtime.log(info(`Status filter: ${sanitizeTerminalText(statusFilter)}`));
   }
   if (flows.length === 0) {
     runtime.log(
@@ -234,7 +231,7 @@ export async function flowsShowCommand(
     `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
   ];
   for (const line of lines) {
-    runtime.log(line);
+    runtime.log(sanitizeTerminalText(line));
   }
   if (tasks.length === 0) {
     runtime.log("Linked tasks: none");
@@ -243,7 +240,13 @@ export async function flowsShowCommand(
   runtime.log("Linked tasks:");
   for (const task of tasks) {
     const safeLabel = safeFlowDisplayText(task.label ?? task.task);
-    runtime.log(`- ${task.taskId} ${task.status} ${task.runId ?? "n/a"} ${safeLabel}`);
+    const detail = formatTaskStatusDetail(task);
+    const safeDetail = detail ? ` · ${safeFlowDisplayText(detail)}` : "";
+    runtime.log(
+      sanitizeTerminalText(
+        `- ${task.taskId} ${task.status} ${safeFlowDisplayText(task.runId)} ${safeLabel}${safeDetail}`,
+      ),
+    );
   }
 }
 
@@ -260,15 +263,21 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     flowId: flow.flowId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? formatFlowLookupMiss(opts.lookup));
+    runtime.error(sanitizeTerminalText(result.reason ?? formatFlowLookupMiss(opts.lookup)));
     runtime.exit(1);
     return;
   }
   if (!result.cancelled) {
-    runtime.error(result.reason ?? `Could not cancel TaskFlow: ${opts.lookup}`);
+    runtime.error(
+      sanitizeTerminalText(result.reason ?? `Could not cancel TaskFlow: ${opts.lookup}`),
+    );
     runtime.exit(1);
     return;
   }
   const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
-  runtime.log(`Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
+  runtime.log(
+    sanitizeTerminalText(
+      `Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`,
+    ),
+  );
 }

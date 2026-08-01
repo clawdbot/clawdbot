@@ -22,18 +22,21 @@ const localPrepareOptions = [
     brandId: "ollama",
     label: "Ollama",
     hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
   },
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "Local model (llama.cpp)",
     hint: "Download and run a private GGUF model",
+    actionLabel: "Review download",
   },
   {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -383,7 +386,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       expect(new Set(localProviderIconColors).size).toBe(1);
       await page
         .locator('[data-prepare-choice="ollama"]')
-        .getByRole("button", { name: "Check & set up" })
+        .getByRole("button", { name: "Choose connection" })
         .click();
 
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
@@ -479,7 +482,8 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText("ollama/qwen3:0.6b", { exact: true }).waitFor();
+      await currentConnection.getByText("Ollama", { exact: true }).waitFor();
+      await currentConnection.getByText("qwen3:0.6b", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="ollama"]').count())
         .toBe(1);
@@ -868,17 +872,21 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         });
         await page.setViewportSize({ height: 900, width: 1280 });
       }
-      await page.getByRole("button", { name: "Verify connection" }).click();
+      await page.getByRole("button", { name: "Check model" }).click();
       const verify = await gateway.waitForRequest("openclaw.setup.verify");
       expect(verify.params).toEqual({});
-      await page.getByText("Answered in 1234 ms").waitFor();
+      await page.getByText("Ready · 1234 ms").waitFor();
       const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect")).length;
+      const verifyCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.verify")).length;
       await page.getByRole("button", { name: "Check again" }).click();
       await expect
-        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-        .toBe(detectCountBeforeRefresh + 1);
-      await page.getByRole("button", { name: "Verify connection" }).waitFor();
-      expect(await page.getByText("Answered in 1234 ms").count()).toBe(0);
+        .poll(async () => (await gateway.getRequests("openclaw.setup.verify")).length)
+        .toBe(verifyCountBeforeRefresh + 1);
+      expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
+        detectCountBeforeRefresh,
+      );
+      await page.getByRole("button", { name: "Check again" }).waitFor();
+      await page.getByText("Ready · 1234 ms").waitFor();
     } finally {
       await context.close();
     }

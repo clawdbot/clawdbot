@@ -1,11 +1,17 @@
 ---
 name: auto-qa
-description: "Continuously audit, live-test, and stress-test the current OpenClaw codebase across at least ten independently scoped subsystem lanes; reproduce and deduplicate genuine bugs, verify focused fixes, maintain an evidence-backed report, and prepare or land pull requests according to maintainer authorization and risk. Use for OpenClaw-wide autonomous QA, live-provider campaigns, gateway, CLI, web, plugin, native-app, scenario, packaging, and extended soak testing."
+description: "Continuously audit, live-test, and stress-test the current OpenClaw codebase across at least ten independently scoped subsystem lanes; default to 100 independently verified, landed root-cause fixes, maintain an evidence-backed report, and announce each merged pull request immediately. Use for OpenClaw-wide autonomous QA, live-provider campaigns, gateway, CLI, web, plugin, native-app, scenario, packaging, and extended soak testing."
 ---
 
 # OpenClaw Auto QA
 
 Run a continuous, current-`main` OpenClaw product campaign. Treat a reviewer finding as a hypothesis, a passing test as evidence only for its actual head, and a merge as complete only when the canonical repository confirms it. Always prefer a clean, appropriately scoped root-cause refactor over a quick fix or smaller diff. Repair the actual root cause in its canonical owner; a patch is not acceptable when it leaves sibling paths, lifecycle invariants, or the defective abstraction intact.
+
+## Set the campaign goal
+
+- Default to **100 distinct, independently verified, actually merged root-cause fixes** unless the operator explicitly specifies a different target. Count broken invariants, not pull requests, symptoms, proposed patches, skill updates, or merely passing tests.
+- When the operator changes the target during an active campaign, update the existing report, numbered ledger, progress denominator, and live status in place. Preserve every previously verified landing; never reset the investigation or claim that an unfinished target has been reached.
+- Exclude security-sensitive, persistent-state, protocol, public-contract, or otherwise review-required work from the accepted count until the appropriate owner explicitly authorizes and verifies its landing.
 
 ## Prefer clean refactors over quick fixes
 
@@ -62,7 +68,7 @@ Read [references/live-proof-routing.md](references/live-proof-routing.md) before
 6. Run a fresh `$autoreview` on the complete final refactor. Require the reviewer to compare owner boundaries and sibling implementations, confirm this is the best clean root-cause solution, and reject quick-fix residue even when tests pass. Resolve actionable findings; rerun review after any production, test, or head change. Personally read the latest ClawSweeper review, satisfy each applicable rank-up move with real evidence, and update the existing PR body before landing.
 7. Check existing open PRs, current author counts, and the actual repository automation before publishing. Read both the current labeler and response policy; verify the authenticated author association, repository permission, account type, automation branch prefix, and actual override label. Apply only exemptions proved by that current policy, including eligible owners, maintainers, collaborators, bots or apps, approved automation branches, and explicit overrides. Never infer capacity from a truncated list or assume that one privileged role represents every exemption. Reuse and repair an existing candidate PR for the same cause. When a real cap applies, hold reviewed worktrees and finish or land existing verified work first.
 8. Create a focused PR with the repository's actual template, canonical cause, user impact, frozen head, completed proof, and risk. Use only the current repo-native `scripts/pr` review, artifact, prepare, and merge workflow for authorized main landing.
-9. Autonomously merge only when the user authorized it **and** the canonical root-cause refactor is individually reproduced, low-risk, independently reviewed, current-main-compatible, and has green required exact-head proof. Evaluate risk by ownership and behavioral impact, not by whether the diff is the smallest possible. Verify the resulting canonical merge SHA before incrementing the ledger.
+9. Autonomously merge only when the user authorized it **and** the canonical root-cause refactor is individually reproduced, low-risk, independently reviewed, current-main-compatible, and has green required exact-head proof. Evaluate risk by ownership and behavioral impact, not by whether the diff is the smallest possible. Verify the resulting canonical merge SHA before incrementing the ledger. Immediately report each verified landing to the operator with its pull-request URL and one or two concise sentences describing the actual root causes fixed; do not batch, defer, or announce unmerged pull requests as landed.
 
 Prepare but **do not autonomously merge** security or authentication changes; SQLite integrity, migration, schema, or persistent-state changes; public configuration or plugin SDK compatibility changes; protocol changes; architectural or product decisions; broad high-impact refactors; uncertain diagnoses; or a candidate with pending, skipped, stale, conflicting, or failing proof. A bounded low-risk root-cause refactor may be autonomously landable when explicitly authorized; sensitive or uncertain impact is not. Mark higher-risk changes **user review required** and keep them outside the accepted-bug count.
 

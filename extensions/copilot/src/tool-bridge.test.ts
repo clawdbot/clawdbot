@@ -489,11 +489,15 @@ describe("createCopilotToolBridge", () => {
 
     it("forwards identity, owner/policy, and channel/routing fields from attemptParams", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
+      const toolBindings = {
+        browser: { kind: "tab", tabId: 7, target: "host", profile: "chrome", targetId: "target-7" },
+      };
 
       await createCopilotToolBridge({
         agentId: "agent-1",
         attemptParams: {
           agentAccountId: "acct-1",
+          toolBindings,
           senderId: "sender-1",
           senderName: "Ada",
           senderUsername: "ada",
@@ -529,6 +533,7 @@ describe("createCopilotToolBridge", () => {
       const opts = getOpts();
       expect(opts).toMatchObject({
         agentAccountId: "acct-1",
+        toolBindings,
         senderId: "sender-1",
         senderName: "Ada",
         senderUsername: "ada",

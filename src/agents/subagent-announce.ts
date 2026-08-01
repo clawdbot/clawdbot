@@ -617,6 +617,14 @@ export async function runSubagentAnnounceFlow(params: {
           })
         : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    let deliveryResultReported = false;
+    const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
+      if (deliveryResultReported) {
+        return;
+      }
+      deliveryResultReported = true;
+      params.onDeliveryResult?.(delivery);
+    };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -639,11 +647,12 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
       continuationTriggerOverride: returnRoute.continuationTriggerOverride,
       ...(returnRoute.traceparent ? { traceparent: returnRoute.traceparent } : {}),
     });
-    params.onDeliveryResult?.(delivery);
+    reportDeliveryResult(delivery);
     didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(

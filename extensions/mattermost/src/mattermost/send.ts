@@ -110,16 +110,16 @@ function createMattermostSendReceipt(params: {
   kind: MessageReceiptPartKind;
   replyToId?: string;
 }): MessageReceipt {
-  const messageIds =
-    params.messageId.trim() && params.messageId !== "unknown" ? [params.messageId] : [];
   return createMessageReceiptFromOutboundResults({
     kind: params.kind,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    results: messageIds.map((messageId) => ({
-      channel: "mattermost",
-      messageId,
-      channelId: params.channelId,
-    })),
+    results: [
+      {
+        channel: "mattermost",
+        messageId: params.messageId,
+        channelId: params.channelId,
+      },
+    ],
   });
 }
 
@@ -496,7 +496,7 @@ export async function sendMessageMattermost(
     props,
   });
 
-  const messageId = post.id ?? "unknown";
+  const messageId = post.id;
   const receipt = createMattermostSendReceipt({
     messageId,
     channelId,

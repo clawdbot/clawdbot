@@ -5,6 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import {
   copyStaticExtensionAssets,
@@ -337,6 +338,9 @@ export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
+  // Alias rewrites delete files under dist; fail closed on a symlinked root
+  // so a stale alias removal cannot land inside the link target.
+  assertRealOutputRoot(distDir, { fs: fsImpl });
   const candidatesByAlias = collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl });
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {
@@ -544,6 +548,12 @@ function shouldCopyStaticExtensionAssets(params) {
  * Runs every runtime postbuild phase after the main dist build.
  */
 export function runRuntimePostBuild(params = {}) {
+  const rootDir = params.rootDir ?? params.cwd ?? params.repoRoot ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  // Postbuild phases share both roots. Validate the whole mutation set before
+  // any phase runs so a later unsafe root cannot leave earlier output changed.
+  assertRealOutputRoot(path.join(rootDir, "dist"), { fs: fsImpl });
+  assertRealOutputRoot(path.join(rootDir, "dist-runtime"), { fs: fsImpl });
   const timingsSetting = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS;
   const timingsEnabled = timingsSetting !== "0" && timingsSetting !== false;
   // Per-phase lines are debug detail; default output is one summary line so a

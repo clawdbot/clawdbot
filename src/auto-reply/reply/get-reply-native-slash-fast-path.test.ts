@@ -40,13 +40,13 @@ const createTypingController = (): TypingController => ({
 
 describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     handleCommandsMock.mockReset();
   });
 
-  it("returns native queue validation instead of discarding trailing command arguments", async () => {
+  async function resolveNativeDirectiveCommand(body: string) {
     handleCommandsMock.mockResolvedValue({ shouldContinue: true });
-
-    const body = "/queue Can you diagnose this?";
+    const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
     const typing = createTypingController();
     const result = await maybeResolveNativeSlashCommandFastReply({
       ctx: buildTestCtx({
@@ -58,19 +58,20 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         CommandAuthorized: true,
         Provider: "telegram",
         Surface: "telegram",
+        GatewayClientScopes: ["operator.admin"],
         SessionKey: "telegram:slash:123",
         CommandTargetSessionKey: "agent:main:telegram:123",
         CommandTurn: {
           kind: "native",
           source: "native",
           authorized: true,
-          commandName: "queue",
+          commandName,
           body,
         },
       }),
       cfg: markCompleteReplyConfig({
         session: {
-          store: path.join(tempDirs.make("openclaw-native-queue-"), "sessions.json"),
+          store: path.join(tempDirs.make("openclaw-native-directive-"), "sessions.json"),
         },
       } as OpenClawConfig),
       agentId: "main",
@@ -86,6 +87,12 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       typing,
     });
 
+    return { result, typing };
+  }
+
+  it("returns native queue validation instead of discarding trailing command arguments", async () => {
+    const { result, typing } = await resolveNativeDirectiveCommand("/queue Can you diagnose this?");
+
     expect(result).toEqual({
       handled: true,
       reply: expect.objectContaining({
@@ -94,6 +101,69 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
     expect(handleCommandsMock).toHaveBeenCalledOnce();
     expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      command: "/think about my deployment plan",
+      expected: 'Unrecognized thinking level "about".',
+    },
+    {
+      command: "/verbose explain quantum computing",
+      expected: 'Unrecognized verbose level "explain".',
+    },
+    {
+      command: "/trace banana please",
+      expected: 'Unrecognized trace level "banana".',
+    },
+    {
+      command: "/fast bananas please",
+      expected: 'Unrecognized fast mode "bananas".',
+    },
+    {
+      command: "/reasoning nonsense please",
+      expected: 'Unrecognized reasoning level "nonsense".',
+    },
+  ])("validates every native directive argument: $command", async ({ command, expected }) => {
+    const { result } = await resolveNativeDirectiveCommand(command);
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({ text: expect.stringContaining(expected) }),
+    });
+  });
+
+  it.each([
+    { command: "/queue collect please help", expected: 'Unexpected argument "please" for /queue.' },
+    { command: "/think high please", expected: 'Unexpected argument "please" for /think.' },
+    { command: "/verbose on please", expected: 'Unexpected argument "please" for /verbose.' },
+    { command: "/fast on please", expected: 'Unexpected argument "please" for /fast.' },
+    {
+      command: "/reasoning on please",
+      expected: 'Unexpected argument "please" for /reasoning.',
+    },
+    { command: "/exec host=node please", expected: 'Unexpected argument "please" for /exec.' },
+  ])(
+    "rejects trailing prose instead of dropping native command $command",
+    async ({ command, expected }) => {
+      const { result } = await resolveNativeDirectiveCommand(command);
+
+      expect(result).toEqual({
+        handled: true,
+        reply: expect.objectContaining({ text: expected }),
+      });
+    },
+  );
+
+  it("keeps recognized native settings commands isolated from nested directives", async () => {
+    const { result } = await resolveNativeDirectiveCommand("/queue /think high");
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({
+        text: expect.stringContaining('Unrecognized queue mode "/think"'),
+      }),
+    });
   });
 
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {

@@ -387,6 +387,14 @@ describe("resolveBuildAllSteps", () => {
       );
     }
     expect(unified.cache?.env).toContain("OPENCLAW_BUILD_PRIVATE_QA");
+    expect(unified.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "src",
+          extensions: expect.arrayContaining([".sql"]),
+        }),
+      ]),
+    );
     expect(resolveBuildAllStepOnCacheHit(getBuildAllStep("copy-export-html-templates"))).toBeNull();
   });
 
@@ -736,6 +744,49 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildAllStepCacheState", () => {
+  it("shares content-addressed outputs across checkout roots", () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-build-cache-"));
+    const firstRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-source-"));
+    const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-target-"));
+    const step = {
+      label: "cached",
+      cache: {
+        inputs: ["src"],
+        outputs: ["dist"],
+        restore: "always" as const,
+      },
+    };
+    const env = { BUILD_ALL_CACHE_ROOT: cacheRoot };
+
+    try {
+      for (const rootDir of [firstRoot, secondRoot]) {
+        fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+        fs.writeFileSync(path.join(rootDir, "src/input.ts"), "same input");
+      }
+      fs.mkdirSync(path.join(firstRoot, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(firstRoot, "dist/output.js"), "cached output");
+
+      const sourceState = resolveBuildAllStepCacheState(step, { rootDir: firstRoot, env });
+      writeBuildAllStepCacheStamp(
+        step,
+        resolveBuildAllStepCacheStampState(step, sourceState, { rootDir: firstRoot }),
+        { rootDir: firstRoot },
+      );
+
+      const targetState = resolveBuildAllStepCacheState(step, { rootDir: secondRoot, env });
+      expect(targetState).toMatchObject({ fresh: true, restorable: true });
+      expect(targetState.outputRoot).toBe(path.join(cacheRoot, "cached", "outputs"));
+      expect(restoreBuildAllStepCacheOutputs(targetState, { rootDir: secondRoot })).toBe(true);
+      expect(fs.readFileSync(path.join(secondRoot, "dist/output.js"), "utf8")).toBe(
+        "cached output",
+      );
+    } finally {
+      fs.rmSync(cacheRoot, { force: true, recursive: true });
+      fs.rmSync(firstRoot, { force: true, recursive: true });
+      fs.rmSync(secondRoot, { force: true, recursive: true });
+    }
+  });
+
   it("invalidates only declaration groups that depend on the changed module", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tsdown-group-cache-"));
     const ai = getBuildAllStep("tsdown-ai");

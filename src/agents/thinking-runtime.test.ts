@@ -4,8 +4,8 @@ import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
-  restoreRegisteredAgentHarnesses,
 } from "./harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
 import {
   hasResolvedThinkingCatalogEntry,

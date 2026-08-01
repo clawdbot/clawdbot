@@ -17,6 +17,7 @@ describe("subagent run liveness", () => {
   it("keeps fresh unended runs live", () => {
     const entry = {
       createdAt: now - 60_000,
+      execution: {},
     };
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
@@ -25,6 +26,7 @@ describe("subagent run liveness", () => {
   it("marks old unended runs stale when no explicit timeout extends the window", () => {
     const entry = {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      execution: {},
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(true);
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(false);
@@ -33,7 +35,7 @@ describe("subagent run liveness", () => {
   it("does not mark ended runs stale", () => {
     const entry = {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      endedAt: now - 1,
+      execution: { endedAt: now - 1 },
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(false);
@@ -43,6 +45,7 @@ describe("subagent run liveness", () => {
     const entry = {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       sessionStartedAt: now - 60_000,
+      execution: {},
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
@@ -52,6 +55,7 @@ describe("subagent run liveness", () => {
     const entry = {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       runTimeoutSeconds: 6 * 60 * 60,
+      execution: {},
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
@@ -62,6 +66,7 @@ describe("subagent run liveness", () => {
     // should not be interpreted as Unix epoch production runs.
     const entry = {
       createdAt: 100,
+      execution: {},
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
@@ -74,6 +79,7 @@ describe("subagent run liveness", () => {
       expect(
         isStaleUnendedSubagentRun({
           createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+          execution: {},
         }),
       ).toBe(true);
     } finally {
@@ -82,12 +88,14 @@ describe("subagent run liveness", () => {
   });
 
   it("keeps child links only while live, recently ended, or waiting on descendants", () => {
-    expect(shouldKeepSubagentRunChildLink({ createdAt: now - 60_000 }, { now })).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink({ createdAt: now - 60_000, execution: {} }, { now }),
+    ).toBe(true);
     expect(
       shouldKeepSubagentRunChildLink(
         {
           createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1,
+          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1 },
         },
         { now },
       ),
@@ -96,7 +104,7 @@ describe("subagent run liveness", () => {
       shouldKeepSubagentRunChildLink(
         {
           createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1,
+          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1 },
         },
         { now },
       ),
@@ -105,7 +113,7 @@ describe("subagent run liveness", () => {
       shouldKeepSubagentRunChildLink(
         {
           createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
-          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1,
+          execution: { endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1 },
         },
         { activeDescendants: 1, now },
       ),
@@ -114,6 +122,7 @@ describe("subagent run liveness", () => {
       shouldKeepSubagentRunChildLink(
         {
           createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+          execution: {},
         },
         { now },
       ),

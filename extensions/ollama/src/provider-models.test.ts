@@ -50,6 +50,18 @@ describe("ollama provider models", () => {
     expect(resolveOllamaApiBase("http://127.0.0.1:11434///")).toBe("http://127.0.0.1:11434");
   });
 
+  it("inspects local models using Ollama's canonical model request field", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      jsonResponse({ model_info: {} }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await readOllamaModelShowInfo("http://127.0.0.1:11434", "gemma4:e2b");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(JSON.parse(requestBodyText(request?.body))).toEqual({ model: "gemma4:e2b" });
+  });
+
   it("caps local discovered runtime context while preserving native metadata", () => {
     const provider = capLocalOllamaProviderContext({
       api: "ollama",
@@ -93,8 +105,8 @@ describe("ollama provider models", () => {
       if (!url.endsWith("/api/show")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
-      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-      if (body.name === "llama3:8b") {
+      const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
+      if (body.model === "llama3:8b") {
         return jsonResponse({ model_info: { "llama.context_length": 65536 } });
       }
       return jsonResponse({});
@@ -161,8 +173,8 @@ describe("ollama provider models", () => {
         });
       }
       if (url.endsWith("/api/show")) {
-        const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-        const completion = body.name === "qwen-chat:latest";
+        const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
+        const completion = body.model === "qwen-chat:latest";
         return jsonResponse({
           capabilities: completion ? ["completion", "tools"] : ["embedding"],
           model_info: completion ? { "qwen.context_length": 32_768 } : {},
@@ -275,14 +287,14 @@ describe("ollama provider models", () => {
       if (!url.endsWith("/api/show")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
-      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-      if (body.name === "kimi-k2.5:cloud") {
+      const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
+      if (body.model === "kimi-k2.5:cloud") {
         return jsonResponse({
           model_info: { "kimi-k2.context_length": 262144 },
           capabilities: ["vision", "thinking", "completion", "tools"],
         });
       }
-      if (body.name === "glm-5.1:cloud") {
+      if (body.model === "glm-5.1:cloud") {
         return jsonResponse({
           model_info: { "glm5.context_length": 202752 },
           capabilities: ["thinking", "completion", "tools"],
@@ -409,7 +421,7 @@ describe("ollama provider models", () => {
     const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:normalized-base" };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(requestUrl(input)).toBe("http://127.0.0.1:11434/api/show");
-      expect(JSON.parse(requestBodyText(init?.body))).toEqual({ name: "qwen3:32b" });
+      expect(JSON.parse(requestBodyText(init?.body))).toEqual({ model: "qwen3:32b" });
       return jsonResponse({
         model_info: { "qwen3.context_length": 131072 },
         capabilities: ["thinking", "tools"],

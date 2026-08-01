@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
@@ -671,7 +672,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       ...rows,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return (
         parentKey != null &&
         mainSessionKeys.has(parentKey) &&

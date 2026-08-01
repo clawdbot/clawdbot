@@ -145,4 +145,40 @@ describe("sendIMessageOutbound approval identity", () => {
       expect.objectContaining({ conversationReadOrigin: "delegated" }),
     );
   });
+
+  it("forwards accepted attachment progress before a later native caption failure", async () => {
+    const receipt = {
+      primaryPlatformMessageId: "p:0/accepted-attachment",
+      platformMessageIds: ["p:0/accepted-attachment"],
+      parts: [{ platformMessageId: "p:0/accepted-attachment", kind: "media" as const, index: 0 }],
+      sentAt: 1_000,
+    };
+    const accepted = {
+      content: "",
+      messageId: "p:0/accepted-attachment",
+      messageIds: ["p:0/accepted-attachment"],
+      sentText: "",
+      receipt,
+      visibleReplySent: true as const,
+    };
+    const captionError = new Error("caption failed after accepted attachment");
+    const send = vi.fn(async (_to, _text, options) => {
+      await options.onDeliveryResult?.(accepted);
+      throw captionError;
+    });
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendIMessageOutbound({
+        cfg: {} as never,
+        to: "+15551230000",
+        text: "caption",
+        mediaUrl: "/tmp/report.pdf",
+        deps: { imessage: send },
+        onDeliveryResult,
+      }),
+    ).rejects.toBe(captionError);
+
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(accepted);
+  });
 });

@@ -1,4 +1,5 @@
 // QA Lab mock provider contracts, wire helpers, and scenario constants.
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
@@ -191,6 +192,7 @@ export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
@@ -207,6 +209,14 @@ export const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 export const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 export const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
   /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
+export const QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE =
+  /Slack MPIM assistant-history seed check[\s\S]*?exact format:\s*(SLACK_QA_MPIM_SEED_[A-Z0-9]+)_BOT_<NONCE>/i;
+export const QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE =
+  /Slack MPIM assistant-history recall check[\s\S]*?previous reply beginning with\s+(SLACK_QA_MPIM_SEED_[A-Z0-9]+_BOT_)[\s\S]*?exact format:\s*(SLACK_QA_MPIM_RECALL_[A-Z0-9]+)_<NONCE>[\s\S]*?otherwise reply with only:\s*(SLACK_QA_MPIM_MISSING_[A-Z0-9]+)/i;
+
+export function buildSlackMpimHistoryBotReply(seedMarker: string) {
+  return `${seedMarker}_BOT_${randomUUID().replaceAll("-", "").toUpperCase()}`;
+}
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
   /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =

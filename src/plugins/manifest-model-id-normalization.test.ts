@@ -108,7 +108,7 @@ describe("manifest model id normalization", () => {
     }
   });
 
-  it("reflects manifest and state-dir changes without a prepared snapshot", () => {
+  it("keeps process metadata stable across manifest edits and reflects lifecycle resets", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
@@ -122,7 +122,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
-    expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     const stateDirB = makeTempDir();
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");

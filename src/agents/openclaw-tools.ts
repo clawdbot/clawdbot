@@ -264,7 +264,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
         preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
-        currentMessagingTarget: options?.currentMessagingTarget,
+        currentMessagingTarget:
+          options?.currentMessagingTarget ??
+          (options?.sourceReplyOnly ? options.agentTo : undefined),
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
@@ -277,6 +279,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        sourceReplyOnly: options?.sourceReplyOnly,
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,

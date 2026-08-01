@@ -50,7 +50,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return sortCronJobs(jobs, "nextRunAtMs", "asc");
   });
 }
 
@@ -289,7 +289,13 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
         return true;
       }
       const haystack = normalizeLowercaseStringOrEmpty(
-        [job.id, job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+        [
+          job.id,
+          job.name,
+          job.description ?? "",
+          job.agentId ?? "",
+          ...(job.displayName ? [job.displayName] : []),
+        ].join(" "),
       );
       return haystack.includes(query);
     });

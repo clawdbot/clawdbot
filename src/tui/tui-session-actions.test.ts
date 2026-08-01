@@ -41,9 +41,10 @@ describe("tui session actions", () => {
   const createHistoryChatLog = () => {
     const addSystem = vi.fn();
     const addUser = vi.fn();
+    const clearAll = vi.fn();
     const chatLog = {
       addSystem,
-      clearAll: vi.fn(),
+      clearAll,
       clearPendingUsers: vi.fn(),
       addUser,
       addLiveUser: vi.fn(),
@@ -52,7 +53,7 @@ describe("tui session actions", () => {
       updateAssistant: vi.fn(),
       startTool: vi.fn(),
     } as unknown as ChatLog;
-    return { chatLog, addSystem, addUser };
+    return { chatLog, addSystem, addUser, clearAll };
   };
 
   const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
@@ -1629,6 +1630,77 @@ describe("tui session actions", () => {
     expect(addSystem).toHaveBeenCalledWith("session agent:main:new");
   });
 
+  it("fences pre-reset history and session-info reads when reset commits", async () => {
+    const history = createDeferred<unknown>();
+    const sessionInfo = createDeferred<unknown>();
+    const loadHistory = vi.fn(() => history.promise);
+    const listSessions = vi.fn(() => sessionInfo.promise);
+    const { chatLog, addUser, clearAll } = createHistoryChatLog();
+    const state = createBaseState({
+      currentSessionId: "session-before-reset",
+      sessionGeneration: 4,
+      sessionInfo: { model: "model-before-reset", updatedAt: 10 },
+    });
+    const {
+      applySessionMutationResult,
+      loadHistory: readHistory,
+      refreshSessionInfo,
+    } = createTestSessionActions({
+      client: { loadHistory, listSessions } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const staleHistory = readHistory();
+    const staleSessionInfo = refreshSessionInfo();
+    await vi.waitFor(() => {
+      expect(loadHistory).toHaveBeenCalledOnce();
+      expect(listSessions).toHaveBeenCalledOnce();
+    });
+
+    expect(
+      applySessionMutationResult({
+        ok: true,
+        key: "agent:main:main",
+        entry: {
+          sessionId: "session-after-reset",
+          model: "model-after-reset",
+          updatedAt: 20,
+        },
+      }),
+    ).toBe(true);
+
+    history.resolve({
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-before-reset",
+        model: "stale-history-model",
+        updatedAt: 10,
+      },
+      messages: [{ role: "user", content: "before reset" }],
+    });
+    sessionInfo.resolve({
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:main",
+          sessionId: "session-before-reset",
+          model: "stale-session-info-model",
+          updatedAt: 10,
+        },
+      ],
+    });
+
+    await expect(staleHistory).resolves.toEqual({ loaded: false });
+    await staleSessionInfo;
+
+    expect(state.sessionGeneration).toBe(5);
+    expect(state.currentSessionId).toBe("session-after-reset");
+    expect(state.sessionInfo.model).toBe("model-after-reset");
+    expect(addUser).not.toHaveBeenCalled();
+    expect(clearAll).toHaveBeenCalledOnce();
+  });
+
   it("does not clear the selected session for another session's reset result", () => {
     const addSystem = vi.fn();
     const clearAll = vi.fn();
@@ -2226,6 +2298,40 @@ describe("tui session actions", () => {
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply");
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
+  });
+
+  it("restores attachment-only assistant rows from history without exposing references", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        { role: "assistant", content: [{ type: "image", data: "secret-image" }] },
+        {
+          role: "assistant",
+          content: [{ type: "audio", source: { type: "url", url: "file:///private/audio.mp3" } }],
+        },
+        { role: "assistant", content: [{ type: "video", url: "file:///private/video.mp4" }] },
+        { role: "assistant", content: [{ type: "file", url: "file:///etc/passwd" }] },
+      ],
+    });
+    const chatLog = {
+      addSystem: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    expect(chatLog.finalizeAssistant.mock.calls.map(([text]) => text)).toEqual([
+      "Attached image",
+      "Attached audio",
+      "Attached video",
+      "Attached file",
+    ]);
   });
 
   it("releases a pending submit when reconnect history proves it was accepted", async () => {

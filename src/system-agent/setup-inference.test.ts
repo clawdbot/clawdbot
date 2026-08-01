@@ -540,6 +540,7 @@ describe("detectSetupInference", () => {
           methodId: "ambient",
           choiceId: "local-model",
           choiceLabel: "Local Server",
+          appGuidedActionLabel: "Connect server",
           appGuidedDiscovery: true,
           icon: "https://cdn.example.com/local.svg",
           website: "https://local.example.com/download",
@@ -569,6 +570,14 @@ describe("detectSetupInference", () => {
     ]);
     expect(detect).toHaveBeenCalledOnce();
     expect(prepare).not.toHaveBeenCalled();
+    expect(detection.prepareOptions).toEqual([
+      expect.objectContaining({
+        id: "local-model",
+        brandId: "local",
+        label: "Local Server",
+        actionLabel: "Connect server",
+      }),
+    ]);
   });
 
   it("surfaces an invalid existing config instead of treating it as fresh", async () => {

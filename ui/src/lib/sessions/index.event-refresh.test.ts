@@ -7,13 +7,16 @@ import { createSessionCapability } from "./index.ts";
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
-function sessionsResult(ts: number): SessionsListResult {
+function sessionsResult(
+  ts: number,
+  sessions: SessionsListResult["sessions"] = [],
+): SessionsListResult {
   return {
     ts,
     path: "",
-    count: 0,
+    count: sessions.length,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [],
+    sessions,
   };
 }
 
@@ -56,6 +59,49 @@ function createHarness(request: GatewayBrowserClient["request"]) {
 }
 
 describe("event-driven session list refresh", () => {
+  it("retains every loaded page when a session event replaces the canonical list", async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 120 }, (_, index) => ({
+      key: `agent:main:session-${index}`,
+      kind: "direct" as const,
+      updatedAt: index + 1,
+    }));
+    const request = vi.fn(async (method: string, params?: { limit?: number; offset?: number }) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const offset = params?.offset ?? 0;
+      const limit = params?.limit ?? 50;
+      const page = rows.slice(offset, offset + limit);
+      const hasMore = offset + page.length < rows.length;
+      return {
+        ...sessionsResult(offset + 1, page),
+        totalCount: rows.length,
+        nextOffset: hasMore ? offset + page.length : null,
+        hasMore,
+      };
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", limit: 60, force: true });
+      await sessions.refresh({ agentId: "main", limit: 60, offset: 60, append: true, force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(120);
+
+      emitEvent(sessionChangedEvent("agent:main:session-0"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request.mock.calls[2]?.[1]).toMatchObject({ agentId: "main", limit: 120 });
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
+      expect(sessions.state.result?.sessions).toHaveLength(120);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears a recreated session's prior deletion before the debounced refresh", async () => {
     vi.useFakeTimers();
     const key = "agent:main:recreated-thread";

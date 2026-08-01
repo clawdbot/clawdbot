@@ -211,6 +211,9 @@ export function registerCronSimpleCommands(cron: Command) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
           const id = String(opts.id);
+          if (typeof opts.runId === "string" && !opts.runId.trim()) {
+            throw new Error("--run-id must not be blank");
+          }
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),

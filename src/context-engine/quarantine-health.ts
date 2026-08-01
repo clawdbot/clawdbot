@@ -14,12 +14,8 @@ type PersistedContextEngineRuntimeQuarantine = {
   failedAt: Date;
 };
 
-type PersistedContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope & {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-};
+type PersistedContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope &
+  Omit<PersistedContextEngineRuntimeQuarantine, "failedAt">;
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -56,10 +52,6 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
   pick: "earliest",
 });
 
-function recordKey(record: Pick<PersistedContextEngineQuarantineRecord, "engineId" | "processId">) {
-  return JSON.stringify([record.engineId, record.processId]);
-}
-
 export function recordPersistedContextEngineQuarantine(
   quarantine: PersistedContextEngineRuntimeQuarantine,
 ): void {
@@ -72,19 +64,19 @@ export function recordPersistedContextEngineQuarantine(
   };
   // The in-memory registry only records the first quarantine per engine, so
   // this is called at most once per (engine, process) and overwrite is safe.
-  quarantineStore.register(recordKey(record), record);
+  quarantineStore.register(JSON.stringify([record.engineId, record.processId]), record);
 }
 
 export function listPersistedContextEngineQuarantines(): PersistedContextEngineRuntimeQuarantine[] {
-  return quarantineStore.list().map((record) => {
+  return quarantineStore.list().map(({ engineId, operation, reason, owner, failedAtMs }) => {
     const quarantine: PersistedContextEngineRuntimeQuarantine = {
-      engineId: record.engineId,
-      operation: record.operation,
-      reason: record.reason,
-      failedAt: new Date(record.failedAtMs),
+      engineId,
+      operation,
+      reason,
+      failedAt: new Date(failedAtMs),
     };
-    if (record.owner) {
-      quarantine.owner = record.owner;
+    if (owner) {
+      quarantine.owner = owner;
     }
     return quarantine;
   });

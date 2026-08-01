@@ -48,6 +48,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -69,7 +70,6 @@ import {
 } from "./bash-tools.exec-host-shared.js";
 import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
-  DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
   runExecProcess,
@@ -404,9 +404,9 @@ function buildGatewayExecApprovalFollowupSummary(params: {
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
     summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
   } else {
-    const output = normalizeNotifyOutput(
-      tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-    );
+    const output = formatExecApprovalContinuationSourceOutput([
+      { label: "output", value: params.outcome.aggregated },
+    ]);
     summary = output
       ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;

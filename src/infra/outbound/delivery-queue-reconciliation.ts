@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
+  ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
   RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
@@ -24,6 +25,35 @@ type UnknownSendQueueEntry = {
   silent?: boolean;
 };
 
+export function buildUnknownSendContext(params: {
+  entry: UnknownSendQueueEntry;
+  payloads: readonly ReplyPayload[];
+  cfg: OpenClawConfig;
+}): ChannelMessageUnknownSendContext {
+  const { entry } = params;
+  return {
+    cfg: params.cfg,
+    queueId: entry.id,
+    channel: entry.channel,
+    to: entry.to,
+    ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
+    enqueuedAt: entry.enqueuedAt,
+    retryCount: entry.retryCount,
+    ...(entry.platformSendStartedAt !== undefined
+      ? { platformSendStartedAt: entry.platformSendStartedAt }
+      : {}),
+    ...(entry.effectiveReplyToId !== undefined
+      ? { effectiveReplyToId: entry.effectiveReplyToId }
+      : {}),
+    payloads: params.payloads,
+    ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
+    ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
+    ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
+    ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
+    ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
+  };
+}
+
 /** Reconciles provider state without applying or rediscovering outbound policy. */
 export async function reconcileUnknownQueuedDelivery(params: {
   entry: UnknownSendQueueEntry;
@@ -45,27 +75,7 @@ export async function reconcileUnknownQueuedDelivery(params: {
   }
   const { entry } = params;
   try {
-    return await reconcileUnknownSend({
-      cfg: params.cfg,
-      queueId: entry.id,
-      channel: entry.channel,
-      to: entry.to,
-      ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
-      enqueuedAt: entry.enqueuedAt,
-      retryCount: entry.retryCount,
-      ...(entry.platformSendStartedAt !== undefined
-        ? { platformSendStartedAt: entry.platformSendStartedAt }
-        : {}),
-      ...(entry.effectiveReplyToId !== undefined
-        ? { effectiveReplyToId: entry.effectiveReplyToId }
-        : {}),
-      payloads: params.payloads,
-      ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
-      ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
-      ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
-      ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
-      ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
-    });
+    return await reconcileUnknownSend(buildUnknownSendContext(params));
   } catch (error) {
     const message = formatErrorMessage(error);
     params.warn(`Delivery entry ${entry.id} unknown-send reconciliation failed: ${message}`);

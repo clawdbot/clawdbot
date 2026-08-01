@@ -127,6 +127,7 @@ describe("OpenClaw setup detection protocol", () => {
           brandId: "lmstudio",
           label: "LM Studio",
           hint: "Local/self-hosted LM Studio server",
+          actionLabel: "Connect server",
           icon: "https://cdn.simpleicons.org/lmstudio",
           website: "https://lmstudio.ai/download",
         },

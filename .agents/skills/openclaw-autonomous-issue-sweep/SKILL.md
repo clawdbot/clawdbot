@@ -17,6 +17,10 @@ subagents. Keep parent-thread updates to concise progress and clickable URLs.
 - Use full-history forks so every subagent inherits the orchestrator's model
   and **xhigh reasoning effort**. Never print, record, or disclose model
   identifiers; redact subprocess banners and diagnostics before reporting.
+- Begin every full-history child assignment with its explicit role and agent
+  identity, require inherited **xhigh reasoning effort**, and forbid
+  `create_goal`, visualizations, `spawn_agent`, or nested agents. Children
+  return evidence to the orchestrator; never downgrade their model or effort.
 - Treat a request to run this workflow as authority to create lightweight,
   issue-scoped isolated Git worktrees and `codex/issue-<id>` branches, review,
   fix, refactor, commit, push, create/update PRs, land eligible changes,
@@ -186,6 +190,74 @@ Choose outcomes in this order:
 - Do not edit `CHANGELOG.md`; capture user impact, issue/PR references, and
   human credit in the PR body or commit message.
 
+## Hard issue-closure gate
+
+An issue stays open unless every step below passes. Similar wording, adjacent
+tests, merged PR dates, contributor suggestions, and confident review summaries
+are not closure proof.
+
+1. Write down the reporter's exact **primary symptom**, desired user-visible
+   outcome, every separately affected surface, reported version/build SHA, and
+   all proposed alternatives. An optional mitigation or diagnostic suggestion
+   does not replace the reported primary outcome.
+2. Personally trace both shipped and current behavior end to end: entry point,
+   canonical owner, caller, callee, dependency contract, sibling surfaces, and
+   existing tests. Reproduce the exact reported failure on the affected build
+   and prove the same user action succeeds on current `main`. Use a runnable
+   product or boundary-level regression; a nearby unit test, revised error text,
+   or an unexecuted source inspection is insufficient.
+3. Prove Git ancestry rather than inferring it from dates:
+
+   ```bash
+   git merge-base --is-ancestor "$fix_sha" "$current_main_sha"
+   git merge-base --is-ancestor "$fix_sha" "$reported_build_or_tag_sha"
+   git tag --contains "$fix_sha"
+   ```
+
+   The fix must be an ancestor of current `main`. Compare it against **each**
+   affected exact build/tag, account for diverged release branches, and identify
+   the first containing release when known. A merge before a release date does
+   not prove inclusion in that release. If the fix was already in an affected
+   build, assume the report still reproduces until a later causal fix is proved.
+
+4. Classify the candidate honestly: root-cause repair, mitigation, diagnostic
+   improvement, unsupported contract, workaround, or product decision. Never
+   close because a suggested fallback landed if the primary action still fails,
+   any reported surface remains broken, an owner hold exists, or documented
+   behavior requires an unresolved maintainer/security/product decision.
+5. Require a **different, independent subagent with inherited xhigh reasoning**
+   to challenge the investigator's closure packet. The challenger personally
+   verifies the primary outcome, every affected surface, runtime owner and
+   contract, release ancestry, and before/after proof. The investigator cannot
+   self-approve; only a separate authorized closure coordinator may grant the
+   mutation after both reviewers agree. Any disagreement means **leave open**.
+6. Immediately recheck live GitHub state, labels/owner holds, current `main`,
+   and exact proof. Do not close on stale state, an incomplete source map, an
+   indirect main-only test, changed wording without changed behavior, or any
+   unresolved facet. In **one sentence**, the closure comment must state the
+   exact fixed behavior, fix SHA/PR, first containing version when known, and
+   before/after evidence.
+7. If a closure is challenged or an incorrectly closed issue is reopened,
+   **pause all closure mutations**. Audit earlier closures, correct the public
+   record, reopen proven mistakes, and resume only after explicit root
+   authorization. Continue safe investigation and verified code-fix work.
+
+Required evidence map:
+
+```text
+Primary symptom -> expected outcome -> every reported surface -> affected build/tag
+Entry -> caller -> canonical owner -> callee -> dependency -> sibling -> boundary proof
+Fix SHA -> current-main ancestry -> each affected-build ancestry -> containing release
+Affected-build failure -> current-main success -> independent challenge -> coordinator grant
+```
+
+Reject example: a remote command fails because its explicit working directory
+does not exist on the target host. A merged change that only replaces a vague
+spawn error with an accurate invalid-directory diagnostic is useful, but the
+command still fails. If the primary expected outcome is successful execution,
+leave the issue open; changing that explicit-directory contract may need an
+owner decision.
+
 ## Verify behavior and obtain two independent reviews
 
 For every non-trivial production change:
@@ -254,9 +326,9 @@ moves:` item with real evidence or an explicit reason for skipping it.
 - Keep owner/security/auth/config/public-SDK/protocol/persistent-state/product
   decisions outside autonomous landing when the relevant guide requires owner
   judgment. Continue with the next issue instead of blocking the whole sweep.
-- Close a fixed issue only after live rechecking its open state and matching
-  the original symptoms to current-main proof. Cite the merged PR/commit and
-  ask the reporter to reopen if it still reproduces on the current version.
+- Close a fixed issue only after the complete **Hard issue-closure gate**,
+  independent challenger sign-off, coordinator grant, and fresh live recheck.
+  Cite the exact causal PR/commit and first containing release when known.
 - Never close merely because a repro is difficult, the report is inconvenient,
   the behavior might be intentional, or the PR is stale. Product-decision and
   won't-implement closures require maintainer judgment.

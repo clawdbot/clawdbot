@@ -105,6 +105,7 @@ vi.mock("../../config/mutate.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   isDefaultInstallIdentity: isDefaultInstallIdentityMock,
+  resolveNativeServiceProfileConflict: () => null,
   resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));

@@ -44,9 +44,11 @@ function createOllamaFetchMock(params: {
       return jsonResponse({ models: params.tags.map((name) => ({ name })) });
     }
     if (url.endsWith("/api/show")) {
-      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-      const contextWindow = body.name ? params.show?.[body.name] : undefined;
-      const capabilities = body.name ? (params.capabilities?.[body.name] ?? ["tools"]) : ["tools"];
+      const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
+      const contextWindow = body.model ? params.show?.[body.model] : undefined;
+      const capabilities = body.model
+        ? (params.capabilities?.[body.model] ?? ["tools"])
+        : ["tools"];
       return jsonResponse({
         ...(contextWindow ? { model_info: { "llama.context_length": contextWindow } } : {}),
         capabilities,
@@ -73,10 +75,21 @@ describe("Ollama non-interactive onboarding", () => {
     upsertAuthProfileWithLock.mockClear();
   });
 
-  it("does not persist local auth when non-interactive setup cannot select a model", async () => {
+  it.each([
+    {
+      label: "Ollama reports a pull failure",
+      body: '{"error":"disk full"}\n',
+      error: "Download failed: disk full",
+    },
+    {
+      label: "the model pull ends before success",
+      body: '{"status":"pulling manifest"}\n',
+      error: "Failed to download missing-model: pull stream ended before success",
+    },
+  ])("does not persist unavailable local models when $label", async ({ body, error }) => {
     const fetchMock = createOllamaFetchMock({
       tags: [],
-      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
+      pullResponse: new Response(body, { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
     const runtime = createRuntime();
@@ -91,7 +104,7 @@ describe("Ollama non-interactive onboarding", () => {
       runtime,
     });
 
-    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
+    expect(runtime.error).toHaveBeenCalledWith(error);
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "No Ollama models are available at http://127.0.0.1:11434.",
@@ -186,7 +199,7 @@ describe("Ollama non-interactive onboarding", () => {
           return false;
         }
         const init = call[1] as RequestInit | undefined;
-        return JSON.parse(requestBodyText(init?.body)).name === modelId;
+        return JSON.parse(requestBodyText(init?.body)).model === modelId;
       }),
     ).toHaveLength(1);
   });

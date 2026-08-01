@@ -32,7 +32,10 @@ import {
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { migrateAndPruneGatewaySessionStoreKey, resolveSessionModelRef } from "../session-utils.js";
+import {
+  resolveCanonicalGatewaySessionStoreKey,
+  resolveSessionModelRef,
+} from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -171,7 +174,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const snapshot = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
           store: snapshot,

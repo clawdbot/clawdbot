@@ -1,3 +1,4 @@
+import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
@@ -12,7 +13,6 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
-import { modelKey } from "./shared.js";
 
 function createAvailabilityUnavailableError(message: string): Error {
   const err = new Error(message);

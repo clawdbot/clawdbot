@@ -442,10 +442,18 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
 
 BytePlus ARK provides access to the same models as Volcano Engine for international users.
 
+- Plugin: `@openclaw/byteplus-provider`
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
 - Example model: `byteplus-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice byteplus-api-key`
+
+Install the official plugin and restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/byteplus-provider
+openclaw gateway restart
+```
 
 ```json5
 {

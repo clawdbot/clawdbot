@@ -69,6 +69,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "ollama",
       label: "Ollama",
       hint: "Connect to an Ollama server and select a cloud or local model",
+      actionLabel: "Choose connection",
       icon: "https://cdn.simpleicons.org/ollama",
       website: "https://ollama.com/download",
     },
@@ -77,6 +78,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "lmstudio",
       label: "LM Studio",
       hint: "Connect to a running LM Studio server and use an already loaded model",
+      actionLabel: "Connect server",
       icon: "https://cdn.simpleicons.org/lmstudio",
       website: "https://lmstudio.ai/download",
     },
@@ -85,6 +87,7 @@ const detected: SystemAgentSetupDetectResult = {
       brandId: "llama-cpp",
       label: "Local model (llama.cpp)",
       hint: "Download and run a private GGUF model",
+      actionLabel: "Review download",
     },
   ],
   recommendedInstalls: [
@@ -498,8 +501,12 @@ describe("renderModelSetup", () => {
     const llamaCpp = container.querySelector<HTMLButtonElement>(
       '[data-prepare-choice="llama-cpp"] button',
     );
-    expect(ollama?.textContent).toContain("Check & set up");
-    expect(llamaCpp?.textContent).toContain("Check & set up");
+    expect(ollama?.textContent).toContain("Choose connection");
+    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
+        ?.textContent,
+    ).toContain("Connect server");
     const llamaCppRow = container.querySelector('[data-prepare-choice="llama-cpp"]');
     expect(llamaCppRow?.querySelector('[data-provider-icon="llamacpp"]')).not.toBeNull();
     expect(text(llamaCppRow!)).toContain("llama.cpp");
@@ -790,7 +797,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).not.toContain("Open Chat");
   });
 
-  it("renders an idle current connection and verifies it", () => {
+  it("renders the selected model and verifies it", () => {
     const onVerify = vi.fn();
     const container = mount(
       props({
@@ -800,7 +807,9 @@ describe("renderModelSetup", () => {
     );
     const current = container.querySelector(".model-setup__current");
     expect(container.querySelector(".settings-section")).toBe(current);
-    expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    expect(text(current!)).toContain("Selected model OpenAI gpt-5 · Signed in locally");
+    expect(text(current!)).toContain("Signed in locally");
+    expect(text(current!)).toContain("Check model");
     expect(current?.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     current?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onVerify).toHaveBeenCalledOnce();
@@ -842,7 +851,7 @@ describe("renderModelSetup", () => {
 
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Current connection openai/gpt-5.6-sol");
+    expect(text(container)).toContain("Selected model OpenAI gpt-5.6-sol");
   });
 
   it("renders connection verification progress", () => {
@@ -866,10 +875,11 @@ describe("renderModelSetup", () => {
         verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
       }),
     );
-    expect(text(container)).toContain("Answered in 1234 ms");
+    expect(text(container)).toContain("Ready · 1234 ms");
     const current = container.querySelector(".model-setup__current");
-    expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
-    expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+    expect(current?.textContent).toContain("Anthropic");
+    expect(current?.textContent).toContain("claude-opus-4-8");
+    expect(current?.textContent).not.toContain("openai/gpt-5");
     expect(current?.querySelector('[data-provider-icon="claude"]')).not.toBeNull();
   });
 
@@ -880,7 +890,9 @@ describe("renderModelSetup", () => {
         verify: { phase: "failed", status: "billing", error: "No credits" },
       }),
     );
-    expect(text(container)).toContain("Billing problem No credits");
+    expect(text(container)).toContain(
+      "Billing problem. No credits Restore provider billing or quota, then retry.",
+    );
   });
 
   it("hides the current connection without a configured model", () => {
@@ -893,11 +905,11 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Current connection openai/gpt-5");
+    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
     expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
 
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Current connection openai/gpt-5");
+    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
     expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 

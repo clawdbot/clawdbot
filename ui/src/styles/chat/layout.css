@@ -4287,6 +4287,27 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-controls__model-capability-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chat-controls__model-capability-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
 /* Keep the chevron pinned right when the mobile trigger stretches. */
 .chat-controls__inline-select-icon {
   display: inline-flex;

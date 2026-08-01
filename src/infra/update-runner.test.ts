@@ -1849,7 +1849,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain("pnpm install");
     expect(calls).toContain("pnpm build");
     expect(calls).not.toContain("pnpm lint");
-    expect(calls).toContain("pnpm ui:build");
+    expect(calls).not.toContain("pnpm ui:build");
     expect(pnpmEnvPaths.filter((envPath) => envPath.includes("openclaw-update-pnpm-"))).not.toEqual(
       [],
     );
@@ -2262,10 +2262,11 @@ describe("runGatewayUpdate", () => {
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
-  it("adds heap headroom to pnpm build steps during dev updates", async () => {
+  it("shares the build cache while adding heap headroom to dev builds", async () => {
     await setupGitPackageManagerFixture();
     const upstreamSha = "upstream123";
     const buildNodeOptions: string[] = [];
+    const buildCacheRoots: string[] = [];
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
 
@@ -2327,6 +2328,7 @@ describe("runGatewayUpdate", () => {
       }
       if (key === "pnpm build") {
         buildNodeOptions.push(options?.env?.NODE_OPTIONS ?? "");
+        buildCacheRoots.push(options?.env?.BUILD_ALL_CACHE_ROOT ?? "");
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
@@ -2352,6 +2354,10 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(buildNodeOptions).toHaveLength(2);
     expect(buildNodeOptions).toEqual(["--max-old-space-size=8192", "--max-old-space-size=8192"]);
+    expect(buildCacheRoots).toEqual([
+      path.join(tempDir, ".artifacts", "build-all-cache"),
+      path.join(tempDir, ".artifacts", "build-all-cache"),
+    ]);
   });
   it("pins dev updates to an explicit target ref when requested", async () => {
     await setupGitPackageManagerFixture();
@@ -3296,6 +3302,103 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
+  it("rebuilds and verifies the original runtime before allowing restart after rollback", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const beforeSha = "a".repeat(40);
+    const targetSha = "b".repeat(40);
+    const stableTag = "v1.0.1-1";
+    let currentHead = beforeSha;
+    let buildCount = 0;
+    const calls: string[] = [];
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const writeRuntime = async (head: string) => {
+      const distRoot = path.join(tempDir, "dist");
+      await fs.mkdir(path.join(distRoot, "control-ui"), { recursive: true });
+      await Promise.all([
+        fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
+        fs.writeFile(
+          path.join(distRoot, "build-info.json"),
+          `${JSON.stringify({ commit: head })}\n`,
+          "utf8",
+        ),
+        fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
+        fs.writeFile(
+          path.join(distRoot, ".runtime-postbuildstamp"),
+          `${JSON.stringify({ head })}\n`,
+          "utf8",
+        ),
+        fs.writeFile(path.join(distRoot, "control-ui", "index.html"), "<html></html>", "utf8"),
+      ]);
+    };
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return toCommandResult({ stdout: tempDir });
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return toCommandResult({ stdout: `${currentHead}\n` });
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return toCommandResult({ stdout: "main\n" });
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+        return toCommandResult({ stdout: `${stableTag}\n` });
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
+        currentHead = targetSha;
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} checkout --force main`) {
+        return toCommandResult();
+      }
+      if (key === `git -C ${tempDir} reset --hard ${beforeSha}`) {
+        currentHead = beforeSha;
+        return toCommandResult();
+      }
+      if (key === "pnpm install") {
+        return toCommandResult();
+      }
+      if (key === "pnpm build") {
+        buildCount += 1;
+        await writeRuntime(currentHead);
+        return toCommandResult();
+      }
+      if (key === doctorCommand) {
+        return toCommandResult({ code: 1, stderr: "doctor failed after build" });
+      }
+      return toCommandResult();
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "doctor-failed",
+      recovery: { serviceRestartSafe: true },
+    });
+    expect(buildCount).toBe(2);
+    expect(currentHead).toBe(beforeSha);
+    expect(
+      JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
+    ).toMatchObject({ commit: beforeSha });
+    expect(result.steps.at(-1)).toMatchObject({
+      name: "git rollback runtime verify",
+      exitCode: 0,
+    });
+    expect(calls.indexOf(doctorCommand)).toBeLessThan(
+      calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
+    );
+    expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+  });
+
   it("repairs UI assets when doctor run removes control-ui files", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const uiIndexPath = await setupUiIndex();
@@ -3314,9 +3417,29 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "stable" });
 
     expect(result.status).toBe("ok");
-    expect(getUiBuildCount()).toBe(2);
+    expect(getUiBuildCount()).toBe(1);
     expect(await pathExists(uiIndexPath)).toBe(true);
     expect(calls).toContain(doctorKey);
+  });
+
+  it("builds Control UI separately only when the checkout build omitted it", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+    const stableTag = "v1.0.1-1";
+    const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
+      stableTag,
+      uiIndexPath,
+      onUiBuild: async () => {
+        await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+        await fs.writeFile(uiIndexPath, "<html>built</html>", "utf-8");
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result.status).toBe("ok");
+    expect(getUiBuildCount()).toBe(1);
+    expect(calls.indexOf("pnpm ui:build")).toBeLessThan(calls.indexOf(doctorKey));
   });
 
   it("fails when UI assets are still missing after post-doctor repair", async () => {
@@ -3327,12 +3450,6 @@ describe("runGatewayUpdate", () => {
     const { runCommand } = await createStableTagRunner({
       stableTag,
       uiIndexPath,
-      onUiBuild: async (count) => {
-        if (count === 1) {
-          await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-          await fs.writeFile(uiIndexPath, "<html>built</html>", "utf-8");
-        }
-      },
       onDoctor: removeControlUiAssets,
     });
 

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.outlined.AccessTime
@@ -39,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,9 +49,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -187,7 +192,10 @@ internal fun OpenClawSidebar(
   val palette = sidebarPalette()
   val roster = sidebarAgentRoster(agents, selectedAgentId)
   var query by rememberSaveable { mutableStateOf("") }
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var agentsExpanded by remember { mutableStateOf(false) }
+  val searchFocusRequester = remember { FocusRequester() }
+  val focusManager = LocalFocusManager.current
   val recentSessions = sidebarRecentSessions(sessions, query)
   val connectionLabel = gatewayStatusLabel(connection)
 
@@ -219,6 +227,23 @@ internal fun OpenClawSidebar(
           modifier = Modifier.weight(1f),
           maxLines = 1,
         )
+        IconButton(
+          onClick = {
+            isSearchActive = !isSearchActive
+            if (!isSearchActive) {
+              query = ""
+              focusManager.clearFocus()
+            }
+          },
+          modifier = Modifier.size(48.dp).testTag("sidebar-search-toggle"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = sidebarSearchLabel(),
+            tint = palette.text,
+            modifier = Modifier.size(20.dp),
+          )
+        }
         IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
           Icon(
             imageVector = Icons.Default.Settings,
@@ -239,12 +264,20 @@ internal fun OpenClawSidebar(
         }
       }
 
-      SidebarSearchField(
-        query = query,
-        onQueryChange = { query = it },
-        palette = palette,
-        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-      )
+      if (isSearchActive) {
+        LaunchedEffect(searchFocusRequester) {
+          searchFocusRequester.requestFocus()
+        }
+        SidebarSearchField(
+          query = query,
+          onQueryChange = { query = it },
+          palette = palette,
+          modifier =
+            Modifier
+              .focusRequester(searchFocusRequester)
+              .padding(top = 4.dp, bottom = 12.dp),
+        )
+      }
 
       SidebarSectionTitle(nativeString("Agents"), palette)
       roster.selected?.let { selected ->

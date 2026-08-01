@@ -34,9 +34,12 @@ import {
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
+  renderCollectionDefaultPresentation,
+  renderFlatDefaultRow,
   renderFieldRow,
   renderJsonTextareaControl,
   renderTags,
+  schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -55,49 +58,7 @@ const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
 function openCollectionDraft(event: Event, draftId: string): void {
   const block = (event.currentTarget as HTMLElement).closest(".cfg-block");
   const draft = Array.from(block?.children ?? []).find((child) => child.id === draftId);
-  const openDraft = (draft as Partial<ConfigFormCollectionDraft> | undefined)?.openDraft;
-  if (typeof openDraft === "function") {
-    openDraft.call(draft);
-  }
-}
-
-export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
-  const fallback = jsonValue(value);
-  const sensitiveState = getSensitiveRenderState({
-    path,
-    value,
-    hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  });
-
-  return renderFieldRow({
-    label,
-    help,
-    helpId,
-    tags,
-    showLabel,
-    stacked: true,
-    control: renderJsonTextareaControl({
-      schema,
-      path,
-      ariaLabel: label,
-      descriptionId: helpId,
-      sourceValue: params.sourceIdentity ?? value,
-      rowIdentity: params.rowIdentity,
-      fallback,
-      rows: 3,
-      sensitiveState,
-      disabled,
-      isRequired: params.isRequired,
-      onToggleSensitivePath: params.onToggleSensitivePath,
-      onPatch,
-    }),
-  });
+  (draft as Partial<ConfigFormCollectionDraft> | undefined)?.openDraft?.call(draft);
 }
 
 export function renderObject(
@@ -117,8 +78,8 @@ export function renderObject(
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
+    onRemove,
   } = params;
-  const showLabel = params.showLabel ?? true;
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
@@ -126,12 +87,14 @@ export function renderObject(
       : false;
   const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
-  const fallback = value ?? schema.default;
+  const inherited = value === undefined && schema.default !== undefined;
+  const fallback = inherited ? schema.default : value;
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
   const objectValue =
     fallback && typeof fallback === "object" && !Array.isArray(fallback)
       ? (fallback as Record<string, unknown>)
       : {};
+  const defaultPresentation = renderCollectionDefaultPresentation(params, fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -181,21 +144,27 @@ export function renderObject(
     if (!canApplyObjectCandidate(schema, objectValue, candidate)) {
       return false;
     }
-    return onPatch(childPath, childValue) !== false;
+    if (inherited) {
+      return onPatch(path, candidate) !== false;
+    }
+    const accepted =
+      childValue === undefined && onRemove ? onRemove(childPath) : onPatch(childPath, childValue);
+    return accepted !== false;
   };
 
   const fields = html`
     ${sorted.map(([propertyKey, node]) => {
+      const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return renderNode({
-        schema: node,
-        value: objectValue[propertyKey],
+        schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
+        value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
         hints,
         rawAvailable,
         unsupported,
         disabled,
         isRequired: requiredKeys.has(propertyKey),
-        sourceIdentity: objectValue[propertyKey],
+        sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
         rowIdentity: params.rowIdentity,
         searchCriteria: childSearchCriteria,
@@ -223,8 +192,8 @@ export function renderObject(
 
   // Top-level objects and label-less contexts emit rows directly into the
   // surrounding settings-group so row dividers stay sibling-driven.
-  if (path.length === 1 || !showLabel) {
-    return html`${fields}`;
+  if (path.length === 1 || params.showLabel === false) {
+    return html`${path.length === 1 ? renderFlatDefaultRow(defaultPresentation) : nothing}${fields}`;
   }
 
   // Nested objects get collapsible treatment as an indented sub-block.
@@ -234,9 +203,15 @@ export function renderObject(
         <div class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
+          ${schema.default !== undefined
+            ? html`<span class="settings-row__desc">${defaultPresentation.description}</span>`
+            : nothing}
           ${renderTags(tags)}
         </div>
-        <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
+        <div class="settings-row__control">
+          ${defaultPresentation.action}
+          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
+        </div>
       </summary>
       <div class="settings-subrows">${fields}</div>
     </details>
@@ -262,6 +237,7 @@ export function renderArray(
     onToggleSensitivePath,
   } = params;
   const showLabel = params.showLabel ?? true;
+  const showHeaderMeta = params.showHeaderMeta ?? showLabel;
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
@@ -281,6 +257,7 @@ export function renderArray(
     });
   }
 
+  const inherited = value === undefined && Array.isArray(schema.default);
   const arrayValue = Array.isArray(value)
     ? value
     : Array.isArray(schema.default)
@@ -291,6 +268,7 @@ export function renderArray(
     : Array.isArray(schema.default)
       ? schema.default
       : UNSET_ARRAY_SOURCE_IDENTITY;
+  const defaultPresentation = renderCollectionDefaultPresentation(params, arrayValue);
   const rowIdentities = rowIdentitiesForArray(arrayValue);
   const {
     minItems: minimumItems,
@@ -370,7 +348,12 @@ export function renderArray(
       <div class="settings-row">
         <div class="settings-row__text">
           ${showLabel ? html`<span class="settings-row__title">${label}</span>` : nothing}
-          ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
+          ${showHeaderMeta && help
+            ? html`<span class="settings-row__desc">${help}</span>`
+            : nothing}
+          ${showHeaderMeta && schema.default !== undefined
+            ? html`<span class="settings-row__desc">${defaultPresentation.description}</span>`
+            : nothing}
           ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
@@ -379,6 +362,7 @@ export function renderArray(
               count: String(arrayValue.length),
             })}</span
           >
+          ${defaultPresentation.action}
           <button
             type="button"
             class="btn btn--sm"
@@ -437,8 +421,9 @@ export function renderArray(
         ? renderSettingsEmpty(t("configForm.noItems"))
         : html`
             <div class="settings-subrows">
-              ${arrayValue.map(
-                (item, index) => html`
+              ${arrayValue.map((item, index) => {
+                const itemSchema = itemSchemaAt(index);
+                return html`
                   <div class="settings-row">
                     <div class="settings-row__text">
                       <span class="settings-row__title">#${index + 1}</span>
@@ -486,15 +471,15 @@ export function renderArray(
                     </div>
                   </div>
                   ${renderNode({
-                    schema: itemSchemaAt(index),
-                    value: item,
+                    schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
+                    value: inherited ? undefined : item,
                     path: [...path, index],
                     hints,
                     rawAvailable,
                     unsupported,
                     disabled,
                     isRequired: true,
-                    sourceIdentity: item,
+                    sourceIdentity: inherited ? undefined : item,
                     controlIdentity: arrayValue,
                     rowIdentity: rowIdentities[index],
                     searchCriteria: childSearchCriteria,
@@ -502,10 +487,12 @@ export function renderArray(
                     revealSensitive,
                     isSensitivePathRevealed,
                     onToggleSensitivePath,
+                    // Inherited rows stay visually unset, but edits materialize the
+                    // complete effective array through patchArrayItem at the parent path.
                     onPatch: patchArrayItem,
                   })}
-                `,
-              )}
+                `;
+              })}
             </div>
           `}
     </div>

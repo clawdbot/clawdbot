@@ -9,6 +9,12 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSearchResult = {
   score: number;
@@ -78,6 +84,7 @@ export type ClawHubSkillSecurityVerdict = {
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -561,22 +568,28 @@ async function runSkillMutation(
 
 export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
   await runSkillMutation(state, skillKey, async (client) => {
-    await client.request("skills.update", { skillKey, enabled });
-    return {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    };
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      enabled,
+    });
+    return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
   });
 }
 
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  if (!apiKey) {
+    return;
+  }
   await runSkillMutation(state, skillKey, async (client) => {
-    const editValue = state.skillEdits[skillKey] ?? "";
-    await client.request("skills.update", { skillKey, apiKey: editValue });
-    return {
-      kind: "success",
-      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    };
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      apiKey,
+    });
+    return skillConfigMutationSuccess(
+      `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+      refreshError,
+    );
   });
 }
 

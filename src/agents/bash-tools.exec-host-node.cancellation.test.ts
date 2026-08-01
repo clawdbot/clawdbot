@@ -88,9 +88,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 vi.mock("./bash-process-registry.js", () => ({ tail: vi.fn((text: string) => text) }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1_000,
   createApprovalSlug: vi.fn(() => "approval"),
-  normalizeNotifyOutput: vi.fn((text: string) => text),
 }));
 
 vi.mock("./embedded-agent-runner/run/abortable.js", () => ({

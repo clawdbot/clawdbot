@@ -21,6 +21,7 @@ import {
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   loadTranscriptEventsSync,
+  materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   parseSqliteSessionFileMarker,
   readTranscriptStatsSync,
@@ -814,7 +815,12 @@ export async function buildSessionEntry(
       }
       raw = (
         await retryTransientMemoryRead(
-          () => readRegularFile({ filePath: absPath }),
+          () =>
+            readRegularFile({
+              filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
+                ? materializeSessionArchiveForRead(absPath)
+                : absPath,
+            }),
           `read session transcript ${absPath}`,
         )
       ).buffer.toString("utf-8");

@@ -164,6 +164,7 @@ export async function resolveHeartbeatPreflight(params: {
     }
     const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
     const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      agentId: params.agentId,
       sessionKey: session.sessionKey,
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: session.entry,

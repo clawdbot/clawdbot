@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 function relativeSymlinkTarget(sourcePath, targetPath) {
@@ -322,6 +323,8 @@ export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
+  assertRealOutputRoot(distRoot);
+  assertRealOutputRoot(runtimeRoot);
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 

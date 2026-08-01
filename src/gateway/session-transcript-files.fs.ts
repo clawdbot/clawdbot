@@ -28,7 +28,6 @@ export type ArchivedSessionTranscript = {
 };
 
 const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
-const MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES = 4096;
 const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
 
 const resetArchiveDiscoveryCache = new Map<
@@ -39,63 +38,8 @@ const resetArchiveDiscoveryCache = new Map<
     archives: ResetArchiveCandidate[];
   }
 >();
-const resetArchiveHeaderMatchCache = new Map<
-  string,
-  {
-    mtimeMs: number;
-    size: number;
-    matches: boolean;
-  }
->();
-
 function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
   resetArchiveDiscoveryCache.clear();
-  resetArchiveHeaderMatchCache.clear();
-}
-
-function deleteResetArchiveHeaderMatchesForArchives(archives: ResetArchiveCandidate[]): void {
-  if (archives.length === 0 || resetArchiveHeaderMatchCache.size === 0) {
-    return;
-  }
-  const archivePaths = new Set(archives.map((archive) => archive.archivePath));
-  for (const cacheKey of resetArchiveHeaderMatchCache.keys()) {
-    const archivePath = cacheKey.slice(cacheKey.indexOf("\0") + 1);
-    if (archivePaths.has(archivePath)) {
-      resetArchiveHeaderMatchCache.delete(cacheKey);
-    }
-  }
-}
-
-function setResetArchiveDiscoveryCacheEntry(
-  cacheKey: string,
-  entry: { dirMtimeMs: number; dirSize: number; archives: ResetArchiveCandidate[] },
-): void {
-  resetArchiveDiscoveryCache.set(cacheKey, entry);
-  while (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
-    const oldestKey = resetArchiveDiscoveryCache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    const oldestEntry = resetArchiveDiscoveryCache.get(oldestKey);
-    if (oldestEntry) {
-      deleteResetArchiveHeaderMatchesForArchives(oldestEntry.archives);
-    }
-    resetArchiveDiscoveryCache.delete(oldestKey);
-  }
-}
-
-function setResetArchiveHeaderMatchCacheEntry(
-  cacheKey: string,
-  entry: { mtimeMs: number; size: number; matches: boolean },
-): void {
-  resetArchiveHeaderMatchCache.set(cacheKey, entry);
-  while (resetArchiveHeaderMatchCache.size > MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES) {
-    const oldestKey = resetArchiveHeaderMatchCache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    resetArchiveHeaderMatchCache.delete(oldestKey);
-  }
 }
 
 function classifySessionTranscriptCandidate(
@@ -193,15 +137,6 @@ async function resetArchiveHeaderMatchesSessionId(
   if (!stat?.isFile()) {
     return false;
   }
-  const cacheKey = `${sessionId}\0${archivePath}`;
-  const cached = resetArchiveHeaderMatchCache.get(cacheKey);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    resetArchiveHeaderMatchCache.delete(cacheKey);
-    resetArchiveHeaderMatchCache.set(cacheKey, cached);
-    return cached.matches;
-  }
-
-  let matches = false;
   const handle = await fs.promises.open(probePath, "r").catch(() => null);
   if (!handle) {
     return false;
@@ -216,24 +151,19 @@ async function resetArchiveHeaderMatchesSessionId(
         continue;
       }
       const record = JSON.parse(trimmed) as unknown;
-      matches =
+      return (
         Boolean(record) &&
         typeof record === "object" &&
         !Array.isArray(record) &&
         (record as { type?: unknown; id?: unknown }).type === "session" &&
-        (record as { type?: unknown; id?: unknown }).id === sessionId;
-      return matches;
+        (record as { type?: unknown; id?: unknown }).id === sessionId
+      );
     }
     return false;
   } catch {
     return false;
   } finally {
     await handle.close().catch(() => undefined);
-    setResetArchiveHeaderMatchCacheEntry(cacheKey, {
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      matches,
-    });
   }
 }
 
@@ -276,11 +206,14 @@ async function listResetArchiveCandidatesForTranscriptAsync(
     (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
   );
   const boundedArchives = archives.slice(0, MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT);
-  setResetArchiveDiscoveryCacheEntry(cacheKey, {
+  resetArchiveDiscoveryCache.set(cacheKey, {
     dirMtimeMs: dirStat.mtimeMs,
     dirSize: dirStat.size,
     archives: boundedArchives,
   });
+  if (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
+    resetArchiveDiscoveryCache.delete(resetArchiveDiscoveryCache.keys().next().value ?? "");
+  }
   return boundedArchives;
 }
 

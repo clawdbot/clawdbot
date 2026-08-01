@@ -732,14 +732,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
   });
 
-  it("records a completed outcome after a native slash command", async () => {
+  it("leaves native-command outcomes to the update middleware owner", async () => {
     const { handler } = registerAndResolveStatusHandler({ cfg: {} });
 
     const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
       await handler(createTelegramPrivateCommandContext());
     });
 
-    expect(result).toEqual({ kind: "completed" });
+    expect(result).toBeUndefined();
   });
 
   it("preserves every argument on native queue command turns", async () => {

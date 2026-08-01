@@ -1555,6 +1555,7 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+    isGroupDm,
     isThreadReply,
     threadTs,
     threadStarter,

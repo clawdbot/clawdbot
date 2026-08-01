@@ -517,7 +517,7 @@ can you audit whether this prompt path has conflicting silence instructions?
 
 ### Tools: Dynamic Tool Catalog
 
-Full JSON: `codex-dynamic-tools.discord-group.json`
+Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 
 ## Dynamic Tool Names
 

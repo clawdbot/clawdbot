@@ -77,6 +77,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
@@ -254,6 +255,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    sourceReplyOnly: params.sourceReplyOnly,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,

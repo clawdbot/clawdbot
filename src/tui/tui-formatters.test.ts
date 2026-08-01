@@ -196,6 +196,71 @@ describe("extractTextFromMessage", () => {
     ).toBe("Attached file: report.pdf");
   });
 
+  it.each([
+    { name: "image", block: { type: "image", data: "secret-image" }, expected: "Attached image" },
+    {
+      name: "audio",
+      block: { type: "audio", source: { type: "base64", data: "secret-audio" } },
+      expected: "Attached audio",
+    },
+    {
+      name: "video",
+      block: { type: "video", url: "file:///Users/operator/private/clip.mp4" },
+      expected: "Attached video",
+    },
+    {
+      name: "file",
+      block: { type: "file", url: "file:///etc/passwd", title: "private.txt" },
+      expected: "Attached file",
+    },
+    {
+      name: "nested audio attachment",
+      block: {
+        type: "attachment",
+        attachment: {
+          kind: "audio",
+          label: "private.ogg",
+          url: "file:///Users/operator/private/audio.ogg",
+        },
+      },
+      expected: "Attached audio",
+    },
+    {
+      name: "provider image URL block",
+      block: { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
+      expected: "Attached image",
+    },
+  ])("renders a terminal-safe assistant $name summary", ({ block, expected }) => {
+    const text = extractTextFromMessage({ role: "assistant", content: [block] });
+    expect(text).toBe(expected);
+    expect(text).not.toMatch(/secret|file:|operator|passwd|private/i);
+  });
+
+  it("renders canonical and legacy assistant media without exposing references", () => {
+    expect(
+      extractTextFromMessage({
+        role: "assistant",
+        content: [],
+        __openclaw: {
+          media: [
+            { kind: "image", path: "/private/generated.png" },
+            { kind: "audio", url: "https://secret.test/voice.ogg?ticket=secret" },
+            { kind: "video", fileName: "private.mov" },
+            { kind: "document", path: "/etc/passwd" },
+          ],
+        },
+      }),
+    ).toBe("Attached image\nAttached audio\nAttached video\nAttached file");
+    expect(
+      extractTextFromMessage({
+        role: "assistant",
+        content: [],
+        mediaUrl: "file:///private/one.png",
+        mediaUrls: ["https://secret.test/two.mp3?ticket=secret"],
+      }),
+    ).toBe("Attached media\nAttached media");
+  });
+
   it("prefers final_answer text over commentary text for assistant messages", () => {
     const text = extractTextFromMessage({
       role: "assistant",

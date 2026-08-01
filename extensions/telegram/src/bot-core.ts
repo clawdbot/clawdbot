@@ -34,6 +34,7 @@ import {
 } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
+  ensureTelegramMessageProcessingResult,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   runWithTelegramUpdateProcessingFrame,
@@ -186,6 +187,10 @@ export function createTelegramBotCore(
     try {
       const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
         await next();
+        if (!getTelegramSpooledReplayDeferredParticipant()) {
+          // Accepted synchronous updates need one terminal fact at their middleware owner.
+          ensureTelegramMessageProcessingResult({ kind: "completed" });
+        }
       });
       const deferredWork = getTelegramSpooledReplayDeferredParticipant();
       if (deferredWork) {

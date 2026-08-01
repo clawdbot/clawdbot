@@ -88,6 +88,8 @@ export type CreateOpenClawToolsOptions = {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Process-local completion authority restricted to the current source conversation. */
+  sourceReplyOnly?: boolean;
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;

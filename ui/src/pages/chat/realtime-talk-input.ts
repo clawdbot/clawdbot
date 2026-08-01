@@ -167,6 +167,44 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
     : new DOMException("Realtime Talk input cancelled", "AbortError");
 }
 
+async function awaitRealtimeTalkMediaRequest(
+  request: Promise<MediaStream>,
+  signal: AbortSignal | undefined,
+): Promise<MediaStream> {
+  if (!signal) {
+    return await request;
+  }
+  if (signal.aborted) {
+    void request.then(
+      (stream) => stream.getTracks().forEach((track) => track.stop()),
+      () => undefined,
+    );
+    throw realtimeTalkAbortReason(signal);
+  }
+  let removeAbortListener: () => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(realtimeTalkAbortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  });
+  try {
+    return await Promise.race([request, aborted]);
+  } catch (error) {
+    if (signal.aborted) {
+      // Browser permission prompts are not cancellable. Release any stream that
+      // arrives after the lifecycle owner has already moved on.
+      void request.then(
+        (stream) => stream.getTracks().forEach((track) => track.stop()),
+        () => undefined,
+      );
+      throw realtimeTalkAbortReason(signal);
+    }
+    throw error;
+  } finally {
+    removeAbortListener();
+  }
+}
+
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
   options: { signal?: AbortSignal } = {},
@@ -177,9 +215,12 @@ export async function openRealtimeTalkInput(
   }
   let audio: MediaStream;
   try {
-    audio = await devices.getUserMedia({
-      audio: realtimeTalkAudioConstraints(inputDeviceId),
-    });
+    audio = await awaitRealtimeTalkMediaRequest(
+      devices.getUserMedia({
+        audio: realtimeTalkAudioConstraints(inputDeviceId),
+      }),
+      options.signal,
+    );
   } catch (error) {
     if (
       inputDeviceId?.trim() &&
@@ -208,9 +249,12 @@ export async function openRealtimeTalkCamera(
   const deviceId = videoDeviceId?.trim();
   let camera: MediaStream;
   try {
-    camera = await devices.getUserMedia({
-      video: deviceId ? { deviceId: { exact: deviceId } } : true,
-    });
+    camera = await awaitRealtimeTalkMediaRequest(
+      devices.getUserMedia({
+        video: deviceId ? { deviceId: { exact: deviceId } } : true,
+      }),
+      options.signal,
+    );
     if (options.signal?.aborted) {
       camera.getTracks().forEach((track) => track.stop());
       throw realtimeTalkAbortReason(options.signal);

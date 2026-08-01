@@ -6,25 +6,16 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
-import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
+import { currentConfigObject, type AgentConfigEntryTarget } from "../../lib/config/index.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
-function findAgentIndex(runtimeConfig: RuntimeConfig, agentId: string) {
-  return findAgentConfigEntryIndex(currentConfigObject(runtimeConfig.state), agentId);
-}
-
-function modelEntry(runtimeConfig: RuntimeConfig, index: number) {
-  const list = (
-    currentConfigObject(runtimeConfig.state) as {
-      agents?: { list?: unknown[] };
-    } | null
-  )?.agents?.list;
-  const existing = Array.isArray(list)
-    ? (list[index] as { model?: unknown } | undefined)?.model
-    : undefined;
-  return { path: ["agents", "list", index, "model"] as Array<string | number>, existing };
+function modelEntry(target: AgentConfigEntryTarget) {
+  return {
+    path: [...target.path, "model"] as Array<string | number>,
+    existing: target.entry.model,
+  };
 }
 
 /** Stage a primary-model change; clearing falls back to the inherited default. */
@@ -33,13 +24,11 @@ export function stageAgentPrimaryModel(
   agentId: string,
   modelId: string | null,
 ) {
-  const index = modelId
-    ? runtimeConfig.ensureAgentEntry(agentId)
-    : findAgentIndex(runtimeConfig, agentId);
-  if (index < 0) {
+  const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
+  if (!target) {
     return;
   }
-  const entry = modelEntry(runtimeConfig, index);
+  const entry = modelEntry(target);
   if (!modelId) {
     runtimeConfig.removeFormValue(entry.path);
   } else if (entry.existing && typeof entry.existing === "object") {
@@ -65,18 +54,19 @@ export function stageAgentModelFallbacks(
   const primary =
     resolveModelPrimary(resolved.entry?.model) ?? resolveModelPrimary(resolved.defaults?.model);
   const effective = resolveEffectiveModelFallbacks(resolved.entry?.model, resolved.defaults?.model);
-  const index =
+  const existingTarget = runtimeConfig.agentEntry(agentId);
+  const target =
     normalized.length > 0
       ? primary
-        ? runtimeConfig.ensureAgentEntry(agentId)
-        : -1
-      : (effective?.length ?? 0) > 0 || findAgentIndex(runtimeConfig, agentId) >= 0
-        ? runtimeConfig.ensureAgentEntry(agentId)
-        : -1;
-  if (index < 0) {
+        ? (existingTarget ?? runtimeConfig.agentEntry(agentId, { ensure: true }))
+        : null
+      : (effective?.length ?? 0) > 0 || existingTarget
+        ? (existingTarget ?? runtimeConfig.agentEntry(agentId, { ensure: true }))
+        : null;
+  if (!target) {
     return;
   }
-  const entry = modelEntry(runtimeConfig, index);
+  const entry = modelEntry(target);
   const currentPrimary =
     typeof entry.existing === "string"
       ? entry.existing.trim()

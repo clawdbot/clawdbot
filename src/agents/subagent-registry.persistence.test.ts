@@ -18,6 +18,7 @@ import {
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -171,7 +172,7 @@ describe("subagent registry persistence", () => {
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
 
-  function saveCanonicalRunFixtures(runs: Map<string, SubagentRunRecord>) {
+  function saveCanonicalRunFixtures(runs: ReadonlyMap<string, SubagentRunFixture>) {
     saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
   }
 
@@ -224,6 +225,7 @@ describe("subagent registry persistence", () => {
       task: "persist progress source",
       cleanup: "keep",
       createdAt: 1,
+      execution: { status: "running" },
     };
 
     await writePersistedRegistry(
@@ -365,7 +367,7 @@ describe("subagent registry persistence", () => {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "do the other thing",
-          cleanup: "keep",
+          cleanup: "keep" as const,
           createdAt: 1,
           startedAt: 1,
           endedAt: 2,
@@ -373,9 +375,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveCanonicalRunFixtures(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -476,7 +476,7 @@ describe("subagent registry persistence", () => {
       task: "persist collector result",
       cleanup: "keep",
       createdAt: 1,
-      endedAt: 2,
+      execution: { status: "terminal", endedAt: 2 },
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
@@ -493,7 +493,7 @@ describe("subagent registry persistence", () => {
     await writeChildSessionEntry({
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
-      updatedAt: run.endedAt,
+      updatedAt: run.execution.endedAt,
     });
 
     closeOpenClawStateDatabaseForTest();
@@ -914,9 +914,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveCanonicalRunFixtures(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -976,7 +974,7 @@ describe("subagent registry persistence", () => {
       runId: "run-active",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBeUndefined();
+    expect(resolved?.execution.endedAt).toBeUndefined();
   });
 
   it("can resolve the newest child-session row even when an older stale row is still active", async () => {
@@ -1022,6 +1020,6 @@ describe("subagent registry persistence", () => {
       runId: "run-current-ended",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBe(220);
+    expect(resolved?.execution.endedAt).toBe(220);
   });
 });

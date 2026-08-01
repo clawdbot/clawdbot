@@ -6,10 +6,7 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
-import {
-  normalizeCompactionTrigger,
-  type CompactionCounterAttribution,
-} from "./compaction-attribution.js";
+import { normalizeCompactionTrigger } from "./compaction-attribution.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -51,6 +48,59 @@ function compactionLogKind(reason: CompactionReason): string {
   return reason === "manual" ? "manual compaction" : "auto-compaction";
 }
 
+function emitCompactionAgentEvent(
+  ctx: EmbeddedAgentSubscribeContext,
+  data:
+    | { phase: "start"; trigger: string; sessionKey?: string }
+    | {
+        phase: "end";
+        willRetry: boolean;
+        completed: boolean;
+        trigger: string;
+        sessionKey?: string;
+        compactionCountBefore: number;
+        compactionCountAfter: number;
+        compactionCountDelta: number;
+      },
+): void {
+  const event = { stream: "compaction" as const, data };
+  emitAgentEvent({ runId: ctx.params.runId, ...event });
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
+}
+
+function runBestEffortCompactionHook(
+  ctx: EmbeddedAgentSubscribeContext,
+  phase: "before" | "after",
+): void {
+  const hookRunner = getGlobalHookRunner();
+  const hookName = phase === "before" ? "before_compaction" : "after_compaction";
+  if (!hookRunner?.hasHooks(hookName)) {
+    return;
+  }
+  const metrics = {
+    messageCount: ctx.params.session.messages?.length ?? 0,
+    sessionFile: ctx.params.session.sessionFile,
+  };
+  const context = { sessionKey: ctx.params.sessionKey };
+  const hook =
+    phase === "before"
+      ? hookRunner.runBeforeCompaction(
+          { ...metrics, messages: ctx.params.session.messages },
+          context,
+        )
+      : hookRunner.runAfterCompaction(
+          { ...metrics, compactedCount: ctx.getCompactionCount() },
+          context,
+        );
+  void hook.catch((err: unknown) => {
+    ctx.log.warn(`${hookName} hook failed: ${String(err)}`);
+  });
+}
+
 /** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
@@ -71,40 +121,15 @@ export function handleCompactionStart(
     consoleMessage: `embedded run ${kind} start: runId=${ctx.params.runId} reason=${reason}`,
   });
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId} trigger=${trigger}`);
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "compaction",
-    data: { phase: "start", trigger, sessionKey: ctx.params.sessionKey },
-  });
-  runBestEffortCallback({
-    label: "compaction agent event",
-    log: ctx.log,
-    callback: () =>
-      ctx.params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "start", trigger, sessionKey: ctx.params.sessionKey },
-      }),
+  emitCompactionAgentEvent(ctx, {
+    phase: "start",
+    trigger,
+    sessionKey: ctx.params.sessionKey,
   });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_compaction")) {
-    void hookRunner
-      .runBeforeCompaction(
-        {
-          messageCount: ctx.params.session.messages?.length ?? 0,
-          messages: ctx.params.session.messages,
-          sessionFile: ctx.params.session.sessionFile,
-        },
-        {
-          sessionKey: ctx.params.sessionKey,
-        },
-      )
-      .catch((err: unknown) => {
-        ctx.log.warn(`before_compaction hook failed: ${String(err)}`);
-      });
-  }
+  runBestEffortCompactionHook(ctx, "before");
 }
 
 /** Handles compaction completion, retry, and incomplete events. */
@@ -121,7 +146,8 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   const wasAborted = Boolean(evt.aborted);
   const compactionCountBefore = ctx.getCompactionCount();
   let compactionCountAfter = compactionCountBefore;
-  if (hasResult && !wasAborted) {
+  const completed = hasResult && !wasAborted;
+  if (completed) {
     ctx.incrementCompactionCount();
     const tokensAfter =
       typeof evt.result === "object" && evt.result
@@ -144,21 +170,24 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       compactionCount: compactionCountAfter,
       consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${compactionCountAfter} willRetry=${willRetry}`,
     });
-    void reconcileSessionStoreCompactionCountAfterSuccess({
-      sessionKey: ctx.params.sessionKey,
-      agentId: ctx.params.agentId,
-      configStore: ctx.params.config?.session?.store,
-      observedCompactionCount: compactionCountAfter,
-      attribution: {
-        runId: ctx.params.runId,
-        trigger,
-        outcome: "compacted",
-      },
-    }).catch((err: unknown) => {
-      ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
-    });
+    void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
+      .then(({ default: reconcile }) =>
+        reconcile({
+          sessionKey: ctx.params.sessionKey,
+          agentId: ctx.params.agentId,
+          configStore: ctx.params.config?.session?.store,
+          observedCompactionCount: compactionCountAfter,
+          attribution: {
+            runId: ctx.params.runId,
+            trigger,
+            outcome: "compacted",
+          },
+        }),
+      )
+      .catch((err: unknown) => {
+        ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
+      });
   }
-  const completed = hasResult && !wasAborted;
   const outcome = completed ? "compacted" : wasAborted ? "aborted" : "skipped";
   const compactionCountDelta = compactionCountAfter - compactionCountBefore;
   ctx.log.debug(
@@ -180,9 +209,17 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       ctx.state.livenessState = "working";
     }
     ctx.maybeResolveCompactionWait();
-    clearStaleAssistantUsageOnSessionMessages(ctx);
+    const messages = ctx.params.session.messages;
+    if (Array.isArray(messages)) {
+      // Marker-free final compaction has no fresh boundary, so stale totals
+      // must be cleared before later context counters inspect assistant usage.
+      stripStaleAssistantUsageBeforeLatestCompaction(messages, {
+        mutate: true,
+        whenMissingCompactionSummary: "zeroAssistantUsage",
+      });
+    }
   }
-  if (!hasResult || wasAborted) {
+  if (!completed) {
     ctx.log.info(`embedded run ${kind} incomplete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -193,84 +230,20 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       consoleMessage: `embedded run ${kind} incomplete: runId=${ctx.params.runId} reason=${reason} aborted=${wasAborted} willRetry=${willRetry}`,
     });
   }
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "compaction",
-    data: {
-      phase: "end",
-      willRetry,
-      completed,
-      trigger,
-      sessionKey: ctx.params.sessionKey,
-      compactionCountBefore,
-      compactionCountAfter,
-      compactionCountDelta,
-    },
-  });
-  runBestEffortCallback({
-    label: "compaction agent event",
-    log: ctx.log,
-    callback: () =>
-      ctx.params.onAgentEvent?.({
-        stream: "compaction",
-        data: {
-          phase: "end",
-          willRetry,
-          completed,
-          trigger,
-          sessionKey: ctx.params.sessionKey,
-          compactionCountBefore,
-          compactionCountAfter,
-          compactionCountDelta,
-        },
-      }),
+  emitCompactionAgentEvent(ctx, {
+    phase: "end",
+    willRetry,
+    completed,
+    trigger,
+    sessionKey: ctx.params.sessionKey,
+    compactionCountBefore,
+    compactionCountAfter,
+    compactionCountDelta,
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
   if (!willRetry) {
-    const hookRunnerEnd = getGlobalHookRunner();
-    if (hookRunnerEnd?.hasHooks("after_compaction")) {
-      void hookRunnerEnd
-        .runAfterCompaction(
-          {
-            messageCount: ctx.params.session.messages?.length ?? 0,
-            compactedCount: ctx.getCompactionCount(),
-            sessionFile: ctx.params.session.sessionFile,
-          },
-          { sessionKey: ctx.params.sessionKey },
-        )
-        .catch((err: unknown) => {
-          ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
-        });
-    }
+    runBestEffortCompactionHook(ctx, "after");
   }
-}
-
-/** Lazily reconciles persisted compaction count after a successful compaction. */
-async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
-  sessionKey?: string;
-  agentId?: string;
-  configStore?: string;
-  observedCompactionCount: number;
-  now?: number;
-  attribution?: CompactionCounterAttribution;
-}): Promise<number | undefined> {
-  const { default: reconcile } =
-    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
-  return reconcile(params);
-}
-
-function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
-  const messages = ctx.params.session.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-  // Marker-free final compaction has no fresh boundary to compare against.
-  // Clear all assistant usage or stale pre-compaction totals keep driving the
-  // context counter after cleanup.
-  stripStaleAssistantUsageBeforeLatestCompaction(messages, {
-    mutate: true,
-    whenMissingCompactionSummary: "zeroAssistantUsage",
-  });
 }

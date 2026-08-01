@@ -13,6 +13,7 @@ import type {
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
   TranscriptEvent,
+  TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -249,12 +250,17 @@ export async function trimSqliteTranscriptForManualCompact(
 export async function appendSqliteTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
 ): Promise<void> {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventInTransaction(database, resolved, event);
+      appendTranscriptEventInTransaction(
+        database,
+        resolved,
+        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      );
     }, toDatabaseOptions(resolved));
   });
 }
@@ -263,6 +269,7 @@ export async function appendSqliteTranscriptEvent(
 export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
 ): boolean {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
@@ -272,9 +279,39 @@ export function appendSqliteTranscriptEventSync(
     if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
       return;
     }
-    appended = appendTranscriptEventInTransaction(database, resolved, event);
+    appended = appendTranscriptEventInTransaction(
+      database,
+      resolved,
+      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+    );
   }, toDatabaseOptions(resolved));
   return appended;
+}
+
+function resolveTranscriptEventAppendParent(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  event: TranscriptEvent,
+  options: TranscriptEventAppendOptions,
+): TranscriptEvent {
+  if (
+    options.appendIntent !== "active-branch" ||
+    !event ||
+    typeof event !== "object" ||
+    Array.isArray(event) ||
+    !("parentId" in event)
+  ) {
+    return event;
+  }
+  const parentId = event.parentId;
+  if (parentId !== null && typeof parentId !== "string") {
+    return event;
+  }
+  const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
+    appendIntent: "active-branch",
+    parentId,
+  });
+  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */

@@ -166,7 +166,11 @@ describeControlUiE2e("Control UI usage session filter Unicode", () => {
 
       const row = page.locator(".session-bar-row").filter({ hasText: scenario.key });
       await expect.poll(() => row.count(), { timeout: 10_000 }).toBe(1);
-      await row.click();
+      const select = row.getByRole("button", { name: scenario.key, exact: true });
+      expect(await select.getAttribute("aria-pressed")).toBe("false");
+      await select.focus();
+      await page.keyboard.press("Shift+Enter");
+      await expect.poll(() => select.getAttribute("aria-pressed")).toBe("true");
 
       const chip = page.locator(".filter-chip").filter({ has: page.locator(".filter-chip-label") });
       const label = chip.locator(".filter-chip-label");

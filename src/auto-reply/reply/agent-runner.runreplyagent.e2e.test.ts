@@ -468,7 +468,6 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(taskTyping.startTypingLoop).toHaveBeenCalledOnce();
-    expect(taskTyping.refreshTypingTtl).toHaveBeenCalledOnce();
     expect(taskTyping.cleanup).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
 
@@ -897,7 +896,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const sessionStore = {
       main: {
         sessionId: "pre-compact-session",
-        sessionFile: "/tmp/pre-compact.jsonl",
+        sessionFile: "main",
         updatedAt: Date.now(),
       },
     };
@@ -923,7 +922,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
-      sessionFile: "/tmp/post-compact.jsonl",
+      sessionFile: "main",
       updatedAt: Date.now(),
     };
     active.complete();
@@ -1993,7 +1992,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: { channel: "webchat" },
+      intentId: expect.any(String),
+      createdAt: expect.any(Number),
+    });
     expect(stored.restartRecoverySourceIngress).toBe("control-ui");
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
@@ -2583,7 +2588,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: { kind: "transport-only" },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "model reply",
+        context: { channel: "discord" },
+        intentId: expect.any(String),
+        createdAt: expect.any(Number),
+      },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });

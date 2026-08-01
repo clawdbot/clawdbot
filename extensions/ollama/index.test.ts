@@ -153,6 +153,12 @@ describe("ollama tool-schema compatibility", () => {
       });
     }
   });
+
+  it("keeps configured-row projection aligned with absent runtime model normalizers", () => {
+    for (const provider of registerProvidersWithPluginConfig({})) {
+      expect(provider.normalizeResolvedModel).toBeUndefined();
+    }
+  });
 });
 
 function createOllamaResetValidationContext(

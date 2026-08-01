@@ -2,7 +2,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -22,7 +24,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync } from "node:fs";
+      import { appendFileSync, existsSync } from "node:fs";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -87,33 +89,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         };
       }
 
-      function assistantMessageFromSourceReplyPayloads(payloads: ReturnType<typeof buildEmbeddedRunPayloads>) {
-        if (payloads.length === 0) {
-          throw new Error("expected source reply payload");
-        }
-        for (const payload of payloads) {
-          const metadata = getReplyPayloadMetadata(payload);
-          if (!metadata?.sourceReplyTranscriptMirror) {
-            throw new Error("expected source reply transcript mirror metadata");
-          }
-          record("sourceReplyMetadata", metadata.sourceReplyTranscriptMirror);
-        }
-        const normalized = normalizeReplyPayloadsForDelivery(payloads);
-        const content = normalized.flatMap((payload) => {
-          const text = payload.text?.trim();
-          return text ? [{ type: "text", text }] : [];
-        });
-        if (content.length === 0) {
-          throw new Error("expected displayable source reply content");
-        }
-        return {
-          role: "assistant",
-          content,
-          timestamp: Date.now(),
-        };
-      }
-
       ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
+      ${TUI_PTY_ASSISTANT_FIXTURE_SCRIPT}
 
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
@@ -361,13 +338,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                   runId,
                 })
               : [];
+            const attachmentOnlyMessage = buildAttachmentOnlyAssistantMessage(opts.message, runId);
             const message = isSourceReplyProof
               ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
-              : {
+              : (attachmentOnlyMessage ?? {
                   role: "assistant",
                   content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
                   timestamp: Date.now(),
-                };
+                });
             this.onEvent?.({
               event: "chat",
               payload: {
@@ -495,10 +473,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
         }
 
-        async resetSession(key: string, reason?: "new" | "reset") {
-          record("resetSession", { key, reason });
-          return {};
-        }
+        ${TUI_PTY_RESET_FIXTURE.methods}
 
         async getGatewayStatus() {
           record("getGatewayStatus");
@@ -584,6 +559,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           message: initialMessage,
           historyLimit: 5,
           title: "openclaw tui pty fixture",
+          ${TUI_PTY_RESET_FIXTURE.options}
         });
       }
 
