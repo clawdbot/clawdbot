@@ -136,27 +136,6 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
-
-  it("carries input provenance into destination-aware tool guards", () => {
-    const inputProvenance = {
-      kind: "inter_session" as const,
-      sourceSessionKey: "agent:requester:discord:source",
-      sourceTool: "sessions_send",
-    };
-    const context = buildEmbeddedAttemptToolRunContext({
-      trigger: "manual",
-      inputProvenance,
-    });
-    expect(context.inputProvenance).toEqual(inputProvenance);
-  });
-
-  it("omits input provenance when none is provided", () => {
-    expect(
-      buildEmbeddedAttemptToolRunContext({
-        trigger: "manual",
-      }).inputProvenance,
-    ).toBeUndefined();
-  });
 });
 
 describe("resolvePromptBuildHookResult", () => {
