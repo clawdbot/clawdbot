@@ -1,9 +1,9 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CODEX_APP_SERVER_VERSION } from "../../../../extensions/codex/test-api.js";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { loadBundledPluginPublicSurface } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
 import {
   createOpenClawTestInstance,
@@ -110,6 +110,9 @@ describe("Codex auth product proof", () => {
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },
     async () => {
+      const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginPublicSurface<{
+        CODEX_APP_SERVER_VERSION: string;
+      }>({ pluginId: "codex", artifactBasename: "test-api.js" });
       const appServerFixture = fileURLToPath(
         new URL("./codex-auth-app-server.fixture.mjs", import.meta.url),
       );
