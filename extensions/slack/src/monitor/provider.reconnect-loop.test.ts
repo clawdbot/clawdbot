@@ -152,7 +152,7 @@ describe("slack socket reconnect loop", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "healthy",
+      lifecycle: "ready",
       lastError: null,
     });
     expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);

@@ -84,6 +84,37 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it.each(["starting", "recovering"] as const)(
+    "trusts recorded %s lifecycle instead of wall-clock inference",
+    (lifecycle) => {
+      expect(
+        evaluateHealth(runningAccount({ connected: false, lifecycle, lastStartAt: 0 }), {
+          now: 1_000_000,
+        }),
+      ).toEqual({ healthy: true, reason: "startup-connect-grace" });
+    },
+  );
+
+  it("lets recorded ready bypass wall-clock startup grace", () => {
+    expect(
+      evaluateHealth(runningAccount({ connected: false, lifecycle: "ready", lastStartAt: 99_999 })),
+    ).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("treats recorded blocked lifecycle as unhealthy", () => {
+    expect(evaluateHealth(connectedAccount({ lifecycle: "blocked" }))).toEqual({
+      healthy: false,
+      reason: "blocked",
+    });
+  });
+
+  it("maps recorded stopped lifecycle to the existing restartable verdict", () => {
+    expect(evaluateHealth(runningAccount({ lifecycle: "stopped" }))).toEqual({
+      healthy: false,
+      reason: "not-running",
+    });
+  });
+
   it("treats active runs as busy even when disconnected", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(activeRunAccount(now - 30_000), { now });

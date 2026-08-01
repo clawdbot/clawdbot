@@ -20,6 +20,7 @@ type ChannelHealthSnapshot = {
   reconnectAttempts?: number;
   mode?: string;
   ingressUnavailable?: true;
+  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
   terminalDisconnect?: boolean;
 };
 
@@ -28,6 +29,7 @@ type ChannelHealthEvaluationReason =
   | "unmanaged"
   | "not-running"
   | "terminal-disconnect"
+  | "blocked"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
@@ -84,6 +86,15 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
+  }
+  if (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") {
+    return { healthy: true, reason: "startup-connect-grace" };
+  }
+  if (snapshot.lifecycle === "stopped") {
+    return { healthy: false, reason: "not-running" };
+  }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
@@ -134,7 +145,7 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
-  if (snapshot.lastStartAt != null) {
+  if (snapshot.lifecycle === undefined && snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };

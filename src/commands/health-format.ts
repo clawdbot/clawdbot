@@ -186,6 +186,11 @@ export const formatHealthChannelLines = (
       : [];
     const statusState =
       typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
+    const healthState = selectedSummary.healthState;
+    if (typeof healthState === "string" && healthState) {
+      lines.push(`${label}: ${healthState}`);
+      continue;
+    }
     if (statusState) {
       if (statusState === "linked") {
         const authAgeMs =

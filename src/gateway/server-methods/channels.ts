@@ -481,9 +481,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      if (!health.healthy) {
-        snapshot.healthState = health.reason;
-      }
+      snapshot.healthState = health.healthy ? undefined : health.reason;
       return { accountId, account, snapshot };
     };
 

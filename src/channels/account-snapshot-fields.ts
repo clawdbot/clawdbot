@@ -250,8 +250,16 @@ export function projectSafeChannelAccountSnapshotFields(
     "lastTransportActivityAt",
     asFiniteNumber(record.lastTransportActivityAt),
   );
-  for (const key of ["statusState", "healthState"] as const) {
-    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  setSnapshotField(snapshot, "statusState", normalizeOptionalString(record.statusState));
+  const lifecycle = record.lifecycle;
+  if (
+    lifecycle === "starting" ||
+    lifecycle === "ready" ||
+    lifecycle === "recovering" ||
+    lifecycle === "blocked" ||
+    lifecycle === "stopped"
+  ) {
+    snapshot.lifecycle = lifecycle;
   }
   // False or absent ingress means unknown, never evidence that ingress is healthy.
   if (asBoolean(record.ingressUnavailable) === true) {

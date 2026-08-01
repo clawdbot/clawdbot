@@ -141,7 +141,7 @@ function adoptSlackRuntimeIdentity(params: {
   botId?: unknown;
   isEnterpriseInstall?: unknown;
 }): boolean {
-  if (params.ctx.identityHealth.healthState !== "degraded") {
+  if (params.ctx.identityHealth.lifecycle !== "blocked") {
     return false;
   }
   const resolved = resolveSlackRuntimeIdentity(params);
@@ -150,7 +150,7 @@ function adoptSlackRuntimeIdentity(params: {
   }
   params.ctx.botUserId = resolved.botUserId;
   params.ctx.botId = resolved.botId;
-  params.ctx.identityHealth = { healthState: "healthy", lastError: null };
+  params.ctx.identityHealth = { lifecycle: "ready", lastError: null };
   return true;
 }
 
@@ -579,7 +579,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   monitorContextRef.current = ctx;
 
   const recoverSlackIdentity = async () => {
-    if (ctx.identityHealth.healthState !== "degraded") {
+    if (ctx.identityHealth.lifecycle !== "blocked") {
       return;
     }
     try {
@@ -835,7 +835,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
                 runtime.log?.(
-                  ctx.identityHealth.healthState === "degraded"
+                  ctx.identityHealth.lifecycle === "blocked"
                     ? "slack socket mode connected (degraded identity)"
                     : "slack socket mode connected",
                 );

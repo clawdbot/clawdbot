@@ -411,7 +411,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastDisconnect: { at: 12, error: "boom" },
           lastEventAt: 13,
           lastTransportActivityAt: 14,
-          healthState: "healthy",
+          lifecycle: "recovering" as const,
           ingressUnavailable: true as const,
           busy: true,
           activeRuns: 2,
@@ -431,7 +431,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastDisconnect: { at: 12, error: "boom" },
         lastEventAt: 13,
         lastTransportActivityAt: 14,
-        healthState: "healthy",
+        lifecycle: "recovering",
         ingressUnavailable: true,
         busy: true,
         activeRuns: 2,
@@ -445,7 +445,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       input: {
         runtime: {
           running: false,
-          healthState: "logged-out",
+          lifecycle: "blocked" as const,
           terminalDisconnect: true,
         },
       },
@@ -453,7 +453,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       expected: {
         ...defaultRuntimeState,
         running: false,
-        healthState: "logged-out",
+        lifecycle: "blocked",
         terminalDisconnect: true,
         probe: undefined,
       },

@@ -501,4 +501,24 @@ describe("channelsHandlers channels.status", () => {
     expect(payload.eventLoop).toBe(eventLoop);
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("stale-socket");
   });
+
+  it("derives blocked health from recorded lifecycle", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "blocked",
+    });
+  });
 });
