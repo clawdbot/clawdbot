@@ -281,12 +281,9 @@ export class ChatPane extends ChatPaneHeader {
       sessionRailCompanion: catalogKey
         ? undefined
         : this.sessionCompanionThreads.view(state.sessionKey),
-      sessionRailOpenRequest:
-        this.sessionRailOpenSessionKey === state.sessionKey ? this.sessionRailOpenRequest : 0,
-      sessionRailConsumedOpenRequest: this.sessionRailConsumedOpenRequest,
+      ...this.sessionRailOpenRequestProps(state.sessionKey),
       sessionRailMode: selectedSessionRailMode,
       sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
-      onSessionRailOpenRequestConsumed: this.consumeSessionRailOpenRequest,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
@@ -706,4 +703,3 @@ export class ChatPane extends ChatPaneHeader {
     )}${this.renderResetConfirmation()}`;
   }
 }
-/* oxlint-disable max-lines -- TODO: split this oversized owner surface. */

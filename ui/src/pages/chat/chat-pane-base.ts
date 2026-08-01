@@ -187,6 +187,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   };
 
+  protected sessionRailOpenRequestProps(sessionKey: string) {
+    return {
+      sessionRailOpenRequest:
+        this.sessionRailOpenSessionKey === sessionKey ? this.sessionRailOpenRequest : 0,
+      sessionRailConsumedOpenRequest: this.sessionRailConsumedOpenRequest,
+      onSessionRailOpenRequestConsumed: this.consumeSessionRailOpenRequest,
+    };
+  }
+
   protected readonly submitSessionCompanionQuestion = async (question: string) => {
     const state = this.state;
     if (!state || !state.sessionKey) {
