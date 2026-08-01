@@ -1,6 +1,4 @@
-/**
- * Public SDK subpath for realtime voice provider types, runtime helpers, and talk events.
- */
+/** Production-private runtime seam for bundled and separately published official plugins. */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceAudioFormat,
