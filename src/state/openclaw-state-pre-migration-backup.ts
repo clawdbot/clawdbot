@@ -77,9 +77,12 @@ function prunePreMigrationBackups(backupDir: string, keep: number): string[] {
  *
  * OpenClaw migrates the state schema in place on startup. Once the on-disk
  * `user_version` is raised, an older build refuses to open the database
- * ("uses newer schema version N; this OpenClaw build supports M"), so an
- * interrupted, unwanted, or buggy upgrade has no recovery path unless a copy was
- * taken first. `VACUUM INTO` writes a single consistent snapshot (including
+ * ("uses newer schema version N; this build supports M"), so an interrupted,
+ * unwanted, or buggy upgrade has no recovery path unless a copy was taken
+ * first. That refusal used to point operators at restoring a compatible
+ * backup; #115232 dropped the advice as unactionable, and part of why it was
+ * unactionable is that nothing created such a backup. `VACUUM INTO` writes a
+ * single consistent snapshot (including
  * committed WAL frames) without holding a write transaction, so it is safe to
  * call on the live handle before the migration transaction begins.
  *
