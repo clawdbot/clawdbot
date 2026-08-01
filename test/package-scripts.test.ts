@@ -209,6 +209,18 @@ describe("package scripts", () => {
     );
   });
 
+  it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["test:windows:ci"]).not.toContain("schtasks.integration.e2e.test.ts");
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "CI_WINDOWS_SCHTASKS_INTEGRATION=1",
+    );
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "src/daemon/schtasks.integration.e2e.test.ts",
+    );
+  });
+
   it("runs shared test-state cleanup coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/test-utils/openclaw-test-state.test.ts",

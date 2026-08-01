@@ -5,12 +5,11 @@ import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
-import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { slackSecurityAdapter } from "./security.js";
-import { SLACK_CHANNEL } from "./setup-shared.js";
 
 export { SLACK_CHANNEL } from "./setup-shared.js";
 
@@ -42,26 +41,13 @@ export function createSlackPluginBase(params: {
   | "secrets"
 > {
   return {
-    id: SLACK_CHANNEL,
+    ...slackSetupPlugin,
     meta: {
-      ...getChatChannelMeta(SLACK_CHANNEL),
+      ...getChatChannelMeta(slackSetupPlugin.id),
       preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
     setupContract: params.setupContract,
-    capabilities: {
-      chatTypes: ["direct", "channel", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      nativeCommands: true,
-    },
-    commands: {
-      nativeCommandsAutoEnabled: false,
-      nativeSkillsAutoEnabled: false,
-      resolveNativeCommandName: ({ commandKey, defaultName }) =>
-        commandKey === "status" ? "agentstatus" : defaultName,
-    },
     doctor: slackDoctor,
     agentPrompt: {
       inboundFormattingHints: () => ({
@@ -83,18 +69,10 @@ export function createSlackPluginBase(params: {
         "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",
       ],
     },
-    streaming: {
-      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: { configPrefixes: ["channels.slack"] },
     security: slackSecurityAdapter,
-    configSchema: SlackChannelConfigSchema,
     config: {
+      ...slackSetupPlugin.config,
       ...slackConfigAdapter,
-      hasConfiguredState: ({ env }) =>
-        ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
-          (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
-        ),
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
       describeAccount: (account) =>
         describeAccountSnapshot({

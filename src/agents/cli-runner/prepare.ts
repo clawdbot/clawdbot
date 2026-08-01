@@ -344,13 +344,13 @@ function shouldRefreshAuthProfileForExecution(params: {
   authProfileId?: string;
   authCredential?: AuthProfileCredential;
 }): boolean {
-  return Boolean(
-    params.policy &&
-    params.authProfileId &&
-    (params.authCredential?.type === "oauth" ||
-      params.authCredential?.type === "api_key" ||
-      params.authCredential?.type === "token"),
-  );
+  if (!params.policy || !params.authProfileId || !params.authCredential) {
+    return false;
+  }
+  if (params.authCredential.type === "oauth") {
+    return params.policy.oauthRefreshOwner === "core";
+  }
+  return params.authCredential.type === "api_key" || params.authCredential.type === "token";
 }
 
 type CliAuthProfileResolutionFailure =

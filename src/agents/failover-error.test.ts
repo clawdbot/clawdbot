@@ -3,6 +3,7 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -1416,6 +1417,17 @@ describe("failover-error", () => {
       ).toBe(true);
     });
 
+    it("returns true for stale gateway lifecycle ownership loss", () => {
+      const staleLifecycle = createAgentRunStaleLifecycleError();
+      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
+      ).toBe(true);
+      const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
+      abortWrapper.name = "AbortError";
+      expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
     it("returns true when the coordination error is nested via cause", () => {
       const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
       expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
@@ -1457,6 +1469,13 @@ describe("failover-error", () => {
           status: 503,
           message: "upstream overloaded",
           cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 503,
+          message: "upstream overloaded",
+          cause: createAgentRunStaleLifecycleError(),
         }),
       ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);

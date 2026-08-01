@@ -55,7 +55,7 @@ export type PendingFinalDeliveryPayload = {
   wakeOnDescendantSettle?: boolean;
 };
 
-export type SubagentExecutionState = {
+type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
   acceptedAt?: number;
   startedAt?: number;

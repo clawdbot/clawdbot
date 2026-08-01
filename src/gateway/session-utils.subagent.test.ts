@@ -15,6 +15,7 @@ import {
 import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
@@ -1407,6 +1408,13 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         "main",
       );
 
+      expect(
+        canPrewarmCombinedSessionStoresForGateway(cfg, {
+          agentIds: ["main", "ops"],
+          maxRows: 1,
+        }),
+      ).toBe(false);
+
       const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
       expect(store["agent:main:main"]?.sessionId).toBe("s-main-unscoped");
       expect(store["agent:ops:main"]).toBeUndefined();
@@ -1493,6 +1501,19 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         { incognito: true, sessionId: "s-incognito-dynamic", updatedAt: 500 },
         "dynamic",
       );
+      await seedSessionEntry(
+        resolveIncognitoOpenClawAgentSqlitePath({ agentId: "ops" }),
+        "dashboard:incognito-ops",
+        { incognito: true, sessionId: "s-incognito-ops", updatedAt: 600 },
+        "ops",
+      );
+
+      expect(
+        canPrewarmCombinedSessionStoresForGateway(cfg, {
+          agentIds: ["ops"],
+          maxRows: 4,
+        }),
+      ).toBe(false);
 
       const { store } = loadCombinedSessionStoreForGateway(cfg);
       expect(store["agent:ops:main"]?.sessionId).toBe("s-ops");
@@ -1589,6 +1610,13 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       } as OpenClawConfig;
 
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
+
+      expect(
+        canPrewarmCombinedSessionStoresForGateway(cfg, {
+          agentIds: ["codex"],
+          maxRows: 0,
+        }),
+      ).toBe(false);
 
       expect(path.resolve(storePath)).toBe(path.resolve(codexStorePath));
       expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
