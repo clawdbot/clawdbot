@@ -2021,11 +2021,16 @@ export function handleMessageEnd(
       !strippedBufferedText.startsWith(leadingWhitespace)
         ? `${leadingWhitespace}${strippedBufferedText}`
         : strippedBufferedText;
-    return {
-      ...bufferedResult,
-      ...parsedText,
-      text: bufferedText,
-    };
+    return bufferedResult
+      ? {
+          ...bufferedResult,
+          text: bufferedText,
+        }
+      : {
+          text: bufferedText,
+          replyToTag: false,
+          isSilent: false,
+        };
   };
 
   const hasBufferedBlockReply = ctx.blockChunker
@@ -2053,9 +2058,7 @@ export function handleMessageEnd(
             if (!isCurrentDeliveryGeneration()) {
               return undefined;
             }
-            emitSplitResultAsBlockReply(
-              composeFinalBlockReply(ctx.consumeReplyDirectives("", { final: true })),
-            );
+            emitSplitResultAsBlockReply(composeFinalBlockReply(consumeFinalReplyDirectives()));
             return finishMessageEndDelivery();
           },
           (err: unknown) => {

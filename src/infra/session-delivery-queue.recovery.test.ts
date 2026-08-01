@@ -81,6 +81,41 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("replays continuation trigger and trusted trace exactly once after restart", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated media ready",
+          messageId: "generated-media-restart",
+          continuationTrigger: "delegate-return",
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+          traceparentProvenance: "internal",
+        },
+        tempDir,
+      );
+      const deliver = vi.fn(async () => undefined);
+
+      const summary = await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          continuationTrigger: "delegate-return",
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+          traceparentProvenance: "internal",
+        }),
+        { stateDir: tempDir },
+      );
+      expect(summary.recovered).toBe(1);
+    });
+  });
+
   it("does not deliver seeded generic rows containing inline attachment bytes", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const kind of ["systemEvent", "agentTurn"] as const) {

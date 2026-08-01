@@ -99,6 +99,9 @@ describe("session delivery queue runtime", () => {
             message: "generated image ready",
             messageId: "image:task-lease:agent-loop",
             idempotencyKey: "image:task-lease:agent-loop",
+            continuationTrigger: "delegate-return",
+            traceparent: " 00-0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-01 ",
+            traceparentProvenance: "internal",
           },
           60_000,
         );
@@ -114,6 +117,14 @@ describe("session delivery queue runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
 
         expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            continuationTrigger: "delegate-return",
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            traceparentProvenance: "internal",
+          }),
+          expect.any(Object),
+        );
         expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
       });
     });

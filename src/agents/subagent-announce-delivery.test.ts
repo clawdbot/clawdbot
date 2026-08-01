@@ -2320,6 +2320,31 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("persists continuation trigger and trusted trace for generated media", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const callGateway = createGatewayMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "music_generate",
+      continuationTriggerOverride: "delegate-return",
+      traceparent,
+      internalEvents: musicCompletionEvents(),
+    });
+
+    expectDeliveryPath(result, "queued");
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
+        continuationTrigger: "delegate-return",
+        traceparent,
+        traceparentProvenance: "internal",
+      }),
+      expect.any(Number),
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("queues generated media group completions that miss required message-tool delivery", async () => {
     const callGateway = createPayloadGatewayMock({
       text: "The track is ready.",

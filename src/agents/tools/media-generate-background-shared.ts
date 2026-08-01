@@ -9,6 +9,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
@@ -53,6 +54,7 @@ export type MediaGenerationTaskHandle = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
+  traceparent?: string;
 };
 
 /** Schedules detached media generation work. */
@@ -246,6 +248,7 @@ function createMediaGenerationTaskRun(params: {
       requesterSessionKey: sessionKey,
       requesterOrigin,
       taskLabel: params.prompt,
+      traceparent: formatActiveContinuationTraceparent(),
     };
     touchMediaGenerationTaskRunContext(handle);
     return handle;
@@ -666,6 +669,8 @@ async function wakeMediaGenerationTaskCompletion(params: {
     expectsCompletionMessage: true,
     bestEffortDeliver: true,
     directIdempotencyKey: announceId,
+    continuationTriggerOverride: "work-wake",
+    ...(params.handle.traceparent ? { traceparent: params.handle.traceparent } : {}),
   });
   if (delivery.delivered) {
     return { status: "delivered" };

@@ -2938,12 +2938,25 @@ describe("handleMessageEnd", () => {
     );
   });
 
-  it("emits final media and malformed pending text after flushing buffered message_end text", () => {
+  it("emits final media and malformed pending text after an async buffered flush", async () => {
     const emitBlockReply = vi.fn();
-    const flushBlockReplyBuffer = vi.fn();
+    let resolveFlush: (() => void) | undefined;
+    const flushBlockReplyBuffer = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFlush = () => {
+            emitBlockReply({ mediaUrls: ["/tmp/final.png"] });
+            ctx.state.lastDeliveredAssistantReplyDirectives = {
+              mediaUrls: ["/tmp/final.png"],
+            };
+            resolve();
+          };
+        }),
+    );
     const accumulator = createStreamingDirectiveAccumulator();
-    const text = "Caption [[oops\nMEDIA:/tmp/final.png";
-    const streamed = accumulator.consume(text)?.text ?? "";
+    const text = "[[reply_to_current]]\nCaption [[oops\nMEDIA:/tmp/final.png";
+    const streamed = accumulator.consume("[[reply_to_current]]\nCaption")?.text ?? "";
+    accumulator.consume(" [[oops\nMEDIA:/tmp/final.png");
     const consumeReplyDirectives = vi.fn((chunk: string, options?: { final?: boolean }) =>
       accumulator.consume(chunk, options),
     );
@@ -2964,7 +2977,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void endMessage(ctx, {
+    const pending = endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text }],
@@ -2976,16 +2989,29 @@ describe("handleMessageEnd", () => {
       assistantMessageIndex: undefined,
       final: true,
     });
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    resolveFlush?.();
+    await pending;
     expect(consumeReplyDirectives).toHaveBeenCalledWith("", { final: true });
-    const finalReply = firstMockArg(emitBlockReply, "block reply") as {
-      text?: string;
-      mediaUrls?: string[];
-    };
+    const replies = emitBlockReply.mock.calls.map(
+      ([reply]) =>
+        reply as {
+          text?: string;
+          mediaUrls?: string[];
+          replyToCurrent?: boolean;
+        },
+    );
+    const finalReply = replies.at(-1);
+    if (!finalReply) {
+      throw new Error("Expected final block reply");
+    }
     expect(finalReply).toMatchObject({
-      text: " [[oops",
-      mediaUrls: ["/tmp/final.png"],
+      text: "Caption [[oops",
+      mediaUrls: undefined,
+      replyToCurrent: true,
     });
-    expect(`${streamed}${finalReply.text ?? ""}`).toBe("Caption [[oops");
+    expect(replies.flatMap((reply) => reply.mediaUrls ?? [])).toEqual(["/tmp/final.png"]);
+    expect(replies.map((reply) => reply.text ?? "").join("")).not.toContain("MEDIA:");
   });
 
   it("does not re-emit final media already delivered at text_end", () => {

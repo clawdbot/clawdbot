@@ -282,6 +282,34 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("fails closed for untrusted trace context and malformed continuation triggers", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "untrusted metadata",
+          messageId: "untrusted-metadata",
+        },
+        tempDir,
+      );
+      rewriteSessionQueueEntry(tempDir, id, (entry) => {
+        entry.traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+      });
+      await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toEqual(
+        expect.not.objectContaining({ traceparent: expect.anything() }),
+      );
+      rewriteSessionQueueEntry(tempDir, id, (entry) => {
+        entry.continuationTrigger = "operator-controlled";
+      });
+      await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+      expect(readSessionQueueRow(tempDir, id)).toMatchObject({
+        status: "failed",
+        last_error: "invalid generic session delivery payload: invalid shape",
+      });
+    });
+  });
+
   it("fails a managed delegate return whose durable receipt and projection disagree", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await expect(

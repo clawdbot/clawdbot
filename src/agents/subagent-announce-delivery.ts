@@ -8,7 +8,9 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import { isContinuationHeartbeatEquivalent } from "../auto-reply/reply/run-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
@@ -1212,6 +1214,12 @@ export async function deliverSubagentAnnouncement(params: {
   let durableQueueStatusUnknown = false;
   if (durableGeneratedMediaHandoff) {
     try {
+      const continuationTrigger = isContinuationHeartbeatEquivalent(
+        params.continuationTriggerOverride,
+      )
+        ? params.continuationTriggerOverride
+        : undefined;
+      const traceparent = normalizeDiagnosticTraceparent(params.traceparent);
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
       const canonicalSessionKey = resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey);
       const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
@@ -1261,6 +1269,8 @@ export async function deliverSubagentAnnouncement(params: {
           },
           sourceReplyDeliveryMode,
           expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
+          ...(continuationTrigger ? { continuationTrigger } : {}),
+          ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
           idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
         },
         resolveSubagentAnnounceTimeoutMs(cfg) + 5_000,

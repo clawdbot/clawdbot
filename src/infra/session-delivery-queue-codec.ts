@@ -8,6 +8,7 @@ import {
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
 } from "../auto-reply/continuation/targeting-pure.js";
+import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -101,6 +102,7 @@ type QueuedSessionDeliveryGenericPayload =
       deliveryContext?: SessionDeliveryContext;
       inputProvenance?: InputProvenance;
       sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+      continuationTrigger?: ContinuationTrigger;
       expectedMediaUrls?: string[];
       suppressTextDelivery?: true;
       idempotencyKey?: string;
@@ -346,6 +348,7 @@ const QueuedAgentTurnSchema = z
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     inputProvenance: QueuedInputProvenanceSchema.optional(),
     sourceReplyDeliveryMode: z.enum(["automatic", "message_tool_only"]).optional(),
+    continuationTrigger: z.enum(["work-wake", "delegate-return", "subagent-return"]).optional(),
     expectedMediaUrls: z.array(z.string()).optional(),
     suppressTextDelivery: z.literal(true).optional(),
     idempotencyKey: z.string().optional(),
@@ -528,14 +531,22 @@ function decodeLoadedSessionDelivery(
     if (!parsed.success) {
       return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_SHAPE, result.entryJson);
     }
-    const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
-    if (normalized !== result.entry || !hasOnlyGenericAttachmentRefs(normalized)) {
+    const attachmentNormalized = normalizeQueuedAttachmentRefs(
+      result.entry as QueuedSessionDelivery,
+    );
+    if (
+      attachmentNormalized !== result.entry ||
+      !hasOnlyGenericAttachmentRefs(attachmentNormalized)
+    ) {
       return invalidSessionDelivery(
         result.entry,
         INVALID_GENERIC_DELIVERY_ATTACHMENTS,
         result.entryJson,
       );
     }
+    const normalized = normalizeQueuedSessionDeliveryTraceparent(
+      attachmentNormalized,
+    ) as QueuedSessionDelivery;
     return { status: "loaded", entry: normalized };
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(result.entry);
@@ -590,7 +601,8 @@ export function normalizeQueuedSessionDeliveryTraceparent(
   payload: QueuedSessionDeliveryPayload,
 ): QueuedSessionDeliveryPayload {
   const normalizedTraceparent =
-    payload.kind !== "postCompactionDelegate" || payload.traceparentProvenance === "internal"
+    (payload.kind !== "postCompactionDelegate" && payload.kind !== "agentTurn") ||
+    payload.traceparentProvenance === "internal"
       ? normalizeDiagnosticTraceparent(payload.traceparent)
       : undefined;
   const normalizedPayload: QueuedSessionDeliveryPayload = { ...payload };
