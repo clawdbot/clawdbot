@@ -44,6 +44,10 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -2004,6 +2008,60 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it("does not create empty agent databases while scanning startup recovery", async () => {
+    const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
+    const databasePaths = await Promise.all(
+      agentIds.map(async (agentId) => {
+        await makeSessionsDir(agentId);
+        return path.join(tmpDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+      }),
+    );
+
+    await expect(markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir })).resolves.toEqual(
+      { marked: 0, skipped: 0 },
+    );
+    for (const databasePath of databasePaths) {
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("does not enter the writer lane for agent databases without running sessions", async () => {
+    const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
+    for (const agentId of agentIds) {
+      openOpenClawAgentDatabase({
+        agentId,
+        env,
+        path: path.join(tmpDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+      });
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const applySessionEntryReplacements = vi.spyOn(
+      sessionAccessor,
+      "applySessionEntryReplacements",
+    );
+
+    try {
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
+      ).resolves.toEqual({ marked: 0, skipped: 0 });
+      expect(applySessionEntryReplacements).not.toHaveBeenCalled();
+    } finally {
+      applySessionEntryReplacements.mockRestore();
+    }
+  });
+
+  it("keeps corrupt existing agent databases on the startup recovery error path", async () => {
+    await makeSessionsDir();
+    const databasePath = path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, "not a sqlite database");
+
+    await expect(
+      markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
+    ).rejects.toThrow();
   });
 
   it.each([
