@@ -3723,13 +3723,13 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
+  it("serializes macOS Swift tests on hosted runners", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
 
     expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
+      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'serial' || 'parallel' }}",
     );
     expect(testStep.run).toContain(
       "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
