@@ -161,6 +161,10 @@ describe("memory consolidation", () => {
     );
     expect(new Set(sessionKeys).size).toBe(2);
     expect(sessionKeys.every((key) => key.startsWith("dreaming-narrative-"))).toBe(true);
+    // Both groups share the global `subagent` lane so the configured
+    // `agents.defaults.subagents.maxConcurrent` bounds consolidation too.
+    const lanes = subagent.run.mock.calls.map(([options]) => (options as { lane?: string }).lane);
+    expect(new Set(lanes)).toEqual(new Set(["subagent"]));
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 

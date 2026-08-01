@@ -435,7 +435,9 @@ describe("runDreamNarrative", () => {
     expect(runOptions.idempotencyKey).toBe(`${expectedRunKey}-${nowMs}`);
     expect(runOptions.idempotencyKey).toMatch(/^dreaming-narrative-/);
     expect(runOptions.sessionKey).toBe(expectedSessionKey);
-    expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
+    // Runs on the shared global subagent lane so the configured
+    // `agents.defaults.subagents.maxConcurrent` bounds every narrative.
+    expect(runOptions.lane).toBe("subagent");
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
@@ -446,6 +448,50 @@ describe("runDreamNarrative", () => {
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  // Regression: distinct agent/session narratives used per-session lanes, so the
+  // configured `agents.defaults.subagents.maxConcurrent` never applied and each
+  // session ran a separate dreaming subagent in parallel (#95746).
+  it("routes concurrent narratives for distinct sessions to the shared subagent lane", async () => {
+    const subagent = createMockSubagent("Two agents dreamed into one lane.");
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+    const [firstWorkspace, secondWorkspace] = await Promise.all([
+      createTempWorkspace("openclaw-dreaming-lane-"),
+      createTempWorkspace("openclaw-dreaming-lane-"),
+    ]);
+    try {
+      await Promise.all([
+        runDreamNarrative({
+          agentId: "alpha",
+          subagent,
+          workspaceDir: firstWorkspace,
+          data: { phase: "light", snippets: ["First agent memory."] },
+          nowMs,
+          logger,
+        }),
+        runDreamNarrative({
+          agentId: "beta",
+          subagent,
+          workspaceDir: secondWorkspace,
+          data: { phase: "light", snippets: ["Second agent memory."] },
+          nowMs,
+          logger,
+        }),
+      ]);
+    } finally {
+      await Promise.all([
+        fs.rm(firstWorkspace, { recursive: true, force: true }),
+        fs.rm(secondWorkspace, { recursive: true, force: true }),
+      ]);
+    }
+
+    const lanes = subagent.run.mock.calls.map((call) => (call[0] as Record<string, unknown>).lane);
+    expect(lanes).toHaveLength(2);
+    // Both narratives land on the one global `subagent` lane; a shared lane is
+    // what lets a global limit of one serialize them together.
+    expect(new Set(lanes)).toEqual(new Set(["subagent"]));
   });
 
   it("keeps creation and cleanup on the memory-core-owned session identity", async () => {
