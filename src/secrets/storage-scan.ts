@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -28,13 +33,18 @@ export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: s
   return [...new Map(candidates.map((candidate) => [path.resolve(candidate), candidate])).values()];
 }
 
-function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
+function resolveActiveAgentDir(
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  fallbackAgentId = "main",
+): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env);
   }
-  // Storage scans must include the implicit main agent even before config has agent entries.
-  return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
+  // With no env override, scope to the configured default agent so a non-"main"
+  // default (e.g. `default: true` on "nova") does not seed a dead main path.
+  return path.join(resolveUserPath(stateDir), "agents", fallbackAgentId, "agent");
 }
 
 /**
@@ -48,8 +58,11 @@ export function listAgentModelsJsonPaths(
 ): string[] {
   const resolvedStateDir = resolveUserPath(stateDir);
   const paths = new Set<string>();
-  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+  // Use the configured default agent instead of hard-coding "main" so deployments
+  // that set `default: true` on a non-"main" agent resolve the correct models.json path.
+  const defaultAgentId = resolveDefaultAgentId(config);
+  paths.add(path.join(resolvedStateDir, "agents", defaultAgentId, "agent", "models.json"));
+  paths.add(path.join(resolveActiveAgentDir(stateDir, env, defaultAgentId), "models.json"));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -61,13 +74,16 @@ export function listAgentModelsJsonPaths(
     }
   }
 
+  // Agents with a custom agentDir resolve via resolveAgentDir (which honors that
+  // override). Agents without one are scoped to the provided stateDir rather than
+  // the ambient process env, mirroring the default-agent seed above.
   for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
+    const configuredDir = resolveAgentConfig(config, agentId)?.agentDir?.trim();
+    if (configuredDir) {
+      paths.add(path.join(resolveUserPath(resolveAgentDir(config, agentId)), "models.json"));
       continue;
     }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+    paths.add(path.join(resolvedStateDir, "agents", agentId, "agent", "models.json"));
   }
 
   return [...paths];
