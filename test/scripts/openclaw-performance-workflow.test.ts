@@ -239,6 +239,9 @@ describe("OpenClaw performance workflow", () => {
     ].join("\n");
     const boundedProbe =
       'curl -fsS --connect-timeout 2 --max-time "$gateway_probe_timeout" "http://127.0.0.1:${gateway_port}/healthz"';
+    const websocketTimeout = "gateway_ready_remaining_ms=$((gateway_ready_remaining * 1000))";
+    const websocketProbe = "node dist/entry.js gateway health \\";
+    const benchmark = "node --import tsx scripts/bench-cli-startup.ts \\";
 
     expect(run).toContain("gateway_ready_timeout_seconds=120");
     expect(run).toContain("gateway_probe_timeout_seconds=5");
@@ -247,11 +250,37 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain(deadlineFailure);
     expect(run).toContain(probeCap);
     expect(run).toContain(boundedProbe);
+    expect(run).toContain(websocketTimeout);
+    expect(run).toContain(websocketProbe);
+    expect(run).toContain('--port "$gateway_port" \\');
+    expect(run).toContain('--timeout "$gateway_ready_remaining_ms" \\');
+    expect(run).toContain('--json >"$gateway_readiness_log" 2>&1; then');
+    expect(run).toContain(
+      "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway WebSocket health.",
+    );
     expect(run.split("/healthz")).toHaveLength(2);
     expect(run.indexOf(deadline)).toBeLessThan(run.indexOf(remaining));
     expect(run.indexOf(remaining)).toBeLessThan(run.indexOf(deadlineFailure));
     expect(run.indexOf(deadlineFailure)).toBeLessThan(run.indexOf(probeCap));
     expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
+    expect(run.indexOf(boundedProbe)).toBeLessThan(run.indexOf(websocketTimeout));
+    expect(run.indexOf(websocketTimeout)).toBeLessThan(run.indexOf(websocketProbe));
+    expect(run.indexOf(websocketProbe)).toBeLessThan(run.indexOf(benchmark));
+    expect(run.slice(run.indexOf(websocketTimeout), run.indexOf(benchmark))).not.toContain(
+      "sleep ",
+    );
+  });
+
+  it("isolates gateway readiness identity from benchmark device state", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain('gateway_readiness_home="$(mktemp -d)"');
+    expect(run).toContain('gateway_readiness_state="$gateway_readiness_home/.openclaw"');
+    expect(run).toContain('gateway_readiness_config="$gateway_readiness_state/openclaw.json"');
+    expect(run).toContain('mkdir -p "$gateway_state" "$gateway_readiness_state"');
+    expect(run).toContain('cp "$gateway_config" "$gateway_readiness_config"');
+    expect(run).toContain(': > "$gateway_readiness_log"');
+    expect(run).toContain('rm -rf "$gateway_home" "$gateway_readiness_home"');
   });
 
   it("measures warmed and first-device gateway health separately", () => {
