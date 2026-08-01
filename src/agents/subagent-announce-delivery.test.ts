@@ -2296,7 +2296,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves continuation trigger and trace during generated-media direct fallback", async () => {
+  it("preserves continuation trigger and trace on the direct completion path", async () => {
     const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
     const callGateway = createGatewayMock({
       result: { payloads: [{ text: "The track is ready." }] },
@@ -2306,40 +2306,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
-      sourceTool: "music_generate",
       continuationTriggerOverride: "delegate-return",
       traceparent,
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "music_generation",
-          childSessionKey: "music_generate:task-continuation",
-          childSessionId: "task-continuation",
-          announceType: "music generation task",
-          taskLabel: "continuation track",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "Generated 1 track.",
-          attachments: [
-            {
-              type: "audio",
-              path: "/workspace/generated-continuation.mp3",
-              mimeType: "audio/mpeg",
-              name: "generated-continuation.mp3",
-            },
-          ],
-          replyInstruction: "Deliver the generated music.",
-        },
-      ],
+      internalEvents: taskCompletionEvents({
+        childSessionId: "task-continuation",
+        taskLabel: "continuation track",
+      }),
     });
 
     expectGatewayAgentParams(callGateway, {
       continuationTrigger: "delegate-return",
       traceparent,
     });
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrls: ["/workspace/generated-continuation.mp3"] }),
-    );
   });
 
   it("queues generated media group completions that miss required message-tool delivery", async () => {

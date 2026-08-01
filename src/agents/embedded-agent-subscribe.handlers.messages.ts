@@ -1986,6 +1986,27 @@ export function handleMessageEnd(
     return undefined;
   };
 
+  // The accumulator must always be final-flushed so an incomplete bracket tail held
+  // back by splitTrailingDirective is released, while still emitting undelivered
+  // continuation metadata (media/audio/reply target) exactly once.
+  const composeFinalBlockReply = (
+    bufferedResult: ReturnType<typeof ctx.consumeReplyDirectives>,
+  ) => {
+    const remainingFinalDirectives = resolveUndeliveredFinalDirectives();
+    if (!remainingFinalDirectives.hasMetadata || !remainingFinalDirectives.result) {
+      return bufferedResult;
+    }
+    return {
+      ...remainingFinalDirectives.result,
+      text:
+        remainingFinalDirectives.hasReplyTarget &&
+        remainingFinalDirectives.mediaUrls.length === 0 &&
+        !remainingFinalDirectives.audioAsVoice
+          ? finalAssistantText
+          : (bufferedResult?.text ?? ""),
+    };
+  };
+
   const consumeFinalReplyDirectives = () => {
     const bufferedResult = ctx.consumeReplyDirectives("", { final: true });
     if (!hasMedia || !parsedText) {
@@ -2032,19 +2053,8 @@ export function handleMessageEnd(
             if (!isCurrentDeliveryGeneration()) {
               return undefined;
             }
-            const remainingFinalDirectives = resolveUndeliveredFinalDirectives();
             emitSplitResultAsBlockReply(
-              remainingFinalDirectives.hasMetadata && remainingFinalDirectives.result
-                ? {
-                    ...remainingFinalDirectives.result,
-                    text:
-                      remainingFinalDirectives.hasReplyTarget &&
-                      remainingFinalDirectives.mediaUrls.length === 0 &&
-                      !remainingFinalDirectives.audioAsVoice
-                        ? finalAssistantText
-                        : "",
-                  }
-                : ctx.consumeReplyDirectives("", { final: true }),
+              composeFinalBlockReply(ctx.consumeReplyDirectives("", { final: true })),
             );
             return finishMessageEndDelivery();
           },
@@ -2060,20 +2070,7 @@ export function handleMessageEnd(
       // Final-flush the streaming directive accumulator so any partial
       // inline reply/audio tag held back by splitTrailingDirective gets
       // emitted on the message_end / blockReplyChunking path.
-      const remainingFinalDirectives = resolveUndeliveredFinalDirectives();
-      emitSplitResultAsBlockReply(
-        remainingFinalDirectives.hasMetadata && remainingFinalDirectives.result
-          ? {
-              ...remainingFinalDirectives.result,
-              text:
-                remainingFinalDirectives.hasReplyTarget &&
-                remainingFinalDirectives.mediaUrls.length === 0 &&
-                !remainingFinalDirectives.audioAsVoice
-                  ? finalAssistantText
-                  : "",
-            }
-          : consumeFinalReplyDirectives(),
-      );
+      emitSplitResultAsBlockReply(composeFinalBlockReply(consumeFinalReplyDirectives()));
     } else if (finalAssistantText !== textEndDeliveredVisibleText || finalDirectives.hasMetadata) {
       // Skip only an unchanged text_end delivery. Canonical message_end text
       // can extend or replace the streamed snapshot, and final-only directive
