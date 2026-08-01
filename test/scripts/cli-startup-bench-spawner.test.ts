@@ -78,7 +78,7 @@ describe("CLI startup benchmark script spawners", () => {
         return fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
       };
 
-      const warmedHomes = runCase("gatewayHealthJson");
+      const warmedHomes = runCase("gatewayHealthJsonConnected");
       expect(warmedHomes).toHaveLength(3);
       expect(new Set(warmedHomes).size).toBe(1);
       expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
@@ -87,6 +87,49 @@ describe("CLI startup benchmark script spawners", () => {
       expect(firstDeviceHomes).toHaveLength(3);
       expect(new Set(firstDeviceHomes).size).toBe(3);
       expect(firstDeviceHomes.every((home) => !fs.existsSync(home))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires connected gateway health probes to exit successfully", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "transport-error.mjs");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'console.log(\'{"ok":false,"gateway_transport_error":"closed"}\');',
+          "process.exitCode = 1;",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+
+      expect(runCase("gatewayHealthJson").status).toBe(0);
+      for (const caseId of ["gatewayHealthJsonConnected", "gatewayHealthJsonFirstDevice"]) {
+        const result = runCase(caseId);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);
+      }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

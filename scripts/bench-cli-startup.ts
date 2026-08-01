@@ -447,12 +447,17 @@ const COMMAND_CASES: readonly CommandCase[] = [
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
+    id: "gatewayHealthJsonConnected",
+    name: "gateway health --json (connected)",
+    args: ["gateway", "health", "--json"],
+    presets: [],
+    stateScope: "case",
+  },
+  {
     id: "gatewayHealthJsonFirstDevice",
     name: "gateway health --json (first device)",
     args: ["gateway", "health", "--json"],
     presets: [],
-    expectedExitCodes: [0, 1],
-    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
     id: "configGetGatewayPort",
@@ -659,6 +664,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "gatewayHealthJsonConnected" &&
     commandCase.id !== "gatewayHealthJsonFirstDevice" &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
