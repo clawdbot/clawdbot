@@ -40,7 +40,7 @@ export async function runMatrixQaE2eeClientOperation<T>(params: {
   }
 }
 
-export function shouldRecordMatrixQaObservedEventUpdate(params: {
+function shouldRecordMatrixQaObservedEventUpdate(params: {
   next: MatrixQaObservedEvent;
   previous: MatrixQaObservedEvent | undefined;
 }) {

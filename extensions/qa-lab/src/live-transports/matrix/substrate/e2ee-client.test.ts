@@ -8,7 +8,6 @@ import {
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
-  shouldRecordMatrixQaObservedEventUpdate,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
 
@@ -18,7 +17,6 @@ const testing = {
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
-  shouldRecordMatrixQaObservedEventUpdate,
 };
 
 describe("matrix qa e2ee client storage", () => {
@@ -107,31 +105,21 @@ describe("matrix qa e2ee client storage", () => {
       sender: "@bot:matrix-qa.test",
       type: "m.room.message",
     };
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const decrypted = {
+      ...previous,
+      body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
+      msgtype: "m.text",
+    };
 
-    expect(
-      testing.shouldRecordMatrixQaObservedEventUpdate({
-        previous,
-        next: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-      }),
-    ).toBe(true);
-    expect(
-      testing.shouldRecordMatrixQaObservedEventUpdate({
-        previous: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-        next: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-      }),
-    ).toBe(false);
+    recorder.record(previous);
+    recorder.record(decrypted);
+    recorder.record(decrypted);
+
+    expect(observed).toEqual([previous, decrypted]);
   });
 
   it("rehydrates a replacement when its threaded target decrypts later", () => {
