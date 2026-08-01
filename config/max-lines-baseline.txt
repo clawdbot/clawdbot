@@ -459,8 +459,6 @@ src/agents/runtime-plan/prepare-auth.test.ts
 src/agents/sandbox/ssh.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-write-lock.test.ts
-src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts

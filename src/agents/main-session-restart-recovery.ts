@@ -4,7 +4,6 @@
 
 export {
   markRestartAbortedMainSessions,
-  markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
 export {

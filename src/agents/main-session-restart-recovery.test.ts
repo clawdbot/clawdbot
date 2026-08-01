@@ -65,7 +65,6 @@ import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js"
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
-  markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery,
   recoverStartupOrphanedMainSessions as recoverStartupOrphanedMainSessionsBase,
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
@@ -75,7 +74,6 @@ import {
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
 import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
-import type { SessionLockInspection } from "./session-write-lock.js";
 import {
   createAssistantToolCallMessage,
   createSessionEntry,
@@ -356,26 +354,6 @@ function unresumableAssistantMessage(text = "provider failed") {
     stopReason: "error",
     errorMessage: "Provider finish_reason: content_filter",
   };
-}
-
-function cleanedLockForPath(lockPath: string): SessionLockInspection {
-  // Simulates lock cleanup after process restart: stale lock removed, owning
-  // PID dead, and the transcript path available for recovery.
-  return {
-    lockPath,
-    pid: 999_999,
-    pidAlive: false,
-    createdAt: new Date(Date.now() - 1_000).toISOString(),
-    ageMs: 1_000,
-    stale: true,
-    staleReasons: ["dead-pid"],
-    removable: true,
-    removed: true,
-  };
-}
-
-function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspection {
-  return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
 }
 
 describe("main-session-restart-recovery", () => {
@@ -766,86 +744,6 @@ describe("main-session-restart-recovery", () => {
     const store = readStore(storePath);
     expect(result).toEqual({ marked: 1, skipped: 0 });
     expect(store["agent:main:custom-by-id"]?.abortedLastRun).toBe(true);
-  });
-
-  it("marks only main running sessions whose transcript lock was cleaned", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        ...runningSessionEntry("main-session"),
-      },
-      "agent:main:subagent:child": {
-        ...runningSessionEntry("child-session"),
-        spawnDepth: 1,
-      },
-      "agent:main:other": {
-        ...runningSessionEntry("other-session"),
-      },
-    });
-
-    const result = await markRestartAbortedMainSessionsFromLocks({
-      sessionsDir,
-      cleanedLocks: [
-        cleanedLock(sessionsDir, "main-session"),
-        cleanedLock(sessionsDir, "child-session"),
-      ],
-    });
-
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked: 1, skipped: 1 });
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "does not mark a session for an unrelated topic lock that only shares its id prefix",
-      sessionKey: "agent:main:main",
-      sessionId: "main-session",
-      sessionFile: "main-session.jsonl",
-      lockKind: "unrelated",
-      marked: 0,
-    },
-    {
-      name: "falls back to the session id transcript lock when persisted sessionFile is outside the sessions dir",
-      sessionKey: "agent:main:main",
-      sessionId: "main-session",
-      sessionFile: "../stale/outside.jsonl",
-      lockKind: "session-id",
-      marked: 1,
-    },
-    {
-      name: "falls back to the session id transcript lock when persisted sessionFile belongs to another generated session",
-      sessionKey: "agent:main:main",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-      sessionFile: "22222222-2222-4222-8222-222222222222.jsonl",
-      lockKind: "session-id",
-      marked: 1,
-    },
-  ])("$name", async ({ sessionKey, sessionId, sessionFile, lockKind, marked }) => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      [sessionKey]: runningSessionEntry(sessionId, { sessionFile }),
-    });
-    const lockFile =
-      lockKind === "unrelated"
-        ? "main-session-topic-unrelated.jsonl.lock"
-        : `${sessionId}.jsonl.lock`;
-    const lockPath = path.join(sessionsDir, lockFile);
-
-    const result = await markRestartAbortedMainSessionsFromLocks({
-      sessionsDir,
-      cleanedLocks: [cleanedLockForPath(lockPath)],
-    });
-
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked, skipped: 0 });
-    if (marked === 1) {
-      expect(store[sessionKey]?.abortedLastRun).toBe(true);
-    } else {
-      expect(store[sessionKey]?.abortedLastRun).toBeUndefined();
-    }
   });
 
   it("resumes marked sessions with a tool-result transcript tail", async () => {
