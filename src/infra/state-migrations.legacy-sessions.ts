@@ -185,7 +185,7 @@ export async function migrateLegacySessions(
   ) {
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(merged)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
+      const normalizedEntry = normalizeSessionEntry(entry, key);
       if (!normalizedEntry) {
         continue;
       }
@@ -259,7 +259,7 @@ export async function migrateLegacySessions(
     if (rewroteSessionFiles) {
       const normalized = Object.create(null) as Record<string, SessionEntry>;
       for (const [key, entry] of Object.entries(merged)) {
-        const normalizedEntry = normalizeSessionEntry(entry);
+        const normalizedEntry = normalizeSessionEntry(entry, key);
         if (normalizedEntry) {
           normalized[key] = normalizedEntry;
         }

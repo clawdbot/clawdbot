@@ -4261,5 +4261,38 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
+
+  it("preserves key-shaped pending rows during automatic legacy session migration", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const pendingKey = "agent:worker-1:desk";
+    const targetStore = {
+      [pendingKey]: { sessionId: pendingKey, updatedAt: 50 },
+      "agent:worker-1:desk:other": { sessionId: "other-session", updatedAt: 60 },
+    };
+    await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(true);
+
+    const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId?: string; initializationPending?: boolean; updatedAt?: number }
+    >;
+    expect(afterStore[pendingKey]).toBeDefined();
+    expect(afterStore[pendingKey]?.initializationPending).toBe(true);
+    expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
+    expect(afterStore["agent:worker-1:desk:other"]?.sessionId).toBe("other-session");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
