@@ -920,7 +920,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
     }
     closeWebSocketSilently(entry.socket, 1000, "debug_close");
   };
+  // Sticky SSE fallback follows the provider session-resource lifecycle;
+  // otherwise reused session ids stay degraded and the set grows indefinitely.
   if (sessionId) {
+    websocketSseFallbackSessions.delete(sessionId);
     const entry = websocketSessionCache.get(sessionId);
     if (entry) {
       closeEntry(entry);
@@ -932,6 +935,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
     closeEntry(entry);
   }
   websocketSessionCache.clear();
+  websocketSseFallbackSessions.clear();
 }
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);

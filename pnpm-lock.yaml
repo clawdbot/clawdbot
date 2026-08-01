@@ -2331,6 +2331,9 @@ importers:
       chalk:
         specifier: 6.0.0
         version: 6.0.0
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
 
   packages/tool-call-repair:
     dependencies:

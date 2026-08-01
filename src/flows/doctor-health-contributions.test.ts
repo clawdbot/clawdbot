@@ -3646,6 +3646,35 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it("forwards explicit paths only for the pending doctor migration write", async () => {
+      const ctx = buildWriteConfigCtx({});
+      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            explicitSetPaths: [["agents", "entries"]],
+          }),
+        }),
+      );
+
+      ctx.cfg = { gateway: { mode: "remote" } };
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          writeOptions: expect.not.objectContaining({
+            explicitSetPaths: expect.anything(),
+          }),
+        }),
+      );
+    });
+
     it("points update-time config rewrites at the pre-update backup", async () => {
       vi.mocked(fs.existsSync).mockImplementation((value) => String(value).endsWith(".pre-update"));
       const ctx = buildWriteConfigCtx({
