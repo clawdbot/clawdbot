@@ -705,6 +705,7 @@ struct TalkModeManagerTests {
 
         #expect(parsed.requiresGatewayRealtimeTransport)
         #expect(parsed.openAIRequiresGatewayRealtimeTransport)
+        #expect(routing.executionMode == .realtimeRelay)
         #expect(routing.route == .realtimeRelay)
     }
 
