@@ -3989,7 +3989,7 @@ describe("qa mock openai server", () => {
     });
   });
 
-  it("serves the Matrix voice preflight transcription contract for its explicit fixture", async () => {
+  it("serves the Matrix voice preflight transcription contract after Matrix media staging", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -4003,7 +4003,9 @@ describe("qa mock openai server", () => {
       headers: {
         "content-type": "multipart/form-data; boundary=qa",
       },
-      body: '--qa\r\ncontent-disposition: form-data; name="file"; filename="matrix-qa-voice-preflight.wav"\r\n\r\nvoice\r\n--qa--\r\n',
+      body: `--qa\r\ncontent-disposition: form-data; name="file"; filename="matrix-qa-voice-preflight---fixture-id.wav"\r\n\r\n${"voice".repeat(
+        16_000,
+      )}\r\n--qa--\r\n`,
     });
 
     expect(response.status).toBe(200);
