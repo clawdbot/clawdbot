@@ -117,7 +117,7 @@ describe("local media roots", () => {
     });
   });
 
-    it("does not ambient-merge agents.defaults.mediaLocalRoots into generic agent roots", () => {
+  it("does not ambient-merge agents.defaults.mediaLocalRoots into generic agent roots", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-state");
     const extraRoot = process.platform === "win32" ? "C:\data\snapshots" : "/data/snapshots";
     const roots = withStateDir(stateDir, () =>
@@ -136,7 +136,7 @@ describe("local media roots", () => {
     expectNormalizedRootsContain(roots, [path.join(stateDir, "workspace-ops")]);
   });
 
-it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
+  it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-fsroot");
     const roots = withStateDir(stateDir, () =>
       getAgentScopedMediaLocalRoots(

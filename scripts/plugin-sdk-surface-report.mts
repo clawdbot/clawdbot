@@ -138,7 +138,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
-  "media-runtime": 3,
+  // +1: policy-gated outbound media access resolver for channel reply paths.
+  "media-runtime": 4,
   // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
@@ -441,6 +442,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: strict explicit agent-id normalization without default-agent fallback.
       // +2: session-catalog family and node-host binding composers.
       // +2: bounded provider stream and read-only SecretRef resolver.
+      // -1: remove the obsolete transcript tool-call predicate.
       // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
