@@ -1055,7 +1055,37 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+    it("blocks changing exec failures at the critical no-progress threshold", () => {
+      const state = createState();
+      const params = { command: "openclaw flaky-helper" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Runtime failed before spawn: attempt ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("blocks changing exec failures at the global no-progress threshold", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -1078,11 +1108,12 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
-      }
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
     });
 
     it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {

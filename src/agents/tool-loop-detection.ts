@@ -171,12 +171,22 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
     });
   }
 
-  if (status === "completed" || status === "failed") {
+  if (status === "completed") {
     return digestStable({
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
       output: nonEmptyStringField(details.aggregated) ?? text,
+    });
+  }
+
+  // Failed exec diagnostics vary between attempts without proving progress; hash only stable
+  // execution facts so repeated failures can reach the loop guards.
+  if (status === "failed") {
+    return digestStable({
+      status,
+      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      timedOut: details.timedOut === true,
     });
   }
 
