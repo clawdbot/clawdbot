@@ -605,6 +605,10 @@ describe("Slack live QA runtime helpers", () => {
     expect(
       buildScenarioConfig("slack-progress-commentary-false").agents?.defaults?.verboseDefault,
     ).toBe("off");
+    expect(
+      buildScenarioConfig("slack-mpim-app-mention-dedupe").channels?.slack?.accounts?.sut
+        ?.streaming,
+    ).toEqual({ mode: "off" });
     const omitted = progressConfig("slack-progress-commentary-omitted");
     expect(omitted).toMatchObject({ toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);

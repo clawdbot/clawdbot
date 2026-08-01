@@ -48,7 +48,9 @@ export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
 };
 
 export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation = {
-  configOverrides: { groupDmEnabled: true, replyToMode: "all" },
+  // Keep the event-dedupe assertion independent from Slack's separate
+  // streaming preview/final message lifecycle.
+  configOverrides: { groupDmEnabled: true, replyToMode: "all", streamingMode: "off" },
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const seedMarker = `SLACK_QA_MPIM_SEED_${suffix}`;
