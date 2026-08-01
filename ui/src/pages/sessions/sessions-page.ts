@@ -682,7 +682,12 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async deleteSelected() {
     const keys = [...this.selectedKeys];
-    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+    if (
+      keys.length === 0 ||
+      this.loading ||
+      this.sessionMutationPending ||
+      this.context?.hostPolicy.canInvokeAction("sessions.delete") === false
+    ) {
       return;
     }
     if (
@@ -699,7 +704,12 @@ class SessionsPage extends OpenClawLightDomElement {
     keys: string[],
     options: { deleteTranscript?: boolean; archivedOnly?: boolean } = {},
   ) {
-    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+    if (
+      keys.length === 0 ||
+      this.loading ||
+      this.sessionMutationPending ||
+      this.context?.hostPolicy.canInvokeAction("sessions.delete") === false
+    ) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -838,6 +848,9 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async deleteSessionFromMenu(row: GatewaySessionRow) {
+    if (this.context?.hostPolicy.canInvokeAction("sessions.delete") === false) {
+      return;
+    }
     const label = normalizeOptionalString(row.label) ?? row.key;
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
       return;
@@ -1385,6 +1398,7 @@ class SessionsPage extends OpenClawLightDomElement {
           checkpointLoadingKey: this.checkpointLoadingKey,
           checkpointBusyKey: this.checkpointBusyKey,
           checkpointErrorByKey: this.checkpointErrorByKey,
+          canDeleteSessions: context.hostPolicy.canInvokeAction("sessions.delete"),
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
             this.activeMinutes = "";

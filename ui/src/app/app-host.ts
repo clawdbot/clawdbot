@@ -9,7 +9,7 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/update-banner.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
   type SidebarWorkboardRenderers,
@@ -420,7 +420,15 @@ class OpenClawShell
   }
 
   navigate(routeId: string, options?: ApplicationNavigationOptions) {
-    this.shellNavigation.navigate(routeId, options);
+    const context = this.context;
+    if (!context || !isRouteId(routeId) || !context.hostPolicy.isRouteEnabled(routeId)) {
+      return;
+    }
+    this.closeNavDrawer({ restoreFocus: true });
+    context.navigate(
+      routeId,
+      isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
+    );
   }
 
   replaceChatWithCurrentSession() {
@@ -568,9 +576,15 @@ class OpenClawShell
   }
 
   enabledRouteIds(): readonly RouteId[] {
-    return isWorkboardEnabledInConfigSnapshot(this.context?.runtimeConfig.state.configSnapshot)
+    const context = this.context;
+    const configEnabledRoutes = isWorkboardEnabledInConfigSnapshot(
+      context?.runtimeConfig.state.configSnapshot,
+    )
       ? APP_ROUTE_IDS
       : ROUTE_IDS_WITHOUT_WORKBOARD;
+    return context
+      ? configEnabledRoutes.filter((routeId) => context.hostPolicy.isRouteEnabled(routeId))
+      : configEnabledRoutes;
   }
 
   /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */

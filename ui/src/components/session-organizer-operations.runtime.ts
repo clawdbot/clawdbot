@@ -21,6 +21,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import type { ApplicationContext } from "../app/context.ts";
 
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
@@ -31,6 +32,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "refreshSidebarSessions"
     | "resetForStatusFilter"
   >;
+  readonly sessionDataContext?: Pick<ApplicationContext, "hostPolicy"> | null;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;

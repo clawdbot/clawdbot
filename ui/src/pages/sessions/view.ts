@@ -98,6 +98,7 @@ export type SessionsProps = {
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   checkpointErrorByKey: Record<string, string>;
+  canDeleteSessions?: boolean;
   onFiltersChange: (next: {
     activeMinutes: string;
     limit: string;
@@ -1084,6 +1085,7 @@ function renderOverrideSelect(params: {
 }
 
 export function renderSessions(props: SessionsProps) {
+  const canDeleteSessions = props.canDeleteSessions ?? true;
   const rawRows = props.result?.sessions ?? [];
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
@@ -1149,8 +1151,12 @@ export function renderSessions(props: SessionsProps) {
       ? html`
           <button
             class="btn danger"
-            ?disabled=${props.loading || archivedCount === 0}
-            @click=${props.onDeleteAllArchived}
+            ?disabled=${props.loading || archivedCount === 0 || !canDeleteSessions}
+            @click=${() => {
+              if (canDeleteSessions) {
+                props.onDeleteAllArchived();
+              }
+            }}
           >
             ${icons.trash} ${t("sessionsView.deleteAllArchived")}
           </button>
@@ -1181,6 +1187,7 @@ export function renderSessions(props: SessionsProps) {
         actions: refreshAction,
       },
       renderSessionsTable(props, {
+        canDeleteSessions,
         paginated,
         groups,
         groupingActive,
@@ -1197,6 +1204,7 @@ export function renderSessions(props: SessionsProps) {
 }
 
 type SessionsTableContext = {
+  canDeleteSessions: boolean;
   paginated: GatewaySessionRow[];
   groups: SessionRowGroup[] | null;
   groupingActive: boolean;
@@ -1215,6 +1223,7 @@ type SessionsTableContext = {
 function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
   const {
     paginated,
+    canDeleteSessions,
     groups,
     groupingActive,
     emptyBecauseFiltered,
@@ -1361,8 +1370,12 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             </button>
             <button
               class="btn btn--sm danger"
-              ?disabled=${props.loading}
-              @click=${props.onDeleteSelected}
+              ?disabled=${props.loading || !canDeleteSessions}
+              @click=${() => {
+                if (canDeleteSessions) {
+                  props.onDeleteSelected();
+                }
+              }}
             >
               ${icons.trash} ${t("sessionsView.deleteSelected")}
             </button>
@@ -1382,7 +1395,11 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                     paginated.every((r) => props.selectedKeys.has(r.key))}
                     .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
                     !paginated.every((r) => props.selectedKeys.has(r.key))}
+                    ?disabled=${!canDeleteSessions}
                     @change=${() => {
+                      if (!canDeleteSessions) {
+                        return;
+                      }
                       const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                       if (allSelected) {
                         props.onDeselectPage(paginated.map((r) => r.key));
@@ -1490,6 +1507,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
 }
 
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
+  const canDeleteSessions = props.canDeleteSessions ?? true;
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const latestCheckpoint = row.latestCompactionCheckpoint;
   const checkpointCount = row.compactionCheckpointCount ?? 0;
@@ -1587,7 +1605,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <input
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
-          @change=${() => props.onToggleSelect(row.key)}
+          ?disabled=${!canDeleteSessions}
+          @change=${() => {
+            if (canDeleteSessions) {
+              props.onToggleSelect(row.key);
+            }
+          }}
           aria-label=${`${t("sessionsView.selectSession")}: ${row.key}`}
         />
       </td>
