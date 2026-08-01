@@ -1,11 +1,7 @@
 // Memory Core plugin module owns memory and session source indexing.
-import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  parseSqliteSessionFileMarker,
-  parseUsageCountedSessionIdFromFileName,
-  sessionPathForFile,
   sessionPathForSessionIdentity,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -186,10 +182,17 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
     const targetArchiveFiles = params.needsFullReindex
       ? null
-      : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries);
+      : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries, true);
     const corpusEntryByPath = new Map<string, SessionTranscriptCorpusEntry>(
       corpusEntries.map((entry) => [entry.sessionFile, entry]),
     );
+    const corpusEntryForPath = (file: string): SessionTranscriptCorpusEntry => {
+      const entry = corpusEntryByPath.get(file);
+      if (!entry) {
+        throw new Error(`Missing session corpus entry for ${file}`);
+      }
+      return entry;
+    };
     const files = targetArchiveFiles
       ? Array.from(targetArchiveFiles)
       : corpusEntries.map((entry) => entry.sessionFile);
@@ -204,16 +207,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForFile: (file) => {
-        const corpusEntry = corpusEntryByPath.get(file);
-        if (corpusEntry) {
-          return this.sessionPathForCorpusEntry(corpusEntry);
-        }
-        const sqliteMarker = parseSqliteSessionFileMarker(file);
-        return sqliteMarker
-          ? sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId)
-          : sessionPathForFile(file);
-      },
+      sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
@@ -278,19 +272,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }).rows.map((row) => row.path),
       );
       for (const file of targetArchiveFiles) {
-        const corpusEntry = corpusEntryByPath.get(file);
-        const sqliteMarker = parseSqliteSessionFileMarker(file);
-        const sessionId =
-          corpusEntry?.sessionId ??
-          sqliteMarker?.sessionId ??
-          parseUsageCountedSessionIdFromFileName(path.basename(file));
-        if (!sessionId) {
-          continue;
-        }
-        const staleAgentId = corpusEntry?.agentId ?? sqliteMarker?.agentId ?? this.agentId;
+        const corpusEntry = corpusEntryForPath(file);
+        const staleAgentId = corpusEntry.agentId;
         const staleLivePaths = [
-          sessionPathForSessionIdentity(staleAgentId, sessionId),
-          this.legacyExtensionlessSessionPathForIdentity(staleAgentId, sessionId),
+          sessionPathForSessionIdentity(staleAgentId, corpusEntry.sessionId),
+          this.legacyExtensionlessSessionPathForIdentity(staleAgentId, corpusEntry.sessionId),
         ];
         for (const staleLivePath of staleLivePaths) {
           if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
@@ -334,10 +320,9 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
                   }
                   return null;
                 }
-                const corpusEntry = corpusEntryByPath.get(absPath);
                 const entry = await buildSessionEntry(
                   absPath,
-                  corpusEntry ? this.buildSessionEntryOptions(corpusEntry) : undefined,
+                  this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
                 );
                 if (!entry) {
                   if (params.progress) {
@@ -363,7 +348,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
                       total: params.progress.total,
                     });
                   }
-                  this.resetSessionDelta(absPath, entry.size);
                   return null;
                 }
                 return entry;
@@ -379,7 +363,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
             (entry): MemoryIndexWorkItem => ({
               entry,
               source: "sessions",
-              afterIndex: () => this.resetSessionDelta(entry.absPath, entry.size),
             }),
           ),
         );
@@ -409,10 +392,9 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           }
           return;
         }
-        const corpusEntry = corpusEntryByPath.get(absPath);
         const entry = await buildSessionEntry(
           absPath,
-          corpusEntry ? this.buildSessionEntryOptions(corpusEntry) : undefined,
+          this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
         );
         if (!entry) {
           if (params.progress) {
@@ -438,11 +420,9 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
               total: params.progress.total,
             });
           }
-          this.resetSessionDelta(absPath, entry.size);
           return;
         }
         await this.indexFile(entry, { source: "sessions", content: entry.content });
-        this.resetSessionDelta(absPath, entry.size);
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
