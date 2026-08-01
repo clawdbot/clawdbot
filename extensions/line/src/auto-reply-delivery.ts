@@ -257,7 +257,7 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  const orderedMessages = processed.segments?.flatMap((segment) =>
+  const orderedMessages = processed.segments?.flatMap<messagingApi.Message>((segment) =>
     segment.type === "flex"
       ? [deps.createFlexMessage(segment.message.altText, segment.message.contents)]
       : deps

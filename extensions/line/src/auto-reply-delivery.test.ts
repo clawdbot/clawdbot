@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 // Line tests cover auto reply delivery plugin behavior.
 import { describe, expect, it, vi } from "vitest";
@@ -34,11 +35,17 @@ describe("deliverLineAutoReply", () => {
 
     const calls = [
       ...replyMessageLine.mock.calls.map((args, index) => ({
-        position: replyMessageLine.mock.invocationCallOrder[index],
+        position: expectDefined(
+          replyMessageLine.mock.invocationCallOrder[index],
+          "LINE reply delivery call order",
+        ),
         messages: args[1],
       })),
       ...pushMessagesLine.mock.calls.map((args, index) => ({
-        position: pushMessagesLine.mock.invocationCallOrder[index],
+        position: expectDefined(
+          pushMessagesLine.mock.invocationCallOrder[index],
+          "LINE push delivery call order",
+        ),
         messages: args[1],
       })),
     ].toSorted((left, right) => left.position - right.position);
@@ -49,7 +56,7 @@ describe("deliverLineAutoReply", () => {
           ? message.altText === "Code"
             ? "code-card"
             : "valid-table-card"
-          : message.text.includes("Large")
+          : message.type === "text" && message.text.includes("Large")
             ? "oversized-table-text"
             : undefined,
       )

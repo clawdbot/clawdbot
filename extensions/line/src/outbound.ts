@@ -1,3 +1,4 @@
+import type { messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
@@ -99,7 +100,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const orderedMessages = processed.segments?.flatMap((segment) =>
+    const orderedMessages = processed.segments?.flatMap<messagingApi.Message>((segment) =>
       segment.type === "flex"
         ? [segment.message]
         : runtime.channel.text
