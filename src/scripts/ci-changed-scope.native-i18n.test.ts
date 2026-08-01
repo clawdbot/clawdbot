@@ -20,7 +20,6 @@ describe("native i18n changed scope", () => {
     ];
     const generatedPaths = [
       "apps/.i18n/native/sv.json",
-      "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values-sv/strings.xml",
       "apps/android/app/src/thirdParty/res/values-sv/accessibility_strings.xml",

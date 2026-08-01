@@ -64,6 +64,10 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
+export type SessionListScope = Pick<SessionListOptions, "agentId" | "archivedFilter">;
+
+export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+
 export type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
@@ -143,6 +147,12 @@ export type SessionCapability = {
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
+  listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
+  subscribeList: (
+    scope: SessionListScope,
+    listener: (snapshot: SessionListSnapshot) => void,
+  ) => () => void;
+  refreshList: (options?: SessionRefreshOptions) => Promise<void>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,

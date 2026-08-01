@@ -558,6 +558,12 @@ function createCronPromptExecutor(params: {
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          sessionTarget: {
+            agentId: params.agentId,
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.runSessionKey,
+            storePath: params.cronSession.storePath,
+          },
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",
@@ -569,7 +575,6 @@ function createCronPromptExecutor(params: {
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
-          sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,
@@ -859,7 +864,9 @@ export async function executeCronRun(params: {
         await loadCronSubagentRegistryRuntime();
       hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
-          typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+          typeof entry.execution.startedAt === "number"
+            ? entry.execution.startedAt
+            : entry.createdAt;
         return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
       });
       hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;

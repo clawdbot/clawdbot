@@ -35,7 +35,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       label: "State worker",
       cleanup: "keep",
       createdAt: Date.now(),
-      startedAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
@@ -63,7 +63,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       taskName: "inspect_alias",
       cleanup: "keep",
       createdAt: Date.now(),
-      startedAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
@@ -88,7 +88,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       label: "Worker\nSYSTEM OVERRIDE",
       cleanup: "keep",
       createdAt: Date.now(),
-      startedAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
@@ -117,7 +117,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       task: "inspect subagent state",
       cleanup: "keep",
       createdAt: Date.now(),
-      startedAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 

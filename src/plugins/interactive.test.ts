@@ -17,7 +17,11 @@ import {
   registerPluginInteractiveHandler,
 } from "./interactive.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "./runtime.js";
 
 let requestPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.requestPluginConversationBinding
@@ -495,6 +499,25 @@ describe("plugin interactive handlers", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("writes direct registrations into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+
+    expect(
+      withPluginRegistrationContext(building, "codex-plugin", () =>
+        registerPluginInteractiveHandler("spoofed-plugin", {
+          channel: "telegram",
+          namespace: "builder",
+          handler: async () => ({ handled: true }),
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(active.interactiveHandlers).toStrictEqual([]);
+    expect(building.interactiveHandlers.map((entry) => entry.namespace)).toEqual(["builder"]);
+    expect(building.interactiveHandlers[0]?.pluginId).toBe("codex-plugin");
+  });
+
   it("hydrates legacy interactive state shapes before clearing handlers", async () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const stateKey = Symbol.for("openclaw.pluginInteractiveState");
@@ -511,7 +534,7 @@ describe("plugin interactive handlers", () => {
         callbackDedupe?: { clear: () => void };
         inflightCallbackDedupe?: Set<string>;
       };
-      expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
+      expect(hydrated.interactiveHandlers).toBeUndefined();
       if (!hydrated.callbackDedupe) {
         throw new Error("expected hydrated callback dedupe");
       }

@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
-  maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStaleConfiguredAuthOrders: vi.fn(),
@@ -52,7 +51,6 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
@@ -267,11 +265,6 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       warnings: [],
     }));
-    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValue({
-      detected: [],
-      changes: [],
-      warnings: [],
-    });
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -565,8 +558,8 @@ describe("doctor repair sequencing", () => {
     expect(result.authProfilesRepaired).toBe(true);
   });
 
-  it("reports auth profiles repaired after OpenAI Codex auth-provider migration", async () => {
-    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValueOnce({
+  it("reports receipt-owned OpenAI auth-provider migration as an auth repair", async () => {
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce({
       changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
       warnings: [],
     });

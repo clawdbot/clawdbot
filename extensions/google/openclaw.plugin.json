@@ -718,6 +718,16 @@
     "webSearch.baseUrl": {
       "label": "Gemini Search Base URL",
       "help": "Optional Gemini API base URL for web search grounding proxies."
+    },
+    "webSearch.headers": {
+      "label": "Gemini Search Headers",
+      "help": "Optional headers merged into Gemini web search requests. Use a SecretRef value when a header contains a secret.",
+      "advanced": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "webSearch.headers.*", "expected": "string" }]
     }
   },
   "contracts": {
@@ -763,6 +773,12 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "object"]
+            }
           }
         }
       }

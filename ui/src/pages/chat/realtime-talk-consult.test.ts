@@ -79,6 +79,39 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(order).toEqual(["flush", "tool-call"]);
   });
 
+  it("does not start a consult after aborting during the transcript flush", async () => {
+    let releaseFlush!: () => void;
+    const flushPending = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const flushTranscriptWrites = vi.fn(async () => await flushPending);
+    const request = vi.fn();
+    const submit = vi.fn();
+    const controller = new AbortController();
+
+    const consult = submitRealtimeTalkConsult({
+      ctx: {
+        client: { request },
+        sessionKey: "agent:main:main",
+        voiceSessionId: "voice-1",
+        flushTranscriptWrites,
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Check status" },
+      submit,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
+
+    controller.abort();
+    releaseFlush();
+    await consult;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
   it("prefers source-reply final text over an earlier empty Talk consult final", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string) => {

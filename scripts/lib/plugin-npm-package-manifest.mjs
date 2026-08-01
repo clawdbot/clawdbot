@@ -229,6 +229,63 @@ function spawnCommandSync(command, args, options) {
   return spawnSync(command, args, options);
 }
 
+/** @internal Directly tested release-script implementation detail. */
+export function runPluginNpmCiWithRetry(args, options, params = {}) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 180_000;
+  const spawn = params.spawn ?? spawnNpmSync;
+  const cleanupAttempt = params.cleanupAttempt ?? (() => {});
+  const pluginDir = params.pluginDir ?? "plugin";
+
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = spawn(args, { ...options, timeout: timeoutMs });
+    if (result.error?.code !== "ETIMEDOUT") {
+      return result;
+    }
+
+    // A timed-out npm process can leave a partial tree that makes the next
+    // package attempt nondeterministic. Restore the staging invariant even
+    // when the retry budget is exhausted.
+    cleanupAttempt();
+    if (attempt === attempts) {
+      return result;
+    }
+    console.error(
+      `[plugin-npm-publish] bundled dependency install timed out for ${pluginDir} ` +
+        `(attempt ${attempt}/${attempts}); retrying`,
+    );
+  }
+  return result;
+}
+
+/** @internal Directly tested release-script implementation detail. */
+export function generatePluginNpmPackageLockWithRetry(packageDir, options = {}, params = {}) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 180_000;
+  const generate = params.generate ?? generateNpmPackageLock;
+  const pluginDir = params.pluginDir ?? "plugin";
+  const env = {
+    ...(options.env ?? process.env),
+    OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: String(timeoutMs),
+  };
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return generate(packageDir, { ...options, env });
+    } catch (error) {
+      if (error?.code !== "ETIMEDOUT" || attempt === attempts) {
+        throw error;
+      }
+      console.error(
+        `[plugin-npm-publish] package-lock generation timed out for ${pluginDir} ` +
+          `(attempt ${attempt}/${attempts}); retrying`,
+      );
+    }
+  }
+  throw new Error(`package-lock generation retry loop exhausted for ${pluginDir}`);
+}
+
 function resolveInstalledPackageDir(packageDir, packageName) {
   return path.join(packageDir, "node_modules", ...packageName.split("/"));
 }
@@ -430,10 +487,14 @@ function installPackageLocalBundledDependencies(params) {
   try {
     fs.writeFileSync(
       packageLockPath,
-      generateNpmPackageLock(params.packageDir, { installStrategy: "shallow" }),
+      generatePluginNpmPackageLockWithRetry(
+        params.packageDir,
+        { installStrategy: "shallow" },
+        { pluginDir: params.pluginDir },
+      ),
       "utf8",
     );
-    const result = spawnNpmSync(
+    const result = runPluginNpmCiWithRetry(
       [
         "ci",
         "--install-strategy=shallow",
@@ -450,6 +511,10 @@ function installPackageLocalBundledDependencies(params) {
         cwd: params.packageDir,
         env: process.env,
         stdio: ["ignore", "ignore", "inherit"],
+      },
+      {
+        cleanupAttempt: () => fs.rmSync(nodeModulesPath, { recursive: true, force: true }),
+        pluginDir: params.pluginDir,
       },
     );
     if (result.error) {

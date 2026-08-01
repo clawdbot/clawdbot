@@ -559,9 +559,9 @@ export function createNpmLockExecOptions(invocation, cwd, env = process.env) {
   };
 }
 
-function runNpm(args, cwd) {
-  const npm = createNpmLockCommand(args);
-  execFileSync(npm.command, npm.args, createNpmLockExecOptions(npm, cwd));
+function runNpm(args, cwd, env = process.env) {
+  const npm = createNpmLockCommand(args, { env });
+  execFileSync(npm.command, npm.args, createNpmLockExecOptions(npm, cwd, env));
 }
 
 function packageExtensionAppliesToDependency(selector, dependencyName) {
@@ -764,7 +764,7 @@ function describeOverrideViolations(violations) {
     .join("; ");
 }
 
-function normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs) {
+function normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs, env) {
   const npmLockPath = path.join(tempDir, "package-lock.json");
   const overrideRules = exactOverrideRulesFromOverrides(npmLockOverrides);
   if (Object.keys(overrideRules).length === 0) {
@@ -787,7 +787,7 @@ function normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs) {
   // shrinkwraps as inactive, drop their cached subtree, then ask npm to recalculate this
   // package's authoritative lock with registry integrity hashes.
   writeFileSync(npmLockPath, `${JSON.stringify(npmLock, null, 2)}\n`);
-  runNpm(npmInstallArgs, tempDir);
+  runNpm(npmInstallArgs, tempDir, env);
 
   const normalized = JSON.parse(readFileSync(npmLockPath, "utf8"));
   const remaining = collectOverrideViolations(normalized, overrideRules);
@@ -832,6 +832,7 @@ export function createNpmPackageLockInstallStrategyArgs(options = {}) {
 export function generateNpmPackageLock(packageDir, options = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-npm-lock-"));
   try {
+    const env = options.env ?? process.env;
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
     const npmLockOverrides = readNpmLockOverrides();
     const peerResolutionArgs = shouldUseLegacyPeerDepsForNpmLock(packageJson)
@@ -851,8 +852,8 @@ export function generateNpmPackageLock(packageDir, options = {}) {
       `${JSON.stringify(packageJsonForNpmLock(packageJson, npmLockOverrides), null, 2)}\n`,
     );
     copyLocalFileDependencies(packageJson, packageDir, tempDir);
-    runNpm(npmInstallArgs, tempDir);
-    normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs);
+    runNpm(npmInstallArgs, tempDir, env);
+    normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs, env);
     const generated = normalizeNpmVersionDrift(
       applyPackageExtensionPeerMetadata(
         JSON.parse(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),

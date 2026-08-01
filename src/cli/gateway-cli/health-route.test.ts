@@ -37,7 +37,12 @@ describe("runGatewayHealthJsonRoute", () => {
       },
     );
 
-    expect(callGateway).toHaveBeenCalledWith("health", { json: true, timeout: "10000" });
+    expect(callGateway).toHaveBeenCalledWith(
+      "health",
+      { json: true, timeout: "10000" },
+      undefined,
+      { defaultTimeoutMs: 10_000 },
+    );
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true, durationMs: 6 }, 2);
     expect(readBestEffortConfig).not.toHaveBeenCalled();
     expect(emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
@@ -70,6 +75,8 @@ describe("runGatewayHealthJsonRoute", () => {
           gateway: { auth: { mode: "token" }, mode: "local", port: 19083 },
         },
       }),
+      undefined,
+      { defaultTimeoutMs: 10_000 },
     );
   });
 

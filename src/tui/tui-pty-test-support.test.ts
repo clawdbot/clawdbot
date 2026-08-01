@@ -32,6 +32,29 @@ describe("TUI PTY test support", () => {
   beforeEach(() => {
     nodePtyMocks.spawn.mockReset();
     processTreeMocks.signalProcessTree.mockClear();
+    vi.unstubAllEnvs();
+  });
+
+  it("removes explicitly cleared inherited environment variables", () => {
+    vi.stubEnv("OPENCLAW_TUI_PTY_PARENT_ONLY", "parent");
+    nodePtyMocks.spawn.mockReturnValue(createMockPty());
+
+    startPty("node", [], {
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_TUI_PTY_PARENT_ONLY: undefined,
+        OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
+      },
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    const spawnOptions = nodePtyMocks.spawn.mock.calls[0]?.[2];
+    expect(spawnOptions?.env).not.toHaveProperty("OPENCLAW_TUI_PTY_PARENT_ONLY");
+    expect(spawnOptions?.env).toMatchObject({
+      OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
+      TERM: "xterm-256color",
+    });
   });
 
   it("applies fixture-specific terminal dimensions", () => {
@@ -198,14 +221,46 @@ describe("TUI PTY test support", () => {
 
     const disposal = run.dispose();
     expect(run.dispose()).toBe(disposal);
-    expect(order).toEqual(["data-dispose", "kill"]);
+    expect(order).toEqual(["kill"]);
 
     order.push("exit");
     exitListener?.({ exitCode: 0 });
     await disposal;
 
-    expect(order).toEqual(["data-dispose", "kill", "exit", "exit-dispose"]);
+    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
     expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("force-kills the owned process tree when graceful disposal times out", async () => {
+    const order: string[] = [];
+    const kill = vi.fn(() => order.push("term"));
+    nodePtyMocks.spawn.mockReturnValue(
+      createMockPty({
+        pid: 4242,
+        kill,
+        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
+        onExit: vi.fn(() => ({ dispose: () => order.push("exit-dispose") })),
+      }),
+    );
+    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
+      order.push("force");
+      opts?.onComplete?.();
+    });
+
+    const run = startPty("node", [], {
+      cwd: process.cwd(),
+      env: {},
+      exitTimeoutMs: 1,
+      outputTimeoutMs: 1_000,
+    });
+
+    await run.dispose();
+
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledWith(4242, "SIGKILL", {
+      onComplete: expect.any(Function),
+    });
+    expect(order).toEqual(["term", "force", "data-dispose", "exit-dispose"]);
   });
 
   it("force-kills the PTY and waits for its exit event", async () => {

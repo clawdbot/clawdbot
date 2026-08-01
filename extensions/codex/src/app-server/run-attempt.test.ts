@@ -805,8 +805,8 @@ async function writeTokenPressureState(
 }
 
 function installFailingThreadStartClient(onThreadStart: () => unknown) {
-  const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
-  clearSpy.mockClear();
+  const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+  retireSpy.mockClear();
   const state: { failedClient?: unknown } = {};
   setCodexAppServerClientFactoryForTest(async () => {
     const client = {
@@ -823,7 +823,7 @@ function installFailingThreadStartClient(onThreadStart: () => unknown) {
     state.failedClient = client;
     return client as never;
   });
-  return { clearSpy, state };
+  return { retireSpy, state };
 }
 
 async function runSharedClientRestartTest(closeCount: number) {
@@ -4995,7 +4995,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
   it("does not retire the shared Codex client when a spawned helper run fails with a logical thread/start error", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw new CodexAppServerRpcError(
         { message: "401 authentication_error: Invalid bearer token" },
         "thread/start",
@@ -5004,37 +5004,39 @@ describe("runCodexAppServerAttempt", () => {
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(false);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
 
   it("retires the shared Codex client when a spawned helper run times out during thread/start", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => new Promise<never>(() => {}));
+    const { retireSpy, state } = installFailingThreadStartClient(
+      () => new Promise<never>(() => {}),
+    );
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     params.timeoutMs = 1;
     await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
       "codex app-server startup timed out",
     );
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
   it("retires the shared Codex client when a spawned helper hits a thread/start write failure", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     });
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("write EPIPE");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
 
   it("retires the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw new CodexAppServerRpcError(
         { message: "401 authentication_error: Invalid bearer token" },
         "thread/start",
@@ -5042,9 +5044,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     const params = createRunParams();
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

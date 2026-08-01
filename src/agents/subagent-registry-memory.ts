@@ -25,29 +25,39 @@ function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   ]);
 }
 
-function removeRunFromChildSessionIndex(runId: string, entry: SubagentRunRecord) {
-  const sessionRuns = runsByChildSessionKey.get(entry.childSessionKey);
-  if (sessionRuns?.get(runId) !== entry) {
-    return;
-  }
-  sessionRuns.delete(runId);
-  if (sessionRuns.size === 0) {
-    runsByChildSessionKey.delete(entry.childSessionKey);
-  }
-}
-
-function removeRunFromCollectorGroupIndex(runId: string, entry: SubagentRunRecord) {
-  const key = collectorGroupKey(entry);
+function removeIndexedSubagentRun(
+  index: Map<string, Map<string, SubagentRunRecord>>,
+  key: string | undefined,
+  runId: string,
+  entry: SubagentRunRecord,
+) {
   if (!key) {
     return;
   }
-  const groupRuns = runsByCollectorGroupKey.get(key);
-  if (groupRuns?.get(runId) !== entry) {
+  const indexedRuns = index.get(key);
+  if (indexedRuns?.get(runId) !== entry) {
     return;
   }
-  groupRuns.delete(runId);
-  if (groupRuns.size === 0) {
-    runsByCollectorGroupKey.delete(key);
+  indexedRuns.delete(runId);
+  if (indexedRuns.size === 0) {
+    index.delete(key);
+  }
+}
+
+function indexSubagentRun(
+  index: Map<string, Map<string, SubagentRunRecord>>,
+  key: string | undefined,
+  runId: string,
+  entry: SubagentRunRecord,
+) {
+  if (!key) {
+    return;
+  }
+  const indexedRuns = index.get(key);
+  if (indexedRuns) {
+    indexedRuns.set(runId, entry);
+  } else {
+    index.set(key, new Map([[runId, entry]]));
   }
 }
 
@@ -55,28 +65,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   override set(runId: string, entry: SubagentRunRecord): this {
     const prev = this.get(runId);
     if (prev) {
-      removeRunFromChildSessionIndex(runId, prev);
-      removeRunFromCollectorGroupIndex(runId, prev);
+      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
+      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
       if (prev.collect === true && prev.childSessionKey) {
         collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
       }
     }
     super.set(runId, entry);
-    let sessionRuns = runsByChildSessionKey.get(entry.childSessionKey);
-    if (!sessionRuns) {
-      sessionRuns = new Map();
-      runsByChildSessionKey.set(entry.childSessionKey, sessionRuns);
-    }
-    sessionRuns.set(runId, entry);
-    const groupKey = collectorGroupKey(entry);
-    if (groupKey) {
-      let groupRuns = runsByCollectorGroupKey.get(groupKey);
-      if (!groupRuns) {
-        groupRuns = new Map();
-        runsByCollectorGroupKey.set(groupKey, groupRuns);
-      }
-      groupRuns.set(runId, entry);
-    }
+    indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
+    indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
     if (entry.collect === true && entry.childSessionKey) {
       collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
     }
@@ -86,8 +83,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   override delete(runId: string): boolean {
     const prev = this.get(runId);
     if (prev) {
-      removeRunFromChildSessionIndex(runId, prev);
-      removeRunFromCollectorGroupIndex(runId, prev);
+      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
+      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
     }
     if (
       prev?.collect === true &&

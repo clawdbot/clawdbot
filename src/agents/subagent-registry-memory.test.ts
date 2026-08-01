@@ -15,6 +15,7 @@ function createRun(runId: string, childSessionKey: string): SubagentRunRecord {
     task: runId,
     cleanup: "keep",
     createdAt: 1,
+    execution: { status: "running" },
   };
 }
 

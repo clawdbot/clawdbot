@@ -84,7 +84,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "517952b835640a368c4af6dfe6dc8365ae841b57";
+    const canonicalKovaRef = "283070760a16655b28835061774158b8b11b4aff";
     const legacyKovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
@@ -252,6 +252,20 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf(remaining)).toBeLessThan(run.indexOf(deadlineFailure));
     expect(run.indexOf(deadlineFailure)).toBeLessThan(run.indexOf(probeCap));
     expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
+  });
+
+  it("measures warmed and first-device gateway health separately", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain("--case gatewayHealthJsonConnected \\");
+    expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
+  });
+
+  it("keeps the source performance gateway fixture network-hermetic", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain('"models": { "catalogRefresh": { "enabled": false } },');
+    expect(run).toContain('"update": { "checkOnStart": false },');
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

@@ -62,6 +62,7 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 import { stableStringify } from "./stable-stringify.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
+const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
 type PreparedModelRuntimeAgentBaseFacts = {
   input: PreparedModelRuntimeInput;
@@ -111,6 +112,7 @@ function prepareAgentFacts(
   input: PreparedModelRuntimeInput,
   catalogMode: PreparedModelRuntimeCatalogMode,
   ambientCredentials: Readonly<AgentCredentialMap>,
+  additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
@@ -137,12 +139,17 @@ function prepareAgentFacts(
     configuredModelRefs,
     // Gateway startup prepares only providers named by config/model selection. An unrelated
     // stored credential must not pull that provider's complete catalog into the admission path.
-    providerIds: collectPreparedModelRuntimeProviderIds(
-      input.config,
-      credentials,
-      catalogMode === "live",
-      configuredModelRefs,
-    ),
+    providerIds: [
+      ...new Set([
+        ...collectPreparedModelRuntimeProviderIds(
+          input.config,
+          credentials,
+          catalogMode === "live",
+          configuredModelRefs,
+        ),
+        ...additionalProviderIds.map(normalizeProviderId).filter(Boolean),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right)),
   };
 }
 
@@ -194,6 +201,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
 export async function prepareWorkspaceBuildGroup(
   inputs: readonly PreparedModelRuntimeInput[],
   catalogMode: PreparedModelRuntimeCatalogMode,
+  options: { providerDiscoveryProviderIds?: readonly string[] } = {},
 ): Promise<{
   agentFacts: PreparedModelRuntimeAgentFacts[];
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
@@ -261,12 +269,22 @@ export async function prepareWorkspaceBuildGroup(
     configuredManifestModels.set(key, model);
     return model;
   };
-  const configuredProviderIds = collectPreparedModelRuntimeProviderIds(input.config, {}, false);
-  const staticCatalogProviderIds = collectConfiguredProviderIdsNeedingStaticCatalog({
-    config: input.config,
-    matchesStaticModelId,
-    resolveStaticCatalogModel: resolveConfiguredManifestModel,
-  });
+  const configuredProviderIds = [
+    ...new Set([
+      ...collectPreparedModelRuntimeProviderIds(input.config, {}, false),
+      ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  const staticCatalogProviderIds = [
+    ...new Set([
+      ...collectConfiguredProviderIdsNeedingStaticCatalog({
+        config: input.config,
+        matchesStaticModelId,
+        resolveStaticCatalogModel: resolveConfiguredManifestModel,
+      }),
+      ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
   const staticProviderCatalogStartedAt = performance.now();
   const preparedStaticProviderCatalog =
     catalogMode === "static"
@@ -312,7 +330,12 @@ export async function prepareWorkspaceBuildGroup(
   const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
   const agentFactsStartedAt = performance.now();
   const agentBaseFacts = inputs.map((candidate) =>
-    prepareAgentFacts(candidate, catalogMode, ambientCredentials),
+    prepareAgentFacts(
+      candidate,
+      catalogMode,
+      ambientCredentials,
+      options.providerDiscoveryProviderIds,
+    ),
   );
   const agentFactsMs = performance.now() - agentFactsStartedAt;
   const configuredProjectionStartedAt = performance.now();
@@ -460,12 +483,21 @@ export async function prepareFullCatalogFacts(
     }
   }
   const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
+  const completeModelCatalog = { ...modelCatalog, staticEntries };
+  if (catalogMode === "live") {
+    fullModelCatalogSnapshots.add(completeModelCatalog);
+  }
   return {
     templateModelRegistry,
-    modelCatalog: { ...modelCatalog, staticEntries },
+    modelCatalog: completeModelCatalog,
     configuredRuntimeModels,
     inlineProviderModels: workspaceFacts.inlineProviderModels,
   };
+}
+
+/** Reports whether a catalog came from the complete prepared-catalog build path. */
+export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): boolean {
+  return fullModelCatalogSnapshots.has(snapshot);
 }
 
 function modelCatalogEntryKey(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
@@ -659,6 +691,7 @@ export async function prepareAgentCatalogSource(
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
+  sourceOptions: { providerDiscoveryProviderIds?: readonly string[] } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
   const options = {
@@ -671,10 +704,13 @@ export async function prepareAgentCatalogSource(
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
-          providerDiscoveryProviderIds: providerIds,
+          providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
         }
       : {
           providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
+          ...(sourceOptions.providerDiscoveryProviderIds
+            ? { providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds }
+            : {}),
         }),
   };
   if (!persist) {

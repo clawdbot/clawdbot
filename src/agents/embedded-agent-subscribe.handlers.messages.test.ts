@@ -15,6 +15,7 @@ import {
 import {
   buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
+  resolveCurrentSourceMessagingToolPartial,
   resolveSilentReplyFallbackText,
 } from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -51,6 +52,7 @@ function createMessageUpdateContext(
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
     stripBlockTags?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
@@ -65,12 +67,17 @@ function createMessageUpdateContext(
     params: {
       runId: "run-1",
       session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
     },
     state: {
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       reasoningStreamOpen: false,
       streamReasoning: false,
       deltaBuffer: "",
@@ -158,6 +165,8 @@ function createMessageEndContext(
       deterministicApprovalPromptSent: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       includeReasoning: false,
       streamReasoning: false,
       blockReplyBreak: "message_end",
@@ -346,6 +355,130 @@ describe("pending assistant reply directives", () => {
       isReasoning: true,
     });
     expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+  });
+});
+
+describe("handleMessageUpdate current-source message-tool previews", () => {
+  it("holds delta-only continuation fragments and releases one full divergent snapshot", () => {
+    const state = {
+      currentSourceMessagingToolHeldPartial: undefined as string | undefined,
+      currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+    };
+
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "QA-MSTEAMS",
+        visibleDelta: "QA-MSTEAMS",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "-DM-OK",
+        visibleDelta: "-DM-OK",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: " with more detail",
+        visibleDelta: " with more detail",
+      }),
+    ).toEqual({ hold: false, text: "QA-MSTEAMS-DM-OK with more detail" });
+    expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
+  });
+
+  it("holds automatic partial prefixes and exact duplicates after source delivery", () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_duplicate",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: sentText,
+        id: "msg_source_duplicate",
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("releases the full cumulative snapshot when automatic text diverges", () => {
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_diverges",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: `${sentText} with more detail`,
+        id: "msg_source_diverges",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: `${sentText} with more detail` }),
+    );
+  });
+
+  it("keeps unrelated automatic partial text visible", () => {
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "A genuinely different answer",
+        id: "msg_source_different",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "A genuinely different answer" }),
+    );
   });
 });
 

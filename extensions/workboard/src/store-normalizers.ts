@@ -1024,7 +1024,11 @@ export function appendCompletionProof(
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
-  options: { allowDependencyLinks?: boolean; preserveProofId?: string } = {},
+  options: {
+    allowDependencyLinks?: boolean;
+    allowArchivedAt?: boolean;
+    preserveProofId?: string;
+  } = {},
 ): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return trimMetadataToBudget(fallback, options);
@@ -1034,7 +1038,11 @@ export function normalizeMetadata(
     record.stale && typeof record.stale === "object" && !Array.isArray(record.stale)
       ? (record.stale as Record<string, unknown>)
       : null;
-  const hasArchivedAt = Object.hasOwn(record, "archivedAt");
+  // Archival is a transition owned by archive(), which appends the matching
+  // `archived` event. Callers that cannot produce that event (create) must not
+  // be able to declare it, or the card is excluded from dispatch from the
+  // instant it exists with an event log recording only `created`.
+  const hasArchivedAt = Object.hasOwn(record, "archivedAt") && options.allowArchivedAt !== false;
   const hasStale = Object.hasOwn(record, "stale");
   const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
   const links = Array.isArray(record.links)

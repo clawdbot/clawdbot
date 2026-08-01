@@ -224,6 +224,32 @@ describe("Slack Web API routing", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retries startup auth after a rate limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+          status: 429,
+          headers: { "retry-after": "0" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+          status: 200,
+        }),
+      );
+    const client = createSlackStartupAuthClient("rate-limited-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).resolves.toMatchObject({
+      ok: true,
+      team_id: "TMOCK",
+      user_id: "UMOCK",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts a stalled-header lookup after one request", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];

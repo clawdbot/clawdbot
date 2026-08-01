@@ -605,6 +605,10 @@ describe("Slack live QA runtime helpers", () => {
     expect(
       buildScenarioConfig("slack-progress-commentary-false").agents?.defaults?.verboseDefault,
     ).toBe("off");
+    expect(
+      buildScenarioConfig("slack-mpim-app-mention-dedupe").channels?.slack?.accounts?.sut
+        ?.streaming,
+    ).toEqual({ mode: "off" });
     const omitted = progressConfig("slack-progress-commentary-omitted");
     expect(omitted).toMatchObject({ toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
@@ -617,7 +621,7 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("verifies progress commentary by Slack message identity", () => {
+  it("verifies progress commentary from history or successful captured message writes", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
@@ -666,8 +670,10 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text:
-                  testCase.commentaryStyle === "lane" ? `💬 ${commentaryMarker}` : commentaryMarker,
+                text: testCase.commentaryStyle === "lane" ? "Working…" : commentaryMarker,
+                ...(testCase.commentaryStyle === "lane"
+                  ? { blockText: ["Update", commentaryMarker] }
+                  : {}),
                 ts: testCase.commentaryTs,
               },
             ]
@@ -1030,9 +1036,7 @@ describe("Slack live QA runtime helpers", () => {
         },
       }),
     );
-    expect(run && "matchText" in run ? run.matchText : "").toMatch(
-      /^SLACK_QA_TABLE_DONE_[A-Z0-9]+$/u,
-    );
+    expect(run && "matchText" in run ? run.matchText : "").toBe(summaryText);
   });
 
   it("verifies the SUT-owned native table and exact accessible top-level text", async () => {
@@ -1153,17 +1157,8 @@ describe("Slack live QA runtime helpers", () => {
 
   it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
     const probe = testing.buildSlackInvalidBlocksTableProbe();
-    const invalidBlocksError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
-      code: "slack_webapi_platform_error",
-      data: { error: "invalid_blocks", ok: false },
-    });
-    let apiAttempt = 0;
     let storedPayload: Record<string, unknown> | undefined;
     const postMessage = vi.fn(async (payload: Record<string, unknown>) => {
-      apiAttempt += 1;
-      if (apiAttempt === 1) {
-        throw invalidBlocksError;
-      }
       storedPayload = payload;
       return { channel: "C123456789", ok: true, ts: "2.000000" };
     });
@@ -1172,7 +1167,10 @@ describe("Slack live QA runtime helpers", () => {
         ? [
             {
               blocks: storedPayload.blocks,
-              text: storedPayload.text,
+              text:
+                typeof storedPayload.text === "string"
+                  ? storedPayload.text.replace(/\s+/gu, " ")
+                  : storedPayload.text,
               ts: "2.000000",
               user: "U999999999",
             },
@@ -1201,32 +1199,67 @@ describe("Slack live QA runtime helpers", () => {
       timeoutMs: 0,
     });
 
-    expect(postMessage).toHaveBeenCalledTimes(2);
-    const [nativeRequest] = postMessage.mock.calls[0] ?? [];
-    const [fallbackRequest] = postMessage.mock.calls[1] ?? [];
-    const nativeBlocks = nativeRequest?.blocks as Array<{ rows?: unknown[]; type?: string }>;
-    expect(nativeRequest).toMatchObject({ mrkdwn: false });
-    expect(nativeBlocks).toHaveLength(1);
-    expect(nativeBlocks[0]).toMatchObject({ type: "data_table" });
-    expect(nativeBlocks[0]?.rows).toHaveLength(102);
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    const [fallbackRequest] = postMessage.mock.calls[0] ?? [];
     expect(fallbackRequest).not.toHaveProperty("blocks");
     expect(fallbackRequest).toMatchObject({ mrkdwn: false });
     const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
-    expect(fallbackText).toBe(nativeRequest?.text);
     expect(fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(fallbackText.split("\n")).toContain(probe.finalRowText);
-    expect(result.message).toMatchObject({
-      text: fallbackText,
-      ts: "2.000000",
-      user: "U999999999",
-    });
+    expect(result.message).toMatchObject({ ts: "2.000000", user: "U999999999" });
+    expect(result.message.text).toBe(fallbackText.replace(/\s+/gu, " "));
     expect(result.details).toContain("first API failure=invalid_blocks");
     expect(result.details).toContain("fallback formatting disabled=true");
     expect(result.details).toContain("complete delivery=true");
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 
-  it("fails with sanitized evidence when Slack returns a different first API code", async () => {
+  it("bounds invalid_blocks readback diagnostics while showing the observed text", async () => {
+    const malformedReadback = `BROKEN-${"x".repeat(2_000)}`;
+    const postMessage = vi.fn(async () => ({
+      channel: "C123456789",
+      ok: true,
+      ts: "2.000000",
+    }));
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const error = await testing
+      .runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: {
+          conversations: {
+            history: vi.fn(async () => ({
+              messages: [{ text: malformedReadback, ts: "2.000000", user: "U999999999" }],
+            })),
+          },
+        } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(`${malformedReadback.length} characters`);
+    expect(message).toContain('actual="BROKEN-');
+    expect(message).toContain("…");
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it("reports the real Slack error when the fallback request fails", async () => {
     const postMessage = vi.fn(async () => {
       throw Object.assign(new Error("do not persist this raw platform detail"), {
         data: { error: "invalid_arguments", ok: false },
@@ -1254,13 +1287,11 @@ describe("Slack live QA runtime helpers", () => {
         sutWriteClient: sutWriteClient as never,
         timeoutMs: 0,
       }),
-    ).rejects.toThrow(
-      "expected first Slack API failure code invalid_blocks; observed invalid_arguments",
-    );
+    ).rejects.toThrow("Slack fallback failed after invalid_blocks; observed invalid_arguments");
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 
-  it("does not expose an untrusted Slack API error value", async () => {
+  it("does not expose an untrusted Slack fallback error value", async () => {
     const postMessage = vi.fn(async () => {
       throw Object.assign(new Error("private platform detail"), {
         data: { error: "unsafe private detail", ok: false },
@@ -1288,7 +1319,9 @@ describe("Slack live QA runtime helpers", () => {
         sutWriteClient: sutWriteClient as never,
         timeoutMs: 0,
       }),
-    ).rejects.toThrow("expected first Slack API failure code invalid_blocks; observed none");
+    ).rejects.toThrow(
+      "Slack fallback failed after invalid_blocks; observed no fallback API failure code",
+    );
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 

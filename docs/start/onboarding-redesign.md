@@ -300,8 +300,8 @@ restart` from the real environment and verify the plist. Product follow-up:
   `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
   accepts. Then `scripts/pr` prepare/merge as usual.
 
-- **Gates that CI enforces beyond focused tests**: docs map
-  (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
+- **Gates that CI enforces beyond focused tests**: docs consistency
+  (`pnpm check:docs` after changing docs), oxlint (`no-map-spread`,
   `max-lines` — split files, never suppress), `check:test-types`, knip
   deadcode (export only what prod consumes; route tests through public APIs),
   and the live-test shard classifier

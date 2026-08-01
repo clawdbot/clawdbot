@@ -1,3 +1,4 @@
+import type { messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
@@ -26,7 +27,6 @@ import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
-const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -100,9 +100,20 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const chunks = processed.text
-      ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
-      : [];
+    const orderedMessages = processed.segments?.flatMap<
+      messagingApi.FlexMessage | messagingApi.TextMessage
+    >((segment) =>
+      segment.type === "flex"
+        ? [segment.message]
+        : runtime.channel.text
+            .chunkMarkdownText(segment.text, chunkLimit)
+            .map((text) => ({ type: "text" as const, text })),
+    );
+    const chunks = orderedMessages
+      ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
+      : processed.text
+        ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
+        : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const mediaOptions = {
@@ -180,15 +191,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         );
       }
 
-      for (const flexMsg of processed.flexMessages) {
-        const flexContents = flexMsg.contents;
-        await recordResult(
-          sendFlex(to, flexMsg.altText, flexContents, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+      if (!orderedMessages) {
+        for (const flexMsg of processed.flexMessages) {
+          await recordResult(
+            sendFlex(to, flexMsg.altText, flexMsg.contents, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        }
       }
     }
 
@@ -197,7 +209,40 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (chunks.length > 0) {
+    if (orderedMessages) {
+      for (const [index, message] of orderedMessages.entries()) {
+        const isLast = index === orderedMessages.length - 1;
+        if (message.type === "flex") {
+          if (isLast && quickReply) {
+            await sendMessageBatch([{ ...message, quickReply }]);
+          } else {
+            await recordResult(
+              sendFlex(to, message.altText, message.contents, {
+                verbose: false,
+                cfg,
+                accountId: accountId ?? undefined,
+              }),
+            );
+          }
+        } else if (isLast && hasQuickReplies) {
+          await recordResult(
+            sendQuickReplies(to, message.text, quickReplies, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        } else {
+          await recordResult(
+            sendText(to, message.text, {
+              verbose: false,
+              cfg,
+              accountId: accountId ?? undefined,
+            }),
+          );
+        }
+      }
+    } else if (chunks.length > 0) {
       for (const [i, chunk] of chunks.entries()) {
         const isLast = i === chunks.length - 1;
         if (isLast && hasQuickReplies) {
@@ -221,11 +266,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     } else if (shouldSendQuickRepliesInline) {
       const quickReplyMessages: Array<Record<string, unknown>> = [];
       if (lineData.flexMessage) {
-        quickReplyMessages.push({
-          type: "flex",
-          altText: truncateUtf16Safe(lineData.flexMessage.altText, LINE_FLEX_ALT_TEXT_LIMIT),
-          contents: lineData.flexMessage.contents,
-        });
+        quickReplyMessages.push(
+          outboundRuntime.createFlexMessage(
+            lineData.flexMessage.altText,
+            lineData.flexMessage.contents as Parameters<
+              typeof outboundRuntime.createFlexMessage
+            >[1],
+          ),
+        );
       }
       if (lineData.templateMessage) {
         const template = buildTemplate(lineData.templateMessage);
@@ -243,11 +291,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         });
       }
       for (const flexMsg of processed.flexMessages) {
-        quickReplyMessages.push({
-          type: "flex",
-          altText: truncateUtf16Safe(flexMsg.altText, LINE_FLEX_ALT_TEXT_LIMIT),
-          contents: flexMsg.contents,
-        });
+        quickReplyMessages.push(
+          outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
+        );
       }
       for (const url of mediaUrls) {
         const trimmed = url?.trim();

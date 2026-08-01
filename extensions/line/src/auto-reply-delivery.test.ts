@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 // Line tests cover auto reply delivery plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -9,9 +11,72 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { createFlexMessage as createProviderFlexMessage } from "./send.js";
 
 describe("deliverLineAutoReply", () => {
+  it.each([
+    { name: "without quick replies", quickReplies: [] as string[] },
+    { name: "with final quick replies", quickReplies: ["Continue"] },
+  ])("keeps oversized Markdown tables in source order $name", async ({ quickReplies }) => {
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+    const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: markdown },
+      lineData: quickReplies.length > 0 ? { quickReplies } : {},
+      deps,
+    });
+
+    const calls = [
+      ...replyMessageLine.mock.calls.map((args, index) => ({
+        position: expectDefined(
+          replyMessageLine.mock.invocationCallOrder[index],
+          "LINE reply delivery call order",
+        ),
+        messages: args[1],
+      })),
+      ...pushMessagesLine.mock.calls.map((args, index) => ({
+        position: expectDefined(
+          pushMessagesLine.mock.invocationCallOrder[index],
+          "LINE push delivery call order",
+        ),
+        messages: args[1],
+      })),
+    ].toSorted((left, right) => left.position - right.position);
+    const sequence = calls
+      .flatMap((call) => call.messages)
+      .map((message) =>
+        message.type === "flex"
+          ? message.altText === "Code"
+            ? "code-card"
+            : "valid-table-card"
+          : message.type === "text" && message.text.includes("Large")
+            ? "oversized-table-text"
+            : undefined,
+      )
+      .filter(Boolean);
+
+    expect(sequence).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
+    expect(calls.every((call) => call.messages.length <= 5)).toBe(true);
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine.mock.calls.length).toBeGreaterThan(0);
+    if (quickReplies.length > 0) {
+      const messages = calls.flatMap((call) => call.messages);
+      expect(messages.at(-1)).toMatchObject({
+        type: "flex",
+        altText: "Code",
+        quickReply: { items: quickReplies },
+      });
+      expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+    }
+  });
+
   it("sends text and rich messages on one reply token instead of pushing the rich bubble", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
@@ -249,13 +314,47 @@ describe("deliverLineAutoReply", () => {
     });
   });
 
-  it("truncates flex altText on a surrogate boundary", async () => {
-    // The emoji's surrogate pair straddles LINE's 400-char altText cap; a raw
-    // slice used to send a lone high surrogate to the LINE API.
+  it.each([
+    { label: "explicit card", extracted: false },
+    { label: "extracted Markdown card", extracted: true },
+  ])("preserves provider-valid $label alternative text in auto-replies", async ({ extracted }) => {
+    const altText = "a".repeat(1200);
+    const lineData = extracted ? {} : { flexMessage: { altText, contents: { type: "bubble" } } };
+    const { deps, replyMessageLine } = createDeps({
+      ...(extracted
+        ? {
+            processLineMessage: (text) => ({
+              text,
+              flexMessages: [{ type: "flex", altText, contents: { type: "bubble" } }],
+            }),
+          }
+        : {}),
+      createFlexMessage: createProviderFlexMessage,
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "hello", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "token",
+      [
+        { type: "text", text: "hello" },
+        { type: "flex", altText, contents: { type: "bubble" } },
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+  });
+
+  it("bounds Flex alternative text without splitting a Unicode surrogate pair", async () => {
+    // The emoji crosses the real provider's 1500-character alternative-text boundary.
     const lineData = {
-      flexMessage: { altText: `${"a".repeat(399)}😀 overflow`, contents: { type: "bubble" } },
+      flexMessage: { altText: `${"a".repeat(1499)}😀 overflow`, contents: { type: "bubble" } },
     };
-    const createFlexMessageSpy = vi.fn(createFlexMessage);
+    const createFlexMessageSpy = vi.fn(createProviderFlexMessage);
     const { deps } = createDeps({
       createFlexMessage: createFlexMessageSpy as LineAutoReplyDeps["createFlexMessage"],
     });
@@ -267,8 +366,8 @@ describe("deliverLineAutoReply", () => {
       deps,
     });
 
-    const sentAltText = createFlexMessageSpy.mock.calls[0]?.[0] ?? "";
-    expect(sentAltText.length).toBeLessThanOrEqual(400);
+    const sentAltText = createFlexMessageSpy.mock.results[0]?.value.altText ?? "";
+    expect(sentAltText).toBe("a".repeat(1499));
     expect(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(sentAltText),
     ).toBe(false);

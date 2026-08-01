@@ -229,7 +229,8 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText(modelRef, { exact: true }).waitFor();
+      await currentConnection.getByText("LM Studio", { exact: true }).waitFor();
+      await currentConnection.getByText("qwen3-8b-instruct", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="lmstudio"]').count())
         .toBe(1);

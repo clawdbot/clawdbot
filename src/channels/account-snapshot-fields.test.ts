@@ -159,6 +159,16 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
   });
 
+  it("projects recorded lifecycle alongside channel-authored healthState", () => {
+    expect(
+      projectSafeChannelAccountSnapshotFields({
+        lifecycle: "blocked",
+        healthState: "degraded",
+      }),
+    ).toEqual({ healthState: "degraded", lifecycle: "blocked" });
+    expect(projectSafeChannelAccountSnapshotFields({ lifecycle: "unknown" })).toEqual({});
+  });
+
   it("preserves false, zero, and nullable fields without exposing invalid credential metadata", () => {
     const snapshot = projectSafeChannelAccountSnapshotFields({
       running: false,

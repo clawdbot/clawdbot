@@ -6,7 +6,9 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: mocks.warn }),
 }));
 
+import { requireActivePluginChannelRegistry } from "./runtime.js";
 import {
+  clearSessionDiscussionProvider,
   getSessionDiscussionProvider,
   registerSessionDiscussionProvider,
   type SessionDiscussionProvider,
@@ -23,9 +25,10 @@ function provider(id: string): SessionDiscussionProvider {
 describe("session discussion provider registry", () => {
   beforeEach(() => {
     mocks.warn.mockClear();
+    clearSessionDiscussionProvider();
   });
 
-  it("returns the registered provider and warns when replacing it", () => {
+  it("keeps providers owner-keyed without silently displacing the first owner", () => {
     const first = provider("first");
     const second = provider("second");
 
@@ -34,9 +37,13 @@ describe("session discussion provider registry", () => {
     expect(mocks.warn).not.toHaveBeenCalled();
 
     registerSessionDiscussionProvider(second);
-    expect(getSessionDiscussionProvider()).toBe(second);
+    expect(getSessionDiscussionProvider()).toBe(first);
+    expect([...requireActivePluginChannelRegistry().sessionDiscussionProviders.keys()]).toEqual([
+      "first",
+      "second",
+    ]);
     expect(mocks.warn).toHaveBeenCalledWith(
-      "replacing session discussion provider first with second",
+      "session discussion provider second registered alongside first; retaining first as the default",
     );
   });
 });

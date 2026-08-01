@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
@@ -470,6 +471,104 @@ describe("createWebSendApi", () => {
       "voice-1",
       "voice-text-1",
     ]);
+  });
+
+  it("preserves the accepted voice receipt when its visible caption send disconnects", async () => {
+    const captionError = new Error("connection closed while sending the voice caption");
+    sendMessage
+      .mockResolvedValueOnce({ key: { id: "voice-accepted-1" } })
+      .mockRejectedValueOnce(captionError);
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery did not preserve its partial receipt");
+    }
+    expect(failure.deliveryResult.visibleReplySent).toBe(true);
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-1"]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["voice-accepted-1"]);
+    expect(failure).toHaveProperty("cause", captionError);
+  });
+
+  it("preserves the accepted voice receipt when caption mention resolution fails", async () => {
+    const mentionError = new Error("group metadata lookup disconnected");
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: vi.fn().mockRejectedValue(mentionError),
+    });
+    sendMessage.mockResolvedValueOnce({ key: { id: "voice-accepted-2" } });
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery was lost during mention resolution");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-2"]);
+    expect(failure).toHaveProperty("cause", mentionError);
+  });
+
+  it.each([
+    {
+      kind: "text",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
+    },
+    {
+      kind: "poll",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendPoll("+1555", { question: "Q?", options: ["a", "b"] }),
+    },
+  ])("retains the accepted $kind receipt when activity recording fails", async ({ kind, send }) => {
+    const activityError = new Error("channel activity bookkeeping disconnected");
+    sendMessage.mockResolvedValueOnce({ key: { id: `${kind}-accepted` } });
+    recordChannelActivity.mockImplementationOnce(() => {
+      throw activityError;
+    });
+
+    const failure = await send(api).catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted provider delivery was lost during activity bookkeeping");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual([`${kind}-accepted`]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([`${kind}-accepted`]);
+    expect(failure).toHaveProperty("cause", activityError);
+  });
+
+  it("retains both accepted voice receipts when later activity recording fails", async () => {
+    const activityError = new Error("channel activity bookkeeping disconnected");
+    sendMessage
+      .mockResolvedValueOnce({ key: { id: "voice-accepted-3" } })
+      .mockResolvedValueOnce({ key: { id: "caption-accepted-3" } });
+    recordChannelActivity.mockImplementationOnce(() => {
+      throw activityError;
+    });
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice and caption deliveries were lost");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-3", "caption-accepted-3"]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
+      "voice-accepted-3",
+      "caption-accepted-3",
+    ]);
+    expect(failure).toHaveProperty("cause", activityError);
   });
 
   it("supports video media and gifPlayback option", async () => {

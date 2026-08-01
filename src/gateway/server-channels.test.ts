@@ -533,6 +533,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalled();
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toBe("channel exited without an error");
   });
 
@@ -579,6 +580,9 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     await flushMicrotasks();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lifecycle,
+    ).toBe("ready");
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
 
     const snapshot = manager.getRuntimeSnapshot();
@@ -586,7 +590,39 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
+    expect(account?.lifecycle).toBe("stopped");
     expect(account?.lastError).toBeNull();
+  });
+
+  it("records starting on every start and preserves explicit blocked over connected ready", async () => {
+    const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      lifecycleAtHandoff.push(ctx.getStatus().lifecycle);
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: true,
+        lifecycle: "blocked",
+        lastError: "identity unavailable",
+      });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      connected: true,
+      lifecycle: "blocked",
+    });
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
   it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
@@ -856,7 +892,7 @@ describe("server-channels auto restart", () => {
         setStatus({
           accountId,
           terminalDisconnect: true,
-          healthState: "logged-out",
+          lifecycle: "blocked",
           lastError: "relink required",
         });
       },
@@ -871,7 +907,7 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toMatchObject({
       terminalDisconnect: true,
-      healthState: "logged-out",
+      lifecycle: "stopped",
       lastError: "relink required",
       restartPending: false,
     });
@@ -966,6 +1002,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toContain("channel stop timed out");
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
 
@@ -1051,6 +1088,7 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.reconnectAttempts).toBe(0);
     expect(account?.lastError).toContain("channel stop timed out");
   });
@@ -1425,6 +1463,7 @@ describe("server-channels auto restart", () => {
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
       linked: false,
       running: false,
+      lifecycle: "stopped",
       lastError: "logged out",
     });
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);

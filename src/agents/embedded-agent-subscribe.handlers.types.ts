@@ -170,6 +170,8 @@ export type EmbeddedAgentSubscribeState = {
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolHeldPartial?: string;
   messagingToolSentTargets: MessagingToolSend[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
@@ -338,6 +340,7 @@ type ToolHandlerState = Pick<
   | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
+  | "currentSourceMessagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"

@@ -24,6 +24,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { previewRemHarness } from "./rem-harness.js";
+import { writeSessionIngestionState } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -2307,6 +2308,98 @@ describe("memory-core dreaming phases", () => {
     expect(persistedLines).toHaveLength(160);
     expect(corpus).toContain("bulk-line-0");
     expect(corpus).toContain("bulk-line-159");
+  });
+
+  it("preserves checkpoints for known sessions beyond a capped sweep", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const busySessionIds = Array.from(
+      { length: 20 },
+      (_, index) => `aa-busy-${index.toString().padStart(2, "0")}`,
+    );
+    for (const sessionId of [...busySessionIds, "zz-known"]) {
+      await seedDreamingSessionTranscript({
+        sessionId,
+        messages: [
+          {
+            role: "user",
+            timestamp: "2026-04-05T18:00:00.000Z",
+            content: `Initial durable note for ${sessionId}`,
+          },
+        ],
+      });
+    }
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+      const before = await dreamingTestState.readSessionIngestionState(workspaceDir);
+      const knownStateKey = "main:sessions/main/zz-known";
+      const knownCheckpoint = expectDefined(
+        before.files[knownStateKey],
+        "known session checkpoint",
+      );
+
+      for (const sessionId of busySessionIds) {
+        await seedDreamingSessionTranscript({
+          sessionId,
+          messages: Array.from({ length: 12 }, (_, index) => ({
+            role: "user" as const,
+            timestamp: "2026-04-05T18:05:00.000Z",
+            content: `New durable note ${index} for ${sessionId}`,
+          })),
+        });
+      }
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
+      });
+
+      const after = await dreamingTestState.readSessionIngestionState(workspaceDir);
+      expect(after.files[knownStateKey]).toStrictEqual(knownCheckpoint);
+    } finally {
+      restoreDreamingTestEnv();
+    }
+  });
+
+  it("prunes absent live checkpoints without deleting foreign backfill state", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const archiveName = "retained.jsonl.deleted.2026-04-06T01-00-00.000Z";
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(path.join(sessionsDir, archiveName), "");
+    const checkpoint = {
+      mtimeMs: 1,
+      size: 1,
+      contentHash: "hash",
+      lineCount: 1,
+      lastContentLine: 1,
+    };
+    await writeSessionIngestionState(workspaceDir, {
+      version: 3,
+      files: {
+        "main:sessions/main/missing": checkpoint,
+        [`main:sessions/main/${archiveName}`]: checkpoint,
+        "session-backfill:/archive.jsonl": checkpoint,
+      },
+      seenMessages: {},
+    });
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+      const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
+      expect(state.files).toEqual({
+        [`main:sessions/main/${archiveName}`]: checkpoint,
+        "session-backfill:/archive.jsonl": checkpoint,
+      });
+    } finally {
+      restoreDreamingTestEnv();
+    }
   });
 
   it("ingests appended SQLite session transcript rows after prior checkpoint", async () => {

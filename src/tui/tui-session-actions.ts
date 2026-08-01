@@ -19,6 +19,12 @@ import {
   isCommandMessage,
 } from "./tui-formatters.js";
 import { readTuiSessionUserMessage } from "./tui-session-events.js";
+import {
+  clearTuiSessionModeOverrides,
+  sessionInfoUiEquals,
+  type SessionInfoDefaults,
+  type SessionInfoEntry,
+} from "./tui-session-info.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   getTuiSessionProjection,
@@ -26,7 +32,7 @@ import {
   reduceTuiSessionProjection,
 } from "./tui-session-projection.js";
 import * as submit from "./tui-submit-state.js";
-import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
   clear: () => void;
@@ -50,47 +56,6 @@ type SessionActionContext = {
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
-
-type SessionInfoDefaults = {
-  model?: string | null;
-  modelProvider?: string | null;
-  contextTokens?: number | null;
-  thinkingLevels?: Array<{ id: string; label: string }>;
-};
-
-type SessionInfoEntry = SessionInfo & {
-  key?: string;
-  sessionId?: string;
-  modelOverride?: string;
-  providerOverride?: string;
-};
-
-function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
-  return (
-    left.thinkingLevel === right.thinkingLevel &&
-    (left.thinkingLevels === right.thinkingLevels ||
-      JSON.stringify(left.thinkingLevels ?? null) ===
-        JSON.stringify(right.thinkingLevels ?? null)) &&
-    left.fastMode === right.fastMode &&
-    left.verboseLevel === right.verboseLevel &&
-    left.traceLevel === right.traceLevel &&
-    left.reasoningLevel === right.reasoningLevel &&
-    left.model === right.model &&
-    left.modelProvider === right.modelProvider &&
-    left.agentRuntime?.id === right.agentRuntime?.id &&
-    left.agentRuntime?.source === right.agentRuntime?.source &&
-    left.agentRuntime?.fallback === right.agentRuntime?.fallback &&
-    left.contextTokens === right.contextTokens &&
-    left.inputTokens === right.inputTokens &&
-    left.outputTokens === right.outputTokens &&
-    left.totalTokens === right.totalTokens &&
-    left.responseUsage === right.responseUsage &&
-    left.effectiveResponseUsage === right.effectiveResponseUsage &&
-    left.displayName === right.displayName &&
-    (left.goal === right.goal ||
-      JSON.stringify(left.goal ?? null) === JSON.stringify(right.goal ?? null))
-  );
-}
 
 export function createSessionActions(context: SessionActionContext) {
   const {
@@ -661,6 +626,7 @@ export function createSessionActions(context: SessionActionContext) {
     setActivityStatus("idle");
     if (selectionChanged) {
       state.currentSessionId = null;
+      clearTuiSessionModeOverrides(state.sessionInfo);
     }
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.

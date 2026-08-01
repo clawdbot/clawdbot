@@ -281,6 +281,51 @@ export function listSqliteSessionEntriesReadOnly(
   return result.found ? result.value : [];
 }
 
+/** Counts durable session rows without materializing entry JSON or warming the entry cache. */
+export function countSqliteSessionEntryRowsReadOnly(scope: SessionEntryListScope = {}): number {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getSessionKysely(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_nodes")
+        .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
+    );
+    return row ? normalizeSqliteNumber(row.count) : 0;
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : 0;
+}
+
+/**
+ * Proves whether a durable store has a row in one of the requested lifecycle states.
+ * Unknown existing schemas stay eligible so the writable owner can surface or repair them.
+ */
+export function hasSqliteSessionEntriesByStatusReadOnly(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
+  statuses: readonly SessionEntryStatus[],
+): boolean {
+  const selectedStatuses = [...new Set(statuses)];
+  if (selectedStatuses.length === 0) {
+    return false;
+  }
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getSessionKysely(database.db);
+    return Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("status", "in", selectedStatuses)
+          .limit(1),
+      ),
+    );
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : result.reason !== "database-missing";
+}
+
 function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,

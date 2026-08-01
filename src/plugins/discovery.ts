@@ -303,7 +303,7 @@ function isExtensionFile(filePath: string): boolean {
   if (!EXTENSION_EXTS.has(ext)) {
     return false;
   }
-  if (filePath.endsWith(".d.ts")) {
+  if (/\.d\.[cm]?ts$/.test(filePath)) {
     return false;
   }
   const baseName = normalizeLowercaseStringOrEmpty(path.basename(filePath));

@@ -2,9 +2,8 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { formatTag, isRich, pad, truncate } from "./list.format.js";
+import { formatTag, formatTokenK, isRich, pad, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
-import { formatTokenK } from "./shared.js";
 
 const MODEL_PAD = 42;
 const INPUT_PAD = 10;

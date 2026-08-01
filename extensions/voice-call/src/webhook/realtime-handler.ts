@@ -339,7 +339,10 @@ export class RealtimeCallHandler {
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
   private readonly activeTelephonyClosersByCallId = new Map<
     string,
-    (reason: TelephonyCloseReason) => void
+    {
+      owner: ActiveRealtimeVoiceBridge;
+      close: (reason: TelephonyCloseReason) => void;
+    }
   >();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
   private readonly rawPartialUserTranscriptsByCallId = new Map<string, string>();
@@ -797,6 +800,10 @@ export class RealtimeCallHandler {
         },
       },
       onTranscript: (role, text, isFinal) => {
+        const owner = nativeConsultOwner.current;
+        if (owner && !this.isActiveBridgeOwner(callId, owner)) {
+          return;
+        }
         const turnId = harness.ensureTurn();
         const eventType =
           role === "assistant"
@@ -898,6 +905,27 @@ export class RealtimeCallHandler {
         );
       },
       onEvent: (event) => {
+        if (event.direction === "client" && event.type === "session.continuity.reset") {
+          // A fresh provider session cannot complete the prior session's text,
+          // audio, tool work, or Talk turn.
+          const turnId = harness.talk.activeTurnId;
+          const owner = nativeConsultOwner.current;
+          if (owner && this.isActiveBridgeOwner(callId, owner)) {
+            this.clearUserTranscriptState(callId);
+            this.resetConsultSessionForContinuity(callId, owner);
+          }
+          harness.flushOutput(() => {
+            audioPacer.clearAudio();
+            harness.finishOutputAudio(event.type);
+          });
+          if (turnId) {
+            harness.talk.cancelTurn({
+              turnId,
+              payload: { callId, providerCallId: callSid, reason: event.type },
+            });
+          }
+          return;
+        }
         if (event.type === "input_audio_buffer.speech_started") {
           harness.ensureTurn();
           return;
@@ -943,11 +971,15 @@ export class RealtimeCallHandler {
         });
       },
       onClose: (reason) => {
-        if (nativeConsultOwner.current) {
-          this.clearActiveBridgeMappings(callId, callSid, nativeConsultOwner.current);
-          this.cancelConsultSession(callId, nativeConsultOwner.current);
+        const owner = nativeConsultOwner.current;
+        const ownsCallState = owner ? this.isActiveBridgeOwner(callId, owner) : false;
+        if (owner) {
+          this.clearActiveBridgeMappings(callId, callSid, owner);
+          this.cancelConsultSession(callId, owner);
         }
-        this.clearUserTranscriptState(callId);
+        if (ownsCallState) {
+          this.clearUserTranscriptState(callId);
+        }
         harness.finishOutputAudio(reason);
         harness.emit({
           type: "session.closed",
@@ -957,10 +989,13 @@ export class RealtimeCallHandler {
         if (reason !== "error") {
           return;
         }
-        emitCallEnd("error");
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(1011, "Bridge disconnected");
         }
+        if (owner && !ownsCallState) {
+          return;
+        }
+        emitCallEnd("error");
         void this.provider
           .hangupCall({ callId, providerCallId: callSid, reason: "error" })
           .catch((error: unknown) => {
@@ -992,8 +1027,9 @@ export class RealtimeCallHandler {
     });
     this.activeBridgesByCallId.set(callId, session);
     this.activeBridgesByCallId.set(callSid, session);
-    this.activeTelephonyClosersByCallId.set(callId, closeTelephony);
-    this.activeTelephonyClosersByCallId.set(callSid, closeTelephony);
+    const telephonyCloser = { owner: session, close: closeTelephony };
+    this.activeTelephonyClosersByCallId.set(callId, telephonyCloser);
+    this.activeTelephonyClosersByCallId.set(callSid, telephonyCloser);
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
@@ -1021,9 +1057,12 @@ export class RealtimeCallHandler {
       try {
         closeSession();
       } finally {
+        const ownsCallState = this.isActiveBridgeOwner(callId, session);
         this.clearActiveBridgeMappings(callId, callSid, session);
         this.cancelConsultSession(callId, session);
-        this.clearUserTranscriptState(callId);
+        if (ownsCallState) {
+          this.clearUserTranscriptState(callId);
+        }
         harness.close();
         audioPacer.close();
       }
@@ -1031,8 +1070,11 @@ export class RealtimeCallHandler {
 
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
+      const ownsCallState = this.isActiveBridgeOwner(callId, session);
       session.close();
-      emitCallEnd("error");
+      if (ownsCallState) {
+        emitCallEnd("error");
+      }
       ws.close(1011, "Failed to connect");
     });
 
@@ -1105,20 +1147,41 @@ export class RealtimeCallHandler {
     this.forcedConsultsByCallId.delete(callId);
   }
 
-  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge | undefined): void {
-    if (!owner) {
-      return;
-    }
+  private resetConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge): boolean {
     const session = this.consultSessionsByCallId.get(callId);
     if (!session || session.owner !== owner) {
-      return;
+      return false;
     }
-    // Forced and native consults share bridge ownership. Replacement or close
-    // must invalidate both before a newer bridge can observe call-scoped state.
     session.coordinator.clearPending();
     this.cancelForcedConsult(callId, owner);
     this.cancelNativeConsult(callId, owner);
+    return true;
+  }
+
+  private resetConsultSessionForContinuity(
+    callId: string,
+    owner: ActiveRealtimeVoiceBridge,
+  ): boolean {
+    const session = this.consultSessionsByCallId.get(callId);
+    if (!session || session.owner !== owner) {
+      return false;
+    }
+    this.cancelForcedConsult(callId, owner);
+    this.cancelNativeConsult(callId, owner);
+    // A fresh provider session must not inherit cancelled/recent consult dedupe.
+    session.coordinator.clear();
+    return true;
+  }
+
+  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge | undefined): void {
+    if (!owner || !this.resetConsultSession(callId, owner)) {
+      return;
+    }
     this.consultSessionsByCallId.delete(callId);
+  }
+
+  private isActiveBridgeOwner(callId: string, owner: ActiveRealtimeVoiceBridge): boolean {
+    return this.activeBridgesByCallId.get(callId) === owner;
   }
 
   private clearActiveBridgeMappings(
@@ -1197,8 +1260,8 @@ export class RealtimeCallHandler {
     reason: TelephonyCloseReason,
   ): void {
     const closer = this.activeTelephonyClosersByCallId.get(callIdOrSid);
-    if (closer) {
-      closer(reason);
+    if (closer && closer.owner === bridge) {
+      closer.close(reason);
       return;
     }
     bridge?.close();

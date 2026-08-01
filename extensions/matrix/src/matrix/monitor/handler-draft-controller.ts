@@ -96,6 +96,10 @@ export async function createMatrixDraftController(params: {
     active: Boolean(draftStream),
     seed: progressSeed,
     formatLine: formatMatrixToolProgressMarkdownCode,
+    buildProgressEventLine: (input, options) =>
+      input.event === "approval"
+        ? formatChannelProgressDraftLine(input, options)
+        : buildChannelProgressDraftLineForEntry(progressConfigEntry, input, options),
     update: (text) => {
       const previewText =
         !progressDraftStreaming && (previewPlan || previewPlanExplanation)
@@ -125,39 +129,10 @@ export async function createMatrixDraftController(params: {
     return {
       ...options,
       onToolStart: async (payload) => {
-        const toolName = payload.name?.trim();
-        await progressDraft.pushToolProgress(
-          buildChannelProgressDraftLineForEntry(
-            progressConfigEntry,
-            {
-              event: "tool",
-              itemId: payload.itemId,
-              toolCallId: payload.toolCallId,
-              name: toolName,
-              phase: payload.phase,
-              args: payload.args,
-            },
-            payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-          ),
-          { toolName },
-        );
+        await progressDraft.pushToolEvent(payload);
       },
       onItemEvent: async (payload) => {
-        await progressDraft.pushToolProgress(
-          buildChannelProgressDraftLineForEntry(progressConfigEntry, {
-            event: "item",
-            itemId: payload.itemId,
-            toolCallId: payload.toolCallId,
-            itemKind: payload.kind,
-            title: payload.title,
-            name: payload.name,
-            phase: payload.phase,
-            status: payload.status,
-            summary: payload.summary,
-            progressText: payload.progressText,
-            meta: payload.meta,
-          }),
-        );
+        await progressDraft.pushItemEvent(payload);
       },
       onPlanUpdate: async (payload) => {
         if (payload.phase !== "update") {
@@ -180,55 +155,13 @@ export async function createMatrixDraftController(params: {
         }
       },
       onApprovalEvent: async (payload) => {
-        if (payload.phase !== "requested") {
-          return;
-        }
-        await progressDraft.pushToolProgress(
-          formatChannelProgressDraftLine({
-            event: "approval",
-            phase: payload.phase,
-            title: payload.title,
-            command: payload.command,
-            reason: payload.reason,
-            message: payload.message,
-          }),
-        );
+        await progressDraft.pushApprovalEvent(payload);
       },
       onCommandOutput: async (payload) => {
-        if (payload.phase !== "end") {
-          return;
-        }
-        await progressDraft.pushToolProgress(
-          buildChannelProgressDraftLineForEntry(progressConfigEntry, {
-            event: "command-output",
-            itemId: payload.itemId,
-            toolCallId: payload.toolCallId,
-            phase: payload.phase,
-            title: payload.title,
-            name: payload.name,
-            status: payload.status,
-            exitCode: payload.exitCode,
-          }),
-        );
+        await progressDraft.pushCommandOutputEvent(payload);
       },
       onPatchSummary: async (payload) => {
-        if (payload.phase !== "end") {
-          return;
-        }
-        await progressDraft.pushToolProgress(
-          buildChannelProgressDraftLineForEntry(progressConfigEntry, {
-            event: "patch",
-            itemId: payload.itemId,
-            toolCallId: payload.toolCallId,
-            phase: payload.phase,
-            title: payload.title,
-            name: payload.name,
-            added: payload.added,
-            modified: payload.modified,
-            deleted: payload.deleted,
-            summary: payload.summary,
-          }),
-        );
+        await progressDraft.pushPatchEvent(payload);
       },
     };
   };

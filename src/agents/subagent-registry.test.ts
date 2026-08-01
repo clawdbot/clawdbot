@@ -11,6 +11,10 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -394,6 +398,7 @@ describe("subagent registry seam flow", () => {
       task: "scoped registry run",
       cleanup: "keep" as const,
       createdAt: Date.now(),
+      execution: { status: "running" as const },
     };
     mocks.getSubagentRunsSnapshotForController.mockReturnValue(new Map([[run.runId, run]]));
     mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(new Map([[run.runId, run]]));
@@ -780,10 +785,14 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(mocks.callGateway).toHaveBeenCalled());
     const entry = mod.getSubagentRunByChildSessionKey(childSessionKey);
     expect(entry).not.toBeNull();
-    Object.assign(entry ?? {}, {
-      endedAt: Date.now(),
-      outcome: { status: "ok" },
-    });
+    if (entry) {
+      entry.execution = {
+        ...entry.execution,
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+      };
+    }
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     let finishCapture: ((value: string) => void) | undefined;
@@ -1015,6 +1024,7 @@ describe("subagent registry seam flow", () => {
             cleanup: "delete",
             expectsCompletionMessage: true,
             createdAt: now,
+            execution: { status: "running" as const },
           },
         ],
       ]),
@@ -1184,12 +1194,11 @@ describe("subagent registry seam flow", () => {
       data: { phase: "start", startedAt },
     });
     await waitForFast(() =>
-      expect(mod.getSubagentRunByRunId("run-start-race")?.startedAt).toBe(startedAt),
+      expect(mod.getSubagentRunByRunId("run-start-race")?.execution.startedAt).toBe(startedAt),
     );
 
     expect(mod.startQueuedSubagentRun("run-start-race", "gateway-start-race")).toBe(true);
     expect(mod.getSubagentRunByRunId("gateway-start-race")).toMatchObject({
-      startedAt,
       sessionStartedAt: startedAt,
       execution: { status: "running", acceptedAt: expect.any(Number), startedAt },
     });
@@ -1589,7 +1598,7 @@ describe("subagent registry seam flow", () => {
       queuedLaunch: { maxConcurrent: 1 },
     });
     expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-    expect(mod.getSubagentRunByRunId(runId)?.endedAt).toBeUndefined();
+    expect(mod.getSubagentRunByRunId(runId)?.execution.endedAt).toBeUndefined();
   });
 
   it("requeues durable requester-settle obligations after a worker error", async () => {
@@ -1638,8 +1647,65 @@ describe("subagent registry seam flow", () => {
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     const run = findRequesterRun("run-interrupted-wait");
-    expect(run?.endedAt).toBeUndefined();
-    expect(run?.outcome).toBeUndefined();
+    expect(run?.execution.endedAt).toBeUndefined();
+    expect(run?.execution.outcome).toBeUndefined();
+  });
+
+  it("detaches subagent completion from a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:main:main";
+    let disposed = false;
+    let resolveWait: (value: Record<string, unknown>) => void = () => {};
+    const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
+      resolveWait = resolve;
+    });
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const freshCompletionWrite = vi.fn(async () => {});
+
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "agent.wait") {
+        return {};
+      }
+      const result = await pendingWait;
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      return result;
+    });
+    mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return true;
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        mod.registerSubagentRun({
+          runId: "run-detached-requester-owner",
+          requesterSessionKey: sessionKey,
+          task: "finish after the requester attempt exits",
+          expectsCompletionMessage: true,
+        });
+        await waitForFast(() =>
+          expect(mocks.callGateway).toHaveBeenCalledWith(
+            expect.objectContaining({ method: "agent.wait" }),
+          ),
+        );
+      },
+    );
+
+    disposed = true;
+    resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+
+    await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(freshCompletionWrite).toHaveBeenCalledOnce();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(staleWriteLock).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
@@ -1727,8 +1793,8 @@ describe("subagent registry seam flow", () => {
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
     });
     const activeRun = findRequesterRun("run-waiter-timeout");
-    expect(activeRun?.endedAt).toBeUndefined();
-    expect(activeRun?.outcome).toBeUndefined();
+    expect(activeRun?.execution.endedAt).toBeUndefined();
+    expect(activeRun?.execution.outcome).toBeUndefined();
 
     resolveSecondWait({
       status: "ok",
@@ -1738,8 +1804,12 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-waiter-timeout");
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
-      expect(completedRun?.endedAt).toBe(222);
-      expectRecordFields(completedRun?.outcome, { status: "ok" }, "completed run outcome");
+      expect(completedRun?.execution.endedAt).toBe(222);
+      expectRecordFields(
+        completedRun?.execution.outcome,
+        { status: "ok" },
+        "completed run outcome",
+      );
     });
     await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
@@ -1773,17 +1843,17 @@ describe("subagent registry seam flow", () => {
       expect(waitAttempts).toBeGreaterThanOrEqual(1);
     });
     const activeRun = findRequesterRun("run-explicit-timeout");
-    expect(activeRun?.endedAt).toBeUndefined();
-    expect(activeRun?.outcome).toBeUndefined();
+    expect(activeRun?.execution.endedAt).toBeUndefined();
+    expect(activeRun?.execution.outcome).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(5_000);
 
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-explicit-timeout");
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
-      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
+      expect(completedRun?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
-        completedRun?.outcome,
+        completedRun?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -1828,8 +1898,11 @@ describe("subagent registry seam flow", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await waitForFast(() => {
         expect(findRequesterRun(runId)).toMatchObject({
-          endedAt: startedAt + 1_000,
-          outcome: { status: "timeout" },
+          execution: {
+            status: "terminal",
+            endedAt: startedAt + 1_000,
+            outcome: { status: "timeout" },
+          },
         });
       });
       getLifecycleHandler()({
@@ -1845,8 +1918,8 @@ describe("subagent registry seam flow", () => {
       });
       await waitForFast(() => {
         const run = findRequesterRun(runId);
-        expect(run?.endedAt).toBe(startedAt + 1_000);
-        expectRecordFields(run?.outcome, {
+        expect(run?.execution.endedAt).toBe(startedAt + 1_000);
+        expectRecordFields(run?.execution.outcome, {
           status: "timeout",
           startedAt,
           endedAt: startedAt + 1_000,
@@ -1886,9 +1959,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-lifecycle-success-after-deadline");
-      expect(run?.endedAt).toBe(startedAt + 1_000);
+      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -1931,9 +2004,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-lifecycle-observed-start");
-      expect(run?.endedAt).toBe(createdAt + 65_000);
+      expect(run?.execution.endedAt).toBe(createdAt + 65_000);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         {
           status: "ok",
           startedAt: observedStartedAt,
@@ -1959,14 +2032,17 @@ describe("subagent registry seam flow", () => {
     expect(run).not.toBeNull();
     Object.assign(run ?? {}, {
       createdAt,
-      startedAt: createdAt,
       sessionStartedAt: createdAt,
-      endedAt: createdAt + 60_000,
-      outcome: {
-        status: "timeout",
+      execution: {
+        status: "terminal",
         startedAt: createdAt,
         endedAt: createdAt + 60_000,
-        elapsedMs: 60_000,
+        outcome: {
+          status: "timeout",
+          startedAt: createdAt,
+          endedAt: createdAt + 60_000,
+          elapsedMs: 60_000,
+        },
       },
       cleanupHandled: true,
     });
@@ -1985,9 +2061,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const correctedRun = findRequesterRun("run-cleanup-lock-observed-success");
-      expect(correctedRun?.endedAt).toBe(createdAt + 60_000);
+      expect(correctedRun?.execution.endedAt).toBe(createdAt + 60_000);
       expectRecordFields(
-        correctedRun?.outcome,
+        correctedRun?.execution.outcome,
         {
           status: "timeout",
           startedAt: createdAt,
@@ -2015,14 +2091,17 @@ describe("subagent registry seam flow", () => {
     expect(run).not.toBeNull();
     Object.assign(run ?? {}, {
       createdAt,
-      startedAt: createdAt,
       sessionStartedAt: createdAt,
-      endedAt: createdAt + 60_000,
-      outcome: {
-        status: "timeout",
+      execution: {
+        status: "terminal",
         startedAt: createdAt,
         endedAt: createdAt + 60_000,
-        elapsedMs: 60_000,
+        outcome: {
+          status: "timeout",
+          startedAt: createdAt,
+          endedAt: createdAt + 60_000,
+          elapsedMs: 60_000,
+        },
       },
       delivery: {
         status: "pending",
@@ -2110,8 +2189,8 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       const correctedRun = findRequesterRun(runId);
-      expect(correctedRun?.endedAt).toBe(startedAt + 35_000);
-      expectRecordFields(correctedRun?.outcome, {
+      expect(correctedRun?.execution.endedAt).toBe(startedAt + 35_000);
+      expectRecordFields(correctedRun?.execution.outcome, {
         status: "ok",
         startedAt,
         endedAt: startedAt + 35_000,
@@ -2148,9 +2227,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-lifecycle-timeout-after-deadline");
-      expect(run?.endedAt).toBe(startedAt + 1_000);
+      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -2184,8 +2263,8 @@ describe("subagent registry seam flow", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-timeout-late-lifecycle-timeout");
-      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
-      expect(completedRun?.outcome?.status).toBe("timeout");
+      expect(completedRun?.execution.endedAt).toBe(startedAt + 1_000);
+      expect(completedRun?.execution.outcome?.status).toBe("timeout");
     });
 
     const lifecycleHandler = getLifecycleHandler();
@@ -2204,9 +2283,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-timeout-late-lifecycle-timeout");
-      expect(run?.endedAt).toBe(startedAt + 1_000);
+      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -2246,9 +2325,9 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-boundary-timeout");
       expect(waitAttempts).toBe(1);
-      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
+      expect(completedRun?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
-        completedRun?.outcome,
+        completedRun?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -2315,9 +2394,9 @@ describe("subagent registry seam flow", () => {
 
       await waitForFast(() => {
         const completedRun = findRequesterRun(runId);
-        expect(completedRun?.endedAt).toBe(createdAt + expected.endedAfterMs);
+        expect(completedRun?.execution.endedAt).toBe(createdAt + expected.endedAfterMs);
         expectRecordFields(
-          completedRun?.outcome,
+          completedRun?.execution.outcome,
           {
             status: expected.status,
             startedAt: createdAt + expected.startedAfterMs,
@@ -2362,9 +2441,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-ok-session-store-start");
-      expect(completedRun?.endedAt).toBe(createdAt + 65_000);
+      expect(completedRun?.execution.endedAt).toBe(createdAt + 65_000);
       expectRecordFields(
-        completedRun?.outcome,
+        completedRun?.execution.outcome,
         {
           status: "ok",
           startedAt: sessionStartedAt,
@@ -2449,9 +2528,9 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(runId);
         expect(waitAttempts).toBeGreaterThanOrEqual(1);
-        expect(run?.endedAt).toBeUndefined();
-        expect(run?.outcome).toBeUndefined();
-        expect(run?.startedAt).toBe(observedStartedAt);
+        expect(run?.execution.endedAt).toBeUndefined();
+        expect(run?.execution.outcome).toBeUndefined();
+        expect(run?.execution.startedAt).toBe(observedStartedAt);
       });
 
       vi.setSystemTime(observedStartedAt + 60_000);
@@ -2459,9 +2538,9 @@ describe("subagent registry seam flow", () => {
 
       await waitForFast(() => {
         const run = findRequesterRun(runId);
-        expect(run?.endedAt).toBe(observedStartedAt + 60_000);
+        expect(run?.execution.endedAt).toBe(observedStartedAt + 60_000);
         expectRecordFields(
-          run?.outcome,
+          run?.execution.outcome,
           {
             status: "timeout",
             startedAt: observedStartedAt,
@@ -2560,9 +2639,9 @@ describe("subagent registry seam flow", () => {
 
       await waitForFast(() => {
         const run = findRequesterRun(runId);
-        expect(run?.endedAt).toBe(createdAt + expected.endedAtMs);
+        expect(run?.execution.endedAt).toBe(createdAt + expected.endedAtMs);
         expectRecordFields(
-          run?.outcome,
+          run?.execution.outcome,
           {
             status: expected.status,
             startedAt: createdAt + expected.startedAtMs,
@@ -2615,9 +2694,9 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       expect(waitTimeouts).toEqual([1_000]);
       const completedRun = findRequesterRun("run-resumed-near-deadline");
-      expect(completedRun?.endedAt).toBe(startedAt + 60_000);
+      expect(completedRun?.execution.endedAt).toBe(startedAt + 60_000);
       expectRecordFields(
-        completedRun?.outcome,
+        completedRun?.execution.outcome,
         {
           status: "timeout",
           startedAt,
@@ -2655,9 +2734,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-terminal-timeout");
-      expect(run?.endedAt).toBe(222);
+      expect(run?.execution.endedAt).toBe(222);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         { status: "error", error: "subagent run terminated" },
         "terminal cancellation outcome",
       );
@@ -2725,9 +2804,9 @@ describe("subagent registry seam flow", () => {
 
       await waitForFast(() => {
         const run = findRequesterRun(runId);
-        expect(run?.endedAt).toBe(startedAt + elapsedMs);
+        expect(run?.execution.endedAt).toBe(startedAt + elapsedMs);
         expectRecordFields(
-          run?.outcome,
+          run?.execution.outcome,
           { status: "timeout", startedAt, endedAt: startedAt + elapsedMs, elapsedMs },
           label,
         );
@@ -2777,8 +2856,8 @@ describe("subagent registry seam flow", () => {
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
     });
     const activeRun = findRequesterRun("run-reactivated-timeout");
-    expect(activeRun?.endedAt).toBeUndefined();
-    expect(activeRun?.outcome).toBeUndefined();
+    expect(activeRun?.execution.endedAt).toBeUndefined();
+    expect(activeRun?.execution.outcome).toBeUndefined();
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
 
     resolveSecondWait({
@@ -2788,7 +2867,11 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-reactivated-timeout");
-      expectRecordFields(completedRun?.outcome, { status: "ok" }, "reactivated run outcome");
+      expectRecordFields(
+        completedRun?.execution.outcome,
+        { status: "ok" },
+        "reactivated run outcome",
+      );
     });
   });
 
@@ -2811,7 +2894,7 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-yield-paused");
-      expect(run?.endedAt).toBe(222);
+      expect(run?.execution.endedAt).toBe(222);
       expect(run?.pauseReason).toBe("sessions_yield");
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -2826,7 +2909,7 @@ describe("subagent registry seam flow", () => {
     const replacement = findRequesterRun("run-yield-continuation");
     expect(replacement?.runId).toBe("run-yield-continuation");
     expect(replacement?.pauseReason).toBeUndefined();
-    expect(replacement?.endedAt).toBeUndefined();
+    expect(replacement?.execution.endedAt).toBeUndefined();
   });
 
   it("ignores a late yield lifecycle event after the paused run is killed", async () => {
@@ -2852,7 +2935,7 @@ describe("subagent registry seam flow", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((run) => run.runId === runId);
     expect(killed).toMatchObject({
-      endedAt: 222,
+      execution: { status: "terminal", endedAt: 222 },
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       cleanupHandled: true,
       suppressAnnounceReason: "killed",
@@ -2870,7 +2953,7 @@ describe("subagent registry seam flow", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((run) => run.runId === runId);
     expect(afterLateYield).toMatchObject({
-      endedAt: 222,
+      execution: { status: "terminal", endedAt: 222 },
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       cleanupHandled: true,
       cleanupCompletedAt: killedCleanupAt,
@@ -2893,9 +2976,13 @@ describe("subagent registry seam flow", () => {
     const run = findRequesterRun(runId);
     expect(run).toBeDefined();
     Object.assign(run!, {
-      endedAt: 222,
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      outcome: { status: "ok" as const },
+      execution: {
+        ...run!.execution,
+        status: "terminal",
+        endedAt: 222,
+        outcome: { status: "ok" as const },
+      },
       cleanupHandled: true,
       cleanupCompletedAt: 223,
       delivery: { status: "delivered" as const, deliveredAt: 223 },
@@ -2908,13 +2995,13 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(run).toMatchObject({
-      endedAt: 333,
+      execution: { status: "terminal", endedAt: 333 },
       pauseReason: "sessions_yield",
       cleanupHandled: false,
       delivery: { status: "pending" },
     });
     expect(run?.endedReason).toBeUndefined();
-    expect(run?.outcome).toBeUndefined();
+    expect(run?.execution.outcome).toBeUndefined();
     expect(run?.cleanupCompletedAt).toBeUndefined();
   });
 
@@ -2956,7 +3043,7 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(testCase.runId);
         expect(run?.pauseReason).toBe("sessions_yield");
-        expect(run?.outcome?.status).not.toBe("error");
+        expect(run?.execution.outcome?.status).not.toBe("error");
       });
     }
 
@@ -3001,7 +3088,7 @@ describe("subagent registry seam flow", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     const run = findRequesterRun("run-yield-after-pending-timeout");
     expect(run?.pauseReason).toBe("sessions_yield");
-    expect(run?.outcome?.status).not.toBe("error");
+    expect(run?.execution.outcome?.status).not.toBe("error");
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
@@ -3029,9 +3116,9 @@ describe("subagent registry seam flow", () => {
     const run = findRequesterRun(runId);
     expect(run).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "manual kill" },
+      execution: { outcome: { status: "error", error: "manual kill" } },
     });
-    expect(run?.outcome?.status).not.toBe("timeout");
+    expect(run?.execution.outcome?.status).not.toBe("timeout");
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
@@ -3077,7 +3164,7 @@ describe("subagent registry seam flow", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     const run = findRequesterRun("run-wait-yield-after-pending-timeout");
     expect(run?.pauseReason).toBe("sessions_yield");
-    expect(run?.outcome?.status).not.toBe("timeout");
+    expect(run?.execution.outcome?.status).not.toBe("timeout");
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
@@ -3137,7 +3224,7 @@ describe("subagent registry seam flow", () => {
 
     const run = findRequesterRun(runId);
     expect(run?.endedReason).toBe(expectedReason);
-    expect(run?.outcome?.status).toBe(expectedOutcome.status);
+    expect(run?.execution.outcome?.status).toBe(expectedOutcome.status);
   });
 
   it("publishes aborted agent.wait snapshots only after killed reconciliation", async () => {
@@ -3236,9 +3323,9 @@ describe("subagent registry seam flow", () => {
     });
 
     const run = findRequesterRun("run-stale-terminal");
-    expect(run?.endedAt).toBe(persistedEndedAt);
+    expect(run?.execution.endedAt).toBe(persistedEndedAt);
     expectRecordFields(
-      run?.outcome,
+      run?.execution.outcome,
       {
         status: "ok",
         endedAt: persistedEndedAt,
@@ -3279,7 +3366,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const run = findRequesterRun("run-killed-with-persisted-completion");
       expect(run?.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
-      expect(run?.outcome).toMatchObject({ status: "ok", startedAt, endedAt });
+      expect(run?.execution.outcome).toMatchObject({ status: "ok", startedAt, endedAt });
       expect(run?.archiveAtMs).toBeUndefined();
     });
   });
@@ -3354,9 +3441,12 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(runId);
         expect(run).toMatchObject({
-          endedAt: completedAt,
           endedReason: expectedReason,
-          outcome: { ...expectedOutcome, startedAt, endedAt: completedAt },
+          execution: {
+            status: "terminal",
+            endedAt: completedAt,
+            outcome: { ...expectedOutcome, startedAt, endedAt: completedAt },
+          },
           completion: { resultText: "durable final result", capturedAt: completedAt },
         });
         expect(run?.killReconciliation).toBeUndefined();
@@ -3428,9 +3518,12 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(runId);
         expect(run).toMatchObject({
-          endedAt: completedAt,
           endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          outcome: { status: "ok", startedAt: replacementStartedAt, endedAt: completedAt },
+          execution: {
+            status: "terminal",
+            endedAt: completedAt,
+            outcome: { status: "ok", startedAt: replacementStartedAt, endedAt: completedAt },
+          },
         });
       });
     } finally {
@@ -3505,7 +3598,7 @@ describe("subagent registry seam flow", () => {
 
       const run = findRequesterRun(runId);
       expect(run).toMatchObject({
-        endedAt: killedAt,
+        execution: { status: "terminal", endedAt: killedAt },
         endedReason: SUBAGENT_ENDED_REASON_KILLED,
         killReconciliation: { killedAt },
       });
@@ -3560,9 +3653,12 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const run = findRequesterRun("run-opaque-killed-with-persisted-completion");
       expect(run).toMatchObject({
-        endedAt,
         endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-        outcome: { status: "ok", startedAt, endedAt },
+        execution: {
+          status: "terminal",
+          endedAt,
+          outcome: { status: "ok", startedAt, endedAt },
+        },
       });
       expect(completeTaskRunByRunId).toHaveBeenCalledTimes(1);
     });
@@ -3770,9 +3866,12 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(runId);
         expect(run).toMatchObject({
-          endedAt: timeoutAt,
           endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          outcome: { status: "timeout", startedAt, endedAt: timeoutAt },
+          execution: {
+            status: "terminal",
+            endedAt: timeoutAt,
+            outcome: { status: "timeout", startedAt, endedAt: timeoutAt },
+          },
         });
         const task = findTaskByRunIdForStatus(runId);
         expect(task).toMatchObject({
@@ -3944,7 +4043,7 @@ describe("subagent registry seam flow", () => {
       });
       const killedRun = findRequesterRun(runId);
       expect(killedRun).toMatchObject({
-        endedAt: yieldedAt,
+        execution: { status: "terminal", endedAt: yieldedAt },
         cleanupCompletedAt: killedAt,
         endedReason: SUBAGENT_ENDED_REASON_KILLED,
       });
@@ -3955,9 +4054,12 @@ describe("subagent registry seam flow", () => {
       await waitForFast(() => {
         const run = findRequesterRun(runId);
         expect(run).toMatchObject({
-          endedAt: completedAt,
           endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          outcome: { status: "ok", startedAt, endedAt: completedAt },
+          execution: {
+            status: "terminal",
+            endedAt: completedAt,
+            outcome: { status: "ok", startedAt, endedAt: completedAt },
+          },
         });
         expect(findTaskByRunIdForStatus(runId)).toMatchObject({
           status: "succeeded",
@@ -4154,8 +4256,8 @@ describe("subagent registry seam flow", () => {
     expect(runs.some((entry) => entry.runId === "run-old-tombstone")).toBe(false);
     const newRun = runs.find((entry) => entry.runId === "run-new-generation");
     expect(newRun).toBeDefined();
-    expect(newRun?.endedAt).toBeUndefined();
-    expect(newRun?.outcome).toBeUndefined();
+    expect(newRun?.execution.endedAt).toBeUndefined();
+    expect(newRun?.execution.outcome).toBeUndefined();
     expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(
       mocks.onSubagentEnded.mock.calls.some(
@@ -4366,8 +4468,8 @@ describe("subagent registry seam flow", () => {
     expect(runs.some((entry) => entry.runId === "run-old-completed-tombstone")).toBe(false);
     const newRun = runs.find((entry) => entry.runId === "run-new-generation-after-completion");
     expect(newRun).toBeDefined();
-    expect(newRun?.endedAt).toBeUndefined();
-    expect(newRun?.outcome).toBeUndefined();
+    expect(newRun?.execution.endedAt).toBeUndefined();
+    expect(newRun?.execution.outcome).toBeUndefined();
     expect(
       mocks.callGateway.mock.calls.some(
         ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
@@ -4419,9 +4521,9 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-sweep-session-start");
-      expect(run?.endedAt).toBe(sessionEndedAt);
+      expect(run?.execution.endedAt).toBe(sessionEndedAt);
       expectRecordFields(
-        run?.outcome,
+        run?.execution.outcome,
         {
           status: "ok",
           startedAt: sessionStartedAt,
@@ -4463,8 +4565,8 @@ describe("subagent registry seam flow", () => {
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     const run = findRequesterRun("run-stale-aborted");
-    expect(run?.endedAt).toBeUndefined();
-    expect(run?.outcome).toBeUndefined();
+    expect(run?.execution.endedAt).toBeUndefined();
+    expect(run?.execution.outcome).toBeUndefined();
   });
 
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
@@ -4557,9 +4659,12 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const run = findRequesterRun("run-retry-durable-completion");
       expect(run).toMatchObject({
-        endedAt: 222,
         endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-        outcome: { status: "ok", startedAt: 111, endedAt: 222 },
+        execution: {
+          status: "terminal",
+          endedAt: 222,
+          outcome: { status: "ok", startedAt: 111, endedAt: 222 },
+        },
       });
       expect(mocks.persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThanOrEqual(3);
     });
@@ -4748,7 +4853,7 @@ describe("subagent registry seam flow", () => {
     );
 
     const run = findRequesterRun(runId);
-    expect(run?.endedAt).toBeUndefined();
+    expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.endedReason).toBeUndefined();
     expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "running" });
   });
@@ -4852,7 +4957,7 @@ describe("subagent registry seam flow", () => {
 
       const run = findRequesterRun(runId);
       expect(run?.endedReason).toBe("subagent-error");
-      expect(run?.outcome?.status).toBe("error");
+      expect(run?.execution.outcome?.status).toBe("error");
     },
   );
 
@@ -4908,7 +5013,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const run = findRequesterRun(runId);
       expect(run?.endedReason).toBe("subagent-killed");
-      expect(run?.outcome?.status).toBe("error");
+      expect(run?.execution.outcome?.status).toBe("error");
       expect(run?.suppressAnnounceReason).toBe("killed");
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -4980,7 +5085,7 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       const run = findRequesterRun("run-killed-recovery");
-      expect(run?.outcome?.status).toBe("error");
+      expect(run?.execution.outcome?.status).toBe("error");
       expect(run?.endedReason).toBe("subagent-killed");
       expect(run?.suppressAnnounceReason).toBe("killed");
     });
@@ -5332,7 +5437,7 @@ describe("subagent registry seam flow", () => {
       cleanup: "keep",
       cleanupHandled: false,
     });
-    expect(replacement?.endedAt).toBeUndefined();
+    expect(replacement?.execution.endedAt).toBeUndefined();
     expect(replacement?.terminalOwner).toBeUndefined();
     expect(replacement?.delivery?.lastError).toBeUndefined();
     expect(replacement?.delivery?.payload).toBeUndefined();
@@ -5474,7 +5579,7 @@ describe("subagent registry seam flow", () => {
     expect(updated).toBe(1);
     const killedRun = findRequesterRun("run-killed-init");
     const killedAt = Date.parse("2026-03-24T12:00:00Z");
-    expect(killedRun?.outcome).toEqual({
+    expect(killedRun?.execution.outcome).toEqual({
       status: "error",
       error: "manual kill",
       startedAt: killedAt,
@@ -5543,7 +5648,7 @@ describe("subagent registry seam flow", () => {
       cleanup: "delete",
       cleanupHandled: true,
       endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
+      execution: { outcome: { status: "error", error: "manual kill" } },
     });
     expect(
       mod
@@ -5728,7 +5833,7 @@ describe("subagent registry seam flow", () => {
       expect(String(outcome.error)).toContain("Automatic recovery failed after 2 attempts");
     });
     const run = findRequesterRun("run-interrupted");
-    expect(run?.outcome).toEqual({
+    expect(run?.execution.outcome).toEqual({
       status: "error",
       error:
         "Subagent run was interrupted by a gateway restart or connection loss. Automatic recovery failed after 2 attempts. Please retry.",
@@ -5749,7 +5854,7 @@ describe("subagent registry seam flow", () => {
       }),
     ).resolves.toBe(1);
     expect(run?.terminalOwner).toBe("interrupted-recovery");
-    expect(run?.outcome?.error).toContain("Automatic recovery failed after 2 attempts");
+    expect(run?.execution.outcome?.error).toContain("Automatic recovery failed after 2 attempts");
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(announceCalls);
   });
 
@@ -5771,7 +5876,7 @@ describe("subagent registry seam flow", () => {
         startedAt: 1,
         lastEventAt: 1,
       });
-      const entry = {
+      const entry = createSubagentRunRecord({
         runId,
         childSessionKey,
         requesterSessionKey: "agent:main:main",
@@ -5779,8 +5884,8 @@ describe("subagent registry seam flow", () => {
         task: "preserve interrupted task",
         cleanup: "keep" as const,
         createdAt: 1,
-        startedAt: 1,
-      };
+        execution: { status: "running", startedAt: 1 },
+      });
       mod.addSubagentRunForTests(entry);
       const original = structuredClone(entry);
       mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
@@ -5814,8 +5919,6 @@ describe("subagent registry seam flow", () => {
     elapsedMs: 1,
   };
   const completeTerminalEvidence = {
-    endedAt: 2,
-    outcome: completeTerminalOutcome,
     endedReason: SUBAGENT_ENDED_REASON_ERROR,
     execution: {
       status: "terminal" as const,
@@ -5825,17 +5928,49 @@ describe("subagent registry seam flow", () => {
     },
   };
   it.each([
-    ["missing-ended-at", 0, { ...completeTerminalEvidence, endedAt: undefined }, undefined],
-    ["missing-outcome", 0, { ...completeTerminalEvidence, outcome: undefined }, undefined],
+    [
+      "missing-ended-at",
+      0,
+      {
+        ...completeTerminalEvidence,
+        execution: { status: "terminal" as const, startedAt: 1, outcome: completeTerminalOutcome },
+      },
+      undefined,
+    ],
+    [
+      "missing-outcome",
+      0,
+      {
+        ...completeTerminalEvidence,
+        execution: { status: "terminal" as const, startedAt: 1, endedAt: 2 },
+      },
+      undefined,
+    ],
     ["missing-ended-reason", 0, { ...completeTerminalEvidence, endedReason: undefined }, undefined],
-    ["missing-execution", 0, { ...completeTerminalEvidence, execution: undefined }, undefined],
+    [
+      "nonterminal-execution",
+      0,
+      {
+        ...completeTerminalEvidence,
+        execution: { status: "running" as const, startedAt: 1 },
+      },
+      undefined,
+    ],
     ["cleanup-complete", 1, completeTerminalEvidence, 2],
-    ["cleanup-partial", 0, { ...completeTerminalEvidence, execution: undefined }, 2],
+    [
+      "cleanup-partial",
+      0,
+      {
+        ...completeTerminalEvidence,
+        execution: { status: "terminal" as const, startedAt: 1, endedAt: 2 },
+      },
+      2,
+    ],
   ])(
     "%s terminal evidence returns %i",
     async (scenario, expected, evidence, cleanupCompletedAt) => {
       const runId = `run-interrupted-${scenario}`;
-      const entry = {
+      const entry = createSubagentRunRecord({
         runId,
         childSessionKey: `agent:main:subagent:interrupted-${scenario}`,
         requesterSessionKey: "agent:main:main",
@@ -5843,10 +5978,9 @@ describe("subagent registry seam flow", () => {
         task: "preserve existing terminal evidence",
         cleanup: "keep" as const,
         createdAt: 1,
-        startedAt: 1,
         cleanupCompletedAt,
         ...evidence,
-      };
+      });
       mod.addSubagentRunForTests(entry);
       const original = structuredClone(entry);
 
@@ -6181,7 +6315,7 @@ describe("subagent registry seam flow", () => {
     });
     const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
     expect(run).toBeDefined();
-    run!.startedAt = Date.now() - 2_000;
+    run!.execution.startedAt = Date.now() - 2_000;
     mocks.loadSessionStore.mockImplementation(() => {
       throw new Error("simulated sweep failure");
     });

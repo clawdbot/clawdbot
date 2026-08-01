@@ -1,4 +1,5 @@
 // Whatsapp tests cover deliver reply plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -232,6 +233,29 @@ describe("deliverWebReply", () => {
   beforeAll(async () => {
     ({ createWhatsAppReplyTransportContext, deliverWebReply } = await import("./deliver-reply.js"));
     ({ whatsappOutbound } = await import("../outbound-adapter.js"));
+  });
+
+  it("does not resend an accepted reply when its transport reports a disconnect afterward", async () => {
+    const msg = makeMsg();
+    const acceptedFailure = createChannelPartialDeliveryError(new Error("connection closed"), {
+      messageIds: ["reply-already-accepted"],
+      visibleReplySent: true,
+    });
+    vi.mocked(msg.platform.reply).mockRejectedValue(acceptedFailure);
+
+    const failure = await runWithFakeTimers(() =>
+      deliverWebReply({
+        replyResult: { text: "already delivered" },
+        transport: createWhatsAppReplyTransportContext(msg),
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }).catch((caught: unknown) => caught),
+    );
+
+    expect(failure).toBe(acceptedFailure);
+    expect(msg.platform.reply).toHaveBeenCalledOnce();
   });
 
   it("suppresses payloads flagged as reasoning", async () => {

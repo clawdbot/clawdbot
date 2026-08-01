@@ -24,56 +24,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Compares subagent run outcomes, treating missing timing as compatible. */
-function runOutcomesEqual(
-  a: SubagentRunOutcome | undefined,
-  b: SubagentRunOutcome | undefined,
-): boolean {
-  if (!a && !b) {
-    return true;
-  }
-  if (!a || !b) {
-    return false;
-  }
-  if (a.status !== b.status) {
-    return false;
-  }
-  if (a.status === "error" && b.status === "error") {
-    if ((a.error ?? "") !== (b.error ?? "")) {
-      return false;
-    }
-  }
-  if (!runOutcomeHasTiming(a) || !runOutcomeHasTiming(b)) {
-    return true;
-  }
-  return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
-}
-
-/** Returns true when an outcome carries timing fields. */
-function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
-  return (
-    Number.isFinite(outcome?.startedAt) ||
-    Number.isFinite(outcome?.endedAt) ||
-    Number.isFinite(outcome?.elapsedMs)
-  );
-}
-
-/** Returns true when a run outcome update should replace current state. */
-export function shouldUpdateRunOutcome(
-  current: SubagentRunOutcome | undefined,
-  next: SubagentRunOutcome | undefined,
-): boolean {
-  return (
-    !runOutcomesEqual(current, next) || (!runOutcomeHasTiming(current) && runOutcomeHasTiming(next))
-  );
-}
-
 /** Returns the complete task projection only after completion capture has settled. */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): DetachedTaskTerminalState | undefined {
-  const endedAt = entry.endedAt;
-  const outcome = entry.outcome;
+  const endedAt = entry.execution.endedAt;
+  const outcome = entry.execution.outcome;
   const completion = entry.completion;
   if (
     typeof endedAt !== "number" ||
@@ -126,7 +82,7 @@ export function resolveKilledSubagentTaskEndedAt(entry: SubagentRunRecord): numb
   if (entry.killReconciliation) {
     return entry.killReconciliation.killedAt;
   }
-  const endedAt = entry.endedAt;
+  const endedAt = entry.execution.endedAt;
   const cleanupCompletedAt = entry.cleanupCompletedAt;
   return entry.suppressAnnounceReason === "killed" &&
     typeof endedAt === "number" &&
@@ -158,8 +114,8 @@ export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): P
   const outcome =
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED
       ? "killed"
-      : entry.outcome
-        ? resolveLifecycleOutcomeFromRunOutcome(entry.outcome)
+      : entry.execution.outcome
+        ? resolveLifecycleOutcomeFromRunOutcome(entry.execution.outcome)
         : "unknown";
   try {
     await hookRunner.runSubagentProgress(
@@ -222,7 +178,7 @@ export async function emitSubagentEndedHookOnce(params: {
           sendFarewell: params.sendFarewell,
           accountId: params.accountId,
           runId: params.entry.runId,
-          endedAt: params.entry.endedAt,
+          endedAt: params.entry.execution.endedAt,
           outcome: params.outcome,
           error: params.error,
         },

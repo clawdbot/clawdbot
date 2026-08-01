@@ -61,7 +61,7 @@ vi.mock("./active-runtime-registry.js", () => ({
   },
 }));
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry-snapshot.js", () => ({
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata: mocks.loadPluginRegistrySnapshotWithMetadata,
 }));

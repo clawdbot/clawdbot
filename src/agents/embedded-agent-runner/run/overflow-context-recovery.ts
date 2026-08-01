@@ -1,23 +1,14 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
-import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
-import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
-import {
-  compactContextEngineWithSafetyTimeout,
-  resolveCompactionTimeoutMs,
-} from "../compaction-safety-timeout.js";
-import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import {
@@ -30,25 +21,19 @@ import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInActiveTarget,
 } from "../tool-result-truncation.js";
-import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import { createCompactionDiagId } from "./helpers.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 import {
-  buildContextEngineCompactionSessionTarget,
+  compactEmbeddedRunForRecovery,
+  type EmbeddedRunCompactionRecoveryInput,
+} from "./compaction-runtime.js";
+import { createCompactionDiagId } from "./helpers.js";
+import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
-
-type ActiveSession = {
-  id: string;
-  file: string;
-  target?: ContextEngineSessionTarget;
-};
 
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
@@ -60,52 +45,19 @@ type EmbeddedRunOverflowRecoveryOutcome =
       userText: string;
     };
 
-export async function recoverEmbeddedRunOverflow(input: {
-  runParams: RunEmbeddedAgentParams;
-  state: EmbeddedRunContextRecoveryState;
-  contextEngine: ContextEngine;
-  contextTokenBudget?: number;
-  genericCompactionRecoveryAllowed: boolean;
-  aborted: boolean;
-  signalOwnedInterruption: boolean;
-  promptError: unknown;
-  assistantErrorText?: string;
-  assistantOverflowCandidate?: AssistantMessage;
-  attempt: EmbeddedRunAttemptResult;
-  toolResultPromptProjectionState: ToolResultPromptProjectionState;
-  attemptCompactionCount: number;
-  runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
-  resolvedSessionKey: string;
-  sessionAgentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-  harnessRuntime: string;
-  thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
-  authProfileId?: string;
-  authProfileIdSource: "auto" | "user";
-  resolveContextEnginePluginId: () => string | undefined;
-  buildRuntimeSettings: (settings: {
-    tokenBudget?: number | null;
-    degradedReason?: string | null;
-  }) => ReturnType<typeof buildContextEngineRuntimeSettings>;
-  onCompactionHookMessages: (payload: {
-    phase: "before" | "after";
-    messages: string[];
-  }) => Promise<void>;
-  runOwnsCompactionBeforeHook: (reason: string) => Promise<void>;
-  runOwnsCompactionAfterHook: (
-    reason: string,
-    result: CompactResult,
-    previousSessionId?: string,
-  ) => Promise<void>;
-  adoptCompactionTranscript: (result: CompactResult) => Promise<string | undefined>;
-  getActiveSession: () => ActiveSession;
-  prepareCurrentTranscriptRetry: () => void;
-  prepareCompactedTranscriptRetry: () => Promise<void>;
-  armPostCompactionGuard: () => void;
-}): Promise<EmbeddedRunOverflowRecoveryOutcome> {
+export async function recoverEmbeddedRunOverflow(
+  input: EmbeddedRunCompactionRecoveryInput & {
+    aborted: boolean;
+    signalOwnedInterruption: boolean;
+    promptError: unknown;
+    assistantErrorText?: string;
+    assistantOverflowCandidate?: AssistantMessage;
+    toolResultPromptProjectionState: ToolResultPromptProjectionState;
+    attemptCompactionCount: number;
+    prepareCurrentTranscriptRetry: () => void;
+    prepareCompactedTranscriptRetry: () => Promise<void>;
+  },
+): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
     !input.aborted && !input.signalOwnedInterruption
       ? (() => {
@@ -213,94 +165,15 @@ export async function recoverEmbeddedRunOverflow(input: {
     let previousSessionId: string | undefined;
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
-      const sessionBeforeCompaction = input.getActiveSession();
-      const overflowCompactionRuntimeContext = {
-        ...buildEmbeddedCompactionRuntimeContext({
-          sessionKey: runParams.sessionKey,
-          messageChannel: runParams.messageChannel,
-          messageProvider: runParams.messageProvider,
-          clientCaps: runParams.clientCaps,
-          chatType: runParams.chatType,
-          agentAccountId: runParams.agentAccountId,
-          currentChannelId: runParams.currentChannelId,
-          currentThreadTs: runParams.currentThreadTs,
-          currentMessageId: runParams.currentMessageId,
-          authProfileId: input.authProfileId,
-          authProfileIdSource: input.authProfileIdSource,
-          runtimeAuthPlan: input.runtimeAuthPlan,
-          workspaceDir: input.workspaceDir,
-          agentDir: input.agentDir,
-          config: runParams.config,
-          toolOverrides: runParams.toolOverrides,
-          skillsSnapshot: runParams.skillsSnapshot,
-          senderId: runParams.senderId,
-          provider: input.provider,
-          modelId: input.modelId,
-          harnessRuntime: input.harnessRuntime,
-          modelSelectionLocked: runParams.modelSelectionLocked,
-          modelFallbacksOverride: runParams.modelFallbacksOverride,
-          thinkLevel: input.thinkLevel,
-          reasoningLevel: runParams.reasoningLevel,
-          bashElevated: runParams.bashElevated,
-          extraSystemPrompt: runParams.extraSystemPrompt,
-          sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-          ownerNumbers: runParams.ownerNumbers,
-          activeProcessSessions: listActiveProcessSessionReferences({
-            scopeKey: resolveProcessToolScopeKey({
-              sessionKey: runParams.sandboxSessionKey?.trim() || runParams.sessionKey,
-              sessionId: sessionBeforeCompaction.id,
-              agentId: input.sessionAgentId,
-            }),
-          }),
-        }),
-        ...resolveContextEngineCapabilities({
-          config: runParams.config,
-          sessionKey: runParams.sessionKey,
-          agentId: input.sessionAgentId,
-          contextEnginePluginId: input.resolveContextEnginePluginId(),
-          purpose: "context-engine.overflow-compaction",
-        }),
-        onCompactionHookMessages: input.onCompactionHookMessages,
-        ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
-        runId: runParams.runId,
+      const compaction = await compactEmbeddedRunForRecovery(input, {
+        tokenBudget: input.contextTokenBudget,
         trigger: "overflow",
-        ...(overflowTokenCountForCompaction !== undefined
-          ? { currentTokenCount: overflowTokenCountForCompaction }
-          : {}),
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,
         maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
-      };
-      const overflowCompactionRuntimeSettings = input.buildRuntimeSettings({
-        tokenBudget: input.contextTokenBudget,
-        degradedReason: "context_overflow",
+        currentTokenCount: overflowTokenCountForCompaction,
       });
-      compactResult = await compactContextEngineWithSafetyTimeout(
-        input.contextEngine,
-        {
-          sessionId: sessionBeforeCompaction.id,
-          sessionKey: input.resolvedSessionKey,
-          agentId: input.sessionAgentId,
-          sessionTarget: buildContextEngineCompactionSessionTarget({
-            agentId: input.sessionAgentId,
-            config: runParams.config,
-            sessionFile: sessionBeforeCompaction.file,
-            sessionId: sessionBeforeCompaction.id,
-            sessionKey: input.resolvedSessionKey,
-            sessionTarget: sessionBeforeCompaction.target,
-          }),
-          tokenBudget: input.contextTokenBudget,
-          ...(overflowTokenCountForCompaction !== undefined
-            ? { currentTokenCount: overflowTokenCountForCompaction }
-            : {}),
-          force: true,
-          compactionTarget: "budget",
-          runtimeContext: overflowCompactionRuntimeContext,
-          runtimeSettings: overflowCompactionRuntimeSettings,
-        },
-        resolveCompactionTimeoutMs(runParams.config),
-        runParams.abortSignal,
-      );
+      compactResult = compaction.result;
       if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
         const sessionAfterCompaction = input.getActiveSession();
@@ -311,8 +184,8 @@ export async function recoverEmbeddedRunOverflow(input: {
           sessionTarget: sessionAfterCompaction.target,
           sessionFile: sessionAfterCompaction.file,
           reason: "compaction",
-          runtimeContext: overflowCompactionRuntimeContext,
-          runtimeSettings: overflowCompactionRuntimeSettings,
+          runtimeContext: compaction.runtimeContext,
+          runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
         });

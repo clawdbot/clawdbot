@@ -30,7 +30,6 @@ type ChatSendTimingHost = SessionScopeHost & {
   sessionKey: string;
   chatStream: string | null;
   chatQueue: ChatQueueItem[];
-  chatQueueByScope?: Record<string, ChatQueueItem[]>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
   renderLifecycle?: RenderLifecycle;

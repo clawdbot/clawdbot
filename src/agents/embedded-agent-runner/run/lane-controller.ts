@@ -13,6 +13,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionQueuePriority,
+  shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -90,7 +91,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       return;
     }
     const snapshot = getCommandLaneSnapshot(lane);
-    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+    if (shouldNoteLaneWait(snapshot)) {
       params.onLaneWait({
         waitMs: 0,
         queuedAhead: snapshot.queuedCount + snapshot.activeCount,

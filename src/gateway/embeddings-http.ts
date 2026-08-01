@@ -200,6 +200,9 @@ function encodeEmbeddingBase64(embedding: number[]): string {
 // Keep request limits local to the HTTP bridge; provider adapters may support
 // more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
+  if (texts.length === 0 || texts.some((text) => text.length === 0)) {
+    return "`input` must contain at least one non-empty string.";
+  }
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
   }

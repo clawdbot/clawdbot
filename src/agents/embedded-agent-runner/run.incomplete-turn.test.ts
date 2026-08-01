@@ -39,6 +39,7 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -3000,7 +3001,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const attempt = makeAttemptResult();
     delete (attempt as Partial<EmbeddedRunAttemptResult>).replayMetadata;
 
-    expect(resolveReplayInvalidFlag({ attempt })).toBe(true);
+    const normalizedAttempt = normalizeEmbeddedRunAttemptResult(attempt);
+
+    expect(normalizedAttempt.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+    expect(resolveReplayInvalidFlag({ attempt: normalizedAttempt })).toBe(true);
   });
 
   it("detects reasoning-only GPT turns from signed thinking blocks", () => {

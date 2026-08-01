@@ -187,6 +187,7 @@ function resetMusicGenerateMocks() {
   vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
   musicGenerationRuntimeMocks.generateMusic.mockReset();
   mediaStoreMocks.saveMediaBuffer.mockReset();
+  vi.mocked(webMedia.loadWebMedia).mockReset();
   probeMediaFilesWithinBudgetMock.mockReset();
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
     inputs.map(() => ({})),
@@ -695,6 +696,153 @@ describe("createMusicGenerateTool", () => {
         sizeBytes: 11,
       },
     ]);
+  });
+
+  it.each([
+    { mode: "inline", agentSessionKey: undefined },
+    { mode: "detached", agentSessionKey: "agent:main:discord:direct:123" },
+  ])(
+    "does not start $mode music generation when its caller aborts during preparation",
+    async ({ agentSessionKey }) => {
+      taskExecutorMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-music-aborted" });
+      const generateMusic = vi.spyOn(musicGenerationRuntime, "generateMusic");
+      const scheduleBackgroundWork = vi.fn();
+      const tool = expectMusicGenerateTool(
+        createMusicGenerateTool({
+          config: asConfig({
+            agents: {
+              defaults: { musicGenerationModel: { primary: "google/lyria-3-clip-preview" } },
+            },
+          }),
+          agentSessionKey,
+          requesterOrigin: { channel: "discord", to: "channel:1" },
+          scheduleBackgroundWork,
+        }),
+      );
+      const controller = new AbortController();
+      const abortReason = new Error("music requester cancelled");
+
+      const pending = tool.execute("call-music-aborted", { prompt: "a song" }, controller.signal);
+      controller.abort(abortReason);
+
+      await expect(pending).rejects.toBe(abortReason);
+      expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
+      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+      expect(generateMusic).not.toHaveBeenCalled();
+    },
+  );
+
+  it("stops loading later music references when the caller aborts a pending reference", async () => {
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
+      {
+        id: "minimax",
+        defaultModel: "music-2.6",
+        models: ["music-2.6"],
+        capabilities: { edit: { enabled: true, maxInputImages: 2 } },
+        generateMusic: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateMusic = vi.spyOn(musicGenerationRuntime, "generateMusic");
+    let releaseReference!: (value: Awaited<ReturnType<typeof webMedia.loadWebMedia>>) => void;
+    const firstReference = new Promise<Awaited<ReturnType<typeof webMedia.loadWebMedia>>>(
+      (resolve) => {
+        releaseReference = resolve;
+      },
+    );
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("second-image"),
+      contentType: "image/png",
+    });
+    loadWebMedia.mockImplementationOnce(() => firstReference);
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-music-references" });
+    const scheduleBackgroundWork = vi.fn();
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: { defaults: { musicGenerationModel: { primary: "minimax/music-2.6" } } },
+        }),
+        workspaceDir: process.cwd(),
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "channel:1" },
+        scheduleBackgroundWork,
+      }),
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("music requester cancelled while loading a reference");
+
+    const pending = tool.execute(
+      "call-music-references-aborted",
+      {
+        prompt: "a song with references",
+        images: ["https://example.test/first.png", "https://example.test/second.png"],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(loadWebMedia).toHaveBeenCalledOnce());
+    controller.abort(abortReason);
+    releaseReference({
+      kind: "image",
+      buffer: Buffer.from("first-image"),
+      contentType: "image/png",
+    });
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(loadWebMedia).toHaveBeenCalledOnce();
+    expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(generateMusic).not.toHaveBeenCalled();
+    const loadOptions = loadWebMedia.mock.calls[0]?.[1] as
+      | { requestInit?: { signal?: AbortSignal } }
+      | undefined;
+    expect(loadOptions?.requestInit?.signal?.aborted).toBe(true);
+    expect(loadOptions?.requestInit?.signal?.reason).toBe(abortReason);
+  });
+
+  it("keeps an accepted detached music task running after its requester aborts", async () => {
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-music-accepted" });
+    const generateMusic = vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg", fileName: "music.mp3" }],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/accepted-music.mp3",
+      id: "accepted-music.mp3",
+      size: 5,
+      contentType: "audio/mpeg",
+    });
+    const controller = new AbortController();
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: { musicGenerationModel: { primary: "google/lyria-3-clip-preview" } },
+          },
+        }),
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "channel:1" },
+        scheduleBackgroundWork: (work) => scheduled.push(work),
+        onAsyncTaskStarted: () => controller.abort(new Error("requester ended after acceptance")),
+      }),
+    );
+
+    const result = await tool.execute(
+      "call-music-accepted",
+      { prompt: "an accepted song" },
+      controller.signal,
+    );
+
+    expect(detailsOf(result).status).toBe("started");
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]?.();
+    expect(generateMusic).toHaveBeenCalledOnce();
+    expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
   });
 
   it("dedupes a recent default-model music request repeated with explicit or model-only override", async () => {
