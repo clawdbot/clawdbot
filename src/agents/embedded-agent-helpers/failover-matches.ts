@@ -365,6 +365,22 @@ export function isAuthErrorMessage(raw: string): boolean {
   ]);
 }
 
+const AUTH_CREDENTIAL_FILE_PATH_PATTERNS = [
+  /credentials/i,
+  /auth[_-]?profiles/i,
+] as const satisfies readonly ErrorPattern[];
+
+export function isAuthCredentialFileEnoentError(raw: string): boolean {
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  if (!value || !value.includes("enoent")) {
+    return false;
+  }
+  // Require both a filesystem-missing signal (ENOENT) and credential/auth-file
+  // path semantics so unrelated local ENOENT failures (caches, temp files) stay
+  // unclassified instead of being treated as auth outages.
+  return matchesErrorPatterns(value, AUTH_CREDENTIAL_FILE_PATH_PATTERNS);
+}
+
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }

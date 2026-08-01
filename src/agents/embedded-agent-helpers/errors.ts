@@ -30,6 +30,7 @@ import {
   isReasoningConstraintErrorMessage,
 } from "./context-overflow.js";
 import {
+  isAuthCredentialFileEnoentError,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -978,6 +979,9 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
+  if (isAuthCredentialFileEnoentError(raw)) {
+    return toReasonClassification("auth");
+  }
   if (isClaudeCliLoggedOutError(raw, provider)) {
     return toReasonClassification("auth");
   }

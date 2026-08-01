@@ -141,3 +141,41 @@ describe("isLikelyContextOverflowError", () => {
     ).toBe(true);
   });
 });
+
+describe("credential-file ENOENT failover classification (#112226)", () => {
+  it("classifies a missing credentials file as an auth failure so fallback models are tried", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/Users/alice/.claude/.credentials.json'",
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/Users/alice/.openclaw/credentials/anthropic.json'",
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/Users/alice/.openclaw/agents/demo/agent/auth-profiles.json'",
+      ),
+    ).toBe("auth");
+  });
+
+  it("does not classify unrelated local ENOENT failures as auth", () => {
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/tmp/openclaw-agent-exec/log.txt'",
+      ),
+    ).toBeNull();
+    expect(
+      classifyFailoverReason(
+        "ENOENT: no such file or directory, open '/Users/alice/.openclaw/state/openclaw.sqlite'",
+      ),
+    ).toBeNull();
+  });
+
+  it("requires both the ENOENT signal and a credential path", () => {
+    expect(classifyFailoverReason("credentials are configured")).toBeNull();
+    expect(classifyFailoverReason("ENOENT: no such file or directory")).toBeNull();
+  });
+});
