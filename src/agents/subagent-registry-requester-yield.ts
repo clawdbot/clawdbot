@@ -94,7 +94,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       // An in-progress delivery may already target the requester run being aborted.
       // Re-arm it like a delivered result so that completion cannot die with that turn.
       const completionMayBeAttachedToYieldedTurn =
-        typeof entry.endedAt === "number" &&
+        typeof entry.execution.endedAt === "number" &&
         (entry.delivery?.status === "delivered" || entry.delivery?.status === "in_progress");
       entry.requesterSettleWake = {
         status: "pending",
@@ -142,7 +142,8 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   if (
     rearmGeneration !== undefined &&
     entries.every(
-      (entry) => typeof entry.endedAt === "number" && entry.delivery?.status === "delivered",
+      (entry) =>
+        typeof entry.execution.endedAt === "number" && entry.delivery?.status === "delivered",
     )
   ) {
     // Active children keep the frozen batch but let their normal cleanup owner schedule it.

@@ -245,7 +245,7 @@ export function buildSubagentList(params: {
       model: resolveModelRef(sessionEntry, entry.model),
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
-      ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
+      ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
     };
     index += 1;
     return view;
@@ -257,11 +257,14 @@ export function buildSubagentList(params: {
     .filter(
       (entry) =>
         !isActiveSubagentRun(entry, pendingDescendantCount) &&
-        Boolean(entry.endedAt) &&
-        (entry.endedAt ?? 0) >= recentCutoff,
+        Boolean(entry.execution.endedAt) &&
+        (entry.execution.endedAt ?? 0) >= recentCutoff,
     )
     .map((entry) =>
-      buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
+      buildListEntry(
+        entry,
+        getSubagentSessionRuntimeMs(entry, entry.execution.endedAt ?? now) ?? 0,
+      ),
     );
   return {
     total: dedupedRuns.length,

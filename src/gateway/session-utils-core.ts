@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
   listSubagentRunsForController,
 } from "../agents/subagent-registry-read.js";
 import {
@@ -88,13 +87,6 @@ export function deriveSessionTitle(
   }
 
   return undefined;
-}
-
-export function resolveSessionRuntimeMs(
-  run: { startedAt?: number; endedAt?: number; accumulatedRuntimeMs?: number } | null,
-  now: number,
-) {
-  return getSubagentSessionRuntimeMs(run, now);
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {

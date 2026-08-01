@@ -37,6 +37,7 @@ vi.mock("./subagent-registry-state.js", () => ({
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run";
+  const { execution = { status: "running" }, ...recordOverrides } = overrides;
   return {
     runId,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${runId}`,
@@ -45,7 +46,8 @@ function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     task: "test task",
     cleanup: "keep",
     createdAt: 1,
-    ...overrides,
+    ...recordOverrides,
+    execution,
   };
 }
 

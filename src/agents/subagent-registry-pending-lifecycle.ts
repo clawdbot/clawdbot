@@ -54,8 +54,9 @@ export function createPendingLifecycleScheduler(params: {
       }
       if (
         kind === "error"
-          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok"
-          : entry.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
+          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE ||
+            entry.execution.outcome?.status === "ok"
+          : entry.execution.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
       ) {
         return;
       }

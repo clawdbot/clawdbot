@@ -39,8 +39,9 @@ export function listRunsForRequesterFromRuns(
   const requesterRunMatchesScope =
     requesterRun && requesterRun.childSessionKey === key ? requesterRun : undefined;
   // When a requester run is provided, only include children created while that run was active.
-  const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
-  const upperBound = requesterRunMatchesScope?.endedAt;
+  const lowerBound =
+    requesterRunMatchesScope?.execution.startedAt ?? requesterRunMatchesScope?.createdAt;
+  const upperBound = requesterRunMatchesScope?.execution.endedAt;
 
   const results: SubagentRunRecord[] = [];
   for (const entry of runs.values()) {
@@ -400,9 +401,9 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   return Boolean(
     latest &&
     latest.spawnMode !== "session" &&
-    typeof latest.endedAt === "number" &&
+    typeof latest.execution.endedAt === "number" &&
     typeof latest.cleanupCompletedAt === "number" &&
-    latest.cleanupCompletedAt >= latest.endedAt,
+    latest.cleanupCompletedAt >= latest.execution.endedAt,
   );
 }
 
