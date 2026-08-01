@@ -387,12 +387,15 @@ function resolveQmdSessionArtifactProvenance(
   }
   const lines = persisted.lines.slice(firstIndex, lastIndex + 1);
   const first = lines[0];
-  // A QMD snippet can cross turn boundaries. Promote only when every
-  // indexed line agrees on both the origin and canonical session kind.
+  // A QMD snippet can cross turn boundaries. Promote only when every indexed
+  // line agrees on origin, canonical session kind, and replacement lineage.
   if (
     !first ||
     lines.some(
-      (line) => line.originClass !== first.originClass || line.sessionKind !== first.sessionKind,
+      (line) =>
+        line.originClass !== first.originClass ||
+        line.sessionKind !== first.sessionKind ||
+        line.supersedesKey !== first.supersedesKey,
     )
   ) {
     return {};
@@ -405,6 +408,7 @@ function resolveQmdSessionArtifactProvenance(
         (oldest, line) => Math.min(oldest, line.observedAt),
         first.observedAt,
       ),
+      ...(first.supersedesKey ? { supersedesKey: first.supersedesKey } : {}),
     },
   };
 }
@@ -446,13 +450,16 @@ function parseQmdSessionArtifactProvenance(
       observedAt?: unknown;
       originClass?: unknown;
       sessionKind?: unknown;
+      supersedesKey?: unknown;
     };
     if (
       !isMemoryOriginClass(line.originClass) ||
       !isMemorySessionKind(line.sessionKind) ||
       typeof line.observedAt !== "number" ||
       !Number.isFinite(line.observedAt) ||
-      line.observedAt < 0
+      line.observedAt < 0 ||
+      (line.supersedesKey !== undefined &&
+        (typeof line.supersedesKey !== "string" || !line.supersedesKey.trim()))
     ) {
       return null;
     }
@@ -460,6 +467,9 @@ function parseQmdSessionArtifactProvenance(
       originClass: line.originClass,
       sessionKind: line.sessionKind,
       observedAt: Math.floor(line.observedAt),
+      ...(typeof line.supersedesKey === "string"
+        ? { supersedesKey: line.supersedesKey.trim() }
+        : {}),
     });
   }
   return {

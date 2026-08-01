@@ -45,8 +45,30 @@ describe("QMD session artifact mappings", () => {
             provenance: {
               contentStartLine: 3,
               lines: [
-                { originClass: "owner", sessionKind: "interactive", observedAt: 10 },
-                { originClass: "agent", sessionKind: "interactive", observedAt: 20 },
+                {
+                  originClass: "owner",
+                  sessionKind: "interactive",
+                  observedAt: 10,
+                  supersedesKey: "tea-preference",
+                },
+                {
+                  originClass: "owner",
+                  sessionKind: "interactive",
+                  observedAt: 20,
+                  supersedesKey: "tea-preference",
+                },
+                {
+                  originClass: "owner",
+                  sessionKind: "interactive",
+                  observedAt: 30,
+                  supersedesKey: "coffee-preference",
+                },
+                {
+                  originClass: "agent",
+                  sessionKind: "interactive",
+                  observedAt: 40,
+                  supersedesKey: "coffee-preference",
+                },
               ],
             },
             searchPath: "qmd/sessions-main/session-1.md",
@@ -87,12 +109,29 @@ describe("QMD session artifact mappings", () => {
       };
       expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 3 })).toEqual({
         ...identity,
-        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 10 },
+        provenance: {
+          originClass: "owner",
+          sessionKind: "interactive",
+          observedAt: 10,
+          supersedesKey: "tea-preference",
+        },
       });
-      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 4 })).toEqual(
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 4 })).toEqual({
+        ...identity,
+        provenance: {
+          originClass: "owner",
+          sessionKind: "interactive",
+          observedAt: 10,
+          supersedesKey: "tea-preference",
+        },
+      });
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 2, endLine: 2 })).toEqual(
         identity,
       );
-      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 2, endLine: 2 })).toEqual(
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 4, endLine: 5 })).toEqual(
+        identity,
+      );
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 5, endLine: 6 })).toEqual(
         identity,
       );
       expect(
