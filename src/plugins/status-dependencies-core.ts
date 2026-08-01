@@ -1,7 +1,6 @@
 // Collects core dependency status for plugin diagnostics.
 import fs from "node:fs";
 import path from "node:path";
-import type { PluginRegistry } from "./registry-types.js";
 
 /** Dependency name-to-version map from a plugin package manifest. */
 export type PluginDependencySpecMap = Record<string, string>;
@@ -25,6 +24,22 @@ export type PluginDependencyStatus = {
   missingOptional: string[];
   dependencies: PluginDependencyEntry[];
   optionalDependencies: PluginDependencyEntry[];
+};
+
+type PluginDependencyHealthRegistry = {
+  plugins: Array<{
+    id: string;
+    source: string;
+    enabled: boolean;
+    status: "loaded" | "disabled" | "error";
+    dependencyStatus?: PluginDependencyStatus;
+  }>;
+  diagnostics: Array<{
+    level: "warn" | "error";
+    message: string;
+    pluginId?: string;
+    source?: string;
+  }>;
 };
 
 function normalizeDependencyMap(raw: unknown): PluginDependencySpecMap {
@@ -150,7 +165,9 @@ export function buildPluginDependencyStatus(params: {
 }
 
 /** Projects missing required dependencies consistently across cold plugin status surfaces. */
-export function projectPluginDependencyHealth<T extends PluginRegistry>(registry: T): T {
+export function projectPluginDependencyHealth<T extends PluginDependencyHealthRegistry>(
+  registry: T,
+): T {
   const diagnostics = [...registry.diagnostics];
   const plugins = registry.plugins.map((plugin) => {
     const status = plugin.dependencyStatus;
