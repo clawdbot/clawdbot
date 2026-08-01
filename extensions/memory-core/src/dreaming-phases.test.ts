@@ -29,6 +29,7 @@ import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
+  readShortTermRecallEntries,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import {
@@ -668,11 +669,8 @@ describe("memory-core dreaming phases", () => {
       timezone: "UTC",
     });
 
-    const entries = await rankShortTermPromotionCandidates({
+    const entries = await readShortTermRecallEntries({
       workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
     });
     expect(entries).toHaveLength(1);
