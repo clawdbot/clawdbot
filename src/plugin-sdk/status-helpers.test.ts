@@ -412,7 +412,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastEventAt: 13,
           lastTransportActivityAt: 14,
           healthState: "healthy",
-          ingressUnavailable: true,
+          ingressUnavailable: true as const,
           busy: true,
           activeRuns: 2,
           lastRunActivityAt: 15,
