@@ -193,6 +193,58 @@ describe("application gateway observer ownership", () => {
     expect(third).toHaveBeenCalledExactlyOnceWith(gateway.eventLog);
   });
 
+  it.each(["replace", "stop"] as const)(
+    "retires remaining event-log observers when the first observer %ss its client",
+    (action) => {
+      const { gateway, clients, current } = createGatewayStore();
+      const stale = vi.fn();
+      const delivered = vi.fn();
+      gateway.subscribeEventLog(() => {
+        if (action === "replace") {
+          gateway.connect();
+        } else {
+          gateway.stop();
+        }
+      });
+      gateway.subscribeEventLog(stale);
+      gateway.subscribeEvents(delivered);
+      gateway.start();
+      const retired = current();
+      retired.opts.onHello?.(HELLO);
+
+      retired.opts.onEvent?.(createGatewayEvent(1));
+
+      expect(stale).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+      expect(gateway.eventLog).toHaveLength(1);
+      expect(clients).toHaveLength(action === "replace" ? 2 : 1);
+      expect(gateway.snapshot.phase).toBe(action === "replace" ? "reconnecting" : "stopped");
+    },
+  );
+
+  it("retires an older event-log snapshot after a reentrant event is recorded", () => {
+    const { gateway, current } = createGatewayStore();
+    const observed: number[] = [];
+    let nested = false;
+    gateway.subscribeEventLog(() => {
+      if (!nested) {
+        nested = true;
+        current().opts.onEvent?.(createGatewayEvent(2));
+      }
+    });
+    gateway.subscribeEventLog((events) => observed.push(events.length));
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onEvent?.(createGatewayEvent(1));
+
+    expect(observed).toEqual([2]);
+    expect(gateway.eventLog.map((event) => event.payload)).toEqual([
+      { text: "event-2" },
+      { text: "event-1" },
+    ]);
+  });
+
   it("never logs a presence event after its snapshot observer replaces the client", () => {
     const { gateway, current } = createGatewayStore();
     const logged = vi.fn();
