@@ -940,6 +940,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it("shows finishing context for a known run after assistant final", () => {
     const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
       createHandlersHarness({
+        localMode: true,
         state: { activeChatRunId: null },
       });
 
@@ -972,6 +973,43 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(tui.requestRender).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps a local run finishing until its authoritative chat final", () => {
+    const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        localMode: true,
+        state: {
+          activeChatRunId: null,
+          pendingSubmit: acceptedSubmit("run-local"),
+        },
+      });
+
+    handleAgentEvent({
+      runId: "run-local",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-local",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+
+    handleChatEvent({
+      runId: "run-local",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
   it("force-renders when terminal lifecycle end clears an active status", () => {
