@@ -276,6 +276,127 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("creates the additive status transitions table without advancing the schema boundary", () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-workboard-additive-status-transitions-"),
+    );
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      stores.close();
+
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          db
+            .prepare(
+              "SELECT 1 AS found FROM pragma_table_list WHERE name = 'workboard_card_status_transitions'",
+            )
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          db
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          db
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ensures status transitions for an existing schema-3 sqlite store", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-status-upgrade-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec("DROP TABLE workboard_card_status_transitions;");
+      expect(
+        legacy
+          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+          .get(),
+      ).toEqual({ found: 1 });
+      expect(
+        legacy
+          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      legacy.close();
+    }
+
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      try {
+        const card = await store.create({ title: "Upgrade-safe transition", status: "todo" });
+        const sub = await store.subscribeNotifications({
+          boardId: "default",
+          cardId: card.id,
+          eventKinds: ["status_changed"],
+        });
+        await store.list();
+        const beforeFeatureUse = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          expect(
+            beforeFeatureUse
+              .prepare(
+                "SELECT 1 AS found FROM pragma_table_list WHERE name = 'workboard_card_status_transitions'",
+              )
+              .get(),
+          ).toBeUndefined();
+        } finally {
+          beforeFeatureUse.close();
+        }
+        await store.update(card.id, { status: "ready" });
+        const { events } = await store.notificationEvents({ subscriptionId: sub.id });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          kind: "status_changed",
+          cardId: card.id,
+          fromStatus: "todo",
+          toStatus: "ready",
+        });
+      } finally {
+        stores.close();
+      }
+
+      const upgraded = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          upgraded
+            .prepare(
+              "SELECT 1 AS found FROM pragma_table_list WHERE name = 'workboard_card_status_transitions'",
+            )
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          upgraded
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        upgraded.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");

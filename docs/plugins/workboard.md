@@ -94,6 +94,49 @@ UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
 notification kinds are ignored until both surfaces support them; they are never
 rewritten into another valid state.
 
+### Notification kinds
+
+Notification subscriptions (`workboard_notify_subscribe` and the CLI/gateway
+equivalents) deliver these durable event kinds. `status_changed` is strict
+opt-in: a subscription must include it in `eventKinds`. A subscription with no
+`eventKinds` filter keeps the historical terminal stream (`completed`, `failed`,
+`stale`) and does not receive `status_changed`.
+
+| Kind             | Emitted when                                                                                                                               | Extra fields                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `completed`      | A card is completed (`workboard_complete`).                                                                                                | `message` (summary)                            |
+| `failed`         | A card is blocked or a worker violates protocol.                                                                                           | `message` (reason)                             |
+| `stale`          | A running card's session goes quiet past the stale threshold.                                                                              | `message` (reason)                             |
+| `status_changed` | A card moves between any two statuses (e.g. `todo → ready`, `running → review`, `review → done`, any `→ blocked`, unblock back to `todo`). | `cardId`, `fromStatus`, `toStatus`, `revision` |
+
+`status_changed` is a single generalized event covering every lifecycle
+transition, rather than one kind per status. The store persists an immutable
+transition record at the same time it writes the new status, including the
+transition id, timestamp, sequence, revision, and the run/session scope that was
+active at transition time. The notification reader replays those transition
+records instead of deriving from the capped recent-events ring, so ordinary
+card-history trimming does not change notification ids, revision numbers, or
+run/session attribution. Only real transitions are reported: a no-op status
+write (`status === status`) and a position-only move produce no `status_changed`
+event, and card creation is not a transition. `revision` is the card's 1-based
+transition ordinal; together with `cardId` and `toStatus` it forms a stable
+idempotency key for a single transition. `occurredAt` is carried by the shared
+`createdAt` field.
+
+A card completing or being blocked still emits its existing `completed`/`failed`
+notification in addition to the `status_changed` event for the same transition;
+a terminal transition emits exactly one `status_changed`. Subscribers that do
+not request `status_changed` (via `eventKinds`) never receive it.
+
+> **Compatibility / migration.** `status_changed` is additive and
+> backward-compatible. Existing subscribers keep receiving the exact same
+> `completed`/`failed`/`stale` stream. The persisted card schema adds
+> transition records so replay is independent of the capped recent-events ring.
+> To adopt it, add `"status_changed"` to a subscription's `eventKinds`. Consumers should key
+> on `cardId + revision + toStatus` (or the notification `id`) for idempotency
+> and ignore any unknown future notification kinds, as the Control UI already
+> does.
+
 The open dashboard updates from `plugin.workboard.changed` invalidations. Each
 event contains only a store epoch and revision; the UI then rereads canonical
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
@@ -139,29 +182,29 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 
 ## Agent tools
 
-| Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
-| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                               |
-| `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                             |
-| `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                     |
-| `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                        |
-| `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                          |
-| `workboard_release`                                                                                                                              | Release the claim after completion, pause, or handoff; can move the card to a next status.                                                                                                |
-| `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                 |
-| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
-| `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
-| `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
-| `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                      |
-| `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                      |
-| `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                             |
-| `workboard_notify_subscribe` / `workboard_notify_list` / `workboard_notify_events` / `workboard_notify_advance` / `workboard_notify_unsubscribe` | Manage notification subscriptions. Event reads are replay-safe; `advance` moves the durable cursor so callers resume without losing or double-reading completed/failed/stale card events. |
-| `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                 |
-| `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
-| `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
-| `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
-| `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
-| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+| Tool                                                                                                                                             | Purpose                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                                           |
+| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                                                      |
+| `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                                                    |
+| `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                                            |
+| `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                                               |
+| `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                                                 |
+| `workboard_release`                                                                                                                              | Release the claim after completion, pause, or handoff; can move the card to a next status.                                                                                                                       |
+| `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                                        |
+| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                                                |
+| `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                                                  |
+| `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                                                   |
+| `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                                             |
+| `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                                             |
+| `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                                                    |
+| `workboard_notify_subscribe` / `workboard_notify_list` / `workboard_notify_events` / `workboard_notify_advance` / `workboard_notify_unsubscribe` | Manage notification subscriptions. Event reads are replay-safe; `advance` moves the durable cursor so callers resume without losing or double-reading `completed`/`failed`/`stale`/`status_changed` card events. |
+| `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                                        |
+| `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                                                  |
+| `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                           |
+| `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                |
+| `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                             |
+| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                               |
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded; consumers that need

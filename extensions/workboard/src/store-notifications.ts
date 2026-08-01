@@ -8,6 +8,7 @@ import {
   cardSessionKey,
   compareNotifications,
   notificationSequence,
+  synthesizeStatusChangedNotifications,
 } from "./store-card-helpers.js";
 import type {
   WorkboardNotificationEventsInput,
@@ -83,6 +84,12 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveBoardId = effectiveCardId ? undefined : (subscription?.boardId ?? boardId);
     const effectiveSessionKey = subscription?.sessionKey;
     const effectiveRunId = subscription?.runId;
+    // `status_changed` is strictly opt-in: it is delivered only when the
+    // subscription names it in `eventKinds`. A subscription with no `eventKinds`
+    // filter ("all kinds") keeps receiving exactly the historical
+    // completed/failed/stale stream and is never surprised by the new event —
+    // that is what makes the addition backward-compatible and safe to ship dark.
+    const wantsStatusChanged = subscription?.eventKinds?.includes("status_changed") ?? false;
     const events: WorkboardNotification[] = [];
     for (const card of await this.list({ boardId: effectiveBoardId })) {
       if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
@@ -91,6 +98,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
       const stale = card.metadata?.stale;
       const notifications = [
         ...(card.metadata?.notifications ?? []),
+        ...(wantsStatusChanged ? synthesizeStatusChangedNotifications(card) : []),
         ...(stale
           ? [
               {

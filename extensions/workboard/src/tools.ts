@@ -837,7 +837,7 @@ export function createWorkboardTools(params: {
           runId: Type.Optional(Type.String({ description: "Run id." })),
           target: Type.Optional(Type.String({ description: "Human-readable target." })),
           eventKinds: Type.Optional(
-            Type.Array(Type.String(), { description: "completed, failed, stale." }),
+            Type.Array(Type.String(), { description: "completed, failed, stale, status_changed." }),
           ),
         },
         { additionalProperties: false },

@@ -13,6 +13,7 @@ import {
   type WorkboardNotification,
   type WorkboardRunAttempt,
   type WorkboardStatus,
+  type WorkboardStatusTransition,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -129,6 +130,30 @@ export function appendEvent(
       ...event,
     },
   ].slice(-MAX_CARD_EVENTS);
+}
+
+export function appendStatusTransition(
+  existing: WorkboardCard,
+  next: WorkboardCard,
+  at = Date.now(),
+): WorkboardStatusTransition[] | undefined {
+  if (existing.status === next.status) {
+    return next.metadata?.statusTransitions;
+  }
+  const previous = next.metadata?.statusTransitions ?? existing.metadata?.statusTransitions ?? [];
+  const revision = previous.length + 1;
+  const transition: WorkboardStatusTransition = {
+    id: randomUUID(),
+    cardId: next.id,
+    fromStatus: existing.status,
+    toStatus: next.status,
+    createdAt: at,
+    sequence: at * 1000 + revision,
+    revision,
+    ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
+    ...(cardRunId(next) ? { runId: cardRunId(next) } : {}),
+  };
+  return [...previous, transition];
 }
 
 function latestMetadataIdChanged(
@@ -744,5 +769,35 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
     return 1;
   }
   return a.id.localeCompare(b.id);
+}
+
+/**
+ * Read durable `status_changed` notifications from transition-time records.
+ *
+ * These records are persisted separately from the capped recent event ring,
+ * so cursor replay, transition scope, and notification ids do not change when
+ * ordinary card history is trimmed.
+ */
+export function synthesizeStatusChangedNotifications(card: WorkboardCard): WorkboardNotification[] {
+  return (card.metadata?.statusTransitions ?? []).flatMap((transition) => {
+    if (transition.cardId !== card.id) {
+      return [];
+    }
+    return [
+      {
+        id: `status:${card.id}:${transition.id}`,
+        kind: "status_changed" as const,
+        createdAt: transition.createdAt,
+        sequence: transition.sequence,
+        message: `Status changed ${transition.fromStatus} → ${transition.toStatus}.`,
+        cardId: card.id,
+        fromStatus: transition.fromStatus,
+        toStatus: transition.toStatus,
+        revision: transition.revision,
+        ...(transition.sessionKey ? { sessionKey: transition.sessionKey } : {}),
+        ...(transition.runId ? { runId: transition.runId } : {}),
+      },
+    ];
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

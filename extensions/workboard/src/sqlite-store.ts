@@ -14,6 +14,7 @@ import type {
   WorkboardNotification,
   WorkboardProof,
   WorkboardRunAttempt,
+  WorkboardStatusTransition,
   WorkboardWorkerLog,
 } from "@openclaw/workboard-contract";
 import {
@@ -121,6 +122,12 @@ function runTransaction<T>(db: DatabaseSync, run: () => T): T {
   }
 }
 
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 AS found FROM pragma_table_list WHERE name = ?").get(tableName),
+  );
+}
+
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
   return new Set(
     (db.prepare(`PRAGMA table_info(${tableName})`).all() as Row[]).flatMap((row) =>
@@ -134,6 +141,25 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, d
     return;
   }
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+}
+
+const WORKBOARD_STATUS_TRANSITIONS_SQL = `
+    CREATE TABLE IF NOT EXISTS workboard_card_status_transitions (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+      ordinal INTEGER NOT NULL,
+      from_status TEXT NOT NULL,
+      to_status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      sequence INTEGER NOT NULL,
+      revision INTEGER NOT NULL,
+      session_key TEXT,
+      run_id TEXT
+    ) STRICT;
+`;
+
+function ensureStatusTransitionsTable(db: DatabaseSync): void {
+  db.exec(WORKBOARD_STATUS_TRANSITIONS_SQL);
 }
 
 const WORKBOARD_SCHEMA_SQL = `
@@ -352,21 +378,28 @@ const WORKBOARD_SCHEMA_SQL = `
   `;
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
+  const migrationId = `schema-${SCHEMA_VERSION}`;
+  const current = tableExists(db, "workboard_schema_migrations")
+    ? db.prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?").get(migrationId)
+    : undefined;
   db.exec(WORKBOARD_SCHEMA_SQL);
+  if (!current) {
+    ensureStatusTransitionsTable(db);
+  }
   ensureColumn(
     db,
     "workboard_cards",
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
-  const migrationId = `schema-${SCHEMA_VERSION}`;
-  const current = db
-    .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
-    .get(migrationId);
   if (!current) {
-    migrateSqliteSchemaToStrict(db, WORKBOARD_SCHEMA_SQL, {
-      databaseLabel: "workboard database",
-    });
+    migrateSqliteSchemaToStrict(
+      db,
+      `${WORKBOARD_SCHEMA_SQL}\n${WORKBOARD_STATUS_TRANSITIONS_SQL}`,
+      {
+        databaseLabel: "workboard database",
+      },
+    );
     db.prepare(
       "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
     ).run(migrationId, Date.now());
@@ -673,6 +706,31 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
+  const statusTransitions = tableExists(db, "workboard_card_status_transitions")
+    ? childRows(db, "workboard_card_status_transitions", cardId).map((child) => {
+        const transition: WorkboardStatusTransition = {
+          id: requiredString(child, "id"),
+          cardId,
+          fromStatus: requiredString(
+            child,
+            "from_status",
+          ) as WorkboardStatusTransition["fromStatus"],
+          toStatus: requiredString(child, "to_status") as WorkboardStatusTransition["toStatus"],
+          createdAt: requiredNumber(child, "created_at"),
+          sequence: requiredNumber(child, "sequence"),
+          revision: requiredNumber(child, "revision"),
+        };
+        const sessionKey = stringValue(child, "session_key");
+        const runId = stringValue(child, "run_id");
+        if (sessionKey) {
+          transition.sessionKey = sessionKey;
+        }
+        if (runId) {
+          transition.runId = runId;
+        }
+        return transition;
+      })
+    : [];
   const protocol = db
     .prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?")
     .get(cardId) as Row | undefined;
@@ -703,6 +761,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     ...(claim ? { claim } : {}),
     ...(diagnostics.length > 0 ? { diagnostics } : {}),
     ...(notifications.length > 0 ? { notifications } : {}),
+    ...(statusTransitions.length > 0 ? { statusTransitions } : {}),
     ...(stringValue(row, "template_id")
       ? { templateId: stringValue(row, "template_id") as WorkboardMetadata["templateId"] }
       : {}),
@@ -1054,6 +1113,38 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       );
     },
   );
+  const hasStatusTransitions = Boolean(metadata?.statusTransitions?.length);
+  if (hasStatusTransitions || tableExists(db, "workboard_card_status_transitions")) {
+    if (hasStatusTransitions) {
+      ensureStatusTransitionsTable(db);
+    }
+    insertChildren(
+      db,
+      "workboard_card_status_transitions",
+      card.id,
+      metadata?.statusTransitions,
+      (entry, ordinal) => {
+        db.prepare(
+          `
+            INSERT INTO workboard_card_status_transitions
+              (id, card_id, ordinal, from_status, to_status, created_at, sequence, revision, session_key, run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        ).run(
+          entry.id,
+          card.id,
+          ordinal,
+          entry.fromStatus,
+          entry.toStatus,
+          entry.createdAt,
+          entry.sequence,
+          entry.revision,
+          bindNull(entry.sessionKey),
+          bindNull(entry.runId),
+        );
+      },
+    );
+  }
   insertChildren(db, "workboard_worker_logs", card.id, metadata?.workerLogs, (entry, ordinal) => {
     db.prepare(
       `

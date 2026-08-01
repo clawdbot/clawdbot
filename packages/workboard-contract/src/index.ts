@@ -73,7 +73,12 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "orphaned_session",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
-export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
+export const WORKBOARD_NOTIFICATION_KINDS = [
+  "completed",
+  "failed",
+  "stale",
+  "status_changed",
+] as const;
 export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 export function isValidWorkboardBoardId(value: unknown): value is string {
@@ -113,6 +118,18 @@ export type WorkboardEvent = {
   at: number;
   fromStatus?: WorkboardStatus;
   toStatus?: WorkboardStatus;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type WorkboardStatusTransition = {
+  id: string;
+  cardId: string;
+  fromStatus: WorkboardStatus;
+  toStatus: WorkboardStatus;
+  createdAt: number;
+  sequence: number;
+  revision: number;
   sessionKey?: string;
   runId?: string;
 };
@@ -228,6 +245,25 @@ export type WorkboardNotification = {
   message: string;
   sessionKey?: string;
   runId?: string;
+  /**
+   * Card the notification refers to. Populated on synthesized events (e.g.
+   * `status_changed`) so board-scoped subscribers can route without a second
+   * lookup. Persisted notification rows omit it — the parent card supplies it.
+   */
+  cardId?: string;
+  /**
+   * Status-transition endpoints. Populated only on persisted
+   * `status_changed` transition notifications. `fromStatus === toStatus` never
+   * occurs — no-op moves are not persisted as transitions.
+   */
+  fromStatus?: WorkboardStatus;
+  toStatus?: WorkboardStatus;
+  /**
+   * Monotonic 1-based ordinal of the persisted status transition within
+   * the card. With `cardId` and `toStatus` it forms a stable idempotency
+   * key for a single transition. Populated only on `status_changed` events.
+   */
+  revision?: number;
 };
 
 export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
@@ -331,6 +367,7 @@ export type WorkboardMetadata = {
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];
   notifications?: WorkboardNotification[];
+  statusTransitions?: WorkboardStatusTransition[];
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;

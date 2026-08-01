@@ -28,6 +28,7 @@ import {
   syncExecutionAttemptMetadata,
   updateEvent,
   appendEvent,
+  appendStatusTransition,
 } from "./store-card-helpers.js";
 import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
@@ -606,6 +607,15 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
+    if (existing.status !== next.status) {
+      next.metadata = trimMetadataToBudget(
+        {
+          ...next.metadata,
+          statusTransitions: appendStatusTransition(existing, next, now),
+        },
+        options,
+      );
+    }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);

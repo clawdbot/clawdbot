@@ -41,6 +41,7 @@ import {
   type WorkboardProofStatus,
   type WorkboardRunAttempt,
   type WorkboardStatus,
+  type WorkboardStatusTransition,
   type WorkboardTemplateId,
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
@@ -939,6 +940,56 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
   };
 }
 
+function normalizeStatusTransition(value: unknown): WorkboardStatusTransition | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id);
+  const cardId = normalizeOptionalString(record.cardId);
+  const fromStatus =
+    typeof record.fromStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
+      ? (record.fromStatus as WorkboardStatus)
+      : undefined;
+  const toStatus =
+    typeof record.toStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
+      ? (record.toStatus as WorkboardStatus)
+      : undefined;
+  const createdAt = normalizeTimestamp(record.createdAt, 0);
+  const sequence = normalizeTimestamp(record.sequence, 0);
+  const revision =
+    typeof record.revision === "number" && Number.isFinite(record.revision)
+      ? Math.max(1, Math.trunc(record.revision))
+      : undefined;
+  if (
+    !id ||
+    !cardId ||
+    !fromStatus ||
+    !toStatus ||
+    fromStatus === toStatus ||
+    !createdAt ||
+    !sequence ||
+    !revision
+  ) {
+    return null;
+  }
+  const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(record.runId, undefined, 120, "run id");
+  return {
+    id,
+    cardId,
+    fromStatus,
+    toStatus,
+    createdAt,
+    sequence,
+    revision,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  };
+}
+
 function normalizeNotification(value: unknown): WorkboardNotification | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -1118,6 +1169,11 @@ export function normalizeMetadata(
           .filter((notification): notification is WorkboardNotification => notification !== null)
           .slice(-MAX_CARD_NOTIFICATIONS)
       : fallback.notifications,
+    statusTransitions: Array.isArray(record.statusTransitions)
+      ? record.statusTransitions
+          .map(normalizeStatusTransition)
+          .filter((transition): transition is WorkboardStatusTransition => transition !== null)
+      : fallback.statusTransitions,
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -1252,6 +1308,7 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "claim",
     "diagnostics",
     "notifications",
+    "statusTransitions",
     "templateId",
     "archivedAt",
     "stale",
@@ -1384,6 +1441,11 @@ export function trimMetadataToBudget(
       }
     } else if (next.comments?.length) {
       next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
+    } else if (next.statusTransitions?.length) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        statusTransitions: dropFirst(next.statusTransitions),
+      });
     } else if (options.preserveProofId) {
       throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
     }
