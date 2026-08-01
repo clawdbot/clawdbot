@@ -1,3 +1,4 @@
+import { WebAPIRateLimitedError } from "@slack/web-api";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
@@ -341,6 +342,37 @@ describe("Slack presence monitor", () => {
       await polling;
       vi.useRealTimers();
     }
+  });
+
+  it("honors Slack Retry-After before resuming presence polling", async () => {
+    let now = 1_000;
+    const getPresence = vi
+      .fn()
+      .mockRejectedValueOnce(new WebAPIRateLimitedError(120))
+      .mockResolvedValue({ presence: "away" });
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: { getPresence } as never,
+      cooldownStore: createCooldownStore(),
+      enqueue: vi.fn(() => true),
+      wake: vi.fn(),
+      nowMs: () => now,
+    });
+    monitor.observe(createPrepared({ userId: "U1" }));
+    monitor.observe(createPrepared({ userId: "U2" }));
+
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U1" });
+
+    now += 119_999;
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U1" });
+    expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U2" });
   });
 
   it("bounds stop while a presence request is stalled", async () => {
