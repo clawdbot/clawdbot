@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Google provider module implements model/runtime integration.
 import type {
   OpenClawPluginApi,
@@ -13,8 +12,6 @@ import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./pr
 
 const PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const PROVIDER_LABEL = "Gemini CLI runtime";
-
-const loadOauthRuntimeModule = createLazyRuntimeModule(() => import("./oauth.runtime.js"));
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
@@ -36,10 +33,6 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
-    refreshOAuth: async (cred) => {
-      const { refreshGeminiCliOAuthToken } = await loadOauthRuntimeModule();
-      return await refreshGeminiCliOAuthToken(cred);
-    },
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {
