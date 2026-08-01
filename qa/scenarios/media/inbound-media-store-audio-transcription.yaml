@@ -1,0 +1,100 @@
+title: Inbound media-store audio transcription
+
+scenario:
+  id: inbound-media-store-audio-transcription
+  surface: media-understanding
+  coverage:
+    primary:
+      - media.audio-transcription
+    secondary:
+      - channels.qa-channel-media
+  objective: Verify a stored inbound audio attachment carried only by media:// reaches transcription and produces one visible reply.
+  gatewayConfigPatch:
+    tools:
+      media:
+        models:
+          - provider: openai
+            model: gpt-4o-transcribe
+            capabilities: [audio]
+        audio:
+          enabled: true
+          echoTranscript: true
+  successCriteria:
+    - QA Channel saves inline audio and emits only its media://inbound identity.
+    - Media understanding resolves the local store reference without remote fetch failure.
+    - The mock transcription instruction produces exactly one visible marker reply.
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - src/media-understanding/attachments.cache.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: mock-openai
+    suiteIsolation: isolated
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      conversationId: qa-media-store-audio
+      expectedMarker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK
+
+flow:
+  steps:
+    - name: transcribes URL-only stored inbound audio
+      actions:
+        - assert:
+            expr: env.providerMode === 'mock-openai'
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: logCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: audioBase64
+          value:
+            expr: Buffer.alloc(2048, 0x52).toString('base64')
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text: Transcribe the attached voice note and follow its instruction.
+            attachments:
+              - id: stored-voice-note
+                kind: audio
+                mimeType: audio/wav
+                fileName: stored-voice-note.wav
+                mediaFactCarrier: media-store-url
+                contentBase64:
+                  ref: audioBase64
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.expectedMarker))"
+        - set: gatewayLog
+          value:
+            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected exactly one transcription marker reply, saw ${matchingOutbound.length}`"
+        - assert:
+            expr: "!gatewayLog.includes('MediaFetchError') && !gatewayLog.includes('audio: failed')"
+            message:
+              expr: "`stored inbound audio failed before transcription: ${gatewayLog}`"
+      detailsExpr: "`reply=${outbound.text}; markerReplies=${matchingOutbound.length}`"

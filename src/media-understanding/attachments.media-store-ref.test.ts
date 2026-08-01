@@ -3,12 +3,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
 import type { ChannelInboundMediaInput } from "../channels/inbound-event/media.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { MediaAttachmentCache } from "./attachments.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { formatDecisionSummary } from "./runner.entries.js";
 import { runCapability } from "./runner.js";
@@ -25,6 +27,8 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function createOpenAiAudioCfg(): OpenClawConfig {
   return {
     models: {
@@ -38,55 +42,61 @@ function createOpenAiAudioCfg(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-async function runInboundVoiceNoteCase(params: {
-  buildMedia: (saved: { id: string; path: string }) => ChannelInboundMediaInput;
-}) {
+async function withStoredInboundAudio<T>(
+  run: (saved: { id: string; path: string }, stateDir: string) => Promise<T>,
+): Promise<T> {
   // Realpath the temp root: macOS resolves os.tmpdir() through /private, and the
   // media store returns canonical paths that would otherwise miss the roots.
-  const stateDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-store-ref-")),
-  );
-  const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
-    text: "hello from the voice note",
-    model: req.model ?? "unknown",
-  }));
-  try {
-    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () => {
-      // Real inbound store write, exactly what a channel plugin does for an
-      // inbound voice note before handing the reference to the agent turn.
-      const saved = await saveMediaBuffer(
-        createSafeAudioFixtureBuffer(2048, 0x52),
-        "audio/ogg",
-        "inbound",
-      );
-      // toInboundMediaFacts is the documented channel-plugin entry point for
-      // inbound attachments (docs/plugins/sdk-channel-plugins.md).
-      const ctx = { media: toInboundMediaFacts([params.buildMedia(saved)]) };
-      const media = normalizeMediaAttachments(ctx);
-      const cache = createMediaAttachmentCache(media, {
-        localPathRoots: [path.dirname(saved.path)],
-        includeDefaultLocalPathRoots: false,
-      });
-      const providerRegistry = new Map<string, MediaUnderstandingProvider>([
-        ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
-      ]);
-      try {
-        const result = await runCapability({
-          capability: "audio",
-          cfg: createOpenAiAudioCfg(),
-          ctx,
-          attachments: cache,
-          media,
-          providerRegistry,
-        });
-        return { result, transcribeAudio, saved };
-      } finally {
-        await cache.cleanup();
-      }
+  const stateDir = await fs.realpath(tempDirs.make("openclaw-media-store-ref-", os.tmpdir()));
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () => {
+    // Real inbound store write, exactly what a channel plugin does for an
+    // inbound voice note before handing the reference to the agent turn.
+    const saved = await saveMediaBuffer(
+      createSafeAudioFixtureBuffer(2048, 0x52),
+      "audio/ogg",
+      "inbound",
+    );
+    return await run(saved, stateDir);
+  });
+}
+
+async function runInboundVoiceNoteCase(params: {
+  buildMedia: (
+    saved: { id: string; path: string },
+    stateDir: string,
+  ) => ChannelInboundMediaInput | Promise<ChannelInboundMediaInput>;
+}) {
+  return await withStoredInboundAudio(async (saved, stateDir) => {
+    const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+      text: "hello from the voice note",
+      model: req.model ?? "unknown",
+    }));
+    const mediaInput = await params.buildMedia(saved, stateDir);
+    // toInboundMediaFacts is the documented channel-plugin entry point for
+    // inbound attachments (docs/plugins/sdk-channel-plugins.md).
+    const ctx = { media: toInboundMediaFacts([mediaInput]) };
+    const media = normalizeMediaAttachments(ctx);
+    const cache = createMediaAttachmentCache(media, {
+      localPathRoots: [path.dirname(saved.path)],
+      includeDefaultLocalPathRoots: false,
     });
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+      ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
+    ]);
+    try {
+      const result = await runCapability({
+        capability: "audio",
+        cfg: createOpenAiAudioCfg(),
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+      return { result, transcribeAudio, saved };
+    } finally {
+      await cache.cleanup();
+    }
+  });
 }
 
 describe("inbound media-store references in the attachment url field", () => {
@@ -105,10 +115,31 @@ describe("inbound media-store references in the attachment url field", () => {
     expect(transcribeAudio).toHaveBeenCalledTimes(1);
   });
 
-  it("transcribes a voice note carrying both a local path and a media:// url", async () => {
+  it("prefers a valid local path over a conflicting media:// alias", async () => {
+    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+      buildMedia: async (saved) => {
+        const alternatePath = path.join(path.dirname(saved.path), "alternate.ogg");
+        await fs.writeFile(alternatePath, createSafeAudioFixtureBuffer(2048, 0x41));
+        return {
+          path: alternatePath,
+          url: `media://inbound/${saved.id}`,
+          contentType: "audio/ogg",
+        };
+      },
+    });
+
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs[0]?.text).toBe("hello from the voice note");
+    expect(transcribeAudio).toHaveBeenCalledTimes(1);
+    expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
+      createSafeAudioFixtureBuffer(2048, 0x41),
+    );
+  });
+
+  it("prefers the media:// alias when the supplied path is stale", async () => {
     const { result, transcribeAudio } = await runInboundVoiceNoteCase({
       buildMedia: (saved) => ({
-        path: saved.path,
+        path: path.join(path.dirname(saved.path), "missing.ogg"),
         url: `media://inbound/${saved.id}`,
         contentType: "audio/ogg",
       }),
@@ -117,5 +148,134 @@ describe("inbound media-store references in the attachment url field", () => {
     expect(result.decision.outcome).toBe("success");
     expect(result.outputs[0]?.text).toBe("hello from the voice note");
     expect(transcribeAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers the media:// alias when the supplied path is blocked", async () => {
+    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+      buildMedia: async (saved, stateDir) => {
+        const blockedPath = path.join(stateDir, "blocked.ogg");
+        await fs.writeFile(blockedPath, "blocked");
+        return {
+          path: blockedPath,
+          url: `media://inbound/${saved.id}`,
+          contentType: "audio/ogg",
+        };
+      },
+    });
+
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs[0]?.text).toBe("hello from the voice note");
+    expect(transcribeAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a valid path when the media:// alias is invalid", async () => {
+    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+      buildMedia: (saved) => ({
+        path: saved.path,
+        url: "media://outbound/not-an-inbound-file.ogg",
+        contentType: "audio/ogg",
+      }),
+    });
+
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs[0]?.text).toBe("hello from the voice note");
+    expect(transcribeAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the stored path for media:// aliases", async () => {
+    await withStoredInboundAudio(async (saved) => {
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, url: `media://inbound/${saved.id}`, mime: "audio/ogg" }],
+        {
+          localPathRoots: [path.dirname(saved.path)],
+          includeDefaultLocalPathRoots: false,
+        },
+      );
+      try {
+        const result = await cache.getPath({
+          attachmentIndex: 0,
+          maxBytes: 4096,
+          timeoutMs: 1000,
+        });
+
+        expect(result.path).toBe(await fs.realpath(saved.path));
+        expect(result.cleanup).toBeUndefined();
+      } finally {
+        await cache.cleanup();
+      }
+    });
+  });
+
+  it("returns the stored path after a stale path fails", async () => {
+    await withStoredInboundAudio(async (saved) => {
+      const cache = new MediaAttachmentCache(
+        [
+          {
+            index: 0,
+            path: `${saved.path}.missing`,
+            url: `media://inbound/${saved.id}`,
+            mime: "audio/ogg",
+          },
+        ],
+        {
+          localPathRoots: [path.dirname(saved.path)],
+          includeDefaultLocalPathRoots: false,
+        },
+      );
+      try {
+        const result = await cache.getPath({
+          attachmentIndex: 0,
+          maxBytes: 4096,
+          timeoutMs: 1000,
+        });
+
+        expect(result.path).toBe(await fs.realpath(saved.path));
+        expect(result.cleanup).toBeUndefined();
+      } finally {
+        await cache.cleanup();
+      }
+    });
+  });
+
+  it("does not bypass a path maxBytes failure through the media:// alias", async () => {
+    await withStoredInboundAudio(async (saved) => {
+      const oversizedPath = path.join(path.dirname(saved.path), "oversized.ogg");
+      await fs.writeFile(oversizedPath, createSafeAudioFixtureBuffer(8192, 0x41));
+      const cache = new MediaAttachmentCache(
+        [
+          {
+            index: 0,
+            path: oversizedPath,
+            url: `media://inbound/${saved.id}`,
+            mime: "audio/ogg",
+          },
+        ],
+        {
+          localPathRoots: [path.dirname(saved.path)],
+          includeDefaultLocalPathRoots: false,
+        },
+      );
+      try {
+        await expect(
+          cache.getBuffer({ attachmentIndex: 0, maxBytes: 4096, timeoutMs: 1000 }),
+        ).rejects.toMatchObject({ reason: "maxBytes" });
+      } finally {
+        await cache.cleanup();
+      }
+    });
+  });
+
+  it("rejects malformed media:// aliases without attempting a remote fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const cache = new MediaAttachmentCache([{ index: 0, url: "media://inbound/%" }]);
+
+    try {
+      await expect(
+        cache.getBuffer({ attachmentIndex: 0, maxBytes: 4096, timeoutMs: 1000 }),
+      ).rejects.toMatchObject({ reason: "empty" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
