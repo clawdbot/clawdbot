@@ -473,7 +473,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result.readFile).toBeTypeOf("function");
   });
   it("includes configured mediaLocalRoots only when host reads are allowed", () => {
-    const extraRoot = process.platform === "win32" ? "C:\data\snapshots" : "/data/snapshots";
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
     const cfg = {
       tools: { allow: ["read"] },
       agents: { defaults: { mediaLocalRoots: [extraRoot] } },

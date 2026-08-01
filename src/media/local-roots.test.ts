@@ -119,7 +119,7 @@ describe("local media roots", () => {
 
   it("does not ambient-merge agents.defaults.mediaLocalRoots into generic agent roots", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-state");
-    const extraRoot = process.platform === "win32" ? "C:\data\snapshots" : "/data/snapshots";
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
     const roots = withStateDir(stateDir, () =>
       getAgentScopedMediaLocalRoots(
         {
