@@ -8,9 +8,14 @@
 // message permanently. Every dispatchable event is now journaled into the
 // shared channel ingress queue (synchronous SQLite commit) inside the sync
 // event listener — before the token persist can land — and replayed through
-// the core drain after a restart. Tombstones land only after dispatch adopts
-// or finishes, and the persistent inbound deduper skips events already fully
-// handled, so redelivery after an unclean shutdown stays exactly-once.
+// the core drain after a restart. The sync store's admission gate backs this
+// ordering: its debounced cursor write waits for waitForAdmissions(), so a
+// retrying append that holds the admission tail past the debounce can no
+// longer let the cursor outrun a still-unjournaled event, and a permanently
+// failed append freezes the cursor behind that event for redelivery after
+// restart. Tombstones land only after dispatch adopts or finishes, and the
+// persistent inbound deduper skips events already fully handled, so
+// redelivery after an unclean shutdown stays exactly-once.
 import {
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
@@ -141,6 +146,14 @@ export type MatrixIngressMonitor = {
   start: () => void;
   stop: () => Promise<void>;
   waitForIdle: () => Promise<void>;
+  /**
+   * Resolves once every event accepted so far is durably journaled (or has
+   * failed loudly). The sync-token store gates its cursor write on this so
+   * the persisted token can never advance past an unadmitted event.
+   */
+  waitForAdmissions: () => Promise<void>;
+  /** Permanent journal failure recorded since process start, if any. */
+  getAdmissionFailure: () => unknown;
 };
 
 export function createMatrixIngressMonitor(options: {
@@ -245,6 +258,10 @@ export function createMatrixIngressMonitor(options: {
   // Serialize admissions so a retry-backed-off append cannot invert room
   // arrival order in the queue (order over latency).
   let admissionTail: Promise<void> = Promise.resolve();
+  // Sticky once a journal append exhausts its retries: the sync-token store
+  // refuses to advance the durable cursor past the dropped event, so a
+  // restart redelivers it instead of skipping it permanently.
+  let admissionFailure: unknown = null;
 
   const admitOnce = async (roomId: string, event: MatrixRawEvent): Promise<void> => {
     const facts = inspectMatrixIngressEvent(roomId, event);
@@ -284,6 +301,7 @@ export function createMatrixIngressMonitor(options: {
     options.runtime.error?.(
       `matrix ingress: failed to durably journal inbound event room=${roomId} id=${facts.eventId}: ${formatErrorMessage(lastError)}`,
     );
+    admissionFailure = lastError;
   };
 
   return {
@@ -292,6 +310,20 @@ export function createMatrixIngressMonitor(options: {
       admissionTail = admission.catch(() => undefined);
       return admission;
     },
+    waitForAdmissions: async () => {
+      // Settle-stable: an admission chained during the wait reassigns the
+      // tail, so only an unchanged tail proves nothing is still in flight.
+      // The sync cursor persist depends on that proof — awaiting a stale
+      // tail would let the cursor outrun the newly chained event.
+      for (;;) {
+        const tail = admissionTail;
+        await tail;
+        if (tail === admissionTail) {
+          return;
+        }
+      }
+    },
+    getAdmissionFailure: () => admissionFailure,
     start: () => {
       if (running) {
         return;

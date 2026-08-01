@@ -11,7 +11,10 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "../../runtime-api.js";
-import { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
+import {
+  SqliteBackedMatrixSyncStore,
+  type MatrixSyncCursorAdmissionGate,
+} from "../client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "../client/logging.js";
 import { createMatrixStartupAbortError, throwIfMatrixStartupAborted } from "../startup-abort.js";
 import {
@@ -533,6 +536,11 @@ export abstract class MatrixClientBase {
     // Only trust restart replay when the previous process completed a final
     // sync-store persist. A stale cursor can make Matrix re-surface old events.
     return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
+  }
+
+  /** Lets the monitor couple the durable sync cursor to ingress journal admission. */
+  setSyncAdmissionGate(gate: MatrixSyncCursorAdmissionGate | null): void {
+    this.syncStore?.setAdmissionGate(gate);
   }
 
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {

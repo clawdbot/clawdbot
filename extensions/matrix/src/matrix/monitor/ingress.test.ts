@@ -80,6 +80,66 @@ afterEach(() => {
 });
 
 describe("Matrix durable ingress", () => {
+  it("keeps waitForAdmissions pending behind a retrying append and a chained later event", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async () => {});
+      const monitor = createMonitor({ queue, dispatch });
+      try {
+        // The first append fails transiently; its 100 ms retry sleep runs
+        // inside the admission tail while a later event waits behind it. The
+        // sync-token persist gates on waitForAdmissions, so it must observe
+        // this window instead of advancing the cursor past both events.
+        const enqueueSpy = vi.spyOn(queue, "enqueue");
+        enqueueSpy.mockImplementationOnce(() => Promise.reject(new Error("transient sqlite busy")));
+        const first = monitor.accept("!room:example.org", createRawEvent("$evt-retry"));
+        const second = monitor.accept("!room:example.org", createRawEvent("$evt-behind"));
+
+        const waiting = monitor.waitForAdmissions();
+        let settled = false;
+        void waiting.then(() => {
+          settled = true;
+        });
+
+        // The first attempt has failed by now and the tail is sleeping before
+        // its retry: no append is in flight, yet the wait must stay pending.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        expect(settled).toBe(false);
+        expect(await queue.listPending({ limit: 10 })).toEqual([]);
+
+        await first;
+        await second;
+        await waiting;
+        expect(settled).toBe(true);
+        expect(await queue.listPending({ limit: 10 })).toEqual([
+          expect.objectContaining({ id: "$evt-retry" }),
+          expect.objectContaining({ id: "$evt-behind" }),
+        ]);
+        expect(monitor.getAdmissionFailure()).toBe(null);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("records a sticky admission failure after journal retries exhaust", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async () => {});
+      const monitor = createMonitor({ queue, dispatch });
+      try {
+        vi.spyOn(queue, "enqueue").mockRejectedValue(new Error("sqlite gone"));
+        await monitor.accept("!room:example.org", createRawEvent("$evt-doomed"));
+        expect(monitor.getAdmissionFailure()).toBeInstanceOf(Error);
+        // The wait itself still settles: the gate pairs it with the failure
+        // signal to freeze the cursor instead of blocking forever.
+        await monitor.waitForAdmissions();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("commits the journal row before the sync token persist can fire", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async () => {});

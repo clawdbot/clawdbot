@@ -85,6 +85,68 @@ describe("SqliteBackedMatrixSyncStore", () => {
     resetPluginStateStoreForTests();
   });
 
+  it("waits for the admission gate before persisting the sync cursor", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    let releaseAdmissions!: () => void;
+    store.setAdmissionGate({
+      waitForAdmissions: () =>
+        new Promise<void>((resolve) => {
+          releaseAdmissions = resolve;
+        }),
+      getAdmissionFailure: () => null,
+    });
+
+    await store.setSyncData(createSyncResponse("s-gated"));
+    const flushing = store.flush();
+    let settled = false;
+    void flushing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // The cursor write must not land while admissions are still pending —
+    // this is the retry-backoff window where the debounced persist used to
+    // outrun a blocked admission tail and strand events on restart.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(settled).toBe(false);
+    const reader = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(reader.getSavedSyncToken()).resolves.toBe(null);
+
+    releaseAdmissions();
+    await flushing;
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("s-gated");
+  });
+
+  it("refuses to advance the cursor past a permanently failed admission", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    let failure: unknown = new Error("journal append failed permanently");
+    store.setAdmissionGate({
+      waitForAdmissions: async () => {},
+      getAdmissionFailure: () => failure,
+    });
+
+    await store.setSyncData(createSyncResponse("s-blocked"));
+    await expect(store.flush()).rejects.toThrow(/cursor persist blocked/i);
+    const reader = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(reader.getSavedSyncToken()).resolves.toBe(null);
+
+    // The freeze lifts once the gate reports healthy admissions again, and
+    // the retained dirty flag lets the same store complete the write.
+    failure = null;
+    await store.flush();
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("s-blocked");
+  });
+
   it("persists sync data so restart resumes from the saved cursor", async () => {
     const storageRoot = createStorageRoot();
     const syncResponse = createSyncResponse("s123");

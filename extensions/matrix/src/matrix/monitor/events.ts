@@ -245,8 +245,9 @@ export function registerMatrixMonitorEvents(params: {
       return;
     }
     // Durable-before-dispatch: the journal append commits synchronously inside
-    // this listener, before the debounced sync-token persist can tell the
-    // homeserver the batch is consumed.
+    // this listener, and the sync store's admission gate additionally holds
+    // the debounced sync-token persist until every accepted event is
+    // journaled, so the homeserver never marks the batch consumed early.
     void ingress.accept(roomId, event);
   };
 

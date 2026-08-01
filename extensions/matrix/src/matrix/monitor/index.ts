@@ -485,6 +485,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     });
     ingress.start();
 
+    // Couple the sync store's durable cursor write to journal admission:
+    // the persisted token may only advance once every emitted event is
+    // admitted (or loudly failed), closing the window where the 250 ms
+    // debounce could outrun an admission tail blocked by a retrying append.
+    client?.setSyncAdmissionGate({
+      waitForAdmissions: async () => {
+        await ingress?.waitForAdmissions();
+      },
+      getAdmissionFailure: () => ingress?.getAdmissionFailure() ?? null,
+    });
+
     disposeMonitorEvents = registerMatrixMonitorEvents({
       cfg,
       client,

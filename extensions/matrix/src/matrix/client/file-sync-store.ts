@@ -154,6 +154,13 @@ function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   };
 }
 
+export type MatrixSyncCursorAdmissionGate = {
+  /** Resolves once every inbound event emitted so far is durably journaled (or loudly failed). */
+  waitForAdmissions: () => Promise<void>;
+  /** Permanent journal failure recorded since process start, if any. */
+  getAdmissionFailure: () => unknown;
+};
+
 export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private readonly persistLock = createAsyncLock();
   private readonly accumulator = new SyncAccumulator();
@@ -169,6 +176,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private frozen = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
+  private admissionGate: MatrixSyncCursorAdmissionGate | null = null;
 
   constructor(private readonly storageRootDir: string) {
     super();
@@ -287,6 +295,16 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       .catch(() => undefined);
   }
 
+  /**
+   * Couples the durable cursor write to ingress admission. Without this gate
+   * the debounced persist can outrun an admission tail that is stuck behind a
+   * retrying journal append; a crash in that window makes the homeserver
+   * permanently skip the still-unjournaled event.
+   */
+  setAdmissionGate(gate: MatrixSyncCursorAdmissionGate | null): void {
+    this.admissionGate = gate;
+  }
+
   markCleanShutdown(): void {
     this.cleanShutdown = true;
     this.dirty = true;
@@ -346,6 +364,21 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   private async persist(): Promise<void> {
     this.assertStoreAvailable();
+    if (this.admissionGate) {
+      // The write below advances the recoverable cursor, so every event the
+      // sync loop already emitted must be durably admitted first. A journal
+      // append that failed permanently freezes the cursor behind the dropped
+      // event (dirty stays set, flush retries): after any restart the
+      // homeserver redelivers it instead of skipping it.
+      await this.admissionGate.waitForAdmissions();
+      const admissionFailure = this.admissionGate.getAdmissionFailure();
+      if (admissionFailure != null) {
+        throw new Error(
+          "Matrix sync cursor persist blocked: an inbound event could not be journaled",
+          { cause: admissionFailure instanceof Error ? admissionFailure : undefined },
+        );
+      }
+    }
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
