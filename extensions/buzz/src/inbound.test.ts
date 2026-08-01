@@ -107,9 +107,11 @@ describe("handleBuzzInbound", () => {
     expect(firstDispatch(runtime).ctxPayload).toMatchObject({
       WasMentioned: true,
       SenderId: SENDER_PUBLIC_KEY,
-      GroupChannel: ROOM_ID,
+      ChatId: ROOM_ID,
+      NativeChannelId: ROOM_ID,
       GroupSubject: ROOM_ID,
     });
+    expect(firstDispatch(runtime).ctxPayload.GroupChannel).toBeUndefined();
   });
 
   it("uses current Buzz labels without changing the stable sender identity", async () => {
@@ -171,9 +173,11 @@ describe("handleBuzzInbound", () => {
     expect(firstDispatch(runtime).ctxPayload).toMatchObject({
       SenderId: SENDER_PUBLIC_KEY,
       SenderName: "Alice",
-      GroupChannel: ROOM_ID,
+      ChatId: ROOM_ID,
+      NativeChannelId: ROOM_ID,
       GroupSubject: "Engineering",
     });
+    expect(firstDispatch(runtime).ctxPayload.GroupChannel).toBeUndefined();
   });
 
   it("accepts a configured text mention when no native p tag is present", async () => {
