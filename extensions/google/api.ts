@@ -50,9 +50,7 @@ type GoogleGenerativeAiRequestOverrides = ProviderRequestTransportOverrides & {
 };
 
 function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
-  // Config validation can materialize an absent provider URL as an empty string.
-  // Native Google HTTP callers must still use the canonical Gemini endpoint.
-  const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL;
+  const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? DEFAULT_GOOGLE_API_BASE_URL;
   let url: URL;
   try {
     url = new URL(normalized);

@@ -40,6 +40,8 @@ describe("google generative ai helpers", () => {
     expect(normalizeGoogleGenerativeAiBaseUrl("https://xgenerativelanguage.googleapis.com")).toBe(
       "https://xgenerativelanguage.googleapis.com",
     );
+    expect(normalizeGoogleGenerativeAiBaseUrl("")).toBeUndefined();
+    expect(normalizeGoogleGenerativeAiBaseUrl("   ")).toBeUndefined();
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
   });
 
