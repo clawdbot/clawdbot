@@ -86,6 +86,10 @@ describe("cron+hook capacity group", () => {
     const snapshot = getCommandLaneSnapshot(CommandLane.CronNested);
     expect(snapshot.group).toBe("cron-hooks");
     expect(snapshot.groupBudget).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
+      maxConcurrent: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+      reservedForLane: 1,
+    });
 
     const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
     const runs = gates.map((g) =>
@@ -123,6 +127,84 @@ describe("cron+hook capacity group", () => {
       g.release();
     }
     await Promise.all(runs);
+  });
+
+  it("admits hook bursts up to the shared budget and queues the ninth", async () => {
+    publish(HOOKS_ON);
+
+    const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1 }, () => gate());
+    const runs = gates.map((g) =>
+      enqueueCommandInLane(CommandLane.HookDispatch, async () => await g.promise, {
+        warnAfterMs: 10_000,
+      }),
+    );
+    await settle();
+
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
+      activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+      queuedCount: 1,
+      groupActive: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+      groupBudget: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    });
+
+    for (const g of gates) {
+      g.release();
+    }
+    await Promise.all(runs);
+  });
+
+  it("admits seven cron plus one hook, then gives freed capacity to a second hook", async () => {
+    publish(HOOKS_ON);
+
+    const cronGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1 }, () => gate());
+    const cronRuns = cronGates.map((g) =>
+      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
+        warnAfterMs: 10_000,
+      }),
+    );
+    const firstHookGate = gate();
+    const firstHook = enqueueCommandInLane(
+      CommandLane.HookDispatch,
+      async () => await firstHookGate.promise,
+      { warnAfterMs: 10_000 },
+    );
+    await settle();
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
+    );
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+
+    const secondHookGate = gate();
+    const secondHook = enqueueCommandInLane(
+      CommandLane.HookDispatch,
+      async () => await secondHookGate.promise,
+      { warnAfterMs: 10_000 },
+    );
+    await settle();
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
+
+    cronGates[0]?.release();
+    await cronRuns[0];
+    await settle();
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2,
+    );
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(2);
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+
+    firstHookGate.release();
+    secondHookGate.release();
+    for (const g of cronGates.slice(1)) {
+      g.release();
+    }
+    await Promise.all([...cronRuns.slice(1), firstHook, secondHook]);
   });
 
   it("hooks-off immediately drains cron work released by the teardown", async () => {

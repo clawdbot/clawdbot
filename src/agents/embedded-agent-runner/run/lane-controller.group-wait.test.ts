@@ -53,7 +53,7 @@ beforeEach(() => {
   resetAllLanes();
   clearCommandLaneGroup(GROUP);
   setCommandLaneConcurrency(CRON, 8);
-  setCommandLaneConcurrency(HOOK, 1);
+  setCommandLaneConcurrency(HOOK, 8);
   setCommandLaneGroup(GROUP, {
     budget: 8,
     members: [CRON, HOOK],
@@ -99,7 +99,7 @@ describe("group-blocked lane waits are reported", () => {
     const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
     await settle();
 
-    // A second hook cannot start: lane is one-wide AND the group is full.
+    // A second hook cannot start because the group budget is full.
     expect(shouldNoteLaneWait(getCommandLaneSnapshot(HOOK))).toBe(true);
 
     hookGate.release();

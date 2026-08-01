@@ -13,6 +13,7 @@ import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   resetAllLanes,
+  resetCommandLane,
   setCommandLaneConcurrency,
   setCommandLaneGroup,
 } from "./command-queue.js";
@@ -42,7 +43,7 @@ beforeEach(() => {
   resetAllLanes();
   clearCommandLaneGroup(GROUP);
   setCommandLaneConcurrency(CRON, 8);
-  setCommandLaneConcurrency(HOOK, 1);
+  setCommandLaneConcurrency(HOOK, 8);
 });
 
 afterEach(() => {
@@ -112,6 +113,33 @@ describe("command lane capacity groups", () => {
     await Promise.all(runs);
   });
 
+  test("a member may use the full group budget beyond its reservation", async () => {
+    setCommandLaneGroup(GROUP, {
+      budget: 8,
+      members: [CRON, HOOK],
+      reservations: { [HOOK]: 1 },
+    });
+
+    const gates = Array.from({ length: 9 }, () => gate());
+    const runs = gates.map((g) => enqueueCommandInLane(HOOK, async () => await g.promise));
+    await settle();
+
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({
+      activeCount: 8,
+      queuedCount: 1,
+      maxConcurrent: 8,
+      groupActive: 8,
+      groupBudget: 8,
+      reservedForLane: 1,
+      blockedBy: "lane",
+    });
+
+    for (const g of gates) {
+      g.release();
+    }
+    await Promise.all(runs);
+  });
+
   test("capacity freed by one member wakes a queued sibling", async () => {
     setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
 
@@ -163,6 +191,44 @@ describe("command lane capacity groups", () => {
 
     hookGate.release();
     await hookRun;
+  });
+
+  test("a timed-out task releases group capacity to a queued sibling", async () => {
+    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
+
+    const timedOut = enqueueCommandInLane(CRON, async () => new Promise<never>(() => {}), {
+      taskTimeoutMs: 10,
+    });
+    const hookGate = gate();
+    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+
+    await expect(timedOut).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
+
+    hookGate.release();
+    await hookRun;
+  });
+
+  test("resetting a member releases group capacity to a queued sibling", async () => {
+    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
+
+    const cronGate = gate();
+    const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise);
+    await settle();
+
+    const hookGate = gate();
+    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(0);
+
+    expect(resetCommandLane(CRON)).toBe(1);
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
+
+    cronGate.release();
+    hookGate.release();
+    await Promise.all([cronRun, hookRun]);
   });
 
   test("an idle sibling's reservation is withheld, not borrowed", async () => {

@@ -24,8 +24,6 @@ import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 const log = createSubsystemLogger("session-suspension");
 
 const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
-/** Hook agent runs serialize against each other; the lane is one-wide by design. */
-const HOOK_DISPATCH_LANE_RESUME_CONCURRENCY = 1;
 const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 type LaneResumeTimer = {
@@ -131,13 +129,8 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
     case "cron-nested":
-      return resolveCronMaxConcurrentRuns();
     case "hook-dispatch":
-      // One-wide by design: the hook lane's guarantee is that it can always
-      // START under cron saturation, not that hooks run concurrently with each
-      // other. Stated explicitly rather than inherited from the custom-lane
-      // default, so the two can diverge without silently changing this.
-      return HOOK_DISPATCH_LANE_RESUME_CONCURRENCY;
+      return resolveCronMaxConcurrentRuns();
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }

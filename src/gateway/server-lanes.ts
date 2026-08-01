@@ -24,16 +24,19 @@ type GatewayLaneConcurrency = {
   subagent: number;
 };
 
-/** Hook agent runs serialize against each other; the lane is one-wide by design. */
-const HOOK_DISPATCH_LANE_CONCURRENCY = 1;
+/** Capacity held inside the cron budget so hook dispatch cannot be starved. */
+const HOOK_DISPATCH_LANE_RESERVATION = 1;
 
 /** Group bounding cron inner work and hook dispatch to one shared budget. */
 export const CRON_HOOK_LANE_GROUP = "cron-hooks";
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
+  const cron = resolveCronMaxConcurrentRuns();
   return {
-    cron: resolveCronMaxConcurrentRuns(),
-    hookDispatch: cfg.hooks?.enabled === true ? HOOK_DISPATCH_LANE_CONCURRENCY : 0,
+    cron,
+    // The reservation guarantees one slot, but hooks may use every free slot
+    // inside the shared budget. A one-wide lane would serialize unrelated hooks.
+    hookDispatch: cfg.hooks?.enabled === true ? cron : 0,
     main: resolveAgentMaxConcurrent(cfg),
     subagent: resolveSubagentMaxConcurrent(cfg),
   };
@@ -81,8 +84,6 @@ export function applyGatewayLaneConcurrency(
     grouped[CommandLane.CronNested] = concurrency.cron;
   }
   if (hooksEnabled && !suspendedLaneIds.has(CommandLane.HookDispatch)) {
-    // One-wide: the guarantee is that a hook can always START under cron
-    // saturation, not that hooks run concurrently with each other.
     grouped[CommandLane.HookDispatch] = concurrency.hookDispatch;
   }
   // Publish even when `grouped` is empty. With hooks off, `cron-nested` is the
@@ -107,7 +108,7 @@ export function applyGatewayLaneConcurrency(
             [CRON_HOOK_LANE_GROUP]: {
               budget: concurrency.cron,
               members: [CommandLane.CronNested, CommandLane.HookDispatch],
-              reservations: { [CommandLane.HookDispatch]: concurrency.hookDispatch },
+              reservations: { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION },
             },
           }
         : undefined,

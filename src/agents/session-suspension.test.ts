@@ -88,6 +88,24 @@ describe("session suspension", () => {
     );
   });
 
+  it("auto-resumes hook dispatch to the shared cron concurrency width", async () => {
+    vi.useFakeTimers();
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.HookDispatch);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(
+      CommandLane.HookDispatch,
+      0,
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.HookDispatch,
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+  });
+
   it("clamps oversized suspension TTLs for timers and persisted resume time", async () => {
     // Persisted expectedResumeBy must match the clamped timer, not MAX_SAFE_INTEGER.
     vi.useFakeTimers();
