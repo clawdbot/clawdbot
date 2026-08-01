@@ -1,12 +1,17 @@
 // Line plugin module implements send behavior.
+import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
@@ -34,6 +39,19 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+
+// LINE recommends exponential backoff for transient push failures (5xx,
+// rate-limit 429) while treating other 4xx as permanent. The X-Line-Retry-Key
+// header (valid 24h) makes every retry attempt for one logical push idempotent
+// server-side; pushLineMessages generates one key per call so retries never
+// duplicate a send that LINE already accepted. strictShouldRetry keeps the
+// generic channel regex fallback from retrying permanent LINE errors.
+const linePushRetryRunner = createChannelApiRetryRunner({
+  retry: { attempts: 5, minDelayMs: 1000, maxDelayMs: 8000, jitter: 0.3 },
+  shouldRetry: isRetryableLineError,
+  strictShouldRetry: true,
+  verbose: true,
+});
 
 function cacheUserProfile(
   userId: string,
@@ -93,6 +111,32 @@ function resolveLineProviderMessageIds(
     );
   }
   return { messageId, messageIds };
+}
+
+async function readLineConflictReceipt(
+  response: Response,
+): Promise<messagingApi.PushMessageResponse> {
+  try {
+    const text = await response.text();
+    const body = text ? (JSON.parse(text) as unknown) : null;
+    const sentMessages =
+      body && typeof body === "object"
+        ? (body as { sentMessages?: unknown }).sentMessages
+        : undefined;
+    if (Array.isArray(sentMessages)) {
+      // The 409 body is the original acceptance receipt; let the caller's
+      // normal receipt resolution validate its shape.
+      return { sentMessages: sentMessages as messagingApi.SentMessage[] };
+    }
+  } catch {
+    // fall through to the partial-delivery guard below
+  }
+  // LINE accepted this retry key before; treat it as delivered even when the
+  // echoed receipt is unreadable, so the spool never replays a duplicate.
+  throw createChannelPartialDeliveryError(
+    new Error("LINE retry key was already accepted but its receipt is unreadable"),
+    { messageIds: [], visibleReplySent: true },
+  );
 }
 
 function normalizeTarget(to: string): string {
@@ -171,6 +215,7 @@ async function sendLineProviderMessages(
   operation: "push" | "reply",
   token: string,
   request: messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest,
+  retryKey?: string,
 ): Promise<messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse> {
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
@@ -180,12 +225,20 @@ async function sendLineProviderMessages(
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+        ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
       },
       body: JSON.stringify(request),
     },
   );
 
   if (!response.ok) {
+    if (response.status === 409 && operation === "push") {
+      // LINE echoes the original response body when a retry key was already
+      // accepted, proving that push was delivered on an earlier attempt (e.g.
+      // its response was lost). Treat it as a successful delivery instead of a
+      // failure so the caller never replays a duplicate send.
+      return readLineConflictReceipt(response);
+    }
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
@@ -271,6 +324,27 @@ function logLineHttpError(err: unknown, context: string): void {
   }
 }
 
+function isRetryableLineError(error: unknown): boolean {
+  if (isChannelPartialDeliveryError(error)) {
+    // LINE accepted this request before the receipt became unreadable;
+    // retrying would duplicate the send.
+    return false;
+  }
+  if (!error || typeof error !== "object") {
+    return true;
+  }
+  const { status } = error as { status?: number };
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    // LINE's 429 can mean temporary reservation exhaustion even while quota
+    // remains ("You have reached your monthly limit."), so retry all 429s;
+    // retries stay idempotent via the push retry key. Other 4xx (including
+    // expired reply tokens) are definitive rejections.
+    return status === 429;
+  }
+  // 5xx and network/timeout failures are transient candidates.
+  return true;
+}
+
 function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
@@ -320,17 +394,18 @@ async function pushLineMessages(
 
   const { account, token, chatId } = createLinePushContext(to, opts);
   const normalizedMessages = messages.map(normalizeLineMessageActions);
-  const pushRequest = sendLineProviderMessages("push", token, {
-    to: chatId,
-    messages: normalizedMessages,
-  });
+  // One retry key per logical push keeps every retry attempt idempotent, so a
+  // send LINE accepted before a transient failure is never duplicated.
+  const retryKey = randomUUID();
+  const pushRequest = () =>
+    sendLineProviderMessages("push", token, { to: chatId, messages: normalizedMessages }, retryKey);
 
-  const response = behavior.errorContext
-    ? await pushRequest.catch((err: unknown) => {
-        logLineHttpError(err, behavior.errorContext!);
-        throw err;
-      })
-    : await pushRequest;
+  const response = await linePushRetryRunner(pushRequest, "line:push").catch((err: unknown) => {
+    if (behavior.errorContext) {
+      logLineHttpError(err, behavior.errorContext);
+    }
+    throw err;
+  });
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,
@@ -441,6 +516,7 @@ export async function sendMessageLine(
   }
 
   return pushLineMessages(chatId, messages, opts, {
+    errorContext: "push message",
     verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
   });
 }
@@ -624,4 +700,34 @@ export async function getUserProfile(
 export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
+}
+
+export async function logLineChannelQuota(opts: LineClientOpts): Promise<void> {
+  try {
+    const { client } = createLineMessagingClient(opts);
+    const [quotaResponse, consumptionResponse] = await Promise.all([
+      client.getMessageQuota(),
+      client.getMessageQuotaConsumption(),
+    ]);
+
+    if (quotaResponse.type === "none") {
+      logVerbose("line: quota type=none (unlimited plan, no monthly cap)");
+    } else {
+      const used = consumptionResponse.totalUsage;
+      const limit = quotaResponse.value ?? 0;
+      const remaining = limit - used;
+      const pct = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      const message = `line: quota type=limited, ${used}/${limit} used (${remaining} remaining, ${pct}%)`;
+      if (remaining <= 0) {
+        // Exhausted quota blocks every push until the monthly reset; surface it
+        // above verbose level so operators see it without enabling verbose logs.
+        warn(message);
+      } else {
+        logVerbose(message);
+      }
+    }
+  } catch (err) {
+    // Startup visibility only: quota probes must never block or fail the channel.
+    logVerbose(`line: failed to query quota info (non-fatal): ${String(err)}`);
+  }
 }
