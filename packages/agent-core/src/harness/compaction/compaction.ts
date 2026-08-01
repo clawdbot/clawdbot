@@ -143,7 +143,7 @@ export interface CompactionResult<T = unknown> {
 }
 
 /** Successful output from one summarization model call. */
-export interface SummarizationResult {
+interface SummarizationResult {
   summary: string;
   usage: Usage;
 }
