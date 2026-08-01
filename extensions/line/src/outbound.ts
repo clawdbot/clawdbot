@@ -100,7 +100,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const orderedMessages = processed.segments?.flatMap<messagingApi.Message>((segment) =>
+    const orderedMessages = processed.segments?.flatMap<
+      messagingApi.FlexMessage | messagingApi.TextMessage
+    >((segment) =>
       segment.type === "flex"
         ? [segment.message]
         : runtime.channel.text
