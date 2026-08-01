@@ -27,16 +27,11 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
   accountFollowupTurn: (...args: unknown[]) => state.account(...args),
 }));
 
-vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
-  settleQueuedFollowupPresentation: async (defaults: {
-    opts?: { onQueuedFollowupSettled?: () => Promise<void> | void };
-  }) => {
-    try {
-      await defaults.opts?.onQueuedFollowupSettled?.();
-    } catch {}
-  },
-}));
+vi.mock("./followup-turn-admission.js", () => {
+  return {
+    admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
+  };
+});
 
 vi.mock("./followup-turn-execution.js", () => ({
   executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
@@ -245,6 +240,10 @@ describe("createFollowupRunner", () => {
     const typing = createTypingController();
     const turn = createTurn(order);
     const execution = createRejectedExecution(order);
+    let releasePresentation: (() => void) | undefined;
+    const presentationGate = new Promise<void>((resolve) => {
+      releasePresentation = resolve;
+    });
     state.admit.mockResolvedValue({ kind: "admitted", turn });
     state.execute.mockResolvedValue(execution);
     state.account.mockImplementation(async () => {
@@ -260,22 +259,34 @@ describe("createFollowupRunner", () => {
     });
     state.completeLifecycle.mockImplementation(() => order.push("lifecycle-complete"));
 
-    await createFollowupRunner({
+    const run = createFollowupRunner({
       typing,
       typingMode: "instant",
       defaultModel: "claude",
       opts: {
-        onQueuedFollowupSettled: () => {
+        onQueuedFollowupSettled: async () => {
+          order.push("presentation-settling");
+          await presentationGate;
           order.push("presentation-settled");
         },
       },
     })(turn.queued);
+
+    await vi.waitFor(() => {
+      expect(order).toContain("presentation-settling");
+    });
+    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(turn.operation.complete).not.toHaveBeenCalled();
+
+    releasePresentation?.();
+    await run;
 
     expect(order).toEqual([
       "progress-drained",
       "accounted",
       "decision",
       "delivered",
+      "presentation-settling",
       "presentation-settled",
       "lifecycle-complete",
       "operation-complete",

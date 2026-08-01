@@ -24,6 +24,7 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
@@ -48,18 +49,6 @@ export type FollowupRunnerParams = {
   agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
-
-export async function settleQueuedFollowupPresentation(
-  defaults: FollowupRunnerParams,
-): Promise<void> {
-  try {
-    await defaults.opts?.onQueuedFollowupSettled?.();
-  } catch (error) {
-    defaultRuntime.error?.(
-      `followup queue: queued presentation cleanup failed: ${formatErrorMessage(error)}`,
-    );
-  }
-}
 
 type FollowupSessionOwner =
   | {
@@ -662,7 +651,7 @@ export async function admitFollowupTurn(params: {
     return { kind: "admitted", turn };
   } catch (error) {
     if (queuedFollowupAdmitted) {
-      await settleQueuedFollowupPresentation(params.defaults);
+      await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
     operation.complete();
     throw error instanceof Error ? error : new Error(formatErrorMessage(error));
