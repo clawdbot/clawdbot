@@ -297,14 +297,15 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendPayload()({
       cfg,
-      to: "conversation:abc",
+      to: "conversation:19:channel@thread.tacv2",
+      threadId: "presentation-thread-root",
       text: "Deploy finished",
       payload: rendered!,
     });
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
-      to: "conversation:abc",
+      to: "conversation:19:channel@thread.tacv2;messageid=presentation-thread-root",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
     expect(result).toEqual({
@@ -572,6 +573,26 @@ describe("msteamsOutbound cfg threading", () => {
       votes: {},
     });
     expect(Number.isNaN(Date.parse(pollRecord?.createdAt))).toBe(false);
+  });
+
+  it("forwards resolved channel thread ids to poll sends", async () => {
+    await requireSendPoll()({
+      cfg,
+      to: "conversation:19:channel@thread.tacv2",
+      threadId: "poll-thread-root",
+      poll: {
+        question: "Ship it?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:19:channel@thread.tacv2;messageid=poll-thread-root",
+      question: "Ship it?",
+      options: ["Yes", "No"],
+      maxSelections: 1,
+    });
   });
 
   it("chunks outbound text without requiring MSTeams runtime initialization", () => {

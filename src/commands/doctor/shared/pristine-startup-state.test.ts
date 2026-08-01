@@ -148,6 +148,51 @@ describe("pristine startup state", () => {
     expect(canSkipPristineStartupStateMigrations(env)).toBe(true);
   });
 
+  it("accepts canonical internal hook configuration", () => {
+    const env = createFixture({
+      hooks: {
+        internal: {
+          enabled: true,
+          entries: {
+            "session-memory": {
+              enabled: true,
+              env: { OPENCLAW_HOOK_TEST: "enabled" },
+              customOption: "value",
+            },
+          },
+        },
+      },
+    });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: true,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains migrations for legacy, external, and malformed hook configuration", () => {
+    const unsafeHooks = [
+      { gmail: { account: "operator@example.com" } },
+      { internal: { installs: { "session-memory": { source: "bundled" } } } },
+      { internal: { handlers: [] } },
+      { internal: { load: { extraDirs: ["/tmp/hooks"] } } },
+      { internal: { enabled: "yes" } },
+      { internal: { entries: [] } },
+      { internal: { entries: { "session-memory": { enabled: "yes" } } } },
+      { internal: { entries: { "session-memory": { env: { INVALID: true } } } } },
+    ];
+
+    for (const hooks of unsafeHooks) {
+      expect(
+        planPristineStartupStateMigrations(createFixture({ hooks })),
+        JSON.stringify(hooks),
+      ).toEqual({
+        skipAllStateMigrations: false,
+        skipCoreStateMigrations: false,
+      });
+    }
+  });
+
   it("retains migrations for bundled plugins with doctor state surfaces", () => {
     const env = addBundledPlugin(
       createFixture({ plugins: { entries: { example: { enabled: true } } } }),
