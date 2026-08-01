@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import type { ImageContent, TextContent, Usage } from "@openclaw/llm-core";
 import type { AgentMessage } from "../types.js";
 
 export { err, ok } from "@openclaw/normalization-core/result";
@@ -137,4 +137,5 @@ export interface BranchSummaryResult {
   summary: string;
   readFiles: string[];
   modifiedFiles: string[];
+  usage?: Usage;
 }

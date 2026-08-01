@@ -522,6 +522,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               tokensBefore: observedTokenCount ?? result.tokensBefore,
               tokensAfter,
               details: result.details,
+              usage: result.usage,
               sessionId: undefined,
               sessionFile: undefined,
             },

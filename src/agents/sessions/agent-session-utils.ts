@@ -1,3 +1,4 @@
+import type { Usage } from "../../llm/types.js";
 import type {
   BranchSummaryResult as CoreBranchSummaryResult,
   AgentMessage,
@@ -21,6 +22,7 @@ export function normalizeBranchSummaryResult(
   summary?: string;
   readFiles?: string[];
   modifiedFiles?: string[];
+  usage?: Usage;
   aborted?: boolean;
   error?: string;
 } {

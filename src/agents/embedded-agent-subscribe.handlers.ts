@@ -155,6 +155,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           });
         });
         return;
+      case "context_usage":
+        ctx.recordContextUsage(evt.usage);
+        return;
       case "agent_end":
         return scheduleEvent(evt, () => {
           return handleAgentEnd(ctx, evt as never);

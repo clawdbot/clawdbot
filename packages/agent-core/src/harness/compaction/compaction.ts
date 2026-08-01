@@ -138,6 +138,49 @@ export interface CompactionResult<T = unknown> {
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
+  /** Provider-reported usage for the summarization calls performed by this compaction. */
+  usage?: Usage;
+}
+
+/** Successful output from one summarization model call. */
+export interface SummarizationResult {
+  summary: string;
+  usage: Usage;
+}
+
+function combineSummarizationUsage(first: Usage, second: Usage): Usage {
+  const cacheTelemetry =
+    first.cacheTelemetry?.state === "available" && second.cacheTelemetry?.state === "available"
+      ? ({ state: "available" } as const)
+      : first.cacheTelemetry || second.cacheTelemetry
+        ? ({ state: "unavailable" } as const)
+        : undefined;
+  const cacheWrite1h =
+    first.cacheWrite1h !== undefined && second.cacheWrite1h !== undefined
+      ? first.cacheWrite1h + second.cacheWrite1h
+      : undefined;
+  const totalOrigin =
+    first.cost.totalOrigin === "provider-billed" && second.cost.totalOrigin === "provider-billed"
+      ? ("provider-billed" as const)
+      : undefined;
+
+  return {
+    input: first.input + second.input,
+    output: first.output + second.output,
+    cacheRead: first.cacheRead + second.cacheRead,
+    cacheWrite: first.cacheWrite + second.cacheWrite,
+    ...(cacheTelemetry ? { cacheTelemetry } : {}),
+    ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    totalTokens: first.totalTokens + second.totalTokens,
+    cost: {
+      input: first.cost.input + second.cost.input,
+      output: first.cost.output + second.cost.output,
+      cacheRead: first.cost.cacheRead + second.cost.cacheRead,
+      cacheWrite: first.cost.cacheWrite + second.cost.cacheWrite,
+      total: first.cost.total + second.cost.total,
+      ...(totalOrigin ? { totalOrigin } : {}),
+    },
+  };
 }
 
 /** Compaction thresholds and retention settings. */
@@ -609,7 +652,7 @@ async function runSummarizationCompletion(params: {
   streamFn?: StreamFn;
   runtime?: AgentCoreCompletionRuntimeDeps;
   errorLabel: string;
-}): Promise<Result<string, CompactionError>> {
+}): Promise<Result<SummarizationResult, CompactionError>> {
   const summarizationMessages = [
     {
       role: "user" as const,
@@ -646,12 +689,13 @@ async function runSummarizationCompletion(params: {
     );
   }
 
-  return ok(
-    response.content
+  return ok({
+    summary: response.content
       .filter((c): c is { type: "text"; text: string } => c.type === "text")
       .map((c) => c.text)
       .join("\n"),
-  );
+    usage: response.usage,
+  });
 }
 
 /** Generate or update a conversation summary for compaction. */
@@ -667,7 +711,7 @@ export async function generateSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
-): Promise<Result<string, CompactionError>> {
+): Promise<Result<SummarizationResult, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.8 * reserveTokens),
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
@@ -902,26 +946,30 @@ export async function compact(
   }
 
   let summary: string;
+  let usage: Usage;
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const historyResult =
-      messagesToSummarize.length > 0
-        ? await generateSummary(
-            messagesToSummarize,
-            model,
-            settings.reserveTokens,
-            apiKey,
-            headers,
-            signal,
-            customInstructions,
-            previousSummary,
-            thinkingLevel,
-            streamFn,
-            runtime,
-          )
-        : ok<string, CompactionError>("No prior history.");
-    if (!historyResult.ok) {
-      return err(historyResult.error);
+    let historySummary = "No prior history.";
+    let historyUsage: Usage | undefined;
+    if (messagesToSummarize.length > 0) {
+      const historyResult = await generateSummary(
+        messagesToSummarize,
+        model,
+        settings.reserveTokens,
+        apiKey,
+        headers,
+        signal,
+        customInstructions,
+        previousSummary,
+        thinkingLevel,
+        streamFn,
+        runtime,
+      );
+      if (!historyResult.ok) {
+        return err(historyResult.error);
+      }
+      historySummary = historyResult.value.summary;
+      historyUsage = historyResult.value.usage;
     }
     const turnPrefixResult = await generateTurnPrefixSummary(
       turnPrefixMessages,
@@ -937,7 +985,10 @@ export async function compact(
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
-    summary = `${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
+    summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.summary}`;
+    usage = historyUsage
+      ? combineSummarizationUsage(historyUsage, turnPrefixResult.value.usage)
+      : turnPrefixResult.value.usage;
   } else {
     const summaryResult = await generateSummary(
       messagesToSummarize,
@@ -955,7 +1006,8 @@ export async function compact(
     if (!summaryResult.ok) {
       return err(summaryResult.error);
     }
-    summary = summaryResult.value;
+    summary = summaryResult.value.summary;
+    usage = summaryResult.value.usage;
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
@@ -966,6 +1018,7 @@ export async function compact(
     firstKeptEntryId,
     tokensBefore,
     details: { readFiles, modifiedFiles } as CompactionDetails,
+    usage,
   });
 }
 async function generateTurnPrefixSummary(
@@ -978,7 +1031,7 @@ async function generateTurnPrefixSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
-): Promise<Result<string, CompactionError>> {
+): Promise<Result<SummarizationResult, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.5 * reserveTokens),
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,

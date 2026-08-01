@@ -208,6 +208,7 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
+          usage: result.result.usage,
           ...(result.result.sessionId
             ? { sessionId: resultSessionTarget?.sessionId ?? result.result.sessionId }
             : {}),

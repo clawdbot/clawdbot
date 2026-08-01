@@ -304,5 +304,6 @@ export async function generateBranchSummary(
     summary: summary || "No summary generated",
     readFiles,
     modifiedFiles,
+    usage: response.usage,
   });
 }

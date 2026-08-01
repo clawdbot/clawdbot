@@ -38,12 +38,12 @@ function createResponse(model: Model): AssistantMessage {
     provider: model.provider,
     model: model.id,
     usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      input: 12_345,
+      output: 678,
+      cacheRead: 100,
+      cacheWrite: 20,
+      totalTokens: 13_143,
+      cost: { input: 0.0185, output: 0.0049, cacheRead: 0.0001, cacheWrite: 0.0002, total: 0.0237 },
     },
     stopReason: "stop",
     timestamp: 1,
@@ -135,6 +135,10 @@ describe("branch summarization", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.value.usage).toEqual(createResponse(model).usage);
     expect(capture.readCapture().prompt).toContain("ERROR: deployment timed out");
     expect(capture.readCapture().prompt).not.toContain("never send internal metadata");
     expect(capture.readCapture().maxOutputTokens).toBe(2048);

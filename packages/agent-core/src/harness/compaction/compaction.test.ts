@@ -496,7 +496,10 @@ describe("generateSummary thinking options", () => {
       streamFn,
     );
 
-    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(result).toEqual({
+      ok: true,
+      value: { summary: "summary", usage: summaryMessage.usage },
+    });
     expect(streamFn).toHaveBeenCalledOnce();
   });
 });
@@ -521,23 +524,29 @@ describe("split-turn compaction", () => {
     const streamFn = vi.fn<StreamFn>(() => {
       active++;
       maxActive = Math.max(maxActive, active);
-      callCount++;
+      const currentCall = ++callCount;
       const stream = createAssistantMessageEventStream();
       setTimeout(() => {
         active--;
         const message: AssistantMessage = {
           role: "assistant",
-          content: [{ type: "text", text: `summary-${callCount}` }],
+          content: [{ type: "text", text: `summary-${currentCall}` }],
           api: model.api,
           provider: model.provider,
           model: model.id,
           usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            input: currentCall * 100,
+            output: currentCall * 10,
+            cacheRead: currentCall * 5,
+            cacheWrite: currentCall * 2,
+            totalTokens: currentCall * 117,
+            cost: {
+              input: currentCall * 0.01,
+              output: currentCall * 0.02,
+              cacheRead: currentCall * 0.001,
+              cacheWrite: currentCall * 0.002,
+              total: currentCall * 0.033,
+            },
           },
           stopReason: "stop",
           timestamp: 1,
@@ -568,6 +577,17 @@ describe("split-turn compaction", () => {
     );
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.value.usage).toEqual({
+      input: 300,
+      output: 30,
+      cacheRead: 15,
+      cacheWrite: 6,
+      totalTokens: 351,
+      cost: { input: 0.03, output: 0.06, cacheRead: 0.003, cacheWrite: 0.006, total: 0.099 },
+    });
     expect(streamFn).toHaveBeenCalledTimes(2);
     expect(maxActive).toBe(1);
   });

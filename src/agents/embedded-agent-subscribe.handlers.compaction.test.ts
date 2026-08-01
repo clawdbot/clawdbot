@@ -58,6 +58,7 @@ function createCompactionContext(params: {
     },
     getCompactionCount: () => compactionCount,
     noteCompactionTokensAfter: vi.fn(),
+    recordContextUsage: vi.fn(),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
@@ -328,6 +329,26 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
+  it("records successful compaction usage exactly once", () => {
+    const ctx = createCompactionContext({
+      storePath: "sessions.json",
+      sessionKey: "main",
+      initialCount: 0,
+    });
+    const usage = makeUsageSnapshot(13_023);
+
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "overflow",
+      result: { usage },
+      willRetry: true,
+      aborted: false,
+    });
+
+    expect(ctx.recordContextUsage).toHaveBeenCalledOnce();
+    expect(ctx.recordContextUsage).toHaveBeenCalledWith(usage);
+  });
+
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");

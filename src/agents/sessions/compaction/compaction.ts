@@ -89,7 +89,7 @@ export async function generateSummary(
       streamFn as unknown as CoreStreamFn | undefined,
       openClawAgentCoreRuntime,
     ),
-  );
+  ).summary;
 }
 
 /** Runs full compaction through agent-core and returns the compacted conversation result. */

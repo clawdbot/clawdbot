@@ -1,4 +1,4 @@
-import type { ImageContent, Model } from "../../llm/types.js";
+import type { ImageContent, Model, Usage } from "../../llm/types.js";
 import type {
   Agent,
   AgentEvent,
@@ -35,6 +35,7 @@ export type AgentSessionEvent =
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
+  | { type: "context_usage"; source: "branch_summary"; usage: Usage }
   | {
       type: "compaction_end";
       reason: "manual" | "threshold" | "overflow";

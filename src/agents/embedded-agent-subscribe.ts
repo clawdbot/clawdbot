@@ -702,11 +702,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       callback: () => params.onAgentEvent?.({ stream: "usage", data }),
     });
   };
-  const commitAssistantUsage = () => {
-    if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
-      return;
-    }
-    const usage = state.pendingAssistantUsage;
+  const addUsageTotals = (usage: NonNullable<ReturnType<typeof normalizeUsage>>) => {
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
@@ -716,11 +712,18 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    emitRunUsage(usage.output ?? 0);
+  };
+  const commitAssistantUsage = () => {
+    if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
+      return;
+    }
+    const usage = state.pendingAssistantUsage;
+    addUsageTotals(usage);
     // A terminal abort may report zeros after several completed model calls.
     // Retain the latest committed nonzero call so context accounting stays exact.
     lastAssistantUsage = { ...usage };
     state.assistantUsageCommitted = true;
-    emitRunUsage(usage.output ?? 0);
   };
   const recordAssistantUsage = (usageLike: unknown) => {
     if (state.assistantUsageCommitted) {
@@ -731,6 +734,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     state.pendingAssistantUsage = usage;
+  };
+  const recordContextUsage = (usageLike: unknown) => {
+    const usage = resolveAssistantUsage(usageLike);
+    if (usage) {
+      addUsageTotals(usage);
+    }
   };
   const getUsageTotals = () => {
     const hasUsage =
@@ -1423,6 +1432,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     maybeResolveCompactionWait,
     recordAssistantUsage,
     commitAssistantUsage,
+    recordContextUsage,
     incrementCompactionCount,
     noteCompactionTokensAfter,
     getUsageTotals,

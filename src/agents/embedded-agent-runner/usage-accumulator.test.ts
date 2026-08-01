@@ -64,6 +64,26 @@ describe("usage-accumulator", () => {
       expect(acc.total).toBe(251_490);
     });
 
+    it("counts context-maintenance usage alongside the assistant attempt", () => {
+      const acc = createAccumulatorWithUsage(FIRST_USAGE);
+
+      mergeUsageIntoAccumulator(acc, {
+        input: 12_345,
+        output: 678,
+        cacheRead: 100,
+        cacheWrite: 20,
+        total: 13_143,
+      });
+
+      expect(acc).toMatchObject({
+        input: 12_445,
+        output: 728,
+        cacheRead: 80_100,
+        cacheWrite: 5_020,
+        total: 98_293,
+      });
+    });
+
     it("ignores undefined or zero-only usage", () => {
       const acc = createUsageAccumulator();
 

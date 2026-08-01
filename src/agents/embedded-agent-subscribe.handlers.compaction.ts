@@ -123,6 +123,11 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   const completed = hasResult && !wasAborted;
   if (completed) {
     ctx.incrementCompactionCount();
+    const usage =
+      typeof evt.result === "object" && evt.result
+        ? (evt.result as { usage?: unknown }).usage
+        : undefined;
+    ctx.recordContextUsage(usage);
     const tokensAfter =
       typeof evt.result === "object" && evt.result
         ? (evt.result as { tokensAfter?: unknown }).tokensAfter

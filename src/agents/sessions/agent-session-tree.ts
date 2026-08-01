@@ -143,6 +143,9 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         if (result.error) {
           throw new Error(result.error);
         }
+        if (result.usage) {
+          this.emit({ type: "context_usage", source: "branch_summary", usage: result.usage });
+        }
         summaryText = result.summary;
         summaryDetails = {
           readFiles: result.readFiles || [],
