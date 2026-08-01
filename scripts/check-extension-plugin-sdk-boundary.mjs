@@ -15,9 +15,14 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
+// Generated bundles are validated at their build owner; they are not bounded authored source.
+const generatedExtensionAssetSources = new Set(
+  listGeneratedExtensionAssetSources({ rootDir: repoRoot }),
+);
 
 const MODES = new Set([
   "src-outside-plugin-sdk",
@@ -134,6 +139,7 @@ const extensionBoundaryChecker = createExtensionImportBoundaryChecker({
   },
   shouldSkipFile(relativeFile) {
     return (
+      generatedExtensionAssetSources.has(relativeFile) ||
       path.basename(relativeFile).includes("__rootdir_boundary_canary__") ||
       classifyBundledExtensionSourcePath(relativeFile).isTestLike
     );

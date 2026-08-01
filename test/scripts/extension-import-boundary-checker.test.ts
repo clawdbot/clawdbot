@@ -1,9 +1,10 @@
 // Extension import boundary checker tests cover bounded source reads.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createExtensionImportBoundaryChecker } from "../../scripts/lib/extension-import-boundary-checker.mjs";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
 
 const tempDirs: string[] = [];
 
@@ -34,6 +35,58 @@ describe("extension import boundary checker", () => {
 
     await expect(checker.collectInventory()).rejects.toThrow(
       "extension import boundary source file exceeds 32 byte limit",
+    );
+  });
+
+  it("skips declared generated bundles without admitting oversized handwritten JavaScript", async () => {
+    const root = makeTempRoot();
+    const pluginRoot = path.join(root, "extensions", "generated-plugin");
+    const assetRoot = path.join(pluginRoot, "assets");
+    const generatedPath = path.join(assetRoot, "generated.js");
+    const handwrittenPath = path.join(assetRoot, "handwritten.js");
+    const oversizedBytes = 2 * 1024 * 1024 + 1;
+    mkdirSync(assetRoot, { recursive: true });
+    writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        openclaw: {
+          assetScripts: { build: "node generate.mjs" },
+          build: {
+            staticAssets: [{ source: "./assets/generated.js", output: "assets/generated.js" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    // Match CI ordering: the build materializes its declared bundle before source guards run.
+    writeFileSync(generatedPath, "/".repeat(oversizedBytes), "utf8");
+    const generatedSources = new Set(
+      listGeneratedExtensionAssetSources({ rootDir: root }).map((source) =>
+        path.relative(process.cwd(), path.join(root, source)).replaceAll(path.sep, "/"),
+      ),
+    );
+    const createChecker = () =>
+      createExtensionImportBoundaryChecker({
+        boundaryLabel: "test",
+        cleanMessage: "clean",
+        inventoryTitle: "inventory",
+        roots: [path.relative(process.cwd(), path.join(root, "extensions"))],
+        shouldSkipFile: (relativeFile: string) => generatedSources.has(relativeFile),
+        sourceOptions: { fileExtensions: [".js"] },
+      });
+
+    await expect(createChecker().collectInventory()).resolves.toEqual([]);
+
+    const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
+    const specifier = path.relative(assetRoot, targetPath).replaceAll(path.sep, "/");
+    writeFileSync(
+      handwrittenPath,
+      "import " + JSON.stringify(specifier) + ";\n" + "/".repeat(oversizedBytes),
+      "utf8",
+    );
+    await expect(createChecker().collectInventory()).rejects.toThrow(
+      "extension import boundary source file exceeds 2097152 byte limit",
     );
   });
 
