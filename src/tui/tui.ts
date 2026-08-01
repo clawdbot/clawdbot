@@ -1630,7 +1630,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     onCapture: opts.onSubmitBurstCaptured,
   });
   disposeSubmitBurst = submitBurst.dispose;
-  editor.onSubmit = submitBurst.submit;
+  editor.onSubmit = submitBurst;
 
   editor.onEscape = () => {
     if (chatLog.hasVisibleBtw()) {

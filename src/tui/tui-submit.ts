@@ -222,5 +222,5 @@ export function createSubmitBurstCoalescer(params: {
     clearFlushTimer();
   };
 
-  return { submit: submitBurst, dispose };
+  return Object.assign(submitBurst, { dispose });
 }

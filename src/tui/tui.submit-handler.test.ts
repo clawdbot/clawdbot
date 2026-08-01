@@ -186,11 +186,11 @@ describe("createSubmitBurstCoalescer", () => {
       now: () => now,
     });
 
-    submitBurst.submit("Line 1");
+    submitBurst("Line 1");
     now += 10;
-    submitBurst.submit("Line 2");
+    submitBurst("Line 2");
     now += 10;
-    submitBurst.submit("Line 3");
+    submitBurst("Line 3");
 
     expect(submit).not.toHaveBeenCalled();
 
@@ -217,7 +217,7 @@ describe("createSubmitBurstCoalescer", () => {
       submit,
       enabled: true,
       burstWindowMs: 50,
-    }).submit;
+    });
     editor.setText("submitted message");
 
     editor.handleInput("\r");
@@ -249,7 +249,7 @@ describe("createSubmitBurstCoalescer", () => {
       submit,
       enabled: true,
       burstWindowMs: 50,
-    }).submit;
+    });
     editor.setText("blocked message");
 
     editor.handleInput("\r");
@@ -270,8 +270,8 @@ describe("createSubmitBurstCoalescer", () => {
       enabled: false,
     });
 
-    submitBurst.submit("Line 1");
-    submitBurst.submit("Line 2");
+    submitBurst("Line 1");
+    submitBurst("Line 2");
 
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit).toHaveBeenNthCalledWith(1, "Line 1");
@@ -287,10 +287,10 @@ describe("createSubmitBurstCoalescer", () => {
       burstWindowMs: 50,
     });
 
-    submitBurst.submit("pending");
+    submitBurst("pending");
     submitBurst.dispose();
     submitBurst.dispose();
-    submitBurst.submit("after dispose");
+    submitBurst("after dispose");
     vi.advanceTimersByTime(50);
 
     expect(submit).not.toHaveBeenCalled();
