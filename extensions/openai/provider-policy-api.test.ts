@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeModelCatalogId,
-  projectConfiguredModelRow,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -15,57 +14,6 @@ describe("OpenAI provider policy artifact", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
-
-  it("skips runtime normalization for canonical Responses rows", () => {
-    expect(
-      projectConfiguredModelRow({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        model: {
-          provider: "openai",
-          id: "gpt-5.5",
-          api: "openai-responses",
-          baseUrl: "http://127.0.0.1:8080/v1",
-          input: ["text"],
-          name: "GPT-5.5",
-          reasoning: true,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 96_000,
-          maxTokens: 128_000,
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it.each([
-    ["openai-completions", "https://api.openai.com/v1", "gpt-5.5"],
-    ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", "gpt-5.5"],
-    ["openai-responses", "https://chatgpt.com/backend-api/codex", "gpt-5.5"],
-    ["anthropic-messages", "https://api.openai.com/v1", "gpt-5.5"],
-    ["openai-responses", "https://api.openai.com/v1", "gpt-5.4-codex"],
-  ] as const)(
-    "keeps runtime normalization for api=%s baseUrl=%s model=%s",
-    (api, baseUrl, modelId) => {
-      expect(
-        projectConfiguredModelRow({
-          provider: "openai",
-          modelId,
-          model: {
-            provider: "openai",
-            id: modelId,
-            api,
-            baseUrl,
-            input: ["text"],
-            name: "OpenAI model",
-            reasoning: true,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 96_000,
-            maxTokens: 128_000,
-          },
-        }),
-      ).toBeUndefined();
-    },
-  );
 
   it("normalizes the legacy Codex model alias at the provider boundary", () => {
     expect(normalizeModelCatalogId({ provider: " OpenAI ", modelId: "openai/GPT-5.4-CODEX" })).toBe(

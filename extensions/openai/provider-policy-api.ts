@@ -27,6 +27,7 @@ import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_AGENT_RUNTIME_ID = "openclaw";
 const CODEX_AGENT_RUNTIME_ID = "codex";
 const OPENCLAW_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID] as const;
@@ -49,9 +50,40 @@ function normalizeOptionalRouteBaseUrl(value: unknown): string | undefined {
 
 /** Canonical logical id for OpenAI catalog projection. */
 export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdContext) {
-  return params.provider.trim().toLowerCase() === "openai"
+  return params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
+}
+
+/** Resolves authored OpenAI provider config without activating the runtime plugin. */
+export function resolveAuthoredOpenAIProviderConfig(params: {
+  provider: string;
+  config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
+}): ModelProviderConfig | undefined {
+  if (params.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
+    return undefined;
+  }
+  const providers = Object.entries(params.config?.models?.providers ?? {});
+  const requestedProvider = params.provider.trim();
+  const providerKey =
+    providers.find(([providerId]) => providerId.trim() === requestedProvider)?.[0].trim() ??
+    providers
+      .find(([providerId]) => providerId.trim().toLowerCase() === OPENAI_PROVIDER_ID)?.[0]
+      .trim();
+  let providerConfig: ModelProviderConfig | undefined;
+  for (const [providerId, candidate] of providers) {
+    if (providerId.trim() !== providerKey || !candidate) {
+      continue;
+    }
+    providerConfig = providerConfig
+      ? {
+          ...providerConfig,
+          ...candidate,
+          models: candidate.models ?? providerConfig.models,
+        }
+      : candidate;
+  }
+  return providerConfig;
 }
 
 /**
@@ -59,13 +91,16 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
  * Transport-sensitive routes and legacy model aliases still use the runtime hook.
  */
 export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
-  if (ctx.provider.trim().toLowerCase() !== "openai") {
+  if (ctx.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
     return undefined;
   }
+  const configuredProvider = resolveAuthoredOpenAIProviderConfig(ctx);
+  const configuredApi = normalizeOptionalRouteApi(configuredProvider?.api);
   const modelId = ctx.model.id;
   const canonicalModelId = normalizeOpenAIModelRouteId(modelId);
   const canonicalRouteId = normalizeOpenAIModelRouteId(ctx.modelId);
   if (
+    (configuredApi !== undefined && configuredApi !== OPENAI_RESPONSES_API) ||
     ctx.model.api !== OPENAI_RESPONSES_API ||
     isOpenAICodexBaseUrl(ctx.model.baseUrl) ||
     canonicalModelId !== modelId ||
