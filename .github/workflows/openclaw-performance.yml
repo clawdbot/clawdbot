@@ -753,6 +753,8 @@ jobs:
           cat > "$gateway_config" <<EOF
           {
             "browser": { "enabled": false },
+            "models": { "catalogRefresh": { "enabled": false } },
+            "update": { "checkOnStart": false },
             "gateway": {
               "mode": "local",
               "port": ${gateway_port},
