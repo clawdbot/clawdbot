@@ -145,14 +145,6 @@ function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   return result;
 }
 
-export function readServerUiThemePreference(configObject: unknown): ThemeName | null {
-  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
-  if (!prefs || !Object.hasOwn(prefs, "theme")) {
-    return null;
-  }
-  return SYNCED_PREFS.theme.extract(prefs.theme) ?? null;
-}
-
 export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
@@ -423,6 +415,7 @@ export function applyServerUiPrefs(
   hooks: {
     scope?: string;
     onApplied: (patch: Partial<UiSettings>) => void;
+    onThemeChanged?: (theme: ThemeName | null) => void;
   },
 ): boolean {
   const scope = hooks.scope ?? "";
@@ -465,6 +458,9 @@ export function applyServerUiPrefs(
   }
   writeStorage(LAST_SEEN_KEY, scope, key);
   recordReconciledObject();
+  if (Object.hasOwn(changed, "theme")) {
+    hooks.onThemeChanged?.(changed.theme ?? null);
+  }
   const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;

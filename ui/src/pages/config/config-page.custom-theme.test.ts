@@ -32,14 +32,16 @@ type CustomThemeImportState = {
   clearCustomTheme: () => void;
   setCustomThemeImportUrl: (next: string) => void;
   setTheme: (theme: ThemeName) => void;
-  synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+  synchronizeCustomThemeGatewayScope: (scope: string) => void;
   willUpdate: (changed: Map<PropertyKey, unknown>) => void;
 };
 
 function createCustomThemePage(settings: Partial<UiSettings> = {}) {
   const page = new ConfigPage();
   const state = page as unknown as CustomThemeImportState;
-  state.context = { theme: { refresh: vi.fn() } } as unknown as ApplicationContext;
+  state.context = {
+    theme: { recordServerSelection: vi.fn(), refresh: vi.fn(), serverSelectionRevision: 0 },
+  } as unknown as ApplicationContext;
   state.settings = { ...loadSettings(), ...settings };
   return { page, state };
 }
@@ -182,27 +184,21 @@ describe("ConfigPage custom theme import ownership", () => {
     const pending = deferred<ImportedCustomTheme>();
     importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
     const { state } = createCustomThemePage();
-    const runtimeConfig = {
-      state: {
-        configLoading: false,
-        configSchema: {},
-        configSchemaLoading: false,
-        configSnapshot: { config: { ui: { prefs: { theme: "custom" } } } },
-      },
-    } as unknown as ApplicationContext["runtimeConfig"];
+    let serverSelectionRevision = 0;
     state.context = {
       ...state.context,
-      gateway: { connection: { gatewayUrl: "ws://gateway.test" } },
-      runtimeConfig,
+      theme: {
+        ...state.context.theme,
+        get serverSelectionRevision() {
+          return serverSelectionRevision;
+        },
+      },
     } as ApplicationContext;
-    state.synchronizeRuntimeConfig(runtimeConfig);
     state.setCustomThemeImportUrl("first");
     const pendingImport = state.importCustomTheme();
 
-    runtimeConfig.state.configSnapshot = {
-      config: { ui: { prefs: { theme: "claw" } } },
-    } as typeof runtimeConfig.state.configSnapshot;
-    state.synchronizeRuntimeConfig(runtimeConfig);
+    serverSelectionRevision += 1;
+    state.adoptThemeSettings();
     pending.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 
@@ -220,6 +216,25 @@ describe("ConfigPage custom theme import ownership", () => {
 
     state.pageId = "security";
     state.willUpdate(new Map([["pageId", "appearance"]]));
+    pending.resolve(customThemeFixture("First", "first"));
+    await pendingImport;
+
+    expect(state.customThemeImportBusy).toBe(false);
+    expect(state.customThemeImportUrl).toBe("first");
+    expect(state.customThemeImportMessage).toBeNull();
+    expect(state.settings.theme).toBe("claw");
+    expect(state.settings.customTheme).toBeUndefined();
+  });
+
+  it("retires an import when the active Gateway scope changes", async () => {
+    const pending = deferred<ImportedCustomTheme>();
+    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
+    const { state } = createCustomThemePage();
+    state.synchronizeCustomThemeGatewayScope("ws://gateway-a.test");
+    state.setCustomThemeImportUrl("first");
+    const pendingImport = state.importCustomTheme();
+
+    state.synchronizeCustomThemeGatewayScope("ws://gateway-b.test");
     pending.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 

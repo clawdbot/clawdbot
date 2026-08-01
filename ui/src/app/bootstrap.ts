@@ -53,7 +53,7 @@ import {
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, type ThemeMode } from "./theme.ts";
+import { resolveTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -78,6 +78,8 @@ function createApplicationTheme(
   initialSettings: UiSettings,
 ): ApplicationTheme & { dispose: () => void } {
   let settings = initialSettings;
+  let serverSelection: ThemeName | null | undefined;
+  let serverSelectionRevision = 0;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
@@ -118,6 +120,17 @@ function createApplicationTheme(
   return {
     get mode() {
       return settings.themeMode;
+    },
+    get serverSelectionRevision() {
+      return serverSelectionRevision;
+    },
+    recordServerSelection(theme) {
+      if (theme === serverSelection) {
+        return;
+      }
+      serverSelection = theme;
+      serverSelectionRevision += 1;
+      publish();
     },
     setMode(mode: ThemeMode, element) {
       const currentSettings = loadSettings();

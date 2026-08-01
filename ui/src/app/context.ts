@@ -13,7 +13,7 @@ import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
-import type { ThemeMode } from "./theme.ts";
+import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
 export type {
@@ -25,6 +25,8 @@ export type {
 
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
+  readonly serverSelectionRevision: number;
+  recordServerSelection: (theme: ThemeName | null) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
   refresh: () => void;
   subscribe: (listener: () => void) => () => void;

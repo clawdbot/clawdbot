@@ -97,6 +97,7 @@ export class ShellGatewayOwner {
     const scope = context.gateway.connection.gatewayUrl;
     applyServerUiPrefs(snapshot.config, {
       scope,
+      onThemeChanged: (theme) => context.theme.recordServerSelection(theme),
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
