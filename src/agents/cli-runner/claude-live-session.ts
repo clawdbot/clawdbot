@@ -1007,6 +1007,7 @@ function annotateClaudeLiveSyntheticTerminalOutput(
           : undefined);
   return {
     ...terminalOutput,
+    liveSessionGeneration: session.generation,
     ...(retryableSyntheticPlaceholder ? { retryableSyntheticPlaceholder: true as const } : {}),
     ...(nonReplayableReason ? { nonReplayableReason } : {}),
   };

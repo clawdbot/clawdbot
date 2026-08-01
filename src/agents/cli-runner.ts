@@ -119,6 +119,12 @@ function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): st
 type CliNonReplayableReason = NonNullable<CliOutput["nonReplayableReason"]>;
 
 function formatCliNonReplayableTurnError(reason: CliNonReplayableReason): string {
+  if (reason === "synthetic_placeholder") {
+    return "Claude CLI did not produce an assistant response after bounded same-session recovery. Retry the request manually.";
+  }
+  if (reason === "live_session_changed") {
+    return "Claude CLI live session changed before recovery could safely reuse its original process. Retry the request manually.";
+  }
   if (reason === "cancelled" || reason === "aborted") {
     return "Claude CLI cancelled the turn before producing an assistant response. Review any possible tool effects before retrying manually.";
   }
@@ -648,6 +654,19 @@ export async function runPreparedCliAgent(
     isClaudeCliProvider(params.provider) && context.contextWindowInfo
       ? { contextTokens: context.contextWindowInfo.tokens }
       : {};
+  const buildNonReplayableError = (reason: CliNonReplayableReason, cause: unknown) =>
+    Object.assign(
+      new FailoverError(formatCliNonReplayableTurnError(reason), {
+        reason: "empty_response",
+        provider: params.provider,
+        model: context.modelId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+        code: "cli_non_replayable_incomplete_turn",
+        cause,
+      }),
+      { nonReplayableReason: reason },
+    );
   const isolatedCompletion = params.isolatedCompletion === true;
   const hookRunner = isolatedCompletion ? undefined : getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
@@ -1028,6 +1047,7 @@ export async function runPreparedCliAgent(
     options?: {
       timeoutMs?: number;
       forkCliSessionOnResume?: boolean;
+      requiredClaudeLiveSessionGeneration?: string;
       resumeAt?: string;
       onForkSuccessorPersisted?: (sessionId: string) => void;
     },
@@ -1035,6 +1055,8 @@ export async function runPreparedCliAgent(
     const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
     const forkCliSessionOnResume =
       options?.forkCliSessionOnResume ?? context.params.forkCliSessionOnResume;
+    const requiredClaudeLiveSessionGeneration =
+      options?.requiredClaudeLiveSessionGeneration ?? context.requiredClaudeLiveSessionGeneration;
     const cliSessionResumeAt =
       cliSessionIdToUse && forkCliSessionOnResume
         ? (options?.resumeAt ??
@@ -1051,11 +1073,13 @@ export async function runPreparedCliAgent(
     const attemptContext =
       timeoutMs === params.timeoutMs &&
       forkCliSessionOnResume === context.params.forkCliSessionOnResume &&
+      requiredClaudeLiveSessionGeneration === context.requiredClaudeLiveSessionGeneration &&
       cliSessionResumeAt === context.params.cliSessionResumeAt &&
       persistCliSessionForkSuccessor === context.params.persistCliSessionForkSuccessor
         ? context
         : {
             ...context,
+            requiredClaudeLiveSessionGeneration,
             params: {
               ...context.params,
               timeoutMs,
@@ -1111,9 +1135,12 @@ export async function runPreparedCliAgent(
         },
       );
       throw attachCliMessagingDeliveryEvidence(
-        nonReplayableReason
-          ? Object.assign(emptyResponseError, { nonReplayableReason })
-          : emptyResponseError,
+        Object.assign(emptyResponseError, {
+          ...(nonReplayableReason ? { nonReplayableReason } : {}),
+          ...(syntheticPlaceholder && output.liveSessionGeneration
+            ? { syntheticLiveSessionGeneration: output.liveSessionGeneration }
+            : {}),
+        }),
         output,
       );
     }
@@ -1549,8 +1576,11 @@ export async function runPreparedCliAgent(
         !params.abortSignal?.aborted &&
         !getCliMessagingDeliveryEvidence(recoveryError)
       ) {
+        const requiredLiveSessionGeneration = (
+          recoveryError as FailoverError & { syntheticLiveSessionGeneration?: string }
+        ).syntheticLiveSessionGeneration;
         const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
-        if (retryTimeoutMs > 0) {
+        if (retryTimeoutMs > 0 && requiredLiveSessionGeneration) {
           cliBackendLog.warn(
             `cli synthetic placeholder retry: provider=${params.provider} model=${context.modelId} sessionKey=${params.sessionKey ?? "none"}`,
           );
@@ -1559,12 +1589,28 @@ export async function runPreparedCliAgent(
               await executeCliAttempt(reusableCliSessionId, {
                 timeoutMs: retryTimeoutMs,
                 forkCliSessionOnResume: false,
+                requiredClaudeLiveSessionGeneration: requiredLiveSessionGeneration,
               }),
               reusableCliSessionId,
             );
           } catch (retryError) {
-            recoveryError = retryError;
+            if (params.abortSignal?.aborted) {
+              throw retryError;
+            }
+            const sessionChanged =
+              isFailoverError(retryError) &&
+              (retryError.code === "cli_live_session_changed" ||
+                retryError.code === "cli_live_session_missing");
+            recoveryError =
+              getCliMessagingDeliveryEvidence(retryError) || getCliNonReplayableReason(retryError)
+                ? retryError
+                : buildNonReplayableError(
+                    sessionChanged ? "live_session_changed" : "synthetic_placeholder",
+                    retryError,
+                  );
           }
+        } else {
+          recoveryError = buildNonReplayableError("synthetic_placeholder", recoveryError);
         }
       }
       const terminalFailure = await finishTerminalFailure(recoveryError);

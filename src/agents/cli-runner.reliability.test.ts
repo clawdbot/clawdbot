@@ -2007,16 +2007,43 @@ describe("runCliAgent reliability", () => {
         label: "replays an expired synthetic placeholder on the original live session and model",
         secondPlaceholder: false,
         exhaustedBudget: false,
+        interleavedReplacement: false,
+        abortTiming: undefined,
       },
       {
         label: "does not replay a second synthetic placeholder",
         secondPlaceholder: true,
         exhaustedBudget: false,
+        interleavedReplacement: false,
+        abortTiming: undefined,
       },
       {
         label: "does not replay a synthetic placeholder after the original timeout budget expires",
         secondPlaceholder: false,
         exhaustedBudget: true,
+        interleavedReplacement: false,
+        abortTiming: undefined,
+      },
+      {
+        label: "does not replay on a replacement process queued between synthetic attempts",
+        secondPlaceholder: false,
+        exhaustedBudget: false,
+        interleavedReplacement: true,
+        abortTiming: undefined,
+      },
+      {
+        label: "preserves caller cancellation while the pinned retry is queued",
+        secondPlaceholder: false,
+        exhaustedBudget: false,
+        interleavedReplacement: true,
+        abortTiming: "queued" as const,
+      },
+      {
+        label: "preserves caller cancellation while the pinned retry is in flight",
+        secondPlaceholder: false,
+        exhaustedBudget: false,
+        interleavedReplacement: false,
+        abortTiming: "inflight" as const,
       },
     ].flatMap((scenario) => [
       { ...scenario, allowSilent: false },
@@ -2026,135 +2053,258 @@ describe("runCliAgent reliability", () => {
         allowSilent: true,
       },
     ]),
-  )("$label", async ({ secondPlaceholder, exhaustedBudget, allowSilent }) => {
-    vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
-    const clearBeforeRetry = vi.fn(async () => true);
-    const writtenPrompts: string[] = [];
-    let firstWriteReady: (() => void) | undefined;
-    const firstWrite = new Promise<void>((resolve) => {
-      firstWriteReady = resolve;
-    });
-
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as { onStdout?: (chunk: string) => void };
-      const emitLines = (lines: unknown[]) =>
-        input.onStdout?.(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
-      return {
-        runId: "live-synthetic-same-session",
-        pid: 3303,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
-            writtenPrompts.push(data);
-            if (writtenPrompts.length === 1) {
-              emitLines([
-                { type: "system", subtype: "init", session_id: "retained-live" },
-                {
-                  type: "assistant",
-                  session_id: "retained-live",
-                  message: {
-                    model: "<synthetic>",
-                    role: "assistant",
-                    content: [{ type: "text", text: "No response requested." }],
-                  },
-                },
-                { type: "result", session_id: "retained-live", result: "" },
-              ]);
-              firstWriteReady?.();
-            } else if (secondPlaceholder) {
-              emitLines([
-                {
-                  type: "assistant",
-                  session_id: "retained-live",
-                  message: {
-                    model: "<synthetic>",
-                    role: "assistant",
-                    content: [{ type: "text", text: "No response requested." }],
-                  },
-                },
-                { type: "result", session_id: "retained-live", result: "" },
-              ]);
-            } else {
-              emitLines([
-                {
-                  type: "assistant",
-                  session_id: "retained-live",
-                  message: {
-                    model: "claude-sonnet-5",
-                    role: "assistant",
-                    content: [{ type: "text", text: "original model answer" }],
-                  },
-                },
-                {
-                  type: "result",
-                  session_id: "retained-live",
-                  result: "original model answer",
-                },
-              ]);
-            }
-            callback?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+  )(
+    "$label",
+    async ({
+      secondPlaceholder,
+      exhaustedBudget,
+      interleavedReplacement,
+      abortTiming,
+      allowSilent,
+    }) => {
+      vi.useFakeTimers();
+      supervisorSpawnMock.mockClear();
+      const clearBeforeRetry = vi.fn(async () => true);
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+        runAgentEnd: vi.fn(async (_event: unknown) => undefined),
       };
-    });
+      setHookRunnerForTest(hookRunner);
+      const writtenPrompts: string[] = [];
+      const replacementPrompts: string[] = [];
+      const abortController = new AbortController();
+      const callerAbort = Object.assign(new Error("caller cancelled synthetic recovery"), {
+        name: "AbortError",
+      });
+      let firstWriteReady: (() => void) | undefined;
+      const firstWrite = new Promise<void>((resolve) => {
+        firstWriteReady = resolve;
+      });
+      let replacementWriteReady: (() => void) | undefined;
+      const replacementWrite = new Promise<void>((resolve) => {
+        replacementWriteReady = resolve;
+      });
+      let releaseReplacementWrite: (() => void) | undefined;
+      const replacementWriteReleased = new Promise<void>((resolve) => {
+        releaseReplacementWrite = resolve;
+      });
 
-    const backend = {
-      command: "claude",
-      args: ["-p", "--output-format", "stream-json"],
-      resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
-      output: "jsonl" as const,
-      input: "stdin" as const,
-      modelArg: "--model",
-      sessionArgs: ["--session-id", "{sessionId}"],
-      sessionMode: "always" as const,
-      liveSession: "claude-stdio" as const,
-      serialize: true,
-    };
-    const context = buildPreparedContext({
-      sessionKey: "agent:main:synthetic-same-session",
-      cliSessionId: "retained-live",
-      provider: "claude-cli",
-      model: "claude-sonnet-5",
-    });
-    context.preparedBackend.backend = backend;
-    context.backendResolved.config = backend;
-    context.params.timeoutMs = 60_000;
-    context.params.cliSessionBinding = { sessionId: "retained-live" };
-    context.params.onBeforeFreshCliSessionRetry = clearBeforeRetry;
-    context.params.allowEmptyAssistantReplyAsSilent = allowSilent;
-    if (exhaustedBudget) {
-      context.started -= 30_001;
-    }
+      supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+        const input = args[0] as { onStdout?: (chunk: string) => void };
+        const replacement = supervisorSpawnMock.mock.calls.length > 1;
+        const emitLines = (lines: unknown[]) =>
+          input.onStdout?.(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+        return {
+          runId: "live-synthetic-same-session",
+          pid: 3303,
+          startedAtMs: Date.now(),
+          stdin: {
+            write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+              if (replacement) {
+                replacementPrompts.push(data);
+                const finishReplacement = () => {
+                  emitLines([
+                    { type: "system", subtype: "init", session_id: "replacement-live" },
+                    {
+                      type: "result",
+                      session_id: "replacement-live",
+                      result: "replacement answer",
+                    },
+                  ]);
+                  callback?.();
+                };
+                if (abortTiming === "queued") {
+                  replacementWriteReady?.();
+                  void replacementWriteReleased.then(finishReplacement);
+                } else {
+                  finishReplacement();
+                }
+                return;
+              }
+              writtenPrompts.push(data);
+              if (abortTiming === "inflight" && writtenPrompts.length === 2) {
+                abortController.abort(callerAbort);
+                callback?.();
+                return;
+              }
+              if (writtenPrompts.length === 1) {
+                emitLines([
+                  { type: "system", subtype: "init", session_id: "retained-live" },
+                  {
+                    type: "assistant",
+                    session_id: "retained-live",
+                    message: {
+                      model: "<synthetic>",
+                      role: "assistant",
+                      content: [{ type: "text", text: "No response requested." }],
+                    },
+                  },
+                  { type: "result", session_id: "retained-live", result: "" },
+                ]);
+                firstWriteReady?.();
+              } else if (secondPlaceholder) {
+                emitLines([
+                  {
+                    type: "assistant",
+                    session_id: "retained-live",
+                    message: {
+                      model: "<synthetic>",
+                      role: "assistant",
+                      content: [{ type: "text", text: "No response requested." }],
+                    },
+                  },
+                  { type: "result", session_id: "retained-live", result: "" },
+                ]);
+              } else {
+                emitLines([
+                  {
+                    type: "assistant",
+                    session_id: "retained-live",
+                    message: {
+                      model: "claude-sonnet-5",
+                      role: "assistant",
+                      content: [{ type: "text", text: "original model answer" }],
+                    },
+                  },
+                  {
+                    type: "result",
+                    session_id: "retained-live",
+                    result: "original model answer",
+                  },
+                ]);
+              }
+              callback?.();
+            }),
+            end: vi.fn(),
+          },
+          wait: vi.fn(() => new Promise(() => {})),
+          cancel: vi.fn(),
+        };
+      });
 
-    const resultPromise = runPreparedCliAgent(context);
-    const settledResult = resultPromise.then(
-      (result) => ({ result, error: undefined }),
-      (error: unknown) => ({ result: undefined, error }),
-    );
-    await firstWrite;
-    await vi.advanceTimersByTimeAsync(30_000);
-    const { result, error } = await settledResult;
+      const backend = {
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+        output: "jsonl" as const,
+        input: "stdin" as const,
+        modelArg: "--model",
+        sessionArgs: ["--session-id", "{sessionId}"],
+        sessionMode: "always" as const,
+        liveSession: "claude-stdio" as const,
+        serialize: true,
+      };
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:synthetic-same-session",
+        cliSessionId: "retained-live",
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+      });
+      context.preparedBackend.backend = backend;
+      context.backendResolved.config = backend;
+      context.params.timeoutMs = 60_000;
+      context.params.cliSessionBinding = { sessionId: "retained-live" };
+      context.params.onBeforeFreshCliSessionRetry = clearBeforeRetry;
+      context.params.allowEmptyAssistantReplyAsSilent = allowSilent;
+      context.params.abortSignal = abortTiming ? abortController.signal : undefined;
+      context.params.config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "claude-cli/claude-sonnet-5",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
+        },
+      };
+      if (exhaustedBudget) {
+        context.started -= 30_001;
+      }
 
-    if (secondPlaceholder || exhaustedBudget) {
-      expect(error).toMatchObject({ name: "FailoverError", reason: "empty_response" });
-      expect(result).toBeUndefined();
-    } else {
-      expect(error).toBeUndefined();
-      expect(result?.payloads).toEqual([{ text: "original model answer" }]);
-      expect(result?.meta.agentMeta?.model).toBe("claude-sonnet-5");
-      expect(result?.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("retained-live");
-    }
-    expect(writtenPrompts).toHaveLength(exhaustedBudget ? 1 : 2);
-    if (!exhaustedBudget) {
-      expect(writtenPrompts[1]).toBe(writtenPrompts[0]);
-    }
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
-    expect(clearBeforeRetry).not.toHaveBeenCalled();
-  });
+      const run = vi.fn(async (provider: string, model: string) => {
+        if (provider !== "claude-cli" || model !== "claude-sonnet-5") {
+          throw new Error(`unsafe fallback invoked: ${provider}/${model}`);
+        }
+        return await runPreparedCliAgent(context);
+      });
+      const resultPromise = runWithModelFallback({
+        cfg: context.params.config,
+        provider: "claude-cli",
+        model: "claude-sonnet-5",
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        abortSignal: context.params.abortSignal,
+        run,
+        classifyResult: ({ result, provider, model }) =>
+          classifyEmbeddedAgentRunResultForModelFallback({ result, provider, model }),
+      });
+      const cancellationAssertion = abortTiming
+        ? expect(resultPromise).rejects.toMatchObject({ name: "AbortError" })
+        : undefined;
+      await firstWrite;
+      const replacementRun = interleavedReplacement
+        ? executePreparedCliRun({
+            ...context,
+            params: {
+              ...context.params,
+              runId: "run-interleaved-replacement",
+              prompt: "interleaved replacement",
+              abortSignal: undefined,
+            },
+            reusableCliSession: { mode: "none" },
+          })
+        : undefined;
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (abortTiming === "queued") {
+        await replacementWrite;
+        abortController.abort(callerAbort);
+        releaseReplacementWrite?.();
+      }
+      if (abortTiming) {
+        await cancellationAssertion;
+        expect(run).toHaveBeenCalledOnce();
+        expect(hookRunner.runAgentEnd).not.toHaveBeenCalled();
+        expect(writtenPrompts).toHaveLength(abortTiming === "queued" ? 1 : 2);
+        if (abortTiming === "queued") {
+          expect((await replacementRun)?.text).toBe("replacement answer");
+          expect(replacementPrompts).toHaveLength(1);
+        }
+        expect(supervisorSpawnMock).toHaveBeenCalledTimes(abortTiming === "queued" ? 2 : 1);
+        expect(clearBeforeRetry).not.toHaveBeenCalled();
+        return;
+      }
+      const { result } = await resultPromise;
+
+      if (secondPlaceholder || exhaustedBudget || interleavedReplacement) {
+        expect(result.payloads).toEqual([
+          expect.objectContaining({ text: expect.stringMatching(/retry/i), isError: true }),
+        ]);
+        expect(result.meta.replayInvalid).toBe(true);
+        expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      } else {
+        expect(result.payloads).toEqual([{ text: "original model answer" }]);
+        expect(result.meta.agentMeta?.model).toBe("claude-sonnet-5");
+      }
+      expect(run).toHaveBeenCalledOnce();
+      expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("retained-live");
+      expect(result.meta.agentMeta?.cliSessionBinding).not.toHaveProperty("liveSessionGeneration");
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledOnce();
+      expect(hookRunner.runAgentEnd.mock.calls[0]?.[0]).toMatchObject({
+        success: !(secondPlaceholder || exhaustedBudget || interleavedReplacement),
+      });
+      expect(result.didSendViaMessagingTool).toBeUndefined();
+      expect(writtenPrompts).toHaveLength(exhaustedBudget || interleavedReplacement ? 1 : 2);
+      if (!exhaustedBudget && !interleavedReplacement) {
+        expect(writtenPrompts[1]).toBe(writtenPrompts[0]);
+      }
+      if (interleavedReplacement) {
+        expect((await replacementRun)?.text).toBe("replacement answer");
+        expect(replacementPrompts).toHaveLength(1);
+      }
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(interleavedReplacement ? 2 : 1);
+      expect(clearBeforeRetry).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
     [

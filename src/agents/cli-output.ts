@@ -77,11 +77,15 @@ export type CliOutput = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   /** A resumed Claude process consumed a lifecycle placeholder without running this turn. */
   retryableSyntheticPlaceholder?: true;
+  /** Exact child-process identity; a lifecycle retry may never switch generations. */
+  liveSessionGeneration?: string;
   /** Owner-proven activity makes an empty Claude turn unsafe to execute on another model. */
   nonReplayableReason?:
     | "approved_native_tool"
     | "completed_mcp_tool"
     | "captured_tool_activity"
+    | "synthetic_placeholder"
+    | "live_session_changed"
     | "cancelled"
     | "aborted"
     | "failed";
