@@ -110,6 +110,8 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       pluginSdkResolution: params.pluginSdkResolution,
       cache: false,
       activate: false,
+      // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.
+      forceFullRuntimeForChannelPlugins: true,
       preferBuiltPluginArtifacts: useVitestShims,
       manifestRegistry: scopedManifestRegistry,
       logger: {

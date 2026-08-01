@@ -163,4 +163,25 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(registry.webSearchProviders.map((entry) => entry.provider.id)).toEqual(["codex"]);
     expect(registry.migrationProviders.map((entry) => entry.provider.id)).toEqual(["codex"]);
   });
+
+  it("registers Discord voice transcript capabilities without full channel activation", () => {
+    const active = createEmptyPluginRegistry();
+    setActivePluginRegistry(active, "existing-discord-registry");
+    const registry = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: ["discord"],
+      pluginSdkResolution: "dist",
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "discord");
+    expect(
+      plugin?.status,
+      JSON.stringify({ plugin, diagnostics: registry.diagnostics }, null, 2),
+    ).toBe("loaded");
+    expect(plugin?.transcriptSourceProviderIds).toEqual(["discord-voice"]);
+    expect(registry.transcriptSourceProviders.map((entry) => entry.provider.id)).toEqual([
+      "discord-voice",
+    ]);
+    expect(registry.typedHooks).toEqual([]);
+    expect(getActivePluginRegistry()).toBe(active);
+  });
 });
