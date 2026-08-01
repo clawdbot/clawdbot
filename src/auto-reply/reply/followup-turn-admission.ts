@@ -66,7 +66,7 @@ export async function settleQueuedFollowupPresentation(
 }
 
 type FollowupSessionOwner = {
-  current(): SessionEntry | undefined;
+  current: () => SessionEntry | undefined;
   publish(entry: SessionEntry | undefined): void;
   adopt(entry: SessionEntry): void;
 } & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
