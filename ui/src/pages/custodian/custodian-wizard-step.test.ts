@@ -52,6 +52,7 @@ describe("Custodian rich wizard answers", () => {
 
     expect(initialValue).toEqual(["discord"]);
     expect(custodianWizardReply(step({}), "unknown")).toBeNull();
+    expect(custodianWizardReply(step({ type: "text" }), { secret: true })).toBeNull();
     expect(custodianWizardReply(step({ type: "multiselect" }), ["unknown"])).toBeNull();
   });
 });

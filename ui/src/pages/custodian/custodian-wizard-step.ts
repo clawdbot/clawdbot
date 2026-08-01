@@ -1,7 +1,7 @@
 import type { WizardStep } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 
-export type CustodianWizardReply = {
+type CustodianWizardReply = {
   message: string;
   display: string;
 };
@@ -20,8 +20,7 @@ export function custodianWizardReply(
     return { message: "continue", display: t("common.continue") };
   }
   if (step.type === "text") {
-    const text = typeof value === "string" ? value : String(value ?? "");
-    return { message: text, display: text };
+    return typeof value === "string" ? { message: value, display: value } : null;
   }
   if (step.type === "confirm") {
     if (typeof value !== "boolean") {
