@@ -235,7 +235,6 @@ export async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  const movedSessionFiles = new Map<string, string>();
   const entries = safeReadDir(detected.sessions.legacyDir);
   for (const entry of entries) {
     if (!entry.isFile()) {
@@ -252,38 +251,9 @@ export async function migrateLegacySessions(
     }
     try {
       fs.renameSync(from, to);
-      movedSessionFiles.set(path.resolve(from), to);
       changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
     } catch (err) {
       warnings.push(`Failed moving ${from}: ${String(err)}`);
-    }
-  }
-
-  if (movedSessionFiles.size > 0) {
-    let rewroteSessionFiles = false;
-    for (const entry of Object.values(merged)) {
-      const rawSessionFile = entry.sessionFile;
-      const legacySessionFile =
-        typeof rawSessionFile === "string"
-          ? path.resolve(detected.sessions.legacyDir, rawSessionFile)
-          : typeof entry.sessionId === "string"
-            ? path.join(detected.sessions.legacyDir, `${entry.sessionId}.jsonl`)
-            : undefined;
-      const movedSessionFile = legacySessionFile
-        ? movedSessionFiles.get(path.resolve(legacySessionFile))
-        : undefined;
-      if (!movedSessionFile) {
-        continue;
-      }
-      entry.sessionFile = movedSessionFile;
-      rewroteSessionFiles = true;
-    }
-    if (rewroteSessionFiles) {
-      // The first pass already validated protected rows. Adding retired
-      // sessionFile metadata cannot change their normalization outcome.
-      const normalized = normalizeMergedSessionStore(merged, targetKeys);
-      await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
-      changes.push("Rewrote migrated session transcript paths");
     }
   }
 

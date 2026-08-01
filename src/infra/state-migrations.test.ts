@@ -1042,7 +1042,6 @@ describe("state migrations", () => {
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Canonicalized 3 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
-      "Rewrote migrated session transcript paths",
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
@@ -4429,12 +4428,9 @@ describe("state migrations", () => {
     );
   });
 
-  it.each([
-    { phase: "initial merge", transcriptSessionId: "other-session", rewrites: false },
-    { phase: "post-move rewrite", transcriptSessionId: "trace", rewrites: true },
-  ])(
-    "preserves key-shaped pending rows through the $phase",
-    async ({ transcriptSessionId, rewrites }) => {
+  it.runIf(process.platform !== "win32")(
+    "preserves a key-shaped pending row while moving its matching legacy transcript",
+    async () => {
       const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
       const targetStorePath = path.join(
@@ -4460,10 +4456,15 @@ describe("state migrations", () => {
           groupActivation: "always",
           delivery: { kind: "none" },
         },
-        [transcriptKey]: { sessionId: transcriptSessionId, updatedAt: 60 },
+        [transcriptKey]: { sessionId: "trace", updatedAt: 60 },
         [ordinaryKey]: { sessionId: "ordinary-session", updatedAt: 70 },
       };
       await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "sessions", `${pendingKey}.jsonl`),
+        '{"type":"session"}\n',
+        "utf8",
+      );
 
       const result = await autoMigrateLegacyState({
         cfg,
@@ -4474,10 +4475,17 @@ describe("state migrations", () => {
 
       expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
       expect(result.changes).toContain("Moved trace.jsonl → agents/worker-1/sessions");
-      expect(result.changes.includes("Rewrote migrated session transcript paths")).toBe(rewrites);
+      expect(result.changes).toContain(`Moved ${pendingKey}.jsonl → agents/worker-1/sessions`);
+      expect(result.changes).not.toContain("Rewrote migrated session transcript paths");
       await expect(
         fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
       ).resolves.toBe("{}\n");
+      await expect(
+        fs.readFile(
+          path.join(stateDir, "agents", "worker-1", "sessions", `${pendingKey}.jsonl`),
+          "utf8",
+        ),
+      ).resolves.toBe('{"type":"session"}\n');
 
       const afterStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
         string,
@@ -4509,7 +4517,7 @@ describe("state migrations", () => {
         delivery: { kind: "none" },
       });
       expect(afterStore[pendingKey]?.sessionId).toBeUndefined();
-      expect(afterStore[transcriptKey]?.sessionId).toBe(transcriptSessionId);
+      expect(afterStore[transcriptKey]?.sessionId).toBe("trace");
       expect(afterStore[transcriptKey]?.sessionFile).toBeUndefined();
       expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
 
@@ -4526,7 +4534,7 @@ describe("state migrations", () => {
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
         false,
       );
-      expect(rerun.changes).not.toContain("Rewrote migrated session transcript paths");
+      expect(rerun.changes.some((change) => change.startsWith("Moved "))).toBe(false);
     },
   );
 });
