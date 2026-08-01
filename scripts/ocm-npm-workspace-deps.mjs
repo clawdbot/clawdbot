@@ -179,8 +179,8 @@ function prepareRuntimePack(profile, env) {
 
 function restoreRuntimePack(env) {
   const script = `
-    const mod = await import("./scripts/package-changelog.mjs");
-    await mod.restorePackageChangelog();
+    const mod = await import("./scripts/openclaw-postpack.mjs");
+    await mod.restorePrepackArtifacts();
   `;
   runChecked(process.execPath, ["--input-type=module", "--eval", script], {
     env,
