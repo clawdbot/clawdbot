@@ -165,6 +165,16 @@ function normalizePermissions(value: unknown): McpAppPermissions | undefined {
   return Object.keys(permissions).length > 0 ? permissions : undefined;
 }
 
+/** Matches the whitespace rule shared by the base64 helpers: code points at or below 0x20. */
+function isAsciiWhitespaceOnly(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charCodeAt(i) > 0x20) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function decodeResourceHtml(content: Record<string, unknown>): string {
   if (typeof content.text === "string") {
     if (Buffer.byteLength(content.text, "utf8") > MCP_APP_RESOURCE_MAX_BYTES) {
@@ -181,9 +191,10 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
   }
   // Buffer.from silently drops out-of-alphabet characters, which would render
   // corrupted HTML without any error. Canonicalize first and reject outright.
-  // An empty or whitespace-only blob decodes to zero bytes with Node's lenient
-  // decoder; keep that existing valid zero-byte resource behavior.
-  const canonicalBlob = content.blob.trim() === "" ? "" : canonicalizeBase64(content.blob);
+  // A blob carrying only characters at or below 0x20 (the canonicalizer's
+  // whitespace rule, e.g. spaces, tabs, newlines, C0 controls) decodes to zero
+  // bytes with Node's lenient decoder; keep that existing valid behavior.
+  const canonicalBlob = isAsciiWhitespaceOnly(content.blob) ? "" : canonicalizeBase64(content.blob);
   if (canonicalBlob === undefined) {
     throw new Error("MCP App resource returned malformed base64 blob content");
   }

@@ -171,8 +171,8 @@ describe("MCP App UI resources", () => {
     expect(result).toBeUndefined();
   });
 
-  it("keeps empty and whitespace-only blobs as valid zero-byte resources", async () => {
-    for (const blob of ["", " \n\t"]) {
+  it("keeps empty and ASCII-whitespace-only blobs as valid zero-byte resources", async () => {
+    for (const blob of ["", " \n\t", "\x1c\x1f \n"]) {
       const sessionRuntime = runtime(async () => ({
         contents: [
           {
