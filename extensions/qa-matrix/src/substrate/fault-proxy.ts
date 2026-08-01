@@ -73,6 +73,8 @@ export type MatrixQaFaultProxyHit = {
 export type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
+  installRule(rule: MatrixQaFaultProxyRule): void;
+  removeRule(ruleId: string): void;
   stop(): Promise<void>;
 };
 
@@ -300,6 +302,7 @@ export async function startMatrixQaFaultProxy(params: {
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
   const hits: MatrixQaFaultProxyHit[] = [];
+  const rules = new Map(params.rules.map((rule) => [rule.id, rule]));
   const server = createServer((req, res) => {
     void (async () => {
       try {
@@ -314,7 +317,7 @@ export async function startMatrixQaFaultProxy(params: {
           search: requestUrl.search,
         };
         const body = await readRequestBody(req, maxRequestBytes);
-        const rule = params.rules.find((candidate) => candidate.match(request));
+        const rule = [...rules.values()].find((candidate) => candidate.match(request));
         if (rule) {
           hits.push({
             method: request.method,
@@ -380,6 +383,12 @@ export async function startMatrixQaFaultProxy(params: {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     hits: () => [...hits],
+    installRule: (rule) => {
+      rules.set(rule.id, rule);
+    },
+    removeRule: (ruleId) => {
+      rules.delete(ruleId);
+    },
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

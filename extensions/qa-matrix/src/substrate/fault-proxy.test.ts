@@ -173,6 +173,37 @@ describe("Matrix QA fault proxy", () => {
     ]);
   });
 
+  it("installs and removes a fault rule without changing the proxy endpoint", async () => {
+    const target = await startTargetServer();
+    proxy = await startMatrixQaFaultProxy({
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+    });
+    const baseUrl = proxy.baseUrl;
+    proxy.installRule({
+      id: "temporary-sync-fault",
+      match: (request) => request.method === "GET" && request.path === "/_matrix/client/v3/sync",
+      response: () => ({ body: { faulted: true }, status: 418 }),
+    });
+
+    const faulted = await fetch(`${baseUrl}/_matrix/client/v3/sync`);
+    expect(faulted.status).toBe(418);
+    await expect(faulted.json()).resolves.toEqual({ faulted: true });
+
+    proxy.removeRule("temporary-sync-fault");
+    expect(proxy.baseUrl).toBe(baseUrl);
+    const forwarded = await fetch(`${baseUrl}/_matrix/client/v3/sync`);
+    expect(forwarded.status).toBe(200);
+    await expect(forwarded.json()).resolves.toEqual({ forwarded: true });
+    expect(proxy.hits()).toEqual([
+      {
+        method: "GET",
+        path: "/_matrix/client/v3/sync",
+        ruleId: "temporary-sync-fault",
+      },
+    ]);
+  });
+
   it("rejects oversized forwarded request bodies before contacting the target", async () => {
     const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({
