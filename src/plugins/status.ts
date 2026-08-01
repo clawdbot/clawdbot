@@ -237,6 +237,9 @@ function buildPluginReport(
           ...baseContext,
           workspaceDir,
         };
+  const manifestByPluginId =
+    metadataSnapshot?.byPluginId ??
+    new Map(context.manifestRegistry?.plugins.map((manifest) => [manifest.id, manifest]) ?? []);
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -317,9 +320,8 @@ function buildPluginReport(
           plugin.dependencyStatus ??
           buildPluginDependencyStatus({
             rootDir: plugin.rootDir,
-            dependencies: metadataSnapshot?.byPluginId.get(plugin.id)?.packageDependencies,
-            optionalDependencies: metadataSnapshot?.byPluginId.get(plugin.id)
-              ?.packageOptionalDependencies,
+            dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+            optionalDependencies: manifestByPluginId.get(plugin.id)?.packageOptionalDependencies,
           }),
       }),
     ),

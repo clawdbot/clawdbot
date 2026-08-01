@@ -32,6 +32,7 @@ type PluginDependencyHealthRegistry = {
     source: string;
     enabled: boolean;
     status: "loaded" | "disabled" | "error";
+    error?: string;
     dependencyStatus?: PluginDependencyStatus;
   }>;
   diagnostics: Array<{
@@ -171,15 +172,36 @@ export function projectPluginDependencyHealth<T extends PluginDependencyHealthRe
   const diagnostics = [...registry.diagnostics];
   const plugins = registry.plugins.map((plugin) => {
     const status = plugin.dependencyStatus;
-    if (!plugin.enabled || plugin.status === "error" || status?.requiredInstalled !== false) {
+    if (!plugin.enabled || status?.requiredInstalled !== false) {
       return plugin;
     }
     const message =
       `Plugin "${plugin.id}" cannot load because required dependencies are missing: ` +
       `${status.missing.join(", ")}. Install the plugin dependencies or reinstall/update the ` +
       "plugin, then restart the Gateway.";
-    if (!diagnostics.some((entry) => entry.level === "error" && entry.pluginId === plugin.id)) {
+    const existingDiagnosticIndex = diagnostics.findIndex(
+      (entry) => entry.level === "error" && entry.pluginId === plugin.id,
+    );
+    if (existingDiagnosticIndex === -1) {
       diagnostics.push({ level: "error", pluginId: plugin.id, source: plugin.source, message });
+    } else {
+      const existingDiagnostic = diagnostics[existingDiagnosticIndex];
+      if (!existingDiagnostic.message.includes(message)) {
+        diagnostics[existingDiagnosticIndex] = {
+          ...existingDiagnostic,
+          message: `${existingDiagnostic.message}\n${message}`,
+        };
+      }
+    }
+    if (plugin.status === "error") {
+      const existingError = plugin.error;
+      return {
+        ...plugin,
+        error:
+          existingError && !existingError.includes(message)
+            ? `${existingError}\n${message}`
+            : (existingError ?? message),
+      };
     }
     return { ...plugin, status: "error" as const, error: message };
   });

@@ -37,7 +37,10 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-function createDependencyHealthRegistry(pluginId: string) {
+function createDependencyHealthRegistry(
+  pluginId: string,
+  overrides: Omit<Parameters<typeof createPluginRecord>[0], "id"> = {},
+) {
   return createPluginLoadResult({
     plugins: [
       createPluginRecord({
@@ -45,9 +48,34 @@ function createDependencyHealthRegistry(pluginId: string) {
         dependencyStatus: buildPluginDependencyStatus({
           dependencies: { "missing-runtime": "1.0.0" },
         }),
+        ...overrides,
       }),
     ],
   });
+}
+
+function createDependencyHealthFixture() {
+  const rootDir = makeTrackedTempDir("openclaw-plugin-dependency-health", tempDirs);
+  const pluginRoot = path.join(rootDir, "plugin");
+  const bundledRoot = path.join(rootDir, "bundled");
+  fs.mkdirSync(pluginRoot);
+  fs.mkdirSync(bundledRoot);
+  const fixture = createColdPluginFixture({
+    rootDir: pluginRoot,
+    pluginId: "missing-dependency-plugin",
+    packageJson: {
+      dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
+      optionalDependencies: { "optional-runtime": "2.0.0" },
+    },
+  });
+  return {
+    fixture,
+    reportParams: {
+      config: createColdPluginConfig(pluginRoot, fixture.pluginId),
+      env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
+      workspaceDir: rootDir,
+    },
+  };
 }
 
 describe("plugin dependency health projection", () => {
@@ -55,23 +83,10 @@ describe("plugin dependency health projection", () => {
     { mode: "snapshot", load: buildPluginSnapshotReport },
     { mode: "runtime", load: buildPluginDiagnosticsReport },
   ])("surfaces missing required plugin dependencies in $mode inspections", ({ load }) => {
-    const rootDir = makeTrackedTempDir("openclaw-plugin-dependency-health", tempDirs);
-    const pluginRoot = path.join(rootDir, "plugin");
-    const bundledRoot = path.join(rootDir, "bundled");
-    fs.mkdirSync(pluginRoot);
-    fs.mkdirSync(bundledRoot);
-    const fixture = createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "missing-dependency-plugin",
-      packageJson: { dependencies: { "missing-runtime": "1.0.0" } },
-    });
+    const { fixture, reportParams } = createDependencyHealthFixture();
     loaderState.registry = createDependencyHealthRegistry(fixture.pluginId);
 
-    const report = load({
-      config: createColdPluginConfig(pluginRoot, fixture.pluginId),
-      env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
-      workspaceDir: rootDir,
-    });
+    const report = load(reportParams);
 
     expect(report.plugins[0]).toEqual(
       expect.objectContaining({
@@ -88,8 +103,29 @@ describe("plugin dependency health projection", () => {
     );
   });
 
+  it("uses prepared manifest facts when runtime records omit dependency metadata", () => {
+    const { fixture, reportParams } = createDependencyHealthFixture();
+    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
+      dependencyStatus: undefined,
+    });
+
+    const report = buildPluginDiagnosticsReport(reportParams);
+
+    expect(report.plugins[0]?.dependencyStatus).toEqual(
+      expect.objectContaining({
+        requiredInstalled: false,
+        missing: ["missing-runtime"],
+        missingOptional: ["optional-runtime"],
+      }),
+    );
+    expect(report.plugins[0]?.status).toBe("error");
+  });
+
   it("preserves an existing error diagnostic when dependency health also fails", () => {
-    const registry = createDependencyHealthRegistry("existing-plugin-error");
+    const registry = createDependencyHealthRegistry("existing-plugin-error", {
+      status: "error",
+      error: "Cannot find module 'missing-runtime'",
+    });
     registry.diagnostics.push({
       level: "error",
       pluginId: "existing-plugin-error",
@@ -99,8 +135,10 @@ describe("plugin dependency health projection", () => {
     const report = projectPluginDependencyHealth(registry);
 
     expect(report.plugins[0]?.status).toBe("error");
-    expect(report.diagnostics).toEqual([
-      { level: "error", pluginId: "existing-plugin-error", message: "already recorded" },
-    ]);
+    expect(report.plugins[0]?.error).toContain("Cannot find module 'missing-runtime'");
+    expect(report.plugins[0]?.error).toContain("Install the plugin dependencies");
+    expect(report.diagnostics).toHaveLength(1);
+    expect(report.diagnostics[0]?.message).toContain("already recorded");
+    expect(report.diagnostics[0]?.message).toContain("Install the plugin dependencies");
   });
 });
