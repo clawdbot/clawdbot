@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalogSnapshot: vi.fn(),
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
-  resolveProviderPolicySurface: vi.fn(() => null),
+  resolveBundledProviderPolicySurface: vi.fn(() => null),
   shouldSuppressBuiltInModel: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
@@ -32,7 +32,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-public-artifacts.js", () => ({
-  resolveProviderPolicySurface: mocks.resolveProviderPolicySurface,
+  resolveBundledProviderPolicySurface: mocks.resolveBundledProviderPolicySurface,
 }));
 
 import {
@@ -746,7 +746,7 @@ describe("prepared provider catalog projection", () => {
 
 describe("appendConfiguredProviderRows", () => {
   it("skips provider runtime normalization when lightweight policy proves the row canonical", async () => {
-    mocks.resolveProviderPolicySurface.mockReturnValueOnce({
+    mocks.resolveBundledProviderPolicySurface.mockReturnValueOnce({
       projectConfiguredModelRow: () => null,
     } as never);
     const rows: ModelRow[] = [];

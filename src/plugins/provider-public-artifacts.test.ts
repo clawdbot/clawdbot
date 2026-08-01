@@ -21,6 +21,7 @@ function writeExternalPolicyFixture(): string {
       '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
       '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
       "}",
+      "export function projectConfiguredModelRow() { return null; }",
       "",
     ].join("\n"),
     "utf8",
@@ -65,6 +66,7 @@ describe("provider public artifacts", () => {
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
     expect(surface?.normalizeConfig).toBeTypeOf("function");
+    expect(surface?.projectConfiguredModelRow).toBeTypeOf("function");
 
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.openai.com/v1",
@@ -222,6 +224,7 @@ describe("provider public artifacts", () => {
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
+      expect(surface).not.toHaveProperty("projectConfiguredModelRow");
     } finally {
       restoreBundledPluginEnv();
       fs.rmSync(pluginRoot, { recursive: true, force: true });

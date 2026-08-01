@@ -1,4 +1,4 @@
-import { resolveProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
+import { resolveBundledProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ListRowModel } from "./list.model-row.js";
@@ -48,7 +48,7 @@ export async function normalizeConfiguredProviderListRow(params: {
     modelId: params.model.id,
     model: params.model as ProviderRuntimeModel,
   };
-  const policySurface = resolveProviderPolicySurface(params.model.provider, {
+  const policySurface = resolveBundledProviderPolicySurface(params.model.provider, {
     manifestRegistry: params.context.metadataSnapshot?.manifestRegistry,
   });
   if (policySurface?.projectConfiguredModelRow) {
