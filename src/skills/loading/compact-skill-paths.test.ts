@@ -7,7 +7,7 @@ import { withEnv } from "../../test-utils/env.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { testing as workspaceSkillsTesting, buildWorkspaceSkillsPrompt } from "./workspace.js";
 
-describe("compactSkillPaths", () => {
+describe("skill prompt locations", () => {
   function buildPromptForFixtureSkill(params: {
     workspaceRoot: string;
     skillDir: string;
@@ -37,9 +37,10 @@ describe("compactSkillPaths", () => {
     });
   }
 
-  it("replaces home directory prefix with ~ in skill locations", () => {
+  it("keeps home directory prefixes canonical in skill locations", () => {
     const home = os.homedir();
     const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
 
     const prompt = buildPromptForFixtureSkill({
       workspaceRoot: home,
@@ -48,8 +49,8 @@ describe("compactSkillPaths", () => {
       description: "A test skill for path compaction",
     });
 
-    expect(prompt).not.toContain(home + path.sep);
-    expect(prompt).toContain("~/");
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("<location>~/");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("A test skill for path compaction");
   });
@@ -108,10 +109,11 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/plugin-skills/calendar-plugin-skill/SKILL.md");
   });
 
-  it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
+  it("keeps managed skill paths canonical when OS-home tilde reaches the same path", () => {
     const home = os.homedir();
     const stateDir = path.join(home, ".openclaw");
     const skillDir = path.join(stateDir, "skills", "home-managed-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
 
     const prompt = withEnv(
       {
@@ -128,8 +130,10 @@ describe("compactSkillPaths", () => {
         }),
     );
 
-    expect(prompt).toContain("<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>");
-    expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain(
+      "<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>",
+    );
   });
 
   it("normalizes compacted Windows skill locations to forward slashes", () => {
@@ -141,9 +145,10 @@ describe("compactSkillPaths", () => {
     expect(compactedPath).toBe("~/.openclaw-test-skills/win-skill/SKILL.md");
   });
 
-  it("preserves POSIX literal backslashes after home compaction", () => {
+  it("preserves POSIX literal backslashes in canonical skill locations", () => {
     const home = os.homedir();
     const skillDir = path.join(home, ".openclaw-test-skills\\literal-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
 
     const prompt = buildPromptForFixtureSkill({
       workspaceRoot: home,
@@ -156,7 +161,7 @@ describe("compactSkillPaths", () => {
     if (!locationMatch) {
       throw new Error("expected prompt location tag");
     }
-    expect(locationMatch[1]).toContain("~/");
+    expect(locationMatch[1]).toBe(skillFile);
     expect(locationMatch[1]).toContain("\\literal-skill");
   });
 

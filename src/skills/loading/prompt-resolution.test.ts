@@ -21,6 +21,47 @@ describe("resolveSkillsPromptForRun", () => {
     });
     expect(prompt).toBe("SNAPSHOT");
   });
+
+  it("rebuilds tilde snapshot locations from current entries", () => {
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/app/skills/demo-skill/SKILL.md",
+        baseDir: "/app/skills/demo-skill",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt:
+          "<available_skills><skill><location>~/.openclaw/skills/demo-skill/SKILL.md</location></skill></available_skills>",
+        skills: [{ name: "demo-skill" }],
+      },
+      entries: [entry],
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("<available_skills>");
+    expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
+    expect(prompt).not.toContain("<location>~/");
+  });
+
+  it("fails closed for tilde snapshot locations when entries are unavailable", () => {
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt:
+          "<available_skills><skill><location>~/.openclaw/skills/demo-skill/SKILL.md</location></skill></available_skills>",
+        skills: [{ name: "demo-skill" }],
+      },
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toBe("");
+  });
+
   it("builds prompt from entries when snapshot is missing", () => {
     const entry: SkillEntry = {
       skill: createCanonicalFixtureSkill({

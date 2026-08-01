@@ -285,4 +285,31 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(result.shouldRefresh).toBe(true);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
+
+  it("refreshes snapshots from before canonical skill prompt locations", () => {
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt:
+        "<available_skills><skill><location>/Users/alice/.openclaw/skills/demo/SKILL.md</location></skill></available_skills>",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    });
+
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: {
+        ...strippedSnapshot("demo"),
+        prompt:
+          "<available_skills><skill><location>~/.openclaw/skills/demo/SKILL.md</location></skill></available_skills>",
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(result.snapshot.prompt).toContain(
+      "<location>/Users/alice/.openclaw/skills/demo/SKILL.md",
+    );
+    expect(result.snapshot.prompt).not.toContain("<location>~/");
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
 });

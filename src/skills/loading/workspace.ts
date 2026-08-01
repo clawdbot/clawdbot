@@ -64,13 +64,11 @@ const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
- * Replace OS home directory prefixes with `~` in skill file paths to
- * reduce system prompt token usage while matching host file-tool expansion.
+ * Replace OS home directory prefixes with `~` in display-only skill file paths
+ * while preserving executable prompt locations by default at the call site.
  *
  * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
- * → `~/.bun/.../skills/github/SKILL.md`
- *
- * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+ * -> `~/.bun/.../skills/github/SKILL.md`
  */
 function resolveUserHomeDir(): string | undefined {
   return resolveOsHomeDir(process.env, os.homedir);
@@ -95,7 +93,13 @@ function resolveCompactHomePrefixes(): string[] {
   return uniqueStrings([...resolvedHomes, ...realHomes]).toSorted((a, b) => b.length - a.length);
 }
 
-function compactSkillPaths(skills: Skill[]): Skill[] {
+function compactSkillPaths(
+  skills: Skill[],
+  opts?: { preserveExecutableLocations?: boolean },
+): Skill[] {
+  if (opts?.preserveExecutableLocations) {
+    return skills;
+  }
   const homes = resolveCompactHomePrefixes();
   if (homes.length === 0) {
     return skills;
@@ -1644,13 +1648,11 @@ function resolveWorkspaceSkillPromptState(
   const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
-  // Budget checks and final render both use this same representation so the
-  // tier decision is based on the exact strings that end up in the prompt.
-  // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
-    a.name.localeCompare(b.name, "en"),
-  );
+  // Prompt locations are executable read targets. Keep them canonical so a
+  // persisted prompt cannot rebind `~/...` to a different runtime home.
+  const promptSkills = compactSkillPaths(resolvedSkills, {
+    preserveExecutableLocations: true,
+  }).toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const prompt = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
@@ -1670,6 +1672,18 @@ export function resolveSkillsPromptForRun(params: {
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (params.skillsSnapshot && !snapshotPrompt) {
+    return "";
+  }
+  if (snapshotPrompt?.includes("<location>~/")) {
+    if (params.entries && params.entries.length > 0) {
+      const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+        entries: params.entries,
+        config: params.config,
+        agentId: params.agentId,
+        eligibility: params.eligibility,
+      });
+      return prompt.trim() ? prompt : "";
+    }
     return "";
   }
   const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
