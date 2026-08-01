@@ -1,140 +1,272 @@
 /**
- * Sweeps tombstoned cron-run session remnants from the agent SQLite store.
+ * Reclaims expired cron-run retained-history placeholders.
  *
- * When a cron run session is pruned while its transcript windows survive,
- * deleteSqliteSessionEntryRows deliberately rewrites the session_nodes row as
- * a tombstone (entry_json without a sessionId) so the retained windows keep a
- * reference anchor. With archive retention unset those anchors — and the
- * transcript state under them — live forever, invisible to every runtime read
- * (parseSqliteSessionEntryJson rejects them), unbrowsable, and unboundedly
- * accumulating on cron-heavy agents (observed live: 1,733 tombstones anchoring
- * 19,206 dead transcript events, 60% of one agent's transcript table).
- *
- * Cron run transcripts are transient automation artifacts: after the age gate
- * they are deleted, not archived — archiving would only convert row debris
- * into file debris.
+ * Eligibility follows `cron.sessionRetention`. Transcript state is archived
+ * before deletion; archive lifetime remains owned by existing archive policy.
  */
 
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { deleteSqliteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   deleteMaterializedSqliteSessionStatePlans,
   planSqliteSessionStateDeleteIfUnreferenced,
   readReferencedSqliteSessionIds,
-  readSqliteSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { isCanonicalSqliteRetainedHistoryPlaceholder } from "./session-canonical-key.js";
+import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 
 export type SessionTombstoneSweepResult = {
-  /** Tombstoned cron-run rows past the age gate at scan time. */
+  /** Canonical expired cron-run placeholders at scan time. */
   candidates: number;
   /** Node rows deleted (0 on dry runs). */
   removedNodes: number;
-  /** Transcript session-state generations planned for deletion with them. */
+  /** Transcript generations deleted after durable extraction. */
   sweptTranscriptStates: number;
   olderThanMs: number;
 };
 
-type SessionNodeDatabase = Pick<Parameters<typeof readReferencedSqliteSessionIds>[0], "db">;
+type TombstoneCandidate = {
+  currentSessionId: string;
+  generationIds: string[];
+  sessionKey: string;
+  updatedAt: number;
+};
 
-function listTombstonedCronRunKeys(database: SessionNodeDatabase, cutoffMs: number): string[] {
+function listCanonicalCronRunTombstones(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  cutoffMs: number,
+): TombstoneCandidate[] {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const nodes = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json", "updated_at"]),
+    db
+      .selectFrom("session_nodes")
+      .leftJoin("session_windows as retained_window", (join) =>
+        join
+          .onRef("retained_window.session_id", "=", "session_nodes.current_session_id")
+          .onRef("retained_window.session_key", "=", "session_nodes.session_key"),
+      )
+      .select([
+        "session_nodes.session_key",
+        "session_nodes.current_session_id",
+        "session_nodes.entry_json",
+        "session_nodes.entry_valid",
+        "session_nodes.updated_at",
+        "retained_window.session_id as retained_window_id",
+      ]),
   ).rows;
-  return rows
-    .filter(
-      (row) =>
-        isCronRunSessionKey(row.session_key) &&
-        row.updated_at < cutoffMs &&
-        parseSqliteSessionEntryJson(row) === null,
-    )
-    .map((row) => row.session_key);
+  const windows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_windows").select(["session_id", "session_key", "updated_at"]),
+  ).rows;
+  const windowsByKey = new Map<string, Array<{ sessionId: string; updatedAt: number }>>();
+  for (const window of windows) {
+    const owned = windowsByKey.get(window.session_key) ?? [];
+    owned.push({ sessionId: window.session_id, updatedAt: window.updated_at });
+    windowsByKey.set(window.session_key, owned);
+  }
+  return nodes.flatMap((node) => {
+    const ownedWindows = windowsByKey.get(node.session_key) ?? [];
+    const updatedAt = Math.max(node.updated_at, ...ownedWindows.map((window) => window.updatedAt));
+    if (
+      !isCronRunSessionKey(node.session_key) ||
+      updatedAt >= cutoffMs ||
+      !isCanonicalSqliteRetainedHistoryPlaceholder(node)
+    ) {
+      return [];
+    }
+    return [
+      {
+        currentSessionId: node.current_session_id,
+        generationIds: ownedWindows.map((window) => window.sessionId).toSorted(),
+        sessionKey: node.session_key,
+        updatedAt,
+      },
+    ];
+  });
 }
 
-/** Removes aged cron-run tombstone rows plus the transcript state they anchor. */
+function sameCandidate(left: TombstoneCandidate, right: TombstoneCandidate | undefined): boolean {
+  return (
+    right !== undefined &&
+    left.currentSessionId === right.currentSessionId &&
+    left.sessionKey === right.sessionKey &&
+    left.updatedAt === right.updatedAt &&
+    left.generationIds.length === right.generationIds.length &&
+    left.generationIds.every((sessionId, index) => sessionId === right.generationIds[index])
+  );
+}
+
+function readProtectedSessionIds(params: {
+  candidate: TombstoneCandidate;
+  database: OpenClawAgentDatabase;
+  storePath: string;
+}): Set<string> {
+  const protectedSessionIds = readReferencedSqliteSessionIds(
+    params.database,
+    new Set([params.candidate.sessionKey]),
+  );
+  for (const sessionId of collectAdmissionProtectedSessionIds({
+    database: params.database,
+    storePath: params.storePath,
+  })) {
+    protectedSessionIds.add(sessionId);
+  }
+  return protectedSessionIds;
+}
+
+/** Archives and removes expired canonical cron-run placeholders and their unshared state. */
 export async function sweepTombstonedCronRunRemnants(params: {
   agentId: string;
+  storePath: string;
   sqlitePath: string;
   olderThanMs: number;
   dryRun: boolean;
   nowMs?: number;
 }): Promise<SessionTombstoneSweepResult> {
   const nowMs = params.nowMs ?? Date.now();
-  const cutoffMs = nowMs - Math.max(params.olderThanMs, 0);
+  const olderThanMs = Math.max(params.olderThanMs, 0);
+  const cutoffMs = nowMs - olderThanMs;
   const scope = { agentId: params.agentId, path: params.sqlitePath };
   const empty: SessionTombstoneSweepResult = {
     candidates: 0,
     removedNodes: 0,
     sweptTranscriptStates: 0,
-    olderThanMs: params.olderThanMs,
+    olderThanMs,
   };
-
-  if (params.dryRun) {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => listTombstonedCronRunKeys(database, cutoffMs).length,
-      scope,
-    );
-    return result.found ? { ...empty, candidates: result.value } : empty;
+  const scanned = withOpenClawAgentDatabaseReadOnly(
+    (database) => listCanonicalCronRunTombstones(database, cutoffMs),
+    scope,
+  );
+  const candidates = scanned.found ? scanned.value : [];
+  if (params.dryRun || candidates.length === 0) {
+    return { ...empty, candidates: candidates.length };
   }
 
-  // Plan, materialize, and delete are all synchronous, so the whole sweep
-  // runs inside one write transaction: the scan, the reference projection,
-  // and the deletes see one consistent snapshot — no revalidation dance.
   let removedNodes = 0;
-  let candidates = 0;
   let sweptTranscriptStates = 0;
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const keys = listTombstonedCronRunKeys(database, cutoffMs);
-      candidates = keys.length;
-      if (keys.length === 0) {
-        return;
-      }
-      const excluded = new Set(keys);
-      const referencedSessionIds = readReferencedSqliteSessionIds(database, excluded);
-      const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
-      const plans = readSqliteSessionGenerationIdsForKeys(database, keys).flatMap((sessionId) => {
-        const plan = planSqliteSessionStateDeleteIfUnreferenced({
-          // Transient automation debris: delete, don't archive (see module doc).
-          archiveTranscript: false,
-          archiveDirectory,
-          database,
-          reason: "deleted",
-          referencedSessionIds,
-          sessionId,
-        });
-        return plan ? [plan] : [];
-      });
-      const materialized = materializeSqliteSessionStateDeletePlans(plans);
-      deleteMaterializedSqliteSessionStatePlans(database, materialized, undefined, excluded);
-      sweptTranscriptStates = materialized.length;
-      const db = getSessionKysely(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("session_windows").where("session_key", "in", keys),
-      );
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("session_nodes").where("session_key", "in", keys),
-      );
-      removedNodes = keys.length;
-    },
-    scope,
-    { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
-  );
+  for (const candidate of candidates) {
+    const result = await runExclusiveSessionLifecycleMutation({
+      scope: params.storePath,
+      identities: [candidate.sessionKey, ...candidate.generationIds],
+      run: async () =>
+        await runExclusiveSqliteSessionWrite(scope, async () => {
+          const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+          const authoritative = listCanonicalCronRunTombstones(database, cutoffMs).find(
+            (current) => current.sessionKey === candidate.sessionKey,
+          );
+          if (!sameCandidate(candidate, authoritative)) {
+            return null;
+          }
+          const protectedSessionIds = readProtectedSessionIds({
+            candidate,
+            database,
+            storePath: params.storePath,
+          });
+          if (candidate.generationIds.some((sessionId) => protectedSessionIds.has(sessionId))) {
+            return null;
+          }
+          const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
+          const plans = candidate.generationIds.flatMap((sessionId) => {
+            const plan = planSqliteSessionStateDeleteIfUnreferenced({
+              archiveDirectory,
+              archiveTranscript: true,
+              database,
+              reason: "deleted",
+              referencedSessionIds: protectedSessionIds,
+              sessionId,
+            });
+            return plan ? [plan] : [];
+          });
+          if (plans.length !== candidate.generationIds.length) {
+            return null;
+          }
+          const materialized = materializeSqliteSessionStateDeletePlans(plans);
+          let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
+            [];
+          let removed = false;
+          runOpenClawAgentWriteTransaction(
+            (transactionDb) => {
+              const current = listCanonicalCronRunTombstones(transactionDb, cutoffMs).find(
+                (entry) => entry.sessionKey === candidate.sessionKey,
+              );
+              if (!sameCandidate(candidate, current)) {
+                return;
+              }
+              const protectedAtDelete = readProtectedSessionIds({
+                candidate,
+                database: transactionDb,
+                storePath: params.storePath,
+              });
+              if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
+                return;
+              }
+              archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+                transactionDb,
+                materialized,
+                protectedAtDelete,
+                new Set([candidate.sessionKey]),
+              );
+              const db = getSessionKysely(transactionDb.db);
+              const remainingGenerationIds = executeSqliteQuerySync(
+                transactionDb.db,
+                db
+                  .selectFrom("session_windows")
+                  .select("session_id")
+                  .where("session_key", "=", candidate.sessionKey),
+              ).rows;
+              if (remainingGenerationIds.length > 0) {
+                return;
+              }
+              deleteSqliteSessionEntryRows(transactionDb, candidate.sessionKey);
+              removed =
+                executeSqliteQuerySync(
+                  transactionDb.db,
+                  db
+                    .selectFrom("session_nodes")
+                    .select("session_key")
+                    .where("session_key", "=", candidate.sessionKey),
+                ).rows.length === 0;
+            },
+            scope,
+            { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
+          );
+          if (!removed) {
+            return null;
+          }
+          return {
+            archivedTranscripts,
+            sweptTranscriptStates: candidate.generationIds.length,
+          };
+        }),
+    });
+    if (!result) {
+      continue;
+    }
+    removedNodes += 1;
+    sweptTranscriptStates += result.sweptTranscriptStates;
+    emitArchivedSqliteTranscriptUpdates(result.archivedTranscripts);
+  }
   return {
-    candidates,
+    candidates: candidates.length,
     removedNodes,
     sweptTranscriptStates,
-    olderThanMs: params.olderThanMs,
+    olderThanMs,
   };
 }

@@ -2,7 +2,7 @@
 import type { SessionCleanupSummary, SessionsCleanupResult } from "./cleanup-service.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 
-export type SessionCleanupAction =
+type SessionCleanupAction =
   | "keep"
   | "prune-missing"
   | "prune-model-run"

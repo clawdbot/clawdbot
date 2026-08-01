@@ -115,6 +115,27 @@ export function canonicalSessionKeyMigrationRequiredError(
   return new SessionCanonicalKeyMigrationRequiredError(detail);
 }
 
+type CanonicalSqliteRetainedHistoryPlaceholder = {
+  current_session_id: string;
+  entry_json: string;
+  entry_valid: number;
+  retained_window_id: string | null;
+};
+
+/**
+ * Matches the canonical placeholder for retained history without a live entry.
+ * The owned-window join distinguishes it from malformed rows that doctor must repair.
+ */
+export function isCanonicalSqliteRetainedHistoryPlaceholder(
+  row: CanonicalSqliteRetainedHistoryPlaceholder,
+): boolean {
+  return (
+    row.entry_json === "{}" &&
+    row.entry_valid === -1 &&
+    row.retained_window_id === row.current_session_id
+  );
+}
+
 export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync },
   mainKey?: string,
@@ -150,11 +171,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
         "retained_window.session_id as retained_window_id",
       ]),
   ).rows) {
-    if (
-      row.entry_json === "{}" &&
-      row.entry_valid === -1 &&
-      row.retained_window_id === row.current_session_id
-    ) {
+    if (isCanonicalSqliteRetainedHistoryPlaceholder(row)) {
       continue;
     }
     if (row.entry_valid !== 1) {

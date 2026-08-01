@@ -1,6 +1,5 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
@@ -13,8 +12,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
-
-const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
+import { resolveCronSessionRetentionMs } from "./session-retention.js";
 
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
@@ -23,22 +21,6 @@ const lastSweepAtMsByTarget = new Map<string, number>();
 
 function reaperTargetKey(agentId: string, storePath: string): string {
   return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
-}
-
-/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
-function resolveRetentionMs(cronConfig?: CronConfig): number | null {
-  if (cronConfig?.sessionRetention === false) {
-    return null; // pruning disabled
-  }
-  const raw = cronConfig?.sessionRetention;
-  if (typeof raw === "string" && raw.trim()) {
-    try {
-      return parseDurationMs(raw.trim(), { defaultUnit: "h" });
-    } catch {
-      return DEFAULT_RETENTION_MS;
-    }
-  }
-  return DEFAULT_RETENTION_MS;
 }
 
 type ReaperResult = {
@@ -63,7 +45,7 @@ export async function sweepCronRunSessions(params: {
   /** Override for testing — skips the min-interval throttle. */
   force?: boolean;
 }): Promise<ReaperResult> {
-  const retentionMs = resolveRetentionMs(params.cronConfig);
+  const retentionMs = resolveCronSessionRetentionMs(params.cronConfig);
   if (retentionMs === null) {
     return { swept: false, pruned: 0 };
   }

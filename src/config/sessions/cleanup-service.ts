@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveCronSessionRetentionMs } from "../../cron/session-retention.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -397,6 +398,17 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
+  const cronSessionRetentionMs = resolveCronSessionRetentionMs(params.cfg.cron);
+  const tombstoneRemnants =
+    cronSessionRetentionMs != null && fs.existsSync(resolveCleanupSqlitePath(params.target))
+      ? await sweepTombstonedCronRunRemnants({
+          agentId: params.target.agentId,
+          storePath: params.target.storePath,
+          sqlitePath: resolveCleanupSqlitePath(params.target),
+          olderThanMs: cronSessionRetentionMs,
+          dryRun: true,
+        })
+      : null;
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -414,14 +426,6 @@ async function previewStoreCleanup(params: {
     excludeCanonicalPaths: entryCleanupArtifactPaths,
   });
   const budgetEvictedKeys = new Set<string>();
-  const tombstoneRemnants = fs.existsSync(resolveCleanupSqlitePath(params.target))
-    ? await sweepTombstonedCronRunRemnants({
-        agentId: params.target.agentId,
-        sqlitePath: resolveCleanupSqlitePath(params.target),
-        olderThanMs: params.maintenance.pruneAfterMs,
-        dryRun: true,
-      })
-    : null;
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
@@ -576,21 +580,25 @@ export async function runSessionsCleanup(params: {
               freedBytes: 0,
               olderThanMs: maintenance.pruneAfterMs,
             });
+      const cronSessionRetentionMs = resolveCronSessionRetentionMs(cfg.cron);
+      const appliedTombstoneRemnants =
+        mode === "warn" ||
+        cronSessionRetentionMs == null ||
+        !fs.existsSync(resolveCleanupSqlitePath(target))
+          ? null
+          : await sweepTombstonedCronRunRemnants({
+              agentId: target.agentId,
+              storePath: target.storePath,
+              sqlitePath: resolveCleanupSqlitePath(target),
+              olderThanMs: cronSessionRetentionMs,
+              dryRun: false,
+            });
       const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
         agentId: target.agentId,
         storePath: target.storePath,
         mode,
         maintenance,
       });
-      const appliedTombstoneRemnants =
-        mode === "warn" || !fs.existsSync(resolveCleanupSqlitePath(target))
-          ? null
-          : await sweepTombstonedCronRunRemnants({
-              agentId: target.agentId,
-              sqlitePath: resolveCleanupSqlitePath(target),
-              olderThanMs: maintenance.pruneAfterMs,
-              dryRun: false,
-            });
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
