@@ -241,6 +241,12 @@ describe("OpenClaw performance workflow", () => {
       'curl -fsS --connect-timeout 2 --max-time "$gateway_probe_timeout" "http://127.0.0.1:${gateway_port}/healthz"';
     const websocketTimeout = "gateway_ready_remaining_ms=$((gateway_ready_remaining * 1000))";
     const websocketProbe = "node dist/entry.js gateway health \\";
+    const websocketRetryDelay = [
+      "  gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))",
+      "  if (( gateway_ready_remaining > 0 )); then",
+      "    sleep 1",
+      "  fi",
+    ].join("\n");
     const benchmark = "node --import tsx scripts/bench-cli-startup.ts \\";
 
     expect(run).toContain("gateway_ready_timeout_seconds=120");
@@ -255,6 +261,7 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain('--port "$gateway_port" \\');
     expect(run).toContain('--timeout "$gateway_ready_remaining_ms" \\');
     expect(run).toContain('--json >"$gateway_readiness_log" 2>&1; then');
+    expect(run).toContain(websocketRetryDelay);
     expect(run).toContain(
       "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway WebSocket health.",
     );
@@ -265,10 +272,9 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
     expect(run.indexOf(boundedProbe)).toBeLessThan(run.indexOf(websocketTimeout));
     expect(run.indexOf(websocketTimeout)).toBeLessThan(run.indexOf(websocketProbe));
-    expect(run.indexOf(websocketProbe)).toBeLessThan(run.indexOf(benchmark));
-    expect(run.slice(run.indexOf(websocketTimeout), run.indexOf(benchmark))).not.toContain(
-      "sleep ",
-    );
+    const websocketRetryDelayIndex = run.indexOf(websocketRetryDelay, run.indexOf(websocketProbe));
+    expect(websocketRetryDelayIndex).toBeGreaterThan(run.indexOf(websocketProbe));
+    expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
   });
 
   it("isolates gateway readiness identity from benchmark device state", () => {

@@ -835,6 +835,11 @@ jobs:
               cat "$gateway_readiness_log" >&2
               exit 1
             fi
+            # Pace fast transport failures without extending the shared startup deadline.
+            gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
+            if (( gateway_ready_remaining > 0 )); then
+              sleep 1
+            fi
           done
 
           OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
