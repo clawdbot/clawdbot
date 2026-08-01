@@ -1,6 +1,7 @@
 /** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { parseModelRef } from "../../agents/model-selection.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -10,11 +11,11 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
+import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 

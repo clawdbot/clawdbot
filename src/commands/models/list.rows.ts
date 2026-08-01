@@ -9,6 +9,7 @@ import {
   resolveConfiguredModelCatalogOverrides,
 } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   shouldSuppressBuiltInModel,
@@ -33,7 +34,6 @@ import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");

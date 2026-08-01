@@ -122,6 +122,46 @@ describe("createModelListAuthIndex", () => {
     expect(index.providerDiscoveryProviderIds).toEqual(["openai"]);
   });
 
+  it("scopes provider discovery to stored credential profiles", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "moonshot:stored": {
+            type: "api_key",
+            provider: "moonshot",
+            key: "stored-key",
+          },
+        },
+      },
+      env: {},
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual(["moonshot"]);
+  });
+
+  it("scopes provider discovery to configured auth profiles", () => {
+    const index = createModelListAuthIndex({
+      cfg: {
+        auth: {
+          profiles: {
+            "openrouter:configured": {
+              provider: "openrouter",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      authStore: emptyStore,
+      env: {},
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.providerDiscoveryProviderIds).toEqual(["openrouter"]);
+  });
+
   it("forwards route-aware evaluation through the command adapter", () => {
     const index = createModelListAuthIndex({
       cfg: {},
@@ -145,6 +185,7 @@ describe("createModelListAuthIndex", () => {
       selectedProfileId: "openai:platform",
       selectedRoute: { authRequirement: "api-key" },
     });
+    expect(index.providerDiscoveryProviderIds).toEqual(["openai"]);
   });
 
   it("uses enabled synthetic refs from a persisted plugin snapshot", () => {
