@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -611,5 +612,12 @@ export function inspectPluginRegistry(
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  return refreshPersistedInstalledPluginIndex(params);
+  const workspaceDir =
+    params.workspaceDir ??
+    (params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      : undefined);
+  return refreshPersistedInstalledPluginIndex(
+    workspaceDir === undefined ? params : { ...params, workspaceDir },
+  );
 }

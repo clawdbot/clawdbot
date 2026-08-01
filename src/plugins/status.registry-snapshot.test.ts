@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import {
+  readPersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndexSync,
+} from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
 import {
@@ -23,6 +26,16 @@ const tempDirs: string[] = [];
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-status", tempDirs);
+}
+
+function createWorkspacePluginFixture(workspaceDir: string, pluginId: string) {
+  const rootDir = path.join(workspaceDir, ".openclaw", "extensions", pluginId);
+  fs.mkdirSync(rootDir, { recursive: true });
+  return createColdPluginFixture({
+    rootDir,
+    pluginId,
+    manifest: { id: pluginId, name: `Workspace ${pluginId}` },
+  });
 }
 
 afterEach(() => {
@@ -167,6 +180,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       speechProviderIds: ["indexed-speech-provider"],
       realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
       realtimeVoiceProviderIds: ["indexed-voice-provider"],
+      configSchema: true,
       contracts: {
         agentToolResultMiddleware: ["openclaw", "codex"],
         speechProviders: ["indexed-speech-provider"],
@@ -179,6 +193,181 @@ describe("buildPluginRegistrySnapshotReport", () => {
       status: "loaded",
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("discovers the configured default-agent workspace without importing plugin runtime", () => {
+    const tempRoot = makeTempDir();
+    const workspaceDir = path.join(tempRoot, "configured-workspace");
+    const fixture = createWorkspacePluginFixture(workspaceDir, "configured-workspace-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+    };
+    const config = {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: {
+        allow: [fixture.pluginId],
+        entries: { [fixture.pluginId]: { enabled: true } },
+      },
+    };
+
+    const report = buildPluginRegistrySnapshotReport({ config, env });
+
+    expect(report.workspaceDir).toBe(workspaceDir);
+    expectFields(requirePlugin(report.plugins, fixture.pluginId), {
+      id: fixture.pluginId,
+      origin: "workspace",
+      configSchema: true,
+    });
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("uses the selected default agent's workspace for cold plugin inventory", () => {
+    const tempRoot = makeTempDir();
+    const workspaceDir = path.join(tempRoot, "selected-agent-workspace");
+    const fallbackWorkspace = path.join(tempRoot, "fallback-workspace");
+    const fixture = createWorkspacePluginFixture(workspaceDir, "selected-agent-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+    };
+    const config = {
+      agents: {
+        defaults: { workspace: fallbackWorkspace },
+        list: [{ id: "main" }, { id: "research", default: true, workspace: workspaceDir }],
+      },
+      plugins: {
+        allow: [fixture.pluginId],
+        entries: { [fixture.pluginId]: { enabled: true } },
+      },
+    };
+
+    const report = buildPluginRegistrySnapshotReport({ config, env });
+
+    expect(report.workspaceDir).toBe(workspaceDir);
+    expectFields(requirePlugin(report.plugins, fixture.pluginId), {
+      id: fixture.pluginId,
+      origin: "workspace",
+    });
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("preserves an explicit workspace over the configured default agent", () => {
+    const tempRoot = makeTempDir();
+    const configuredWorkspace = path.join(tempRoot, "configured-workspace");
+    const explicitWorkspace = path.join(tempRoot, "explicit-workspace");
+    const configured = createWorkspacePluginFixture(configuredWorkspace, "configured-plugin");
+    const explicit = createWorkspacePluginFixture(explicitWorkspace, "explicit-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+    };
+    const config = {
+      agents: { defaults: { workspace: configuredWorkspace } },
+      plugins: {
+        allow: [configured.pluginId, explicit.pluginId],
+        entries: {
+          [configured.pluginId]: { enabled: true },
+          [explicit.pluginId]: { enabled: true },
+        },
+      },
+    };
+
+    const report = buildPluginRegistrySnapshotReport({
+      config,
+      env,
+      workspaceDir: explicitWorkspace,
+    });
+
+    expect(report.workspaceDir).toBe(explicitWorkspace);
+    expect(report.plugins.map((plugin) => plugin.id)).toEqual([explicit.pluginId]);
+    expect(isColdPluginRuntimeLoaded(configured)).toBe(false);
+    expect(isColdPluginRuntimeLoaded(explicit)).toBe(false);
+  });
+
+  it("keeps configured workspace plugins across manual and policy registry refreshes", async () => {
+    const rootDir = makeTempDir();
+    const stateDir = path.join(rootDir, "state");
+    const workspaceDir = path.join(rootDir, "workspace");
+    const fixture = createWorkspacePluginFixture(workspaceDir, "workspace-demo");
+    const env = {
+      ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: {
+        allow: [fixture.pluginId],
+        entries: { [fixture.pluginId]: { enabled: true } },
+      },
+    };
+
+    const initial = await refreshPluginRegistry({ config, env, reason: "manual", stateDir });
+    expect(initial.plugins.map((plugin) => plugin.pluginId)).toEqual([fixture.pluginId]);
+
+    const disabledConfig = {
+      ...config,
+      plugins: { ...config.plugins, entries: { [fixture.pluginId]: { enabled: false } } },
+    };
+    const disabled = await refreshPluginRegistry({
+      config: disabledConfig,
+      env,
+      policyPluginIds: [fixture.pluginId],
+      reason: "policy-changed",
+      stateDir,
+    });
+    expect(disabled.plugins).toEqual([
+      expect.objectContaining({ pluginId: fixture.pluginId, origin: "workspace", enabled: false }),
+    ]);
+
+    const reenabled = await refreshPluginRegistry({
+      config,
+      env,
+      policyPluginIds: [fixture.pluginId],
+      reason: "policy-changed",
+      stateDir,
+    });
+    expect(reenabled.plugins).toEqual([
+      expect.objectContaining({ pluginId: fixture.pluginId, origin: "workspace", enabled: true }),
+    ]);
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([fixture.pluginId]);
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("preserves an explicit workspace when refreshing the configured plugin registry", async () => {
+    const rootDir = makeTempDir();
+    const stateDir = path.join(rootDir, "state");
+    const configuredWorkspace = path.join(rootDir, "configured-workspace");
+    const explicitWorkspace = path.join(rootDir, "explicit-workspace");
+    const configured = createWorkspacePluginFixture(configuredWorkspace, "configured-plugin");
+    const explicit = createWorkspacePluginFixture(explicitWorkspace, "explicit-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+
+    const refreshed = await refreshPluginRegistry({
+      config: {
+        agents: { defaults: { workspace: configuredWorkspace } },
+        plugins: { allow: [configured.pluginId, explicit.pluginId] },
+      },
+      env,
+      reason: "manual",
+      stateDir,
+      workspaceDir: explicitWorkspace,
+    });
+
+    expect(refreshed.plugins).toEqual([
+      expect.objectContaining({ pluginId: explicit.pluginId, origin: "workspace" }),
+    ]);
+    expect(isColdPluginRuntimeLoaded(configured)).toBe(false);
+    expect(isColdPluginRuntimeLoaded(explicit)).toBe(false);
   });
 
   it("reports package dependency install state without importing plugin runtime", () => {

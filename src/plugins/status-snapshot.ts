@@ -1,4 +1,5 @@
 /** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -120,7 +121,7 @@ function buildPluginRecordFromInstalledIndex(
     commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],
     httpRoutes: 0,
     hookCount: 0,
-    configSchema: false,
+    configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
     dependencyStatus: buildPluginDependencyStatus({
       rootDir: plugin.rootDir,
@@ -135,26 +136,28 @@ export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {
   const config = params?.config ?? getRuntimeConfig();
+  const env = params?.env ?? process.env;
+  const workspaceDir =
+    params?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env);
   const result = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
       loadPluginRegistrySnapshotWithMetadata({
         config,
         env: params?.env,
-        workspaceDir: params?.workspaceDir,
+        workspaceDir,
       }),
     { surface: "status" },
   );
-  const env = params?.env ?? process.env;
   const metadataSnapshot = loadPluginMetadataSnapshot({
     index: result.snapshot,
     config,
     env,
-    workspaceDir: params?.workspaceDir,
+    workspaceDir,
   });
   const manifestByPluginId = metadataSnapshot.byPluginId;
   return projectPluginDependencyHealth({
-    workspaceDir: params?.workspaceDir,
+    workspaceDir,
     ...createEmptyPluginRegistry(),
     plugins: result.snapshot.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
