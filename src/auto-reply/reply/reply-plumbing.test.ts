@@ -434,7 +434,7 @@ const baseRun: SubagentRunRecord = {
   task: "do thing",
   cleanup: "keep",
   createdAt: 1000,
-  startedAt: 1000,
+  execution: { status: "running", startedAt: 1000 },
 };
 
 describe("subagents utils", () => {
@@ -471,8 +471,18 @@ describe("subagents utils", () => {
 
   it("sorts subagent runs by newest start/created time", () => {
     const runs: SubagentRunRecord[] = [
-      { ...baseRun, runId: "run-1", createdAt: 1000, startedAt: 1000 },
-      { ...baseRun, runId: "run-2", createdAt: 1200, startedAt: 1200 },
+      {
+        ...baseRun,
+        runId: "run-1",
+        createdAt: 1000,
+        execution: { status: "running", startedAt: 1000 },
+      },
+      {
+        ...baseRun,
+        runId: "run-2",
+        createdAt: 1200,
+        execution: { status: "running", startedAt: 1200 },
+      },
       { ...baseRun, runId: "run-3", createdAt: 900 },
     ];
     const sorted = sortSubagentRuns(runs);

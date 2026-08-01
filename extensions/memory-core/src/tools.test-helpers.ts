@@ -2,7 +2,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 // Memory Core helper module supports tools helpers behavior.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { isolateMemoryManagerTestConfig } from "./memory/test-manager-helpers.js";
+import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
 
 export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {

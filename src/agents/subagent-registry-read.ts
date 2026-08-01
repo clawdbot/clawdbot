@@ -72,9 +72,12 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 
 /** Returns whether a registry entry still has a live agent run context. */
 export function isSubagentRunLive(
-  entry: Pick<SubagentRunRecord, "runId" | "endedAt"> | null | undefined,
+  entry:
+    | { runId: string; execution: Pick<SubagentRunRecord["execution"], "endedAt"> }
+    | null
+    | undefined,
 ): boolean {
-  if (!entry || typeof entry.endedAt === "number") {
+  if (!entry || typeof entry.execution.endedAt === "number") {
     return false;
   }
   return Boolean(getAgentRunContext(entry.runId));

@@ -24,6 +24,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -681,7 +682,14 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.handoff).toBeUndefined();
     expect(reply.sensitive).toBeUndefined();
     expect(reply.text).toContain("replace the inference route powering this session");
-    expect(reply.text).toContain("Exit OpenClaw and run `openclaw onboard`");
+    // A gateway reader is in a browser or the app and cannot "exit OpenClaw"
+    // into a shell; the copy must name where the command runs instead.
+    expect(reply.text).toContain("`openclaw onboard`");
+    expect(reply.text).toContain("machine running OpenClaw");
+    expect(reply.text).toContain("Stop the OpenClaw host");
+    expect(reply.text).toContain("restart the host");
+    expect(reply.text).toContain("return to OpenClaw");
+    expect(reply.text).not.toContain("Exit OpenClaw");
   });
 
   it("keeps the current inference route when model provider setup is declined", async () => {
@@ -1536,6 +1544,30 @@ describe("SystemAgentChatEngine", () => {
     expect(handoff.handoff).toEqual({ kind: "open-setup", target: "search" });
   });
 
+  it("does not promise Doctor will repair every invalid channel setup config", async () => {
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "invalid-hash",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "gateway.port", message: "Expected number" }],
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("machine running OpenClaw");
+    expect(reply.text).toContain("openclaw doctor --fix");
+    expect(reply.text).toContain("remaining validation errors");
+    expect(reply.text).not.toContain("repairs it");
+  });
+
   it("reports hosted channel setup success when audit persistence fails", async () => {
     const appendAuditEntry = vi.fn(async () => {
       throw new Error("audit store is read-only");
@@ -1953,7 +1985,13 @@ describe("SystemAgentChatEngine", () => {
     const gatewayReply = await gateway.handle("open setup wizard");
     expect(gatewayReply.action).toBe("none");
     expect(gatewayReply.handoff).toBeUndefined();
-    expect(gatewayReply.text).toContain("The app owns the setup screens here");
+    // The gateway surface has real setup screens, so the reply names them
+    // rather than sending the reader to a terminal they may not have.
+    expect(gatewayReply.text).toContain("Settings");
+    expect(gatewayReply.text).toContain("change providers from a shell");
+    expect(gatewayReply.text).toContain("machine running OpenClaw");
+    expect(gatewayReply.text).not.toContain("does the same job");
+    expect(gatewayReply.text).not.toContain("Exit OpenClaw");
   });
 
   it.each([
@@ -2905,6 +2943,24 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.text).toContain("failed validation");
     expect(reply.text).toContain("The write was applied");
     expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
+  it("keeps doctor repair outside OpenClaw when no post-write repair is proposed", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "h",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "gateway.port", message: "Expected number" }],
+    } as never);
+
+    const reply = await verifyConfigAfterSystemAgentWrite(async () => ({ text: "" }));
+
+    expect(reply).toContain("with OpenClaw stopped");
+    expect(reply).toContain("openclaw doctor --fix");
+    expect(reply).toContain("machine running it");
   });
 
   it("warns when an applied write leaves no config to verify", async () => {

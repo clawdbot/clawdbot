@@ -62,7 +62,7 @@ describe("buildSubagentList", () => {
       task: "This is a deliberately long task description used to verify that subagent list output keeps the full task text instead of appending ellipsis after a short hard cutoff.",
       cleanup: "keep",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
@@ -91,7 +91,7 @@ describe("buildSubagentList", () => {
       cleanup: "keep",
       label: "Review worker",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
@@ -149,10 +149,13 @@ describe("buildSubagentList", () => {
         task: "report the actual child outcome",
         cleanup: "keep",
         createdAt: now - 2_000,
-        startedAt: now - 2_000,
-        endedAt: now - 1_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 2_000,
+          endedAt: now - 1_000,
+          outcome,
+        },
         ...(endedReason ? { endedReason } : {}),
-        outcome,
       } satisfies SubagentRunRecord;
       addSubagentRunForTests(run);
 
@@ -179,9 +182,12 @@ describe("buildSubagentList", () => {
       task: "orchestrate child workers",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 120_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(orchestratorRun);
     addSubagentRunForTests({
@@ -263,10 +269,16 @@ describe("buildSubagentList", () => {
         task: "orchestrate child workers",
         cleanup: "keep",
         createdAt: now - 120_000,
-        startedAt: now - 120_000,
-        ...(ended === false ? {} : { endedAt: now - 60_000 }),
+        execution:
+          ended === false
+            ? { status: "running", startedAt: now - 120_000 }
+            : {
+                status: "terminal",
+                startedAt: now - 120_000,
+                endedAt: now - 60_000,
+                outcome,
+              },
         ...(endedReason ? { endedReason } : {}),
-        ...(outcome ? { outcome } : {}),
       } satisfies SubagentRunRecord;
       addSubagentRunForTests(parentRun);
       for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
@@ -310,7 +322,7 @@ describe("buildSubagentList", () => {
       task: "parent active",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
+      execution: { status: "running", startedAt: now - 120_000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(parentRun);
     addSubagentRunForTests({
@@ -349,7 +361,7 @@ describe("buildSubagentList", () => {
       task: "do thing",
       cleanup: "keep",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
@@ -396,7 +408,10 @@ describe("buildSubagentList", () => {
       task: "stale hidden work",
       cleanup: "keep",
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      execution: {
+        status: "running",
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(staleRun);
     const cfg = {
@@ -427,9 +442,12 @@ describe("buildSubagentList", () => {
       task: "parent ended",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 120_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(parentRun);
     addSubagentRunForTests({

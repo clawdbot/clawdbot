@@ -14,7 +14,7 @@ function isCleanupCompleteForMaintenance(entry: SubagentRunRecord): boolean {
 }
 
 function isActiveForMaintenance(entry: SubagentRunRecord): boolean {
-  return typeof entry.endedAt !== "number";
+  return typeof entry.execution.endedAt !== "number";
 }
 
 function isPendingFinalDeliveryForMaintenance(entry: SubagentRunRecord): boolean {

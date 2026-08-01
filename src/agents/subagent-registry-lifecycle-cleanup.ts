@@ -71,7 +71,7 @@ export function createSubagentRegistryLifecycleCleanup(
     entry.expectsCompletionMessage === true &&
     entry.cleanup === "keep" &&
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-    entry.outcome?.status === "ok";
+    entry.execution.outcome?.status === "ok";
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
@@ -131,7 +131,7 @@ export function createSubagentRegistryLifecycleCleanup(
       if (excludeRunId && runId === excludeRunId) {
         continue;
       }
-      if (typeof entry.endedAt !== "number") {
+      if (typeof entry.execution.endedAt !== "number") {
         continue;
       }
       if (entry.cleanupCompletedAt || entry.cleanupHandled) {
@@ -143,7 +143,7 @@ export function createSubagentRegistryLifecycleCleanup(
       if (params.suppressAnnounceForSteerRestart(entry)) {
         continue;
       }
-      const endedAgo = now - (entry.endedAt ?? now);
+      const endedAgo = now - (entry.execution.endedAt ?? now);
       if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
         if (!beginSubagentCleanup(runId)) {
           continue;

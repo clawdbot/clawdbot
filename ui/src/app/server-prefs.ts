@@ -415,6 +415,7 @@ export function applyServerUiPrefs(
   hooks: {
     scope?: string;
     onApplied: (patch: Partial<UiSettings>) => void;
+    onThemeChanged?: (theme: ThemeName | null) => void;
   },
 ): boolean {
   const scope = hooks.scope ?? "";
@@ -457,6 +458,9 @@ export function applyServerUiPrefs(
   }
   writeStorage(LAST_SEEN_KEY, scope, key);
   recordReconciledObject();
+  if (Object.hasOwn(changed, "theme")) {
+    hooks.onThemeChanged?.(changed.theme ?? null);
+  }
   const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;

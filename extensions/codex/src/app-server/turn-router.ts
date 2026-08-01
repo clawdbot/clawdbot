@@ -128,7 +128,9 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   constructor(client: CodexAppServerClient) {
     client.addNotificationHandler((notification) => this.routeNotification(notification));
     client.addRequestHandler((request, signal) => this.routeRequest(request, signal));
-    client.addCloseHandler(() => this.dispose());
+    client.addCloseHandler((closedClient) => {
+      this.dispose(closedClient.getCloseError());
+    });
   }
 
   reserveThread(options: RouteOptions): CodexThreadRouteReservation {
@@ -209,13 +211,16 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     return { completion, cancel: () => finish(false) };
   }
 
-  private dispose(): void {
+  private dispose(cause?: Error): void {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
+    const closeError = cause
+      ? new Error("codex app-server turn router closed", { cause })
+      : new Error("codex app-server turn router closed");
     for (const route of this.routes.values()) {
-      this.release(route, new Error("codex app-server turn router closed"));
+      this.release(route, closeError);
     }
     for (const watchers of this.nativeTurnCompletionWatchers.values()) {
       for (const watcher of watchers) {

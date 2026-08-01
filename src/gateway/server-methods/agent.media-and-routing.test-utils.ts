@@ -1111,9 +1111,12 @@ describe("gateway agent handler", () => {
       task: "initial task",
       cleanup: "keep" as const,
       createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 2,
+        endedAt: 3,
+        outcome: { status: "ok" as const },
+      },
     };
 
     mocks.loadSessionEntry.mockReturnValue({

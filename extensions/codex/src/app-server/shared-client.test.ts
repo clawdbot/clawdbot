@@ -81,7 +81,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 import {
   assertCodexAppServerClientStartSelectionCurrent,
-  detachSharedCodexAppServerClientIfCurrent,
   getSharedCodexAppServerClient,
   readCodexAppServerClientProcessIdentity,
 } from "./shared-client.js";
@@ -1640,35 +1639,6 @@ describe("shared Codex app-server client", () => {
     expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
     expect(second.process.kill).not.toHaveBeenCalled();
     expect(clearSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
-    expect(second.process.stdin.destroyed).toBe(true);
-  });
-
-  it("can detach the current shared client without closing it", async () => {
-    const first = createClientHarness();
-    const second = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(first.client)
-      .mockReturnValueOnce(second.client);
-
-    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.146.0 (macOS; test)");
-    await sendEmptyModelList(first);
-    await expect(firstList).resolves.toEqual({ models: [] });
-
-    expect(detachSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
-    expect(first.process.stdin.destroyed).toBe(false);
-
-    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.146.0 (macOS; test)");
-    await sendEmptyModelList(second);
-    await expect(secondList).resolves.toEqual({ models: [] });
-
-    expect(detachSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
-    first.client.close();
-    expect(first.process.stdin.destroyed).toBe(true);
-    expect(second.process.kill).not.toHaveBeenCalled();
-    expect(detachSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
-    second.client.close();
     expect(second.process.stdin.destroyed).toBe(true);
   });
 

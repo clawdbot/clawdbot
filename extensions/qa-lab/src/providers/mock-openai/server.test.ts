@@ -197,6 +197,11 @@ function buildWhatsAppPendingHistoryContextFixture(
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
+const CODEX_DIRECT_YIELD_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw_direct",
+  tools: [SESSIONS_YIELD_TOOL],
+} as const;
 const CODEX_SUBAGENT_TOOL_NAMESPACE = {
   type: "namespace",
   name: "openclaw",
@@ -2538,14 +2543,25 @@ describe("qa mock openai server", () => {
     expect(plannedToolArgs.mode).toBe("run");
   });
 
-  it("drives yielded-parent subagent fallback QA through sessions_spawn and sessions_yield", async () => {
+  it.each([
+    {
+      name: "flat tools",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      namespace: undefined,
+    },
+    {
+      name: "Codex direct-only tools",
+      tools: [SESSIONS_SPAWN_TOOL, CODEX_DIRECT_YIELD_NAMESPACE],
+      namespace: "openclaw_direct",
+    },
+  ])("drives yielded-parent subagent fallback through $name", async ({ tools, namespace }) => {
     const server = await startMockServer();
     const prompt =
       "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
 
     await expectResponsesText(server, {
       stream: true,
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      tools,
       input: [makeUserInput(prompt)],
     });
 
@@ -2562,7 +2578,7 @@ describe("qa mock openai server", () => {
 
     const body = await expectResponsesText(server, {
       stream: true,
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      tools,
       input: [
         makeUserInput(prompt),
         {
@@ -2579,6 +2595,9 @@ describe("qa mock openai server", () => {
 
     expect(body).toContain('"name":"sessions_yield"');
     expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+    if (namespace) {
+      expect(body.match(new RegExp(`"namespace":"${namespace}"`, "g"))).toHaveLength(3);
+    }
     const yieldDebug = requireRecord(
       await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
       "yield debug request",
@@ -2610,36 +2629,48 @@ describe("qa mock openai server", () => {
   it.each([
     { name: "no current tools", tools: [] },
     { name: "message-only current tools", tools: [MESSAGE_TOOL] },
-  ])("does not replay historical direct-fallback spawn or yield with $name", async ({ tools }) => {
-    const server = await startMockServer();
-    const kickoff =
-      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
-    const completion = [
-      "[Internal task completion event]",
-      "Task: qa-direct-fallback-worker",
-      "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
-    ].join("\n");
+    {
+      name: "protected completion context and delegated tools",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      protectedContext: true,
+    },
+  ])(
+    "does not replay historical direct-fallback spawn or yield with $name",
+    async ({ tools, protectedContext }) => {
+      const server = await startMockServer();
+      const kickoff =
+        "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+      const completion = [
+        "[Internal task completion event]",
+        "Task: qa-direct-fallback-worker",
+        "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+      ].join("\n");
 
-    const payload = await expectResponsesJson(server, {
-      stream: false,
-      tools,
-      instructions:
-        "Historical sessions_spawn and sessions_yield guidance does not grant completion-turn tools.",
-      input: [
-        makeUserInput(kickoff),
-        makeDeveloperInput("Current completion handoff may use only the declared tool surface."),
-        makeUserInput(completion),
-      ],
-    });
+      const payload = await expectResponsesJson(server, {
+        stream: false,
+        tools,
+        instructions:
+          "Historical sessions_spawn and sessions_yield guidance does not grant completion-turn tools.",
+        input: [
+          makeUserInput(kickoff),
+          makeDeveloperInput("Current completion handoff may use only the declared tool surface."),
+          makeUserInput(
+            protectedContext
+              ? TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", completion)
+              : completion,
+          ),
+        ],
+      });
 
-    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(payload)).toBe("");
-    const debugRequest = requireRecord(
-      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
-      "completion debug request",
-    );
-    expect(debugRequest).not.toHaveProperty("plannedToolName");
-  });
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe("");
+      const debugRequest = requireRecord(
+        await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+        "completion debug request",
+      );
+      expect(debugRequest).not.toHaveProperty("plannedToolName");
+    },
+  );
 
   it("prefers the current direct-fallback worker turn over an earlier parent kickoff", async () => {
     const server = await startMockServer();
@@ -5135,6 +5166,7 @@ describe("qa mock openai server", () => {
     const toolPlanOutput = outputItem(await response.json());
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("sessions_spawn");
+    expect(toolPlanOutput.namespace).toBe("openclaw");
   });
 
   it("records image inputs and describes attached images", async () => {

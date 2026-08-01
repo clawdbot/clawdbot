@@ -47,11 +47,11 @@ export async function retireSupersededSubagentRun(params: {
   runs: Map<string, SubagentRunRecord>;
   clearPendingLifecycleError: (runId: string) => void;
 }): Promise<void> {
-  const transcriptTarget = params.entry.execution?.transcriptTarget;
+  const transcriptTarget = params.entry.execution.transcriptTarget;
   params.clearPendingLifecycleError(params.runId);
   params.runs.delete(params.runId);
   const transcriptStillOwned = Array.from(params.runs.values()).some((candidate) => {
-    const candidateTarget = candidate.execution?.transcriptTarget;
+    const candidateTarget = candidate.execution.transcriptTarget;
     return (
       candidateTarget?.sessionId === transcriptTarget?.sessionId &&
       candidateTarget?.sessionKey === transcriptTarget?.sessionKey &&
@@ -150,7 +150,7 @@ export function createSubagentRegistrySweeper(params: {
   });
 
   function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
-    return typeof entry.endedAt === "number" && isDeliverySuspended(entry);
+    return typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry);
   }
 
   function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
@@ -177,8 +177,8 @@ export function createSubagentRegistrySweeper(params: {
       requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
       childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
       childRunId: payload?.childRunId ?? entry.runId,
-      endedAt: payload?.endedAt ?? entry.endedAt,
-      status: payload?.outcome?.status ?? entry.outcome?.status,
+      endedAt: payload?.endedAt ?? entry.execution.endedAt,
+      status: payload?.outcome?.status ?? entry.execution.outcome?.status,
       lastError: getDeliveryLastError(entry) ?? null,
     };
     delivery.payload = undefined;
@@ -207,7 +207,7 @@ export function createSubagentRegistrySweeper(params: {
     if (shouldDeleteAttachments) {
       await safeRemoveAttachmentsDir(entry);
     }
-    await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
+    await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
     const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
     params.completeCleanupBookkeeping({
       runId,
@@ -289,9 +289,9 @@ export function createSubagentRegistrySweeper(params: {
           }
           continue;
         }
-        if (typeof entry.endedAt !== "number") {
+        if (typeof entry.execution.endedAt !== "number") {
           const hasLiveRunContext = Boolean(getAgentRunContext(runId));
-          const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
+          const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
             if (orphanReason) {
@@ -316,7 +316,7 @@ export function createSubagentRegistrySweeper(params: {
               storeCache,
             });
             const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-              notBeforeMs: entry.startedAt ?? entry.createdAt,
+              notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
             if (completion) {
               await params.completeSubagentRunWithRecovery(

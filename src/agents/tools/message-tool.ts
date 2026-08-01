@@ -76,10 +76,7 @@ import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
-import {
-  createSourceDeliveryPlan,
-  resolveSourceDeliveryOutcome,
-} from "../../infra/outbound/source-delivery-plan.js";
+import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
@@ -1085,18 +1082,20 @@ type MessageToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
-const SOURCE_REPLY_ONLY_MESSAGE_ARG_NAMES = new Set([
-  "action",
-  "message",
-  "channel",
-  "target",
-  "to",
-  "channelId",
-  "accountId",
-  "threadId",
-  "replyTo",
-  "final",
-]);
+const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
+  action: stringEnum(["send"], {
+    description: "Send a text reply to the current source conversation.",
+  }),
+  channel: Type.Optional(Type.String()),
+  target: Type.Optional(channelTargetSchema()),
+  accountId: Type.Optional(Type.String()),
+  message: Type.Optional(
+    Type.String({ description: "Text to send to the current source conversation." }),
+  ),
+  replyTo: Type.Optional(Type.String()),
+  threadId: Type.Optional(Type.String()),
+});
+const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]);
 
 function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   if (typeof args.message !== "string" || !args.message.trim()) {
@@ -1166,21 +1165,19 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error(`Completion source replies permit only action "send", not "${params.action}".`);
   }
   for (const name of Object.keys(params.args)) {
-    if (!SOURCE_REPLY_ONLY_MESSAGE_ARG_NAMES.has(name)) {
+    if (
+      !Object.hasOwn(SOURCE_REPLY_ONLY_MESSAGE_SCHEMA.properties, name) &&
+      !SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES.has(name)
+    ) {
       throw new Error(`Completion source replies cannot use the "${name}" argument.`);
     }
   }
   enforceSourceReplyOnlyTextDirectives(params.args);
 
-  const trustedContext = params.trustedTurnContext?.toolContext;
-  const sourceChannel = normalizeMessageChannel(
-    trustedContext ? trustedContext.currentChannelProvider : params.currentChannelProvider,
-  );
+  const sourceContext = params.trustedTurnContext?.toolContext ?? params;
+  const sourceChannel = normalizeMessageChannel(sourceContext.currentChannelProvider);
   const sourceTargets = uniqueValues(
-    (trustedContext
-      ? [trustedContext.currentMessagingTarget, trustedContext.currentChannelId]
-      : [params.currentMessagingTarget, params.currentChannelId]
-    )
+    [sourceContext.currentMessagingTarget, sourceContext.currentChannelId]
       .map((target) => normalizeOptionalString(target))
       .filter((target): target is string => Boolean(target)),
   );
@@ -1204,18 +1201,14 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error("Completion source replies cannot use another channel account.");
   }
 
-  const sourceThreadId = normalizeOptionalString(
-    trustedContext ? trustedContext.currentThreadTs : params.currentThreadTs,
-  );
+  const sourceThreadId = normalizeOptionalString(sourceContext.currentThreadTs);
   const requestedThreadId = normalizeOptionalStringifiedId(params.args.threadId);
   if (requestedThreadId && requestedThreadId !== sourceThreadId) {
     throw new Error("Completion source replies cannot target another thread.");
   }
 
   const requestedReplyTo = readStringParam(params.args, "replyTo");
-  const sourceMessageId = normalizeOptionalStringifiedId(
-    trustedContext ? trustedContext.currentMessageId : params.currentMessageId,
-  );
+  const sourceMessageId = normalizeOptionalStringifiedId(sourceContext.currentMessageId);
   if (
     requestedReplyTo &&
     requestedReplyTo !== sourceMessageId &&
@@ -1231,31 +1224,21 @@ function enforceSourceReplyOnlyMessageAction(params: {
   );
   for (const requestedTarget of explicitTargets) {
     if (
-      !sourceTargets.some(
-        (sourceTarget) =>
-          resolveSourceDeliveryOutcome(
-            createSourceDeliveryPlan({
-              owner: "message_tool",
-              reason: "subagent_completion",
-              target: {
-                channel: sourceChannel,
-                accountId: sourceAccountId,
-                to: sourceTarget,
-                threadId: sourceThreadId,
-              },
-            }),
-            {
-              didSendViaMessageTool: true,
-              messageToolSentTargets: [
-                {
-                  provider: sourceChannel,
-                  accountId: sourceAccountId,
-                  to: requestedTarget,
-                  threadImplicit: true,
-                },
-              ],
-            },
-          ).verifiedMessageToolDelivery,
+      !sourceTargets.some((sourceTarget) =>
+        sourceDeliveryTargetsMatch(
+          {
+            provider: sourceChannel,
+            accountId: sourceAccountId,
+            to: requestedTarget,
+            threadImplicit: true,
+          },
+          {
+            channel: sourceChannel,
+            accountId: sourceAccountId,
+            to: sourceTarget,
+            threadId: sourceThreadId,
+          },
+        ),
       )
     ) {
       throw new Error("Completion source replies cannot target another conversation or thread.");
@@ -1276,7 +1259,6 @@ type MessageToolDiscoveryParams = {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-  sourceReplyOnly?: boolean;
 };
 
 type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg" | "channel"> & {
@@ -1413,9 +1395,6 @@ function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): st
 }
 
 function resolveMessageToolActionSchemaActions(params: MessageToolDiscoveryParams): string[] {
-  if (params.sourceReplyOnly) {
-    return ["send"];
-  }
   const discoveredActions = resolveMessageToolSchemaActions(params);
   const allowedActions = resolveAllowedMessageActions({
     cfg: params.cfg,
@@ -1480,28 +1459,7 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
   );
 }
 
-function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
-  if (params.sourceReplyOnly) {
-    const schema = buildMessageToolSchemaFromActions(
-      ["send"],
-      { includePresentation: false, includeDeliveryPin: false, includeBestEffort: false },
-      MESSAGE_TOOL_SCHEMA_BUILDERS,
-    );
-    const properties = schema.properties as Record<string, TSchema>;
-    for (const name of Object.keys(properties)) {
-      if (!SOURCE_REPLY_ONLY_MESSAGE_ARG_NAMES.has(name)) {
-        delete properties[name];
-      }
-    }
-    properties.action = stringEnum(["send"], {
-      description: "Send a text reply to the current source conversation.",
-    });
-    properties.message = Type.Optional(
-      Type.String({ description: "Text to send to the current source conversation." }),
-    );
-    return schema;
-  }
-  const actions = resolveMessageToolActionSchemaActions(params);
+function buildMessageToolSchema(params: MessageToolDiscoveryParams, actions: string[]) {
   const includePresentation = resolveIncludePresentation(params);
   const includeDeliveryPin = resolveIncludeDeliveryPin(params);
   const includeBestEffort = resolveIncludeBestEffort(params);
@@ -1532,72 +1490,27 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
-function buildMessageToolDescription(options?: {
-  config?: OpenClawConfig;
-  currentChannel?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requireExplicitTarget?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  requesterSenderId?: string;
-  senderIsOwner?: boolean;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-  sourceReplyOnly?: boolean;
-}): string {
-  const baseDescription = options?.sourceReplyOnly
-    ? "Send a message to the current source conversation."
-    : "Send/manage channel messages.";
-  const resolvedOptions = options ?? {};
-  const messageToolDiscoveryParams = resolvedOptions.config
-    ? {
-        cfg: resolvedOptions.config,
-        currentChannelProvider: resolvedOptions.currentChannel,
-        currentChannelId: resolvedOptions.currentChannelId,
-        currentThreadTs: resolvedOptions.currentThreadTs,
-        currentMessageId: resolvedOptions.currentMessageId,
-        currentAccountId: resolvedOptions.currentAccountId,
-        sessionKey: resolvedOptions.sessionKey,
-        sessionId: resolvedOptions.sessionId,
-        agentId: resolvedOptions.agentId,
-        requesterSenderId: resolvedOptions.requesterSenderId,
-        senderIsOwner: resolvedOptions.senderIsOwner,
-        preparedMessageToolCatalog: resolvedOptions.preparedMessageToolCatalog,
-        sourceReplyOnly: resolvedOptions.sourceReplyOnly,
-      }
-    : undefined;
-
-  if (messageToolDiscoveryParams) {
-    const actions = resolveMessageToolActionSchemaActions(messageToolDiscoveryParams);
-    if (actions.length > 0) {
-      const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
-      return appendMessageToolReadHint(
-        appendMessageToolVisibleReplyHint(
-          `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
-          resolvedOptions.sourceReplyDeliveryMode,
-          resolvedOptions.requireExplicitTarget,
-        ),
-        sortedActions,
-      );
-    }
-  }
-
-  if (resolvedOptions.sourceReplyOnly) {
-    return appendMessageToolVisibleReplyHint(
-      `${baseDescription} Supports actions: send.`,
-      resolvedOptions.sourceReplyDeliveryMode,
-      resolvedOptions.requireExplicitTarget,
+function buildMessageToolDescription(
+  actions: string[] | undefined,
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
+  requireExplicitTarget?: boolean,
+): string {
+  const baseDescription = "Send/manage channel messages.";
+  if (actions && actions.length > 0) {
+    const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
+    return appendMessageToolReadHint(
+      appendMessageToolVisibleReplyHint(
+        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+        sourceReplyDeliveryMode,
+        requireExplicitTarget,
+      ),
+      sortedActions,
     );
   }
-
   return appendMessageToolVisibleReplyHint(
     `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
-    resolvedOptions.sourceReplyDeliveryMode,
-    resolvedOptions.requireExplicitTarget,
+    sourceReplyDeliveryMode,
+    requireExplicitTarget,
   );
 }
 
@@ -1608,8 +1521,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
-  const preparedMessageToolCatalog =
-    options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   let generatedIdempotencyCounter = 0;
   // Poll-vote echo record lives in the session-scoped map (recentPollVoteBySession)
   // so it survives the run boundary between the vote and the follow-up text; a
@@ -1641,10 +1552,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           config: options?.config,
         })
       : undefined);
-  const schema =
-    options?.config || options?.sourceReplyOnly
-      ? buildMessageToolSchema({
-          cfg: options.config ?? loadConfigForTool(),
+  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined =
+    options?.config && !options.sourceReplyOnly
+      ? {
+          cfg: options.config,
           currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
           currentChannelId: effectiveCurrentChannel.currentChannelId,
           currentThreadTs,
@@ -1655,27 +1566,31 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           agentId: resolvedAgentId,
           requesterSenderId: options.requesterSenderId,
           senderIsOwner: options.senderIsOwner,
-          preparedMessageToolCatalog,
-          sourceReplyOnly: options.sourceReplyOnly,
-        })
+          preparedMessageToolCatalog:
+            options.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog(),
+        }
+      : undefined;
+  // Schema and prompt must use the same snapshot; repeated discovery can drift
+  // across plugin hooks while needlessly loading channel action metadata twice.
+  const actions = messageToolDiscoveryParams
+    ? resolveMessageToolActionSchemaActions(messageToolDiscoveryParams)
+    : undefined;
+  const schema = options?.sourceReplyOnly
+    ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
+    : messageToolDiscoveryParams
+      ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
       : MessageToolSchema;
-  const description = buildMessageToolDescription({
-    config: options?.config,
-    currentChannel: effectiveCurrentChannel.currentChannelProvider,
-    currentChannelId: effectiveCurrentChannel.currentChannelId,
-    currentThreadTs,
-    currentMessageId: options?.currentMessageId,
-    currentAccountId: agentAccountId,
-    sessionKey: options?.agentSessionKey,
-    sessionId: options?.sessionId,
-    agentId: resolvedAgentId,
-    requireExplicitTarget: options?.requireExplicitTarget,
-    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-    requesterSenderId: options?.requesterSenderId,
-    senderIsOwner: options?.senderIsOwner,
-    preparedMessageToolCatalog,
-    sourceReplyOnly: options?.sourceReplyOnly,
-  });
+  const description = options?.sourceReplyOnly
+    ? appendMessageToolVisibleReplyHint(
+        "Send a message to the current source conversation. Supports actions: send.",
+        options.sourceReplyDeliveryMode,
+        options.requireExplicitTarget,
+      )
+    : buildMessageToolDescription(
+        actions,
+        options?.sourceReplyDeliveryMode,
+        options?.requireExplicitTarget,
+      );
 
   return {
     label: "Message",

@@ -115,10 +115,20 @@ export async function finishUpdate(params: {
       result: params.result,
       jsonMode: Boolean(params.opts.json),
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop: params.preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-    });
+    if (params.result.recovery?.serviceRestartSafe === false) {
+      if (!params.opts.json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
+          ),
+        );
+      }
+    } else {
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+    }
     defaultRuntime.exit(1);
     return;
   }

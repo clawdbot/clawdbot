@@ -117,21 +117,6 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
-  resolveGroupSilentReplyBehavior: vi.fn(
-    (params: {
-      sessionEntry?: SessionEntry;
-      defaultActivation: "always" | "mention";
-      silentReplyPolicy?: "allow" | "disallow";
-    }) => {
-      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
-      const canUseSilentReply = params.silentReplyPolicy !== "disallow";
-      return {
-        activation,
-        canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
-      };
-    },
-  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
