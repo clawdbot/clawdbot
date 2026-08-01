@@ -84,16 +84,33 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
-  it.each(["starting", "recovering"] as const)(
-    "trusts recorded %s lifecycle instead of wall-clock inference",
-    (lifecycle) => {
-      expect(
-        evaluateHealth(runningAccount({ connected: false, lifecycle, lastStartAt: 0 }), {
-          now: 1_000_000,
-        }),
-      ).toEqual({ healthy: true, reason: "startup-connect-grace" });
-    },
-  );
+  it("trusts a fresh recorded starting lifecycle inside connect grace", () => {
+    expect(
+      evaluateHealth(
+        runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 95_000 }),
+      ),
+    ).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+
+  it("falls through to disconnected when recorded starting outlives connect grace", () => {
+    expect(
+      evaluateHealth(runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 0 })),
+    ).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("falls through to stale socket when recorded recovering outlives connect grace", () => {
+    expect(evaluateHealth(staleTransportAccount({ lifecycle: "recovering" }))).toEqual({
+      healthy: false,
+      reason: "stale-socket",
+    });
+  });
+
+  it("does not synthesize lifecycle grace without a start timestamp", () => {
+    expect(evaluateHealth(runningAccount({ connected: false, lifecycle: "starting" }))).toEqual({
+      healthy: false,
+      reason: "disconnected",
+    });
+  });
 
   it("lets recorded ready bypass wall-clock startup grace", () => {
     expect(

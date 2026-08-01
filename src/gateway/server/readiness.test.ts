@@ -259,13 +259,30 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it("uses recorded lifecycle instead of wall-clock startup inference", () => {
+  it("uses fresh recorded lifecycle within connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({
+          connected: false,
+          lifecycle: "starting",
+          lastStartAt: Date.now() - 30_000,
+        }),
+        slack: stoppedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - 30_000,
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports a recorded starting lifecycle that outlives connect grace", () => {
     withReadinessClock(() => {
       const { readiness } = createLongRunningReadinessHarness({
         discord: managedAccount({ connected: false, lifecycle: "starting" }),
-        slack: stoppedAccount({ connected: false, lifecycle: "recovering" }),
       });
-      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+      expect(readiness()).toEqual(failingSnapshot(["discord"], THIRTY_ONE_MIN_MS));
     });
   });
 

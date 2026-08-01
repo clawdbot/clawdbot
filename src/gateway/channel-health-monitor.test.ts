@@ -461,11 +461,12 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("restarts a stuck channel (running but not connected)", async () => {
+  it("restarts a starting channel that stays disconnected past connect grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: disconnectedAccount(now - 300_000, {
+          lifecycle: "starting",
           linked: true,
         }),
       },
@@ -512,6 +513,7 @@ describe("channel-health-monitor", () => {
           connected: false,
           enabled: true,
           configured: true,
+          lifecycle: "starting",
           lastStartAt: now - 5_000,
         },
       },

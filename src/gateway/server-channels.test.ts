@@ -651,7 +651,7 @@ describe("server-channels auto restart", () => {
         channelConnectGraceMs: 120_000,
         staleEventThresholdMs: 30 * 60_000,
       }),
-    ).toEqual({ healthy: true, reason: "startup-connect-grace" });
+    ).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {

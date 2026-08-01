@@ -89,7 +89,17 @@ export function evaluateChannelHealth(
   if (snapshot.lifecycle === "blocked") {
     return { healthy: false, reason: "blocked" };
   }
-  if (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") {
+  const lastStartAt =
+    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
+      ? snapshot.lastStartAt
+      : null;
+  // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
+  // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
+  if (
+    (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
+    lastStartAt != null &&
+    policy.now - lastStartAt < policy.channelConnectGraceMs
+  ) {
     return { healthy: true, reason: "startup-connect-grace" };
   }
   if (snapshot.lifecycle === "stopped") {
@@ -103,10 +113,6 @@ export function evaluateChannelHealth(
       ? Math.max(0, Math.trunc(snapshot.activeRuns))
       : 0;
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
@@ -145,8 +151,8 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
-  if (snapshot.lifecycle === undefined && snapshot.lastStartAt != null) {
-    const upDuration = policy.now - snapshot.lastStartAt;
+  if (snapshot.lifecycle === undefined && lastStartAt != null) {
+    const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }
