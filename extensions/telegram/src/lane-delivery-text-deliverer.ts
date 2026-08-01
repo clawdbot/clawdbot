@@ -275,9 +275,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     buttons: TelegramInlineButtons | undefined,
     promptContextSequence: TelegramPromptContextProjectionSequence,
     followedByDurablePayload = false,
+    allowErrorPayload = false,
   ): Promise<LaneDeliveryResult | undefined> => {
     const stream = lane.stream;
-    if (!stream || text.length === 0 || payload.isError) {
+    if (!stream || text.length === 0 || (payload.isError && !allowErrorPayload)) {
       return undefined;
     }
     rotateFinalizedStream(lane);
@@ -390,17 +391,40 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const isDurableFinal = infoKind === "final";
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
+    const streamedErrorDraftText =
+      isDurableFinal &&
+      payload.isError === true &&
+      laneName === "answer" &&
+      lane.stream &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      !reply.hasMedia &&
+      text.trim()
+        ? (() => {
+            const existing = (
+              lane.lastPartialText ||
+              lane.stream?.lastDeliveredText?.() ||
+              ""
+            ).trimEnd();
+            const notice = text.trim();
+            return existing && !existing.endsWith(notice)
+              ? `${existing}\n\n${notice}`
+              : existing || notice;
+          })()
+        : undefined;
     const streamed =
       allowStream && !reply.hasMedia
         ? await streamText(
             laneName,
             lane,
-            text,
+            streamedErrorDraftText ?? text,
             payload,
             isDurableFinal,
             finalizePreview,
             buttons,
             promptContextSequence,
+            false,
+            streamedErrorDraftText !== undefined,
           )
         : undefined;
     if (streamed) {

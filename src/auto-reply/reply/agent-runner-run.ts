@@ -694,7 +694,9 @@ export async function runReplyAgent(
     });
   } catch (error) {
     return await handleReplyAgentRunError(error, {
+      blockReplyPipeline,
       cfg,
+      isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
       resolvedVerboseLevel,
