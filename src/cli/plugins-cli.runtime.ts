@@ -368,6 +368,11 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     isStalePluginAutoRepairBlocked,
     scanStalePluginConfig,
   } = await import("../commands/doctor/shared/stale-plugin-config.js");
+  // Static discovery cannot see an engine that loaded and then failed at runtime, so read the
+  // same quarantine record gateway health and /status read; without it doctor calls a silently
+  // downgraded engine healthy.
+  const { listContextEngineQuarantines } = await import("../context-engine/registry.js");
+  const { defaultSlotIdForKey } = await import("../plugins/slots.js");
   const cfg = getRuntimeConfig();
   const configSnapshot = await readConfigFileSnapshot().catch(() => null);
   const sourceCfg = (configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg) as
@@ -391,11 +396,13 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     env: process.env,
     plugins: report.plugins,
   });
+  const contextEngineQuarantines = listContextEngineQuarantines();
+  const hasRuntimeQuarantines = contextEngineQuarantines.length > 0;
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
-  if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
+  if (!hasInstallTreeIssues && !hasRuntimeQuarantines && pluginConfigWarnings.length === 0) {
     defaultRuntime.log("No plugin issues detected.");
     return;
   }
@@ -407,6 +414,22 @@ export async function runPluginsDoctorCommand(): Promise<void> {
       const phase = entry.failurePhase ? ` [${entry.failurePhase}]` : "";
       lines.push(`- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`);
     }
+  }
+  if (hasRuntimeQuarantines) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    const fallbackEngineId = defaultSlotIdForKey("contextEngine");
+    lines.push(theme.error("Runtime quarantines:"));
+    for (const entry of contextEngineQuarantines) {
+      const owner = entry.owner ? ` (${entry.owner})` : "";
+      lines.push(
+        `- context engine "${entry.engineId}"${owner} failed during ${entry.operation} and was replaced by "${fallbackEngineId}": ${entry.reason}`,
+      );
+    }
+    lines.push(
+      `  ${theme.muted("Repair:")} fix or disable the owning plugin, then ${theme.command("openclaw gateway restart --force")}`,
+    );
   }
   if (diags.length > 0) {
     if (lines.length > 0) {

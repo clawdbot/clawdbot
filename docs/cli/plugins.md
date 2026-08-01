@@ -510,6 +510,8 @@ openclaw plugins doctor
 
 `doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. When the install tree and plugin config are clean it prints `No plugin issues detected.` If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
 
+`doctor` also lists context engines quarantined at runtime under `Runtime quarantines:`. A plugin engine that loads fine but throws during a session is quarantined for that process and replaced by `legacy`, so a plugin can be healthy on disk while the engine you configured is not the one running. The same records appear in `/status` plugin health and in gateway health.
+
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.
