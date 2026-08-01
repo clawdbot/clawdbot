@@ -6,7 +6,6 @@ import {
   getRegisteredCompactionProvider,
   listRegisteredCompactionProviders,
   registerCompactionProvider,
-  restoreRegisteredCompactionProviders,
   type CompactionProvider,
 } from "./compaction-provider.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -145,7 +144,7 @@ describe("compaction provider registry", () => {
     expect(listCompactionProviderIdsForTest()).toEqual(["dup"]);
   });
 
-  describe("lifecycle (clear / restore)", () => {
+  describe("lifecycle", () => {
     it("clear removes all providers", () => {
       registerCompactionProvider(makeProvider("a"));
       registerCompactionProvider(makeProvider("b"));
@@ -154,31 +153,6 @@ describe("compaction provider registry", () => {
       clearCompactionProviders();
       expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
       expect(getCompactionProvider("a")).toBeUndefined();
-    });
-
-    it("restore replaces current entries with snapshot", () => {
-      const provA = makeProvider("a");
-      const provB = makeProvider("b");
-      registerCompactionProvider(provA, { ownerPluginId: "p-a" });
-      registerCompactionProvider(provB, { ownerPluginId: "p-b" });
-
-      const snapshot = listRegisteredCompactionProviders();
-
-      // Register a third provider to change state
-      registerCompactionProvider(makeProvider("c"));
-      expect(listCompactionProviderIdsForTest()).toHaveLength(3);
-
-      // Restore from snapshot — should have only a and b
-      restoreRegisteredCompactionProviders(snapshot);
-      expect(listCompactionProviderIdsForTest()).toEqual(["a", "b"]);
-      expect(getCompactionProvider("c")).toBeUndefined();
-      expect(getRegisteredCompactionProvider("a")?.ownerPluginId).toBe("p-a");
-    });
-
-    it("restore with empty array clears everything", () => {
-      registerCompactionProvider(makeProvider("x"));
-      restoreRegisteredCompactionProviders([]);
-      expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
     });
   });
 });

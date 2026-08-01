@@ -24,9 +24,11 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       return;
     }
     const next = { pluginId: record.id, runtime };
-    existing
-      ? registry.detachedTaskRuntimes.splice(0, 1, next)
-      : registry.detachedTaskRuntimes.push(next);
+    if (existing) {
+      registry.detachedTaskRuntimes.splice(0, 1, next);
+    } else {
+      registry.detachedTaskRuntimes.push(next);
+    }
   };
 
   const registerInteractiveHandler = (
@@ -44,7 +46,6 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: result.error ?? "interactive handler registration failed",
       });
-      return;
     }
   };
 

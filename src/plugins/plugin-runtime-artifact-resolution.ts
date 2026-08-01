@@ -6,7 +6,6 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { collectLivePluginRegistries, requireActivePluginRegistry } from "./runtime.js";
 
-export type { ResolvedPluginRuntimeArtifact } from "./registry-contribution-types.js";
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
 
 // Pin one physical path per plugin id and logical entry within one installed registry.

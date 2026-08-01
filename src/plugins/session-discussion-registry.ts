@@ -39,13 +39,3 @@ export function getSessionDiscussionProvider(): SessionDiscussionProvider | unde
 export function clearSessionDiscussionProvider(): void {
   requireActivePluginChannelRegistry().sessionDiscussionProviders.clear();
 }
-
-export function restoreSessionDiscussionProvider(
-  provider: SessionDiscussionProvider | undefined,
-): void {
-  const providers = requireActivePluginChannelRegistry().sessionDiscussionProviders;
-  providers.clear();
-  if (provider) {
-    providers.set(provider.id, { pluginId: provider.id, provider });
-  }
-}

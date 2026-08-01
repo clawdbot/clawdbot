@@ -39,7 +39,11 @@ export function registerAgentHarness(
       `agent harness ${id}`,
     );
   }
-  existingIndex === -1 ? harnesses.push(entry) : harnesses.splice(existingIndex, 1, entry);
+  if (existingIndex === -1) {
+    harnesses.push(entry);
+  } else {
+    harnesses.splice(existingIndex, 1, entry);
+  }
 }
 
 /** Returns the harness plus plugin ownership metadata for registry diagnostics. */
@@ -64,14 +68,6 @@ export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
 /** Clears all harnesses; intended for tests and controlled registry reloads. */
 export function clearAgentHarnesses(): void {
   getAgentHarnesses().length = 0;
-}
-
-/** Restores a prior harness snapshot after tests temporarily replace the registry. */
-export function restoreRegisteredAgentHarnesses(entries: RegisteredAgentHarness[]): void {
-  clearAgentHarnesses();
-  for (const entry of entries) {
-    registerAgentHarness(entry.harness, { ownerPluginId: entry.ownerPluginId });
-  }
 }
 
 /** Calls each registered harness session-reset hook without letting one failure stop the fan-out. */

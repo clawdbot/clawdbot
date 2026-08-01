@@ -4,7 +4,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { type MemoryEmbeddingBatchOptions } from "../memory-embedding-providers.js";
+import type { MemoryEmbeddingBatchOptions } from "../memory-embedding-providers.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 
 describe("memory embedding provider registration", () => {

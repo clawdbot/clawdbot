@@ -27,10 +27,7 @@ import type {
   IngestResult,
 } from "./types.js";
 
-export type {
-  ContextEngineFactory,
-  ContextEngineRegistration,
-} from "../plugins/registry-contribution-types.js";
+export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 
 /**
  * Runtime context passed to context engine factories during resolution.

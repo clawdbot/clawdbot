@@ -10,7 +10,6 @@ import {
   listRegisteredAgentHarnesses,
   registerAgentHarness,
   resetRegisteredAgentHarnessSessions,
-  restoreRegisteredAgentHarnesses,
 } from "./registry.js";
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
@@ -112,16 +111,6 @@ describe("agent harness registry", () => {
       registerAgentHarness(makeHarness("owned"));
     });
     expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
-  });
-
-  it("restores a registry snapshot", () => {
-    registerAgentHarness(makeHarness("a"));
-    const snapshot = listRegisteredAgentHarnesses();
-    registerAgentHarness(makeHarness("b"));
-
-    restoreRegisteredAgentHarnesses(snapshot);
-
-    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["a"]);
   });
 
   it("dispatches generic session reset to registered harnesses", async () => {

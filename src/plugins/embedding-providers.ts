@@ -58,9 +58,11 @@ export function registerEmbeddingProvider(
     );
   }
   const entry = { pluginId, provider: adapter, source: "runtime" };
-  existingIndex === -1
-    ? registry.embeddingProviders.push(entry)
-    : registry.embeddingProviders.splice(existingIndex, 1, entry);
+  if (existingIndex === -1) {
+    registry.embeddingProviders.push(entry);
+  } else {
+    registry.embeddingProviders.splice(existingIndex, 1, entry);
+  }
 }
 
 /** Looks up the registered embedding provider entry, including owner metadata. */

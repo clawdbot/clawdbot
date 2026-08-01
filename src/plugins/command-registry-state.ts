@@ -45,21 +45,12 @@ export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>
   },
 });
 
-export function isPluginCommandRegistryLocked(): boolean {
-  return getCommandRegistry().commandRegistryLocked;
-}
-
 export function setPluginCommandRegistryLocked(locked: boolean): void {
   getCommandRegistry().commandRegistryLocked = locked;
 }
 
 export function clearPluginCommands(): void {
   pluginCommands.clear();
-}
-
-export function clearPluginCommandsForPlugin(pluginId: string): void {
-  const registry = getCommandRegistry();
-  registry.commands = registry.commands.filter((entry) => entry.pluginId !== pluginId);
 }
 
 export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
@@ -71,10 +62,6 @@ export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolea
     (Array.isArray(command.requiredScopes) && command.requiredScopes.length > 0) ||
     command.trustedOwnerStatusExposure === true
   );
-}
-
-export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
-  return Array.from(pluginCommands.values());
 }
 
 export function listRegisteredPluginAgentPromptGuidance(params?: {
@@ -125,23 +112,4 @@ function resolveAgentPromptGuidanceTextForSurface(
     return params.includeLegacyGlobalGuidance ? text : undefined;
   }
   return entry.surfaces.includes(params.surface) ? text : undefined;
-}
-
-export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
-  const registry = getCommandRegistry();
-  registry.commands.length = 0;
-  for (const command of commands) {
-    const name = normalizeOptionalLowercaseString(command.name);
-    if (!name) {
-      continue;
-    }
-    registry.commands.push({
-      pluginId: command.pluginId,
-      pluginName: command.pluginName,
-      command: { ...command, name },
-      source: command.pluginRoot ?? "runtime",
-      rootDir: command.pluginRoot,
-      trustedOwnerStatusExposure: command.trustedOwnerStatusExposure,
-    });
-  }
 }

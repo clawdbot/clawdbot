@@ -150,35 +150,3 @@ export function clearPluginInteractiveHandlers(): void {
   requireActivePluginChannelRegistry().interactiveHandlers.length = 0;
   clearPluginInteractiveHandlersState();
 }
-
-/** Clears active interactive handlers owned by one plugin. */
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
-  const registry = requireActivePluginChannelRegistry();
-  registry.interactiveHandlers = registry.interactiveHandlers.filter(
-    (entry) => entry.pluginId !== pluginId,
-  );
-}
-
-/** Lists active plugin interactive handlers. */
-export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
-  return [...getInteractiveHandlers()];
-}
-
-/** Restores active plugin interactive handlers from a saved registry snapshot. */
-export function restorePluginInteractiveHandlers(
-  registrations: readonly RegisteredInteractiveHandler[],
-): void {
-  const registry = requireActivePluginChannelRegistry();
-  registry.interactiveHandlers.length = 0;
-  for (const registration of registrations) {
-    const namespace = normalizePluginInteractiveNamespace(registration.namespace);
-    if (!namespace) {
-      continue;
-    }
-    registry.interactiveHandlers.push({
-      ...registration,
-      namespace,
-      channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
-    });
-  }
-}

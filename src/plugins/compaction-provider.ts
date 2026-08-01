@@ -8,10 +8,7 @@ import {
   resolveDirectPluginRegistrationOwner,
 } from "./runtime.js";
 
-export type {
-  CompactionProvider,
-  RegisteredCompactionProvider,
-} from "./registry-contribution-types.js";
+export type { CompactionProvider } from "./registry-contribution-types.js";
 
 const getProviders = () => requireActivePluginRegistry().compactionProviders;
 
@@ -32,7 +29,11 @@ export function registerCompactionProvider(
       `compaction provider ${provider.id}`,
     );
   }
-  index === -1 ? providers.push(entry) : providers.splice(index, 1, entry);
+  if (index === -1) {
+    providers.push(entry);
+  } else {
+    providers.splice(index, 1, entry);
+  }
 }
 
 export function getCompactionProvider(id: string): CompactionProvider | undefined {
@@ -51,10 +52,4 @@ export function listRegisteredCompactionProviders(): RegisteredCompactionProvide
 
 export function clearCompactionProviders(): void {
   getProviders().length = 0;
-}
-
-export function restoreRegisteredCompactionProviders(
-  entries: RegisteredCompactionProvider[],
-): void {
-  getProviders().splice(0, getProviders().length, ...entries);
 }

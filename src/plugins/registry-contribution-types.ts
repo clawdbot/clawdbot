@@ -321,13 +321,6 @@ export type MemoryPluginCapabilityRegistration = {
   capability: MemoryPluginCapability;
 };
 
-export type MemoryPluginState = {
-  capability?: MemoryPluginCapabilityRegistration;
-  corpusSupplements: MemoryCorpusSupplementRegistration[];
-  promptPreparations: MemoryPromptPreparationRegistration[];
-  promptSupplements: MemoryPromptSupplementRegistration[];
-};
-
 export type SessionDiscussionState = "none" | "available" | "open";
 export type SessionDiscussionInfo = {
   state: SessionDiscussionState;

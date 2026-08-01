@@ -10,7 +10,6 @@ import type {
   MemoryPluginCapabilityRegistration,
   MemoryPluginPublicArtifact,
   MemoryPluginRuntime,
-  MemoryPluginState,
   MemoryPromptPreparationRegistration,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
@@ -25,19 +24,14 @@ const log = createSubsystemLogger("plugins/memory-state");
 export type {
   MemoryCorpusSearchResult,
   MemoryCorpusSupplement,
-  MemoryCorpusSupplementRegistration,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryPluginCapability,
-  MemoryPluginCapabilityRegistration,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
-  MemoryPluginState,
-  MemoryPromptPreparationRegistration,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
-  MemoryPromptSupplementRegistration,
   PreparedMemoryPromptSection,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
@@ -73,10 +67,10 @@ const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
 
 export function registerMemoryCorpusSupplement(
-  pluginId: string,
+  requestedPluginId: string,
   supplement: MemoryCorpusSupplement,
 ): void {
-  pluginId = resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryCorpusSupplements = registry.memoryCorpusSupplements
     .filter((registration) => registration.pluginId !== pluginId)
@@ -84,10 +78,10 @@ export function registerMemoryCorpusSupplement(
 }
 
 export function registerMemoryCapability(
-  pluginId: string,
+  requestedPluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  pluginId = resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryCapabilities.push({ pluginId, capability });
 }
@@ -106,10 +100,10 @@ export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistratio
   return [...requireActivePluginRegistry().memoryCorpusSupplements];
 }
 export function registerMemoryPromptSupplement(
-  pluginId: string,
+  requestedPluginId: string,
   builder: MemoryPromptSectionBuilder,
 ): void {
-  pluginId = resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryPromptSupplements = registry.memoryPromptSupplements
     .filter((registration) => registration.pluginId !== pluginId)
@@ -117,10 +111,10 @@ export function registerMemoryPromptSupplement(
 }
 
 export function registerMemoryPromptPreparation(
-  pluginId: string,
+  requestedPluginId: string,
   prepare: MemoryPromptSectionPreparer,
 ): void {
-  pluginId = resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryPromptPreparations = registry.memoryPromptPreparations
     .filter((registration) => registration.pluginId !== pluginId)
@@ -339,16 +333,6 @@ export async function listActiveMemoryPublicArtifacts(params: {
     }
     return left.absolutePath.localeCompare(right.absolutePath);
   });
-}
-
-export function restoreMemoryPluginState(state: MemoryPluginState): void {
-  const registry = requireActivePluginRegistry();
-  registry.memoryCapabilities = state.capability
-    ? [{ pluginId: state.capability.pluginId, capability: { ...state.capability.capability } }]
-    : [];
-  registry.memoryCorpusSupplements = [...state.corpusSupplements];
-  registry.memoryPromptPreparations = [...state.promptPreparations];
-  registry.memoryPromptSupplements = [...state.promptSupplements];
 }
 
 export function clearMemoryPluginState(): void {

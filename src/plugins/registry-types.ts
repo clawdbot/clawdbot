@@ -352,14 +352,14 @@ export type PluginCommandRegistration = {
   trustedOwnerStatusExposure?: true;
 };
 
-export type PluginLegacyInternalHookRegistration = {
+type PluginLegacyInternalHookRegistration = {
   pluginId: string;
   name: string;
   event: string;
   handler: InternalHookHandler;
 };
 
-export type PluginSessionDiscussionRegistration = {
+type PluginSessionDiscussionRegistration = {
   pluginId: string;
   provider: SessionDiscussionProvider;
 };

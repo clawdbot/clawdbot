@@ -48,9 +48,11 @@ export function registerMemoryEmbeddingProvider(
       `memory embedding provider ${adapter.id}`,
     );
   }
-  index === -1
-    ? registry.memoryEmbeddingProviders.push(entry)
-    : registry.memoryEmbeddingProviders.splice(index, 1, entry);
+  if (index === -1) {
+    registry.memoryEmbeddingProviders.push(entry);
+  } else {
+    registry.memoryEmbeddingProviders.splice(index, 1, entry);
+  }
 }
 
 export function getRegisteredMemoryEmbeddingProvider(
