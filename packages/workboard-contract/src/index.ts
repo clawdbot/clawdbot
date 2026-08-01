@@ -206,15 +206,7 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind:
-    | "claim"
-    | "unblock"
-    | "promote"
-    | "reclaim"
-    | "reassign"
-    | "add_proof"
-    | "open_session"
-    | "unarchive";
+  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
   label: string;
 };
 

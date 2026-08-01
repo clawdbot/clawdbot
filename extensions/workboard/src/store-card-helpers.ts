@@ -395,11 +395,8 @@ export function mergeDiagnostics(
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
   if (card.metadata?.archivedAt) {
-    // An archived card is correctly excluded from automation, but if it is
-    // still in an active status (not done) it is silently undispatchable with
-    // no signal on any surface. Surface a diagnostic so `workboard show` and
-    // `store.diagnostics()` report it instead of leaving the operator to find
-    // it by reading the database (#116359).
+    // Archived cards intentionally skip automation. Keep nonterminal cards
+    // visible as a transient diagnostic without rewriting archived metadata.
     if (card.status !== "done") {
       return [
         diagnostic(
@@ -408,7 +405,7 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
             severity: "warning",
             title: "Archived card is still in an active status",
             detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
-            actions: [{ kind: "unarchive", label: "Unarchive" }],
+            actions: [],
           },
           now,
         ),
