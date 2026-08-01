@@ -268,7 +268,12 @@ describe("appendPreparedModelCatalogRows", () => {
     expect(requireOnlyRow(rows).key).toBe("anthropic/claude-opus-4-7");
     expect(mocks.loadScopedModelCatalogSnapshot).toHaveBeenCalledExactlyOnceWith({
       cfg: {},
+      agentId: "worker",
+      agentDir: "/tmp/openclaw-worker",
+      inheritedAuthDir: "/tmp/openclaw-default",
+      workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["anthropic"],
+      configuredKeys: [],
     });
     expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
@@ -939,7 +944,11 @@ describe("appendAuthenticatedCatalogRows", () => {
     });
     expect(mocks.loadScopedModelCatalogSnapshot).toHaveBeenCalledWith({
       cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      inheritedAuthDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["local-openai"],
+      configuredKeys: [],
     });
   });
 

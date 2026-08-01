@@ -17,12 +17,10 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
-  type AuthProfileCredential,
-  type AuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
-  resolveApiKeyForProfile,
-} from "./auth-profiles.js";
+} from "./auth-profiles/order.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -221,6 +219,35 @@ export function shouldPreferExplicitConfigApiKeyAuth(
     providerConfig !== undefined &&
     hasExplicitProviderApiKeyConfig(providerConfig)
   );
+}
+
+/** True when a custom local provider can use a synthetic no-auth placeholder. */
+export function hasSyntheticLocalProviderAuthConfig(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return false;
+  }
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return false;
+  }
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return false;
+  }
+  if (
+    !isCustomLocalProviderConfig(providerConfig) ||
+    hasExplicitProviderApiKeyConfig(providerConfig)
+  ) {
+    return false;
+  }
+  return Boolean(providerConfig.baseUrl && isLocalAuthProviderBaseUrl(providerConfig.baseUrl));
 }
 
 export function resolveProviderAuthOverride(
@@ -435,6 +462,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
     return reference;
   }
   try {
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
       store: params.store,

@@ -7,12 +7,12 @@ import type { ManifestModelCatalogRowSelection } from "../../model-catalog/manif
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolvePluginContributionOwners } from "../../plugins/plugin-registry-contributions.js";
 import {
   getPluginRecord,
   isPluginEnabled,
-  resolvePluginContributionOwners,
   type PluginRegistrySnapshot,
-} from "../../plugins/plugin-registry.js";
+} from "../../plugins/plugin-registry-snapshot.js";
 
 function planManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;

@@ -474,7 +474,12 @@ export async function loadListModelCatalogSnapshot(
     const { loadScopedListModelCatalogSnapshot } = await loadScopedModelCatalogModule();
     return loadScopedListModelCatalogSnapshot({
       cfg: context.cfg,
+      ...(context.agentId ? { agentId: context.agentId } : {}),
+      agentDir: context.agentDir,
+      inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
+      ...(workspaceDir ? { workspaceDir } : {}),
       providerIds: context.providerDiscoveryProviderIds,
+      configuredKeys: [...context.configuredByKey.keys()],
       ...(context.metadataSnapshot ? { metadataSnapshot: context.metadataSnapshot } : {}),
     });
   }

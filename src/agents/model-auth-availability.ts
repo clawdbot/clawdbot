@@ -15,15 +15,12 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import {
-  isConfiguredAwsSdkAuthProfileForProvider,
-  getRuntimeAuthProfileStoreSnapshot,
-  resolveAuthProfileEligibility,
-} from "./auth-profiles.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
   type AuthProfileOrderResolution,
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "./auth-profiles/order.js";
 import {
@@ -31,6 +28,7 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 import {
@@ -40,12 +38,12 @@ import {
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
 import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
-  hasUsableCustomProviderApiKey,
-  hasRuntimeAvailableProviderAuth,
   hasSyntheticLocalProviderAuthConfig,
+  hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "./model-auth.js";
+} from "./model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createOpenAIModelRoutesResolver,
@@ -538,14 +536,8 @@ export function createModelAuthAvailabilityResolver(
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
       return {
         availability: managed
-          ? hasRuntimeAvailableProviderAuth({
-              provider,
-              modelApi: target.api ?? undefined,
-              cfg: params.cfg,
-              workspaceDir: params.workspaceDir,
-              env,
-              allowPluginSyntheticAuth: false,
-            }) || undefined
+          ? Boolean(resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg })) ||
+            undefined
           : undefined,
         selectedAuthMode: configuredBearerMode,
         evidence: managed ? "runtime" : "synthetic",
@@ -560,14 +552,9 @@ export function createModelAuthAvailabilityResolver(
         };
       }
       const available = resolveSecretRefReadOnlyAvailability(apiKeyRef, params.cfg, env);
-      const runtimeAvailable = hasRuntimeAvailableProviderAuth({
-        provider,
-        modelApi: target.api ?? undefined,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
-        allowPluginSyntheticAuth: false,
-      });
+      const runtimeAvailable = Boolean(
+        resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg }),
+      );
       return {
         availability: runtimeAvailable ? true : available,
         selectedAuthMode: configuredBearerMode,

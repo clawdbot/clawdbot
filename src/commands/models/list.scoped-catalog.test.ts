@@ -3,11 +3,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadManifestCatalogRowsForList: vi.fn(),
   loadStaticManifestCatalogRowsForList: vi.fn(),
+  loadPersistedListCatalogEntries: vi.fn(),
+  prepareScopedReadOnlyModelCatalog: vi.fn(),
 }));
 
 vi.mock("./list.manifest-catalog.js", () => ({
   loadManifestCatalogRowsForList: mocks.loadManifestCatalogRowsForList,
   loadStaticManifestCatalogRowsForList: mocks.loadStaticManifestCatalogRowsForList,
+}));
+
+vi.mock("./list.persisted-catalog.js", () => ({
+  loadPersistedListCatalogEntries: mocks.loadPersistedListCatalogEntries,
+}));
+
+vi.mock("../../agents/prepared-model-runtime.scoped-catalog.js", () => ({
+  prepareScopedReadOnlyModelCatalog: mocks.prepareScopedReadOnlyModelCatalog,
 }));
 
 import { loadScopedListModelCatalogSnapshot } from "./list.scoped-catalog.js";
@@ -43,23 +53,39 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.loadManifestCatalogRowsForList.mockReturnValue([runtimeRow, staticRow]);
   mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([staticRow]);
+  mocks.loadPersistedListCatalogEntries.mockReturnValue([]);
+  mocks.prepareScopedReadOnlyModelCatalog.mockResolvedValue({
+    entries: [],
+    routeVariants: [],
+  });
 });
 
 describe("loadScopedListModelCatalogSnapshot", () => {
-  it("returns an empty snapshot without loading manifest catalogs for an empty auth scope", () => {
-    expect(loadScopedListModelCatalogSnapshot({ cfg: {}, providerIds: [] })).toEqual({
+  it("returns an empty snapshot without loading catalog sources for an empty scope", async () => {
+    await expect(
+      loadScopedListModelCatalogSnapshot({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        providerIds: [],
+        configuredKeys: [],
+      }),
+    ).resolves.toEqual({
       entries: [],
       routeVariants: [],
       staticEntries: [],
     });
     expect(mocks.loadManifestCatalogRowsForList).not.toHaveBeenCalled();
     expect(mocks.loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.loadPersistedListCatalogEntries).not.toHaveBeenCalled();
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
   });
 
-  it("admits runtime manifest rows only for authenticated providers", () => {
-    const snapshot = loadScopedListModelCatalogSnapshot({
+  it("uses runtime manifest rows to enrich configured model ids", async () => {
+    const snapshot = await loadScopedListModelCatalogSnapshot({
       cfg: {},
+      agentDir: "/tmp/openclaw-agent",
       providerIds: ["openai"],
+      configuredKeys: ["openai/gpt-5.6"],
     });
 
     expect(snapshot.entries).toEqual([
@@ -72,17 +98,95 @@ describe("loadScopedListModelCatalogSnapshot", () => {
     ]);
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
     expect(snapshot.staticEntries).toEqual([]);
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
   });
 
-  it("keeps static rows in the scoped snapshot", () => {
-    const snapshot = loadScopedListModelCatalogSnapshot({
+  it("keeps static rows in the scoped snapshot", async () => {
+    const snapshot = await loadScopedListModelCatalogSnapshot({
       cfg: {},
+      agentDir: "/tmp/openclaw-agent",
       providerIds: ["moonshot"],
+      configuredKeys: [],
     });
 
     expect(snapshot.entries).toEqual([
       expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6" }),
     ]);
     expect(snapshot.staticEntries).toEqual(snapshot.entries);
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("uses persisted runtime rows and manifest metadata without loading provider runtimes", async () => {
+    mocks.loadPersistedListCatalogEntries.mockReturnValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.6",
+        name: "Account GPT-5.6",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    ]);
+
+    const snapshot = await loadScopedListModelCatalogSnapshot({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      providerIds: ["openai"],
+      configuredKeys: [],
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.6",
+        name: "Account GPT-5.6",
+        api: "openai-chatgpt-responses",
+        contextWindow: 1_050_000,
+      }),
+    ]);
+    expect(snapshot.routeVariants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ api: "openai-chatgpt-responses" }),
+        expect.objectContaining({ api: "openai-responses" }),
+      ]),
+    );
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("falls back to scoped provider discovery only for providers with no lightweight rows", async () => {
+    const discovered = {
+      provider: "google",
+      id: "gemini-live",
+      name: "Gemini Live",
+      api: "google-generative-ai" as const,
+    };
+    mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([]);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([]);
+    mocks.prepareScopedReadOnlyModelCatalog.mockResolvedValueOnce({
+      entries: [discovered],
+      routeVariants: [discovered],
+    });
+
+    const snapshot = await loadScopedListModelCatalogSnapshot({
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/openclaw-agent",
+      inheritedAuthDir: "/tmp/openclaw-default",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providerIds: ["google"],
+      configuredKeys: [],
+    });
+
+    expect(snapshot.entries).toEqual([discovered]);
+    expect(mocks.prepareScopedReadOnlyModelCatalog).toHaveBeenCalledWith(
+      {
+        config: {},
+        agentId: "main",
+        agentDir: "/tmp/openclaw-agent",
+        inheritedAuthDir: "/tmp/openclaw-default",
+        workspaceDir: "/tmp/openclaw-workspace",
+        readOnly: true,
+      },
+      ["google"],
+    );
   });
 });
