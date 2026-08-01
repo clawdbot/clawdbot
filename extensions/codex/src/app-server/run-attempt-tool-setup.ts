@@ -169,6 +169,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ],
     exposeAllowlistedStaticServers,
     toolsAllow: params.toolsAllow,
+    // The dynamic bridge replaces the native projection for these servers, so it
+    // must inherit the same gates: `codex.agents` (agent id) and the session's
+    // MCP overrides. See buildCodexUserMcpServersThreadConfigPatch.
+    agentId: sessionAgentId,
+    toolOverrides: params.toolOverrides,
     policyContext: {
       config: params.config,
       sessionKey: sandboxSessionKey,

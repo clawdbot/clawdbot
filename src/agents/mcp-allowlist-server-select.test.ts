@@ -48,6 +48,76 @@ describe("selectAllowlistedStaticMcpServerNames", () => {
     expect(select(undefined).size).toBe(0);
   });
 
+  it("excludes a server this agent may not reach", () => {
+    // `codex.agents` is the same capability boundary the native projection
+    // applies; the dynamic bridge must not become a way around it.
+    const scopedCfg = {
+      mcp: {
+        servers: {
+          opik: { command: "true", codex: { agents: ["agent-a"] } },
+          notion: { command: "true" },
+        },
+      },
+    };
+    const selectFor = (agentId?: string) =>
+      selectAllowlistedStaticMcpServerNames({
+        cfg: scopedCfg as never,
+        workspaceDir: "/workspace",
+        toolsAllow: ["opik__read", "notion__read"],
+        ...(agentId ? { agentId } : {}),
+      });
+
+    expect([...selectFor("agent-a")].toSorted()).toEqual(["notion", "opik"]);
+    expect([...selectFor("agent-b")].toSorted()).toEqual(["notion"]);
+    // No agent id at all is fail-closed for a server that declares `agents`.
+    expect([...selectFor()].toSorted()).toEqual(["notion"]);
+  });
+
+  it("excludes a server the session disabled", () => {
+    const selected = selectAllowlistedStaticMcpServerNames({
+      cfg: cfg as never,
+      workspaceDir: "/workspace",
+      toolsAllow: ["opik__read", "notion__read"],
+      toolOverrides: { mcpServers: { opik: false } },
+    });
+    expect([...selected].toSorted()).toEqual(["notion"]);
+  });
+
+  it("excludes a plugin-curated server the user did not configure", () => {
+    // Only the user-MCP patch is omitted on a scoped turn; the bundle-MCP patch
+    // still attaches plugin servers natively, so selecting them here would
+    // surface the same server twice.
+    const selected = selectAllowlistedStaticMcpServerNames({
+      cfg: {
+        mcp: { servers: { opik: { command: "true" } } },
+        plugins: { entries: { "curated-mcp": { enabled: true } } },
+      } as never,
+      workspaceDir: "/workspace-plugin-curated",
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "curated-mcp",
+            origin: "global",
+            format: "openclaw",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: "/plugins/curated-mcp",
+            source: "/plugins/curated-mcp/index.js",
+            manifestPath: "/plugins/curated-mcp/openclaw.plugin.json",
+            mcpServers: {
+              curated: { transport: "streamable-http", url: "https://curated.example.test/mcp" },
+            },
+          },
+        ],
+      } as never,
+      toolsAllow: ["opik__read", "curated__read"],
+    });
+    expect([...selected].toSorted()).toEqual(["opik"]);
+  });
+
   it("excludes a requester-scoped server even when the allowlist names it", async () => {
     const { testing } = await import("./mcp-connection-resolver.js");
     // A registered resolver makes opik requester-scoped; it must not be selected

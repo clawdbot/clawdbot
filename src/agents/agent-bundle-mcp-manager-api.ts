@@ -70,6 +70,7 @@ export async function getOrCreateStaticScopedMcpRuntime(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   includeServerNames: ReadonlySet<string>;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime | undefined> {
   return await getSessionMcpRuntimeManager().getOrCreateStaticScoped(params);
 }

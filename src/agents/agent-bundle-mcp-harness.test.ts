@@ -344,6 +344,35 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     await result!.dispose();
   });
 
+  it("carries session tool overrides into both scoped runtimes", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeRuntime({ sessionId: params.sessionId, requesterSenderId: "authed" }),
+    );
+    mocks.setStaticResolveImpl(async (params) =>
+      params.includeServerNames.has("opik") ? makeStaticRuntime(params.sessionId) : undefined,
+    );
+    const toolOverrides = { mcpServers: { notes: false }, mcpToolsDeny: { opik: ["delete"] } };
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+      sessionId: "session-overrides",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: { opik: { command: "true" } } } } as never,
+      requesterSenderId: "authed",
+      exposeAllowlistedStaticServers: true,
+      toolsAllow: ["opik__read"],
+      toolOverrides,
+    });
+
+    // Both bridges replace surfaces that honored these overrides natively.
+    expect(mocks.getOrCreateRequesterScopedMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ toolOverrides }),
+    );
+    expect(mocks.getOrCreateStaticScopedMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ toolOverrides }),
+    );
+    await result?.dispose();
+  });
+
   it("leaks no stale static stub when the later turn is unrestricted", async () => {
     mocks.setResolveImpl(async (params) =>
       makeRuntime({ sessionId: params.sessionId, requesterSenderId: "authed" }),

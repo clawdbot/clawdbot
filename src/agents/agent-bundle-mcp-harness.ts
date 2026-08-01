@@ -4,6 +4,7 @@
  * caller may pass `staticServerNames` to expose those named static servers as
  * dynamic tools instead (per-turn only, never written to the session cache).
  */
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -59,6 +60,10 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
    */
   exposeAllowlistedStaticServers?: boolean;
   toolsAllow?: string[];
+  /** Owning agent of the turn; gates servers declaring `codex.agents`. */
+  agentId?: string;
+  /** Session overrides that disable a server or deny its tools for this session. */
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   /** When set, applies the same final effective tool policy as the embedded runner. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   /** Builds a capability profile when conversationCapabilityProfile is omitted. */
@@ -133,6 +138,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
+    toolOverrides: params.toolOverrides,
   });
 
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
@@ -158,6 +164,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
         workspaceDir: params.workspaceDir,
         manifestRegistry: params.manifestRegistry,
         toolsAllow: params.toolsAllow,
+        agentId: params.agentId,
+        toolOverrides: params.toolOverrides,
       })
     : undefined;
   if (staticServerNames && staticServerNames.size > 0) {
@@ -169,6 +177,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
       cfg: params.cfg,
       manifestRegistry: params.manifestRegistry,
       includeServerNames: staticServerNames,
+      toolOverrides: params.toolOverrides,
     });
     if (staticRuntime) {
       staticLiveRuntime = await materializeBundleMcpToolsForRun({

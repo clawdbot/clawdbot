@@ -175,6 +175,7 @@ export type SessionMcpRuntimeManager = {
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     includeServerNames: ReadonlySet<string>;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread

@@ -3,10 +3,14 @@
  * static servers does the effective tool allowlist reference?" so a shared-thread
  * harness can expose exactly those as dynamic tools on a scoped-allowlist turn.
  */
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import { isCodexMcpServerAllowedForAgent } from "./cli-runner/bundle-mcp-codex.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import { normalizeToolName } from "./tool-policy-shared.js";
 
@@ -59,17 +63,28 @@ function isMcpServerToolAllowlisted(
 }
 
 /**
- * Names of declared **static** MCP servers the effective allowlist references.
- * Requester-scoped servers are excluded (they resolve on their own path).
- * Safe names come from the FULL declared set so a collision suffix matches the
- * model-facing tool id the operator's allowlist targets. Returns an empty set
- * when the allowlist imposes no restriction (nothing to narrow to a subset).
+ * Names of **user-configured static** MCP servers the effective allowlist
+ * references. Requester-scoped servers are excluded (they resolve on their own
+ * path), and so are plugin-curated bundle MCP servers: only the user-MCP patch
+ * is omitted on a scoped turn, while the bundle-MCP patch still attaches
+ * natively, so taking those over here would surface them twice. Safe names come
+ * from the FULL declared set so a collision suffix matches the model-facing tool
+ * id the operator's allowlist targets. Returns an empty set when the allowlist
+ * imposes no restriction (nothing to narrow to a subset).
+ *
+ * The selection carries the same two capability boundaries the native projection
+ * applies (`buildCodexUserMcpServersThreadConfigPatch`), because the servers this
+ * returns are surfaced *instead of* that projection: session tool overrides
+ * decide the declared set, and `codex.agents` decides which agents may reach a
+ * server. Omitting either would make the dynamic bridge a way around them.
  */
 export function selectAllowlistedStaticMcpServerNames(params: {
   cfg?: OpenClawConfig;
   workspaceDir: string;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolsAllow?: string[];
+  agentId?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Set<string> {
   const selected = new Set<string>();
   if (params.toolsAllow === undefined) {
@@ -80,14 +95,26 @@ export function selectAllowlistedStaticMcpServerNames(params: {
     cfg: params.cfg,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
   });
   const { staticServers } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
   const safeServerNamesByServer = assignSafeServerNames(Object.keys(fullConfig.loaded.mcpServers));
-  for (const serverName of Object.keys(staticServers)) {
-    const safeServerName = safeServerNamesByServer.get(serverName) ?? serverName;
-    if (isMcpServerToolAllowlisted(safeServerName, params.toolsAllow)) {
-      selected.add(serverName);
+  // The native patch this replaces projects `cfg.mcp.servers` only.
+  const userConfiguredServerNames = new Set(
+    Object.keys(normalizeConfiguredMcpServers(params.cfg?.mcp?.servers)),
+  );
+  for (const [serverName, server] of Object.entries(staticServers)) {
+    if (!userConfiguredServerNames.has(serverName)) {
+      continue;
     }
+    const safeServerName = safeServerNamesByServer.get(serverName) ?? serverName;
+    if (!isMcpServerToolAllowlisted(safeServerName, params.toolsAllow)) {
+      continue;
+    }
+    if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, params)) {
+      continue;
+    }
+    selected.add(serverName);
   }
   return selected;
 }

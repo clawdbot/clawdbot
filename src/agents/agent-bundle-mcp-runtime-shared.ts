@@ -20,7 +20,16 @@ export const SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES = 64;
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
   sessionId: string;
   requesterSenderId?: string | null;
+  exposeAllowlistedStaticServers?: boolean;
 }): boolean {
+  // A scoped-allowlist turn surfaces named static servers here *instead of* the
+  // harness-native patch the lifecycle omits for the same turn. That surface is
+  // requester-independent, so skipping the load on a senderId-less attempt would
+  // leave those servers on neither path. Which servers qualify is only knowable
+  // after the config load, so the flag alone admits the turn.
+  if (params.exposeAllowlistedStaticServers) {
+    return true;
+  }
   if (params.requesterSenderId?.trim()) {
     return true;
   }

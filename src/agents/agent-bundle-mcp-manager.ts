@@ -313,11 +313,15 @@ export function createSessionMcpRuntimeManager(
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
+      // Session tool overrides decide the declared set exactly as they do for
+      // `getOrCreate`/`getOrCreateRequesterScoped`: a server disabled for the
+      // session must not be openable through the harness bridge either.
       const fullConfig = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
         manifestRegistry: params.manifestRegistry,
+        toolOverrides: params.toolOverrides,
       });
       // Never open a requester-scoped server here (those stay on their own path).
       const { staticServers } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
@@ -332,11 +336,12 @@ export function createSessionMcpRuntimeManager(
       const safeServerNamesByServer = assignSafeServerNames(
         Object.keys(fullConfig.loaded.mcpServers),
       );
-      return await install.getOrCreateRuntimeEntry({
-        runtimeKey: buildMcpStaticHarnessRuntimeCacheKey({
-          sessionId: params.sessionId,
-          serverNames: openServerNames,
-        }),
+      const runtimeKey = buildMcpStaticHarnessRuntimeCacheKey({
+        sessionId: params.sessionId,
+        serverNames: openServerNames,
+      });
+      const staticRuntime = await install.getOrCreateRuntimeEntry({
+        runtimeKey,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
@@ -346,7 +351,14 @@ export function createSessionMcpRuntimeManager(
         idleTtlMs,
         includeServerNames: openServerNames,
         safeServerNamesByServer,
+        toolOverrides: params.toolOverrides,
       });
+      // The server set is part of the key, so turns with different allowlists
+      // install different variants. Bound them with the same per-session cap the
+      // requester path uses: it counts every runtime key for the session except
+      // the bare-sessionId one, and only evicts lease-free variants.
+      await lifecycle.enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
+      return staticRuntime;
     },
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,

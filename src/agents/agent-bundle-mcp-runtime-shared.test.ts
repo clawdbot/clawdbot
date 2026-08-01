@@ -36,6 +36,20 @@ describe("requester-scoped MCP harness preflight", () => {
     ).toBe(true);
   });
 
+  it("loads for a scoped-allowlist turn that carries no requester identity", () => {
+    // The lifecycle omits the native user-MCP patch for this same turn, so
+    // skipping the load here would leave the allowlisted static servers on
+    // neither path.
+    delete globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+
+    expect(
+      shouldLoadRequesterScopedMcpHarnessRuntime({
+        sessionId: "session-1",
+        exposeAllowlistedStaticServers: true,
+      }),
+    ).toBe(true);
+  });
+
   it("loads advertised stubs for an unauthenticated requester", () => {
     globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] = {
       getAdvertisedScopedCatalog: (sessionId: string) =>

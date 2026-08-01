@@ -53,9 +53,15 @@ function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string
   return isRecord(server.codex) ? server.codex : {};
 }
 
-function isCodexMcpServerAllowedForAgent(
+/**
+ * `codex.agents` on a server declares which agents may reach it. Exported so the
+ * scoped-allowlist selector applies the same capability boundary the native
+ * projection applies — a server reachable natively only from `agent-a` must not
+ * become reachable from `agent-b` through the dynamic-tool bridge.
+ */
+export function isCodexMcpServerAllowedForAgent(
   server: BundleMcpServerConfig,
-  options: CodexUserMcpServersProjectionOptions | undefined,
+  options: Pick<CodexUserMcpServersProjectionOptions, "agentId"> | undefined,
 ): boolean {
   const codex = readCodexProjectionConfig(server);
   if (!Object.hasOwn(codex, "agents")) {

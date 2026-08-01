@@ -3243,6 +3243,103 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
+  it("getOrCreateStaticScoped drops a server the session disabled", async () => {
+    const created: Array<string[]> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.includeServerNames ? [...params.includeServerNames].toSorted() : []);
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: { servers: { opik: { command: "true" }, notion: { command: "true" } } },
+    };
+
+    // The native projection honors `mcpServers: {opik: false}`; the harness
+    // bridge that replaces it on a scoped turn must not reopen the server.
+    await expect(
+      manager.getOrCreateStaticScoped({
+        sessionId: "session-override",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        includeServerNames: new Set(["opik"]),
+        toolOverrides: { mcpServers: { opik: false } },
+      }),
+    ).resolves.toBeUndefined();
+    expect(created).toHaveLength(0);
+
+    const runtime = await manager.getOrCreateStaticScoped({
+      sessionId: "session-override",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      includeServerNames: new Set(["opik", "notion"]),
+      toolOverrides: { mcpServers: { opik: false } },
+    });
+    expect(runtime).toBeDefined();
+    expect(created).toEqual([["notion"]]);
+
+    await manager.disposeAll();
+  });
+
+  it("getOrCreateStaticScoped bounds the number of cached server-set variants", async () => {
+    const disposed: string[] = [];
+    let lastUsedAt = 0;
+    const createRuntime: RuntimeFactory = (params) => {
+      const label = [...(params.includeServerNames ?? [])].toSorted().join(",");
+      lastUsedAt += 1_000;
+      const runtimeLastUsedAt = lastUsedAt;
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: `fingerprint:${label}`,
+        get lastUsedAt() {
+          return runtimeLastUsedAt;
+        },
+        markUsed: () => {},
+        dispose: async () => {
+          disposed.push(label);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      // Pin the sweep clock near the synthetic lastUsedAt values so only the cap
+      // evicts, not the idle TTL.
+      now: () => 5_000,
+      maxIdleRequesterRuntimesPerSession: 2,
+    });
+    const cfg = {
+      mcp: {
+        servers: {
+          opik: { command: "true" },
+          notion: { command: "true" },
+          jira: { command: "true" },
+        },
+      },
+    };
+
+    // Three turns, three different restricted allowlists: without the cap each
+    // one would keep its own live transports until the idle sweep.
+    for (const serverName of ["opik", "notion", "jira"]) {
+      await manager.getOrCreateStaticScoped({
+        sessionId: "session-variants",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        includeServerNames: new Set([serverName]),
+      });
+    }
+
+    expect(disposed).toEqual(["opik"]);
+    expect(manager.listRuntimeKeys()).toHaveLength(2);
+
+    await manager.disposeAll();
+  });
+
   it("getOrCreateStaticScoped keys by server set so a different scope does not evict a leased runtime", async () => {
     const disposed: string[] = [];
     const createRuntime: RuntimeFactory = (params) => {
