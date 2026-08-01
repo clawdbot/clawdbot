@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -258,6 +259,28 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
   });
 
+  it("ignores retired holder max-hold metadata", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "max-hold.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 1_000).toISOString(),
+        maxHoldMs: 1,
+      }),
+    );
+
+    await expect(
+      detectStaleSessionLocks({
+        staleMs: 60_000,
+        readOwnerProcessArgs: () => ["openclaw", "doctor"],
+      }),
+    ).resolves.toEqual([]);
+    await expect(fs.access(lockPath)).resolves.toBeUndefined();
+  });
+
   it("uses the emergency stale-threshold environment override without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -305,5 +328,60 @@ describe("noteSessionLockHealth", () => {
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
     await expect(fs.access(falseLiveLock)).rejects.toThrow();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "removes an untracked current-process sidecar with matching identity",
+    async () => {
+      const starttime = getFileLockProcessStartTime(process.pid);
+      if (starttime === null) {
+        return;
+      }
+      const sessionsDir = state.sessionsDir();
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const lockPath = path.join(sessionsDir, "orphan-self.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          starttime,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+      await noteSessionLockHealth({
+        shouldRepair: true,
+        staleMs: 60_000,
+        readOwnerProcessArgs: () => ["openclaw", "doctor"],
+      });
+
+      expect(firstNoteCall()[0]).toContain("orphan-self-pid");
+      await expectPathMissing(lockPath);
+    },
+  );
+
+  it("retries owner argv inspection after a transient resolver failure", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const first = path.join(sessionsDir, "a.jsonl.lock");
+    const second = path.join(sessionsDir, "b.jsonl.lock");
+    const payload = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+    await Promise.all([fs.writeFile(first, payload), fs.writeFile(second, payload)]);
+    const readOwnerProcessArgs = vi
+      .fn<(pid: number) => string[] | null>()
+      .mockImplementationOnce(() => {
+        throw new Error("transient process inspection failure");
+      })
+      .mockReturnValue(["python", "worker.py"]);
+
+    await noteSessionLockHealth({
+      shouldRepair: true,
+      staleMs: 60_000,
+      readOwnerProcessArgs,
+    });
+
+    expect(readOwnerProcessArgs).toHaveBeenCalledTimes(2);
+    await expect(fs.access(first)).resolves.toBeUndefined();
+    await expectPathMissing(second);
   });
 });

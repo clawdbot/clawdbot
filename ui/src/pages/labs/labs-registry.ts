@@ -2,6 +2,7 @@ import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
 type LabFeatureValue = boolean | string;
+type LabFeatureResetScope = "gate" | "parent";
 
 export type LabFeature = {
   id: string;
@@ -37,8 +38,23 @@ export type LabFeature = {
    * whatever a bare enable defaults to.
    */
   enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
+  /**
+   * Ownership boundary for default provenance and reset. Most rows own only
+   * their gate; features whose runtime default depends on any parent config
+   * own and reset that parent as a unit.
+   */
+  resetScope: LabFeatureResetScope;
   restartHint: (() => string) | null;
 };
+
+type LabFeatureState = {
+  enabled: boolean;
+  defaultEnabled: boolean;
+  overridden: boolean;
+};
+
+const LOCAL_MODEL_LEAN_FEATURE_ID = "localModelLean";
+const LOCAL_MODEL_LEAN_AUTO_MODEL_PATH = ["wizard", "localModelLeanAutoModel"] as const;
 
 export const LAB_FEATURES = [
   {
@@ -65,6 +81,7 @@ export const LAB_FEATURES = [
       return true;
     },
     enableAlso: null,
+    resetScope: "gate",
     restartHint: null,
   },
   {
@@ -78,6 +95,7 @@ export const LAB_FEATURES = [
     activeValues: [true],
     readEnabled: null,
     enableAlso: null,
+    resetScope: "gate",
     restartHint: null,
   },
   {
@@ -109,6 +127,7 @@ export const LAB_FEATURES = [
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
     enableAlso: { mode: "directory" },
+    resetScope: "parent",
     restartHint: null,
   },
   {
@@ -124,6 +143,7 @@ export const LAB_FEATURES = [
     // resolveToolLoopDetectionConfig reads this enabled leaf directly.
     readEnabled: null,
     enableAlso: null,
+    resetScope: "gate",
     restartHint: null,
   },
   {
@@ -137,6 +157,7 @@ export const LAB_FEATURES = [
     activeValues: [true],
     readEnabled: null,
     enableAlso: null,
+    resetScope: "gate",
     restartHint: null,
   },
   {
@@ -153,6 +174,7 @@ export const LAB_FEATURES = [
     activeValues: ["direct", "all"],
     readEnabled: null,
     enableAlso: null,
+    resetScope: "gate",
     // startGatewayEventSubscriptions resolves the mode once and bakes it into
     // the recorder, so this outlives the reload plan's `logging: none` rule.
     restartHint: () => t("labsPage.restartRequired"),
@@ -170,16 +192,35 @@ function recordAtPath(config: Record<string, unknown>, path: readonly string[]):
   return current;
 }
 
-export function isLabFeatureEnabled(
-  config: Record<string, unknown> | null,
+function defaultModelRef(config: Record<string, unknown>): string | undefined {
+  const model = recordAtPath(config, ["agents", "defaults", "model"]);
+  if (typeof model === "string") {
+    return model;
+  }
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
+    return undefined;
+  }
+  const primary = (model as Record<string, unknown>).primary;
+  return typeof primary === "string" ? primary : undefined;
+}
+
+function onboardingOwnsLocalModelLean(
+  config: Record<string, unknown>,
   feature: LabFeature,
 ): boolean {
-  if (!config) {
+  if (feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID) {
     return false;
   }
-  const parentPath = feature.configPath.slice(0, -1);
+  const autoModel = recordAtPath(config, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH);
+  return (
+    typeof autoModel === "string" &&
+    defaultModelRef(config) === autoModel &&
+    recordAtPath(config, feature.configPath) === true
+  );
+}
+
+function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   const key = feature.configPath.at(-1);
-  const parent = recordAtPath(config, parentPath);
   if (feature.readEnabled) {
     return feature.readEnabled(parent);
   }
@@ -194,7 +235,75 @@ export function isLabFeatureEnabled(
   return feature.activeValues.includes((parent as Record<string, unknown>)[key] as LabFeatureValue);
 }
 
+function labFeatureOverridePath(
+  config: Record<string, unknown>,
+  feature: LabFeature,
+): readonly string[] | null {
+  const parentPath = feature.configPath.slice(0, -1);
+  const key = feature.configPath.at(-1);
+  const parent = recordAtPath(config, parentPath);
+  if (!key) {
+    return null;
+  }
+  if (feature.resetScope === "parent") {
+    return parent === undefined ? null : parentPath;
+  }
+  // Boolean/string shorthands own the parent node rather than an `enabled`
+  // child. Resetting the child would replace the shorthand with an empty object.
+  if (
+    key === "enabled" &&
+    parent !== undefined &&
+    (typeof parent !== "object" || parent === null)
+  ) {
+    return parentPath;
+  }
+  if (
+    parent &&
+    typeof parent === "object" &&
+    !Array.isArray(parent) &&
+    Object.hasOwn(parent, key)
+  ) {
+    return feature.configPath;
+  }
+  return null;
+}
+
+export function resolveLabFeatureState(
+  config: Record<string, unknown> | null,
+  feature: LabFeature,
+): LabFeatureState {
+  const source = config ?? {};
+  // Onboarding records this generated value beside the model it belongs to.
+  // Treat the pair as one inherited default so Labs never mislabels or detaches it.
+  if (onboardingOwnsLocalModelLean(source, feature)) {
+    return { enabled: true, defaultEnabled: true, overridden: false };
+  }
+  const parentPath = feature.configPath.slice(0, -1);
+  const key = feature.configPath.at(-1);
+  const parent = recordAtPath(source, parentPath);
+  const overridePath = labFeatureOverridePath(source, feature);
+  let defaultParent = parent;
+  if (overridePath?.length === parentPath.length) {
+    defaultParent = undefined;
+  } else if (
+    overridePath &&
+    key &&
+    parent &&
+    typeof parent === "object" &&
+    !Array.isArray(parent)
+  ) {
+    defaultParent = { ...(parent as Record<string, unknown>) };
+    delete (defaultParent as Record<string, unknown>)[key];
+  }
+  return {
+    enabled: readEnabledFromParent(feature, parent),
+    defaultEnabled: readEnabledFromParent(feature, defaultParent),
+    overridden: overridePath !== null,
+  };
+}
+
 export function labFeatureMergePatch(
+  config: Record<string, unknown> | null,
   feature: LabFeature,
   enabled: boolean,
 ): Record<string, unknown> {
@@ -208,5 +317,37 @@ export function labFeatureMergePatch(
   for (const segment of feature.configPath.slice(0, -1).toReversed()) {
     patch = { [segment]: patch };
   }
-  return patch as Record<string, unknown>;
+  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
+}
+
+function releaseLabFeatureOwnership(
+  config: Record<string, unknown> | null,
+  feature: LabFeature,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  if (
+    feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID ||
+    recordAtPath(config ?? {}, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH) === undefined
+  ) {
+    return patch;
+  }
+  return {
+    ...patch,
+    wizard: { localModelLeanAutoModel: null },
+  };
+}
+
+export function labFeatureResetPatch(
+  config: Record<string, unknown> | null,
+  feature: LabFeature,
+): Record<string, unknown> | null {
+  const path = labFeatureOverridePath(config ?? {}, feature);
+  if (!path?.length) {
+    return null;
+  }
+  let patch: unknown = null;
+  for (const segment of path.toReversed()) {
+    patch = { [segment]: patch };
+  }
+  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
 }

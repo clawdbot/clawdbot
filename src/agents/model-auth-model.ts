@@ -1,6 +1,7 @@
 /**
  * Model-level auth diagnostics and request-header preparation.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getRuntimeConfigSnapshot,
@@ -34,7 +35,6 @@ import {
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,

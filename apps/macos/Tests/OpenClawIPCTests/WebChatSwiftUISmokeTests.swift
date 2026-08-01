@@ -155,6 +155,7 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.toolbarStyle == .unified)
         #expect(window.titlebarSeparatorStyle == .none)
         #expect(window.isMovableByWindowBackground)
+        #expect(window.isRestorable == false)
         #expect(window.title == "Studio — OpenClaw")
         window.title = "main"
         #expect(window.title == "Studio — OpenClaw")

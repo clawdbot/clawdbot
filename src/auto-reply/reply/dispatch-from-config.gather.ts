@@ -62,7 +62,11 @@ export async function gatherDispatchRequest(
     ? params.ctx
     : finalizeInboundContext(params.ctx);
   const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
-  const state = { params: normalizedParams, messageAuditTerminal };
+  const state = {
+    params: normalizedParams,
+    messageAuditTerminal,
+    inboundDedupeReplayUnsafe: false,
+  };
   const { cfg, dispatcher } = normalizedParams;
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
@@ -183,9 +187,8 @@ export async function gatherDispatchRequest(
     messageLifecycle.markIdle(reason);
   };
 
-  let inboundDedupeReplayUnsafe = false;
   const markInboundDedupeReplayUnsafe = () => {
-    inboundDedupeReplayUnsafe = true;
+    state.inboundDedupeReplayUnsafe = true;
   };
 
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -383,8 +386,8 @@ export async function gatherDispatchRequest(
       inboundClaimEvent: inboundClaim.event,
     };
   };
-  let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);
-  const { isGroup, groupId } = hookContext;
+  const hookState = buildHookState(hookCtx);
+  const { isGroup, groupId } = hookState.hookContext;
   let hookMediaPrepared = false;
   let hookMediaMetadataStaged = false;
   const prepareHookMediaMetadata = async () => {
@@ -406,11 +409,12 @@ export async function gatherDispatchRequest(
     );
     if (staged) {
       hookMediaMetadataStaged = true;
-      ({ hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx));
+      Object.assign(hookState, buildHookState(hookCtx));
     }
   };
   const buildMessageReceivedHookContext = () => {
     const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
+    const { hookContext } = hookState;
     const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
     if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
       return hookContext;
@@ -433,88 +437,60 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey,
-      traceReplyPhase,
-      recordProcessed,
-      recordAgentDispatchStarted,
-      recordAgentDispatchCompleted,
-      markProcessing,
-      markIdle,
-      markInboundDedupeReplayUnsafe,
-      acpDispatchSessionKey,
-      markProgress,
-      sessionStoreEntry,
-      notePreparedSession,
-      resolvePreparedTranscriptBinding,
-      sessionAgentId,
-      shouldEmitVerboseProgress,
-      shouldEmitFullVerboseProgress,
-      replyRoute,
-      routeReplyThreadId,
-      inboundAudio,
-      sessionTtsAuto,
-      workspaceDir,
-      replyOperationRunState,
-      completeDispatchReplyOperation,
-      dispatchHookDispatcher,
-      ensureDispatchReplyOperation,
-      failDispatchReplyOperation,
-      getDispatchAbortOperation,
-      getDispatchAbortSignal,
-      getDispatchReplyOperation,
-      getObservedReplyDelivery,
-      getPreDispatchAbortSignal,
-      getReplyOptions,
-      isDispatchOperationAborted,
-      isPreDispatchOperationAborted,
-      markObservedReplyDelivery,
-      releasePreDispatchLifecycleAdmission,
-      runWithDispatchLifecycleAdmission,
-      throwIfDispatchOperationAborted,
-      trackDispatchLifecycleWork,
-      turnLedger,
-      maybeApplyTtsWithFinalizationLease,
-      hookRunner,
-      timestamp,
-      messageIdForHook,
-      isGroup,
-      groupId,
-      prepareHookMediaMetadata,
-      buildMessageReceivedHookContext,
-    },
-    {
-      inboundDedupeReplayUnsafe: {
-        get: () => inboundDedupeReplayUnsafe,
-        set: (value: boolean) => {
-          inboundDedupeReplayUnsafe = value;
-        },
-      },
-      hookContext: {
-        get: () => hookContext,
-        set: (value: typeof hookContext) => {
-          hookContext = value;
-        },
-      },
-      inboundClaimContext: {
-        get: () => inboundClaimContext,
-        set: (value: typeof inboundClaimContext) => {
-          inboundClaimContext = value;
-        },
-      },
-      inboundClaimEvent: {
-        get: () => inboundClaimEvent,
-        set: (value: typeof inboundClaimEvent) => {
-          inboundClaimEvent = value;
-        },
-      },
-    },
-  );
+  const nextState = extendPreparedDispatchState(state, {
+    ctx,
+    cfg,
+    dispatcher,
+    sessionKey,
+    traceReplyPhase,
+    recordProcessed,
+    recordAgentDispatchStarted,
+    recordAgentDispatchCompleted,
+    markProcessing,
+    markIdle,
+    markInboundDedupeReplayUnsafe,
+    acpDispatchSessionKey,
+    markProgress,
+    sessionStoreEntry,
+    notePreparedSession,
+    resolvePreparedTranscriptBinding,
+    sessionAgentId,
+    shouldEmitVerboseProgress,
+    shouldEmitFullVerboseProgress,
+    replyRoute,
+    routeReplyThreadId,
+    inboundAudio,
+    sessionTtsAuto,
+    workspaceDir,
+    replyOperationRunState,
+    completeDispatchReplyOperation,
+    dispatchHookDispatcher,
+    ensureDispatchReplyOperation,
+    failDispatchReplyOperation,
+    getDispatchAbortOperation,
+    getDispatchAbortSignal,
+    getDispatchReplyOperation,
+    getObservedReplyDelivery,
+    getPreDispatchAbortSignal,
+    getReplyOptions,
+    isDispatchOperationAborted,
+    isPreDispatchOperationAborted,
+    markObservedReplyDelivery,
+    releasePreDispatchLifecycleAdmission,
+    runWithDispatchLifecycleAdmission,
+    throwIfDispatchOperationAborted,
+    trackDispatchLifecycleWork,
+    turnLedger,
+    maybeApplyTtsWithFinalizationLease,
+    hookRunner,
+    timestamp,
+    messageIdForHook,
+    isGroup,
+    groupId,
+    hookState,
+    prepareHookMediaMetadata,
+    buildMessageReceivedHookContext,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

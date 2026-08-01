@@ -20,6 +20,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 }));
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
+  const sessionKey = "agent:main:main:user123";
   let tempDir: string;
   let storePath: string;
 
@@ -67,7 +68,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     Body: "test message",
     From: "user123",
     To: "bot123",
-    SessionKey: "main:user123",
+    SessionKey: sessionKey,
     Provider: "quietchat",
     Surface: "quietchat",
     ChatType: "direct",
@@ -83,7 +84,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     await replaceSessionEntry(
       {
         storePath,
-        sessionKey: "main:user123",
+        sessionKey,
       },
       {
         sessionId,
@@ -95,9 +96,9 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
   };
 
   const expectPersistedSession = (): SessionEntry => {
-    const entry = loadSessionEntry({ storePath, sessionKey: "main:user123" });
+    const entry = loadSessionEntry({ storePath, sessionKey });
     if (!entry) {
-      throw new Error("Expected persisted session for main:user123");
+      throw new Error(`Expected persisted session for ${sessionKey}`);
     }
     return entry;
   };

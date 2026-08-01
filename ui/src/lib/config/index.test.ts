@@ -1,10 +1,10 @@
 // @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
+import { createRuntimeConfigCapability, resolveAgentConfigEntryTarget } from "./index.ts";
 
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
@@ -218,6 +218,52 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
+  it("removes a restored optional override from config.set while preserving siblings", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: { runtime: { keep: true, mode: "custom" } },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              runtime: {
+                type: "object",
+                properties: {
+                  keep: { type: "boolean" },
+                  mode: { type: "string", default: "balanced" },
+                },
+              },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.removeFormValue(["runtime", "mode"]);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({ runtime: { keep: true } });
+    runtimeConfig.dispose();
+  });
+
   it("submits only decimal numeric spellings as numbers", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -288,10 +334,71 @@ describe("createRuntimeConfigCapability", () => {
   });
 
   it("stages inherited agent overrides and the default through the public capability", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          sourceConfig: {
+            agents: {
+              entries: {
+                MAIN: {},
+                reviewer: { default: true },
+              },
+            },
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+
+    const newAgent = runtimeConfig.agentEntry("new-agent", { ensure: true });
+    expect(newAgent).toEqual({
+      path: ["agents", "entries", "new-agent"],
+      entry: {},
+    });
+    runtimeConfig.patchForm([...newAgent!.path, "model"], "openai/gpt-5.4");
+    expect(runtimeConfig.stageDefaultAgent("main")).toBe(true);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        entries: {
+          MAIN: { default: true },
+          reviewer: {},
+          "new-agent": { model: "openai/gpt-5.4" },
+        },
+      },
+    });
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const raw = (
+      submitted.find((entry) => entry.method === "config.set")?.params as
+        | { raw?: unknown }
+        | undefined
+    )?.raw;
+    expect(JSON.parse(String(raw))).toEqual({
+      agents: {
+        entries: {
+          MAIN: { default: true },
+          reviewer: {},
+          "new-agent": { model: "openai/gpt-5.4" },
+        },
+      },
+    });
+    expect(JSON.parse(String(raw)).agents).not.toHaveProperty("list");
+    runtimeConfig.dispose();
+  });
+
+  it("refuses to create blocked agent entry paths", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
         ? {
-            config: { agents: { list: [{ id: "main" }, { id: "reviewer" }] } },
+            sourceConfig: { agents: { entries: { main: { default: true } } } },
             hash: "hash-1",
             valid: true,
             issues: [],
@@ -303,12 +410,10 @@ describe("createRuntimeConfigCapability", () => {
     const runtimeConfig = createRuntimeConfigCapability(gateway);
     await runtimeConfig.ensureLoaded();
 
-    expect(runtimeConfig.ensureAgentEntry("new-agent")).toBe(2);
-    expect(runtimeConfig.stageDefaultAgent("reviewer")).toBe(true);
-    expect(runtimeConfig.state.configForm).toMatchObject({
-      agents: {
-        list: [{ id: "main" }, { id: "reviewer", default: true }, { id: "new-agent" }],
-      },
+    expect(runtimeConfig.agentEntry("__proto__", { ensure: true })).toBeNull();
+    expect(runtimeConfig.agentEntry(" ", { ensure: true })).toBeNull();
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { entries: { main: { default: true } } },
     });
     runtimeConfig.dispose();
   });
@@ -1980,6 +2085,46 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("distinguishes definitive external mutation rejections from transient errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid config",
+        });
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      error: "invalid config",
+    });
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new Error("socket closed");
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "error",
+      error: "socket closed",
+    });
+    runtimeConfig.dispose();
+  });
+
   it("classifies an external mutation interrupted by disconnect as retryable", async () => {
     const mutation = deferred<unknown>();
     const request = vi.fn((method: string) => {
@@ -2897,15 +3042,51 @@ describe("config form auto-save", () => {
 describe("agent config helpers", () => {
   it("finds explicit agent entries", () => {
     expect(
-      findAgentConfigEntryIndex(
+      resolveAgentConfigEntryTarget(
         {
           agents: {
-            list: [{ id: "main" }, { id: "assistant" }],
+            entries: {
+              main: {},
+              assistant: { model: "openai/gpt-5.4" },
+            },
           },
         },
         "assistant",
       ),
-    ).toBe(1);
+    ).toEqual({
+      path: ["agents", "entries", "assistant"],
+      entry: { model: "openai/gpt-5.4" },
+    });
+  });
+
+  it("preserves the authored key while resolving normalized agent identities", () => {
+    expect(
+      resolveAgentConfigEntryTarget(
+        {
+          agents: {
+            entries: {
+              MAIN: { model: "openai/gpt-5.4" },
+            },
+          },
+        },
+        "main",
+      ),
+    ).toEqual({
+      path: ["agents", "entries", "MAIN"],
+      entry: { model: "openai/gpt-5.4" },
+    });
+  });
+
+  it("does not resolve missing, blank, or blocked entry keys", () => {
+    const entries = JSON.parse(
+      '{"__proto__":{"model":"openai/gpt-5.4"},"foo bar":{"model":"openai/gpt-5.4"}}',
+    ) as Record<string, unknown>;
+    const config = { agents: { entries } };
+
+    expect(resolveAgentConfigEntryTarget(config, "missing")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, " ")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, "__proto__")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, "foo-bar")).toBeNull();
   });
 });
 

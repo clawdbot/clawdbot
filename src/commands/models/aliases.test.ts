@@ -47,6 +47,74 @@ function snapshot(sourceConfig: OpenClawConfig) {
   };
 }
 
+describe("modelsAliasesListCommand", () => {
+  beforeEach(() => {
+    mocks.loadModelsConfig.mockReset();
+  });
+
+  it.each([
+    {
+      label: "plain",
+      opts: { plain: true },
+      lines: ["alpha anthropic/claude-sonnet-4-6", "zeta openai/gpt-5.6-sol"],
+    },
+    {
+      label: "human-readable",
+      opts: {},
+      lines: [
+        "Aliases (2):",
+        "- alpha -> anthropic/claude-sonnet-4-6",
+        "- zeta -> openai/gpt-5.6-sol",
+      ],
+    },
+  ])("sorts $label aliases independently of model insertion order", async ({ opts, lines }) => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": { alias: "zeta" },
+            "anthropic/claude-sonnet-4-6": { alias: "alpha" },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsAliasesListCommand(opts, runtime);
+
+    expect(runtime.logs).toEqual(lines);
+  });
+
+  it("preserves safely named prototype aliases in deterministic JSON output", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": { alias: "zeta" },
+            "google/gemini-3.1-pro-preview": { alias: "__proto__" },
+            "anthropic/claude-sonnet-4-6": { alias: "alpha" },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsAliasesListCommand({ json: true }, runtime);
+
+    expect(runtime.logs).toHaveLength(1);
+    const payload = JSON.parse(runtime.logs[0] ?? "") as {
+      aliases: Record<string, string>;
+    };
+    expect(Object.keys(payload.aliases)).toEqual(
+      ["zeta", "__proto__", "alpha"].toSorted((left, right) => left.localeCompare(right)),
+    );
+    expect(Object.hasOwn(payload.aliases, "__proto__")).toBe(true);
+    expect(Reflect.get(payload.aliases, "__proto__")).toBe("google/gemini-3.1-pro-preview");
+    expect(payload.aliases.alpha).toBe("anthropic/claude-sonnet-4-6");
+    expect(payload.aliases.zeta).toBe("openai/gpt-5.6-sol");
+  });
+});
+
 describe("modelsAliasesRemoveCommand", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();

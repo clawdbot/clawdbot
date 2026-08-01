@@ -2891,11 +2891,11 @@ describe("matrix monitor handler draft streaming", () => {
       explanation?: string;
       steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void>;
-    onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
+    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void>;
     onCommandOutput?: (payload: {
       itemId?: string;
       toolCallId?: string;
-      phase: string;
+      phase?: string;
       name?: string;
       exitCode?: number;
       status?: string;
@@ -2904,7 +2904,7 @@ describe("matrix monitor handler draft streaming", () => {
     onPatchSummary?: (payload: {
       itemId?: string;
       toolCallId?: string;
-      phase: string;
+      phase?: string;
       name?: string;
       summary?: string;
       title?: string;
@@ -3264,6 +3264,24 @@ describe("matrix monitor handler draft streaming", () => {
 
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
+    await finish();
+    vi.useRealTimers();
+  });
+
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    vi.useFakeTimers();
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onApprovalEvent?.({ command: "must stay hidden" });
+    await opts.onCommandOutput?.({ title: "must stay hidden", exitCode: 0 });
+    await opts.onPatchSummary?.({ summary: "must stay hidden" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
     vi.useRealTimers();
   });

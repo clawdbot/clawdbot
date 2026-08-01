@@ -329,5 +329,6 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

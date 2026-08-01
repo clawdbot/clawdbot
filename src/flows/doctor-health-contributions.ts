@@ -54,7 +54,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyFlatAuthProfileStores, maybeRepairCanonicalApiKeyFieldAlias } =
+  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
@@ -66,17 +66,14 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
-  await maybeRepairLegacyFlatAuthProfileStores({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
-  await maybeRepairCanonicalApiKeyFieldAlias({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
+  });
+  await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.env ? { env: ctx.env } : {}),
   });
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,

@@ -96,4 +96,16 @@ describe("readMemoryHostResponseTextSnippet", () => {
     await expect(read).rejects.toThrow("json aborted");
     expect(canceled).toBe(true);
   });
+
+  it("rejects a JSON body with invalid UTF-8 bytes", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"ok":"val'),
+      0xff,
+      ...new TextEncoder().encode('ue"}'),
+    ]);
+
+    await expect(
+      readResponseJsonWithLimit(new Response(body), { errorPrefix: "remote memory" }),
+    ).rejects.toThrow(/not valid for encoding/);
+  });
 });

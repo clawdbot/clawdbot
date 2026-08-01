@@ -6,7 +6,7 @@ import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
 
 const telegramPluginBase = createTelegramPluginBase({
   setupWizard: {} as never,
-  setup: {} as never,
+  setupContract: {} as never,
 });
 
 function createCfg(): OpenClawConfig {

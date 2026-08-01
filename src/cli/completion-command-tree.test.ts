@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { describe, expect, it } from "vitest";
 import { collectShellCompletionCommandTree } from "./completion-command-tree.js";
 
@@ -61,6 +61,59 @@ describe("shell completion command tree", () => {
 
     expect(tree.descendants[0]?.valueOptions).toEqual(["--profile"]);
     expect(tree.descendants[0]?.completions).toEqual(["--profile", "--force"]);
+  });
+
+  it("preserves inherited Commander option choices by their short and long aliases", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("-p, --profile <name>").choices(["work", "personal"]));
+    program
+      .command("completion")
+      .addOption(new Option("-s, --shell <shell>").choices(["zsh", "bash", "powershell", "fish"]));
+
+    const tree = collectShellCompletionCommandTree(program);
+
+    expect(tree.root.valueChoices).toEqual([
+      { flags: ["-p", "--profile"], choices: ["work", "personal"], requiresValue: true },
+    ]);
+    expect(tree.descendants[0]?.valueChoices).toEqual([
+      { flags: ["-p", "--profile"], choices: ["work", "personal"], requiresValue: true },
+      {
+        flags: ["-s", "--shell"],
+        choices: ["zsh", "bash", "powershell", "fish"],
+        requiresValue: true,
+      },
+    ]);
+  });
+
+  it("keeps unshadowed inherited aliases when a child reuses one option flag", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("-p, --profile <name>").choices(["work", "personal"]));
+    program.command("gateway").option("-p, --port <port>", "Gateway port");
+
+    const tree = collectShellCompletionCommandTree(program);
+
+    expect(tree.descendants[0]?.valueChoices).toEqual([
+      { flags: ["--profile"], choices: ["work", "personal"], requiresValue: true },
+    ]);
+  });
+
+  it("preserves the optional Commander argument contract for constrained choices", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("-c, --color [when]").choices(["always", "never"]));
+    program.command("gateway");
+
+    const tree = collectShellCompletionCommandTree(program);
+    const colorChoice = {
+      flags: ["-c", "--color"],
+      choices: ["always", "never"],
+      requiresValue: false,
+    };
+
+    expect(tree.root.valueChoices).toEqual([colorChoice]);
+    expect(tree.descendants[0]?.valueChoices).toEqual([colorChoice]);
   });
 
   it("keeps commandless roots valid for every shell", () => {

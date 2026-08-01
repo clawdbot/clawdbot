@@ -74,7 +74,16 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(second.removedCount).toBe(0);
   });
 
-  it("prunes stale unsafe-local pages from an available configured directory", async () => {
+  it.each([
+    {
+      name: "prunes stale unsafe-local pages from an available configured directory",
+      humanNotes: null,
+    },
+    {
+      name: "salvages unsafe-local page Notes when configured files disappear",
+      humanNotes: "Durable unsafe-local annotation",
+    },
+  ])("$name", async ({ humanNotes }) => {
     const privateDir = await createPrivateDir("private-prune");
 
     const secretPath = path.join(privateDir, "secret.md");
@@ -93,19 +102,34 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
-      "# private",
-    );
+    const firstPageAbsPath = path.join(vaultDir, firstPagePath);
+    const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
+    expect(firstPage).toContain("# private");
+    if (humanNotes) {
+      await fs.writeFile(
+        firstPageAbsPath,
+        firstPage.replace(
+          "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+          `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
+        ),
+        "utf8",
+      );
+    }
 
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.artifactCount).toBe(0);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
-    );
+    await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
+    const salvageDir = path.join(vaultDir, ".salvage");
+    if (humanNotes) {
+      await expect(
+        fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
+      ).resolves.toContain(humanNotes);
+    } else {
+      await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
   it("preserves pages and human notes for unavailable configured paths", async () => {

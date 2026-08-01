@@ -395,4 +395,44 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       .toBe("");
     await gateway.resolveDeferred("sessions.list");
   });
+
+  it("renders a safe self-abort diagnostic while preserving interrupted status", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-abort-diagnostic");
+    const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    if (captureProof) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage);
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.locator(".agent-chat__input textarea").fill("run the edit");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const params = send.params as { idempotencyKey?: unknown };
+    expect(typeof params.idempotencyKey).toBe("string");
+    const runId = params.idempotencyKey as string;
+    const diagnostic = "edit tool validation failed: edits: must be an array";
+
+    await gateway.emitGatewayEvent("chat", {
+      errorMessage: diagnostic,
+      runId,
+      sessionKey: "main",
+      state: "aborted",
+    });
+
+    const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
+    await alert.waitFor();
+    expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
+    await currentPage.getByLabel("Run status: Interrupted").waitFor();
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+    if (captureProof) {
+      await currentPage.screenshot({
+        path: path.join(artifactDir, "abort-diagnostic-alert.png"),
+        fullPage: true,
+      });
+    }
+  });
 });

@@ -255,6 +255,74 @@ print("done")
     expect(result.text).not.toContain("[here]");
   });
 
+  it("keeps an oversized table visible as canonical bullet text instead of an invalid Flex bubble", () => {
+    const value = "x".repeat(30_000);
+    const result = processLineMessage(
+      `Before\n\n| Name | Value |\n|---|---|\n| Account | ${value} |\n\nAfter`,
+    );
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Account");
+    expect(result.text).toContain(`• Value: ${value}`);
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Account"));
+    expect(result.text.indexOf("Account")).toBeLessThan(result.text.indexOf("After"));
+  });
+
+  it("measures serialized Flex bubbles in UTF-8 bytes instead of UTF-16 text units", () => {
+    const value = "😀".repeat(7_600);
+    const result = processLineMessage(`| Name | Value |\n|---|---|\n| Unicode | ${value} |`);
+
+    expect(value.length).toBeLessThan(30_000);
+    expect(Buffer.byteLength(value, "utf8")).toBeGreaterThan(30_000);
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain(`• Value: ${value}`);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(result.text),
+    ).toBe(false);
+  });
+
+  it("keeps valid tables and code cards while downgrading only an oversized sibling table", () => {
+    const value = "z".repeat(30_000);
+    const result = processLineMessage(
+      `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | [${value}](https://example.test/report) |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card");\n\`\`\``,
+    );
+
+    expect(result.flexMessages.map((message) => message.altText)).toEqual(["Table", "Code"]);
+    expect(result.text).not.toContain("Kept");
+    expect(result.text).toContain(`• Value: ${value} (https://example.test/report)`);
+    expect(result.text.indexOf("First")).toBeLessThan(result.text.indexOf("Between"));
+    expect(result.text.indexOf("Between")).toBeLessThan(result.text.indexOf("Large"));
+    expect(result.text.indexOf("Large")).toBeLessThan(result.text.indexOf("After"));
+    expect(
+      result.segments
+        ?.map((segment) =>
+          segment.type === "flex"
+            ? segment.message.altText
+            : segment.text.includes("Large")
+              ? "oversized-table-text"
+              : undefined,
+        )
+        .filter(Boolean),
+    ).toEqual(["Table", "oversized-table-text", "Code"]);
+    expect(
+      result.flexMessages.every(
+        (message) => Buffer.byteLength(JSON.stringify(message.contents), "utf8") <= 30_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps provider-valid large tables as Flex bubbles", () => {
+    const value = "y".repeat(20_000);
+    const result = processLineMessage(`| Name | Value |\n|---|---|\n| Preserved | ${value} |`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(
+      Buffer.byteLength(JSON.stringify(result.flexMessages[0]?.contents), "utf8"),
+    ).toBeLessThanOrEqual(30_000);
+    expect(result.text).toBe("");
+    expect(result.segments).toBeUndefined();
+  });
+
   it("handles plain text unchanged", () => {
     const text = "Just plain text with no markdown.";
 

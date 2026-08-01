@@ -29,7 +29,7 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const existing = getLatestSubagentRunByChildSessionKey(params.sessionKey);
-  if (!existing || typeof existing.endedAt !== "number") {
+  if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
   const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();

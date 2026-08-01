@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { MatrixEventEvent, Preset, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { formatMatrixErrorReason } from "../errors.js";
-import { MatrixClientBase } from "./client-base.js";
+import { MatrixClientBase, type MatrixMessageWireDispatch } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
@@ -47,6 +49,57 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       joined_rooms?: unknown;
     };
     return Array.isArray(joined.joined_rooms) ? joined.joined_rooms : [];
+  }
+
+  async getTransactionScopeId(): Promise<string> {
+    if (this.transactionScopeId) {
+      return this.transactionScopeId;
+    }
+    const active =
+      this.transactionScopePromise ??
+      (async () => {
+        const configuredUserId = this.client.getUserId()?.trim() || this.selfUserId;
+        const configuredDeviceId =
+          this.transactionScopeDeviceId || this.client.getDeviceId()?.trim() || null;
+        const whoami = (await this.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
+          user_id?: string;
+          device_id?: string;
+        };
+        const userId = whoami.user_id?.trim() || null;
+        const deviceId = whoami.device_id?.trim() || null;
+        if (!userId) {
+          throw new Error("Matrix whoami did not return user_id");
+        }
+        if (configuredUserId && configuredUserId !== userId) {
+          throw new Error("Matrix access token user does not match the configured userId");
+        }
+        if (configuredDeviceId && deviceId && configuredDeviceId !== deviceId) {
+          throw new Error("Matrix access token device does not match the configured deviceId");
+        }
+        this.selfUserId = userId;
+        this.transactionScopeDeviceId = deviceId;
+        // Include both device and token identities. This deliberately fails closed
+        // across credential rotation even where a homeserver could reuse a device txn scope.
+        return createHash("sha256")
+          .update(this.transactionScopeHomeserver)
+          .update("\0")
+          .update(userId)
+          .update("\0")
+          .update(deviceId ?? "")
+          .update("\0")
+          .update(this.transactionScopeAccessTokenHash)
+          .digest("hex");
+      })();
+    this.transactionScopePromise = active;
+    try {
+      const resolved = await active;
+      this.transactionScopeId = resolved;
+      return resolved;
+    } finally {
+      if (this.transactionScopePromise === active) {
+        this.transactionScopePromise = null;
+      }
+    }
   }
 
   async getJoinedRoomMembers(roomId: string): Promise<string[]> {
@@ -124,11 +177,53 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return result.room_id;
   }
 
-  async sendMessage(roomId: string, content: MessageEventContent): Promise<string> {
+  async sendMessage(
+    roomId: string,
+    content: MessageEventContent,
+    transactionId?: string,
+    beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
+  ): Promise<string> {
     return await this.runSerializedRoomSend(roomId, async () => {
-      const sent = await this.client.sendMessage(roomId, content as never);
-      return sent.event_id;
+      return await this.withMessageWireDispatchGuard({
+        transactionId,
+        guard: beforeWireDispatch,
+        run: async () => {
+          if (transactionId) {
+            const room = this.client.getRoom(roomId);
+            const existing = room?.getEventForTxnId?.(transactionId);
+            if (existing) {
+              const existingId = existing.getId();
+              if (
+                existing.status === EventStatus.SENT &&
+                existingId &&
+                !existingId.startsWith("~")
+              ) {
+                return existingId;
+              }
+              if (existing.status === EventStatus.NOT_SENT && room) {
+                const resent = await this.client.resendEvent(existing, room);
+                return resent.event_id;
+              }
+              throw new Error(
+                `Matrix transaction ${transactionId} is already active with status ${existing.status ?? "unknown"}`,
+              );
+            }
+          }
+          const sent = await this.client.sendMessage(roomId, content as never, transactionId);
+          return sent.event_id;
+        },
+      });
     });
+  }
+
+  async getMessageWireEventType(roomId: string): Promise<"m.room.message" | "m.room.encrypted"> {
+    if (this.client.getRoom(roomId)?.hasEncryptionStateEvent() === true) {
+      return "m.room.encrypted";
+    }
+    const crypto = this.client.getCrypto();
+    return crypto && (await crypto.isEncryptionEnabledInRoom(roomId))
+      ? "m.room.encrypted"
+      : "m.room.message";
   }
 
   async sendEvent(

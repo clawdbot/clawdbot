@@ -6,6 +6,7 @@ export type ModelSetupPrepareOption = {
   brandId?: string;
   label: string;
   hint?: string;
+  actionLabel?: string;
   icon?: string;
   website?: string;
 };

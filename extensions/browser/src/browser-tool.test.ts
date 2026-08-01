@@ -159,7 +159,7 @@ const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn<
     () => {
       browser: Record<string, unknown>;
-      gateway?: { nodes?: { browser?: { node?: string } } };
+      gateway?: { nodes?: { browser?: { node?: string; mode?: "off" | "auto" | "manual" } } };
       agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
@@ -1961,6 +1961,33 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the host when a configured browser node is disconnected", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { node: "node-1" } } },
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status" })).rejects.toThrow(
+      "No connected browser-capable nodes.",
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("honors a configured browser node in manual routing mode", async () => {
+    mockSingleBrowserProxyNode();
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { mode: "manual", node: "node-1" } } },
+    });
+
+    await createBrowserTool().execute?.("call-1", { action: "status" });
+
+    expect(lastNodeInvokeCall().request.nodeId).toBe("node-1");
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
   it('allows profile="user" with target="node"', async () => {

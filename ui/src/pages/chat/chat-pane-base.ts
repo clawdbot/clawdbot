@@ -82,6 +82,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) routeFace: BoardFace = "chat";
   @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
@@ -254,6 +255,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
+  protected composerPrefillAttentionTimer: number | null = null;
+  protected composerPrefillAttentionTarget: HTMLElement | null = null;
 
   /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
    * so reused session keys can never inherit another checkout's path. */

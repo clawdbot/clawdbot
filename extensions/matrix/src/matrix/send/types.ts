@@ -100,6 +100,14 @@ export type MatrixSendOpts = {
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Opaque durable queue id used to derive Matrix transaction ids. */
+  deliveryQueueId?: string;
+  /** Stable provider-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** Exact provider-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** Marks recipient-visible timeline dispatch after the recovery plan is durable. */
+  onPlatformSendDispatch?: () => Promise<void>;
   /** Additional Matrix event content fields to merge into the first sent event. */
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */

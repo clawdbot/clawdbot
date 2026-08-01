@@ -10,12 +10,14 @@ import {
 } from "./attempt-client-cleanup.js";
 import {
   isRetryableErrorNotification,
+  isTerminalTurnStatus,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
 import { readModelListResult } from "./models.js";
+import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadStartResponse,
@@ -184,7 +186,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
-  let interruptPromise: Promise<void> | undefined;
+  let interruptPromise: Promise<boolean> | undefined;
   const requestInterrupt = () => {
     if (!activeThreadId || interruptPromise) {
       return;
@@ -305,6 +307,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         model,
       };
     } finally {
+      await interruptPromise;
       requestCleanup();
       cleanup();
     }
@@ -492,8 +495,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       pending.push(notification);
       return;
     }
-    const notificationTurnId = readNotificationTurnId(params);
-    if (notificationTurnId !== turnId) {
+    if (readCodexNotificationTurnId(params) !== turnId) {
       return;
     }
     if (notification.method === "item/completed") {
@@ -542,7 +544,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
     ): Promise<Omit<CodexBoundedTurnResult, "model">> {
       turnId = startedTurn.id;
-      if (isTerminalTurn(startedTurn)) {
+      if (isTerminalTurnStatus(startedTurn.status)) {
         completedTurn = startedTurn;
       }
       for (const notification of pending.splice(0)) {
@@ -644,19 +646,7 @@ function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): st
     .trim();
 }
 
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  const direct = readString(record, "turnId");
-  if (direct) {
-    return direct;
-  }
-  return isJsonObject(record.turn) ? readString(record.turn, "id") : undefined;
-}
-
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function isTerminalTurn(turn: CodexTurn): boolean {
-  return turn.status === "completed" || turn.status === "interrupted" || turn.status === "failed";
 }

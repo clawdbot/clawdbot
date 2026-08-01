@@ -9,7 +9,7 @@ import {
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -17,7 +17,6 @@ import {
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import {
@@ -1788,9 +1787,9 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {
-    expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(
-      shouldPreferNativeModuleLoad(
+      resolvePluginLoaderTryNative(
         `/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`,
       ),
     ).toBe(false);
@@ -1807,9 +1806,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(false);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(false);
     } finally {
       Object.defineProperty(process, "versions", {
@@ -1827,9 +1826,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", {
@@ -1867,8 +1866,7 @@ describe("plugin sdk alias helpers", () => {
 
   it("prefers native module loading for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
     // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
-    // to shouldPreferNativeModuleLoad() — which returns true on Node for
-    // compiled artifacts, avoiding the slow jiti transform path.
+    // to native loading on Node for compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
@@ -2352,18 +2350,121 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
-  it("adds the versioned fs cache directory to plugin loader jiti options", () => {
+  it("scopes the jiti cache to the durable user cache and OpenClaw install", () => {
     const root = createTrustedOpenClawPackageFixture("2.0.0");
     const tmpDir = path.join(root, "tmp");
+    const cacheRoot = path.join(root, "cache");
 
-    const options = withEnv({ TMPDIR: tmpDir }, () =>
+    const options = withEnv({ TMPDIR: tmpDir, XDG_CACHE_HOME: `  ${cacheRoot}  ` }, () =>
       buildPluginLoaderJitiOptions(
         { "openclaw/plugin-sdk/core": path.join(root, "dist", "plugin-sdk", "core.js") },
         { modulePath: path.join(root, "dist", "plugins", "loader.js") },
       ),
     );
 
-    expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
+    expect(options.fsCache).toContain(path.join(cacheRoot, "openclaw", "jiti", "2.0.0"));
+    expect(options.fsCache).not.toContain(tmpDir);
+  });
+
+  it.each(["", "   ", "relative/cache"])(
+    "ignores non-absolute XDG cache roots (%j)",
+    (xdgCacheHome) => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const homeDir = path.join(root, "home");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: xdgCacheHome,
+          LOCALAPPDATA: undefined,
+          OPENCLAW_HOME: homeDir,
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+      const platformCacheRoot =
+        process.platform === "win32"
+          ? path.join(homeDir, "AppData", "Local")
+          : process.platform === "darwin"
+            ? path.join(homeDir, "Library", "Caches")
+            : path.join(homeDir, ".cache");
+
+      expect(options.fsCache).toContain(path.join(platformCacheRoot, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "uses an absolute Windows local application-data cache root",
+    () => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const localAppData = path.join(root, "local-app-data");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: undefined,
+          LOCALAPPDATA: `  ${localAppData}  `,
+          OPENCLAW_HOME: path.join(root, "home"),
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+
+      expect(options.fsCache).toContain(path.join(localAppData, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.each(["JITI_FS_CACHE", "JITI_CACHE"])("honors the %s filesystem-cache opt-out", (envKey) => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const options = withEnv(
+      {
+        JITI_FS_CACHE: envKey === "JITI_FS_CACHE" ? "false" : undefined,
+        JITI_CACHE: envKey === "JITI_CACHE" ? "false" : undefined,
+        XDG_CACHE_HOME: path.join(root, "cache"),
+      },
+      () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+    );
+
+    expect(options.fsCache).toBe(false);
+  });
+
+  it("keeps deferred jiti imports working after the temporary directory is deleted", async () => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const transientTmpRoot = path.join(root, "tmp");
+    const durableCacheRoot = path.join(root, "cache");
+    const sourceRoot = path.join(root, "source");
+    const parentModulePath = path.join(sourceRoot, "parent.ts");
+    const childModulePath = path.join(sourceRoot, "child.ts");
+    mkdirSafeDir(sourceRoot);
+    mkdirSafeDir(transientTmpRoot);
+    fs.writeFileSync(
+      parentModulePath,
+      'export const loadChild = () => import("./child.ts");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(childModulePath, 'export const marker = "still-delivered";\n', "utf-8");
+    const createJiti = await getCreateJiti();
+
+    await withEnvAsync(
+      {
+        TMPDIR: transientTmpRoot,
+        XDG_CACHE_HOME: durableCacheRoot,
+        JITI_FS_CACHE: undefined,
+        JITI_CACHE: undefined,
+      },
+      async () => {
+        const options = buildPluginLoaderJitiOptions({}, { modulePath: parentModulePath });
+        const loadSourceModule = createJiti(parentModulePath, {
+          ...options,
+          tryNative: false,
+        });
+        const parent = loadSourceModule(parentModulePath) as {
+          loadChild: () => Promise<{ marker: string }>;
+        };
+
+        fs.rmSync(transientTmpRoot, { recursive: true, force: true });
+
+        await expect(parent.loadChild()).resolves.toMatchObject({ marker: "still-delivered" });
+        expect(String(options.fsCache)).toContain(path.join(durableCacheRoot, "openclaw", "jiti"));
+        expect(fs.readdirSync(String(options.fsCache)).some((file) => file.includes("child"))).toBe(
+          true,
+        );
+      },
+    );
   });
 
   it("pre-normalizes and marks alias maps for source transforms", () => {

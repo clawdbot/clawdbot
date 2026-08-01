@@ -240,7 +240,7 @@ const pwMocks = vi.hoisted(() => {
     storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
     storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
     traceStartViaPlaywright: vi.fn(async () => {}),
-    traceStopViaPlaywright: vi.fn(async () => {}),
+    traceStopViaPlaywright: vi.fn(async (opts: { path: string }) => opts.path),
     takeScreenshotViaPlaywright: vi.fn(async () => ({
       buffer: Buffer.from("png"),
     })),

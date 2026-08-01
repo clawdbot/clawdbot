@@ -224,6 +224,7 @@ export type CronServiceDeps = {
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };

@@ -48,6 +48,14 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const NORMALIZED_PNG_BYTES = Buffer.from("normalized-png");
+const CATALOG_ICON_URL = "https://cdn.example.test/setup-tool.svg";
+const ICON_ROUTES = [
+  { label: "plugin", pathname: "/__openclaw__/plugin-icon/firecrawl" },
+  {
+    label: "catalog",
+    pathname: `/__openclaw__/catalog-icon/${encodeURIComponent(CATALOG_ICON_URL)}`,
+  },
+] as const;
 
 let port = 0;
 let server: ReturnType<typeof createServer>;
@@ -85,6 +93,7 @@ beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
   configForRequest = () => testConfig;
+  mocks.authorize.mockReset();
   mocks.authorize.mockResolvedValue({
     authMethod: "token",
     trustDeclaredOperatorScopes: false,
@@ -112,20 +121,68 @@ function request(pathname: string, options?: { token?: string; method?: string }
   });
 }
 
-describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
-  it("requires gateway authentication before resolving plugin metadata", async () => {
-    mocks.authorize.mockImplementationOnce(async ({ res }) => {
-      res.statusCode = 401;
-      res.end();
-      return null;
-    });
+describe("Control UI plugin and catalog icon routes", () => {
+  it.each(
+    ICON_ROUTES.flatMap(({ label, pathname }) =>
+      (["GET", "HEAD"] as const).map((method) => ({ label, method, pathname })),
+    ),
+  )(
+    "authenticates $method $label icons before resolving their metadata",
+    async ({ method, pathname }) => {
+      mocks.authorize.mockImplementationOnce(async ({ res }) => {
+        res.statusCode = 401;
+        res.end();
+        return null;
+      });
 
-    const response = await request("/__openclaw__/plugin-icon/firecrawl", { token: "" });
+      const response = await request(pathname, { method, token: "" });
 
-    expect(response.status).toBe(401);
-    expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
-    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(401);
+      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    ICON_ROUTES.flatMap(({ label, pathname }) =>
+      (["image/png", "image/svg+xml"] as const).map((contentType) => ({
+        contentType,
+        label,
+        pathname,
+      })),
+    ),
+  )(
+    "preserves every $contentType $label GET header on a bodyless HEAD",
+    async ({ contentType, pathname }) => {
+      const svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+      if (contentType === "image/svg+xml") {
+        mocks.readRemoteMediaBuffer.mockResolvedValue({ buffer: Buffer.from(svg), contentType });
+      }
+
+      const get = await request(pathname);
+      const head = await request(pathname, { method: "HEAD" });
+
+      expect(get.status).toBe(200);
+      expect(head.status).toBe(200);
+      for (const name of [
+        "cache-control",
+        "content-disposition",
+        "content-length",
+        "content-security-policy",
+        "content-type",
+        "cross-origin-resource-policy",
+        "x-content-type-options",
+      ]) {
+        expect(head.headers.get(name), name).toBe(get.headers.get(name));
+      }
+      const expectedBody =
+        contentType === "image/svg+xml" ? Buffer.from(svg) : NORMALIZED_PNG_BYTES;
+      expect(Buffer.from(await get.arrayBuffer())).toEqual(expectedBody);
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("resolves by plugin identity and ignores arbitrary remote URL parameters", async () => {
     const response = await request(
@@ -167,7 +224,7 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
   });
 
   it("resolves encoded catalog URLs through the server-owned allowlist", async () => {
-    const iconUrl = "https://cdn.example.test/setup-tool.svg";
+    const iconUrl = CATALOG_ICON_URL;
     const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
 
     expect(response.status).toBe(200);
@@ -217,6 +274,53 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
     expect(mocks.resolveIconUrl).toHaveBeenCalledTimes(2);
     expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
   });
+
+  it.each(ICON_ROUTES)(
+    "shares one $label icon download across concurrent GET and HEAD",
+    async ({ pathname }) => {
+      const [get, head] = await Promise.all([
+        request(pathname),
+        request(pathname, { method: "HEAD" }),
+      ]);
+
+      expect(get.status).toBe(200);
+      expect(head.status).toBe(200);
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(ICON_ROUTES)(
+    "reuses a $label icon loaded by HEAD on a later GET",
+    async ({ pathname }) => {
+      const head = await request(pathname, { method: "HEAD" });
+      const get = await request(pathname);
+
+      expect(head.status).toBe(200);
+      expect(get.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe(get.headers.get("content-length"));
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      expect(Buffer.from(await get.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(ICON_ROUTES)(
+    "returns a bodyless 404 for an unavailable $label icon HEAD",
+    async ({ label, pathname }) => {
+      if (label === "plugin") {
+        mocks.resolveIconUrl.mockResolvedValueOnce(undefined);
+      } else {
+        mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
+      }
+
+      const response = await request(pathname, { method: "HEAD" });
+
+      expect(response.status).toBe(404);
+      expect((await response.arrayBuffer()).byteLength).toBe(0);
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    },
+  );
 
   it("accepts one canonical scoped plugin id encoded as a single path segment", async () => {
     const response = await request(
@@ -279,13 +383,17 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
     expect(failed.status).toBe(404);
   });
 
-  it("rejects non-GET methods without loading metadata", async () => {
-    const response = await request("/__openclaw__/plugin-icon/firecrawl", { method: "POST" });
+  it.each(ICON_ROUTES)(
+    "rejects non-read $label icon methods without loading metadata",
+    async ({ pathname }) => {
+      const response = await request(pathname, { method: "POST" });
 
-    expect(response.status).toBe(405);
-    expect(response.headers.get("allow")).toBe("GET");
-    expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(405);
+      expect(response.headers.get("allow")).toBe("GET, HEAD");
+      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+    },
+  );
 
   it("matches the configured Control UI base path", async () => {
     const handledServer = createServer((req, res) => {
@@ -306,11 +414,18 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
     });
     try {
       const handledPort = (handledServer.address() as AddressInfo).port;
-      const response = await fetch(
-        `http://127.0.0.1:${handledPort}/openclaw/__openclaw__/plugin-icon/firecrawl`,
-        { headers: { Authorization: "Bearer test-token" } },
-      );
-      expect(response.status).toBe(200);
+      for (const { pathname } of ICON_ROUTES) {
+        for (const method of ["GET", "HEAD"]) {
+          const response = await fetch(`http://127.0.0.1:${handledPort}/openclaw${pathname}`, {
+            headers: { Authorization: "Bearer test-token" },
+            method,
+          });
+          expect(response.status).toBe(200);
+          if (method === "HEAD") {
+            expect((await response.arrayBuffer()).byteLength).toBe(0);
+          }
+        }
+      }
     } finally {
       await new Promise<void>((resolve, reject) => {
         handledServer.close((error) => (error ? reject(error) : resolve()));

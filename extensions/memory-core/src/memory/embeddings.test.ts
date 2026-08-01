@@ -12,21 +12,50 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   acquireLocalService: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
-  getEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
-    mockEmbeddingRegistry.genericLookupConfigs.push(config);
-    return mockEmbeddingRegistry.genericAdapters.find((adapter) => adapter.id === id);
-  },
-  listEmbeddingProviders: () => [...mockEmbeddingRegistry.genericAdapters],
-}));
-
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   DEFAULT_LOCAL_MODEL: "nomic-embed-text",
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
-  getMemoryEmbeddingProvider: (id: string) =>
-    mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id),
+  getMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
+    const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+    if (memoryAdapter) {
+      return memoryAdapter;
+    }
+    mockEmbeddingRegistry.genericLookupConfigs.push(config);
+    const genericAdapter = mockEmbeddingRegistry.genericAdapters.find(
+      (adapter) => adapter.id === id,
+    );
+    if (!genericAdapter) {
+      return undefined;
+    }
+    return {
+      ...genericAdapter,
+      create: async (options) => {
+        const result = await genericAdapter.create({
+          ...options,
+          ...(typeof options.outputDimensionality === "number"
+            ? { dimensions: options.outputDimensionality }
+            : {}),
+        });
+        const provider = result.provider;
+        if (!provider) {
+          return { ...result, provider: null };
+        }
+        return {
+          ...result,
+          provider: {
+            ...provider,
+            embedQuery: (text, callOptions) =>
+              provider.embed(text, { ...callOptions, inputType: "query" }),
+            embedBatch: (texts, callOptions) =>
+              provider.embedBatch(texts, { ...callOptions, inputType: "document" }),
+            ...(provider.close ? { close: () => provider.close?.() } : {}),
+          },
+        };
+      },
+    } satisfies MemoryEmbeddingProviderAdapter;
+  },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviders: () =>

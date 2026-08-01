@@ -68,6 +68,42 @@ describe("AppSidebar multi-select", () => {
     return { sidebar, harness };
   }
 
+  it("names each session's pin and menu buttons after their owning session", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    for (const key of ["agent:main:a", "agent:main:b"]) {
+      const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+      const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      expect(label).toBeTruthy();
+      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
+        `Pin thread: ${label}`,
+      );
+      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
+        `Open thread menu: ${label}`,
+      );
+    }
+  });
+
+  it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
+    const { sidebar } = await mountMultiSelect();
+    const link = rowLink(sidebar, "agent:main:a");
+    const trigger = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:a"] [data-session-menu]',
+    );
+    link.focus();
+    link.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+
+    const menu = await sessionMenu(sidebar);
+    const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
+    item?.focus();
+    item?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("cmd-click toggles rows into the selection and plain click clears it", async () => {
     const { sidebar } = await mountMultiSelect();
 

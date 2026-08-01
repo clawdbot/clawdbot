@@ -54,8 +54,8 @@ type SessionsJsonPayload = {
   }>;
 };
 
-const ACP_SPAWN_CHILD_KEY = "agent:copilot:acp:7de23a0a-799d-4d63-b1b1-a7de9d4cd840";
-const ACP_DM_KEY = "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
+const ACP_SPAWN_CHILD_KEY = "agent:main:acp:7de23a0a-799d-4d63-b1b1-a7de9d4cd840";
+const ACP_DM_KEY = "agent:main:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
 const TELEGRAM_GROUP_KEY = "agent:main:telegram:group:-1003967207344:topic:1";
 
 /**

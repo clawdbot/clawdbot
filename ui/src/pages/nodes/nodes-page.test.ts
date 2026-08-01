@@ -26,6 +26,7 @@ type TestNodesPage = HTMLElement & {
     hostUpdate: () => void;
     hostDisconnected: () => void;
   };
+  disconnectedCallback: () => void;
   willUpdate: (changed: Map<PropertyKey, unknown>) => void;
   applyGatewaySnapshot: (
     snapshot: ApplicationGatewaySnapshot,
@@ -164,6 +165,72 @@ describe("NodesPage gateway lifecycle", () => {
     await currentLoad;
     expect(page.nodes).toEqual([{ id: "new" }]);
     expect(page.nodesLoading).toBe(false);
+
+    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+  });
+
+  it("retires an in-flight load when its gateway provider changes without a client change", async () => {
+    const first = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const second = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const request = vi
+      .fn<(method: string, params?: unknown) => Promise<unknown>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = gatewaySnapshot(client, true);
+    const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
+    page.context = {
+      runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
+    } as unknown as ApplicationContext;
+    page.applyGatewaySnapshot(snapshot, false);
+
+    const staleLoad = loadNodes(page);
+    const previousGeneration = page.requestGeneration;
+    page.applyGatewaySnapshot(snapshot, true);
+    const currentLoad = loadNodes(page);
+
+    expect(page.requestGeneration).toBeGreaterThan(previousGeneration);
+    first.resolve({ nodes: [{ id: "old" }] });
+    await staleLoad;
+    expect(page.nodes).toEqual([]);
+    expect(page.nodesLoading).toBe(true);
+
+    second.resolve({ nodes: [{ id: "new" }] });
+    await currentLoad;
+    expect(page.nodes).toEqual([{ id: "new" }]);
+    expect(page.nodesLoading).toBe(false);
+
+    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+  });
+
+  it("restores request ownership when a disconnected page reconnects", async () => {
+    const first = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const second = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const request = vi
+      .fn<(method: string, params?: unknown) => Promise<unknown>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = gatewaySnapshot(client, true);
+    const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
+    page.context = {
+      runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
+    } as unknown as ApplicationContext;
+    page.applyGatewaySnapshot(snapshot, false);
+
+    const staleLoad = loadNodes(page);
+    page.disconnectedCallback();
+    page.applyGatewaySnapshot(snapshot, false);
+    const currentLoad = loadNodes(page);
+
+    first.resolve({ nodes: [{ id: "old" }] });
+    await staleLoad;
+    expect(page.nodes).toEqual([]);
+    expect(page.nodesLoading).toBe(true);
+
+    second.resolve({ nodes: [{ id: "new" }] });
+    await currentLoad;
+    expect(page.nodes).toEqual([{ id: "new" }]);
 
     page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
   });

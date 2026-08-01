@@ -50,10 +50,8 @@ function messageText(content: unknown): string {
     .join("");
 }
 
-async function verifyRuntimeContextTranscriptShape(root: string) {
-  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const sessionManager = SessionManager.open(sessionFile);
+async function verifyRuntimeContextTranscriptShape() {
+  const sessionManager = SessionManager.inMemory();
   const effectivePrompt = [
     "visible ask",
     "",
@@ -233,8 +231,7 @@ async function verifyDoctorRepair(root: string) {
   })) as TranscriptEntry[];
   const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
   assert(
-    JSON.stringify(ids) ===
-      JSON.stringify(["broken-session", "parent", "plain-user", "plain-assistant"]),
+    JSON.stringify(ids) === JSON.stringify(["broken", "parent", "plain-user", "plain-assistant"]),
     `doctor kept wrong active branch: ${JSON.stringify(ids)}`,
   );
   assert(
@@ -256,7 +253,7 @@ async function main() {
   setEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
-    await verifyRuntimeContextTranscriptShape(root);
+    await verifyRuntimeContextTranscriptShape();
     await verifyDoctorRepair(root);
     console.log("session runtime context Docker E2E passed");
   } finally {

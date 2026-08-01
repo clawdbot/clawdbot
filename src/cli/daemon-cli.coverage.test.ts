@@ -296,7 +296,7 @@ describe("daemon-cli coverage", () => {
 
   it("installs the daemon (json output)", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceIsLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     serviceInstall.mockClear();
 
     await runDaemonCommand([
@@ -322,7 +322,7 @@ describe("daemon-cli coverage", () => {
 
   it("passes the existing service environment into the install plan on forced reinstall", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(true);
+    serviceIsLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
       environment: {
@@ -353,7 +353,7 @@ describe("daemon-cli coverage", () => {
 
   it("passes an explicit service wrapper into the install plan", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceIsLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonCommand([
       "daemon",

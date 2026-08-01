@@ -135,11 +135,13 @@ describe("subagent registry persistence resume", () => {
         task: "deliver before waking requester",
         cleanup: "keep",
         createdAt: 100,
-        startedAt: 110,
-        endedAt: 200,
         endedReason: "subagent-complete",
-        outcome: { status: "ok" },
-        execution: { status: "terminal", startedAt: 110, endedAt: 200 },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 200,
+          outcome: { status: "ok" },
+        },
         expectsCompletionMessage: true,
         completion: { required: true, resultText: "done", capturedAt: 200 },
         delivery: {

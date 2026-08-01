@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
@@ -166,6 +167,7 @@ export function renderSettingsToggleRow(props: {
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
+  actions?: TemplateResult | typeof nothing;
 }): TemplateResult {
   const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
     const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
@@ -200,6 +202,7 @@ export function renderSettingsToggleRow(props: {
           : nothing}
       </div>
       <div class="settings-row__control">
+        ${props.actions ?? nothing}
         <wa-switch
           class="settings-toggle"
           size="s"
@@ -221,6 +224,40 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+export function renderSettingsDefaultState(props: {
+  value: string;
+  overridden: boolean;
+  disabled?: boolean;
+  onReset: () => void;
+}): {
+  description: TemplateResult;
+  action: TemplateResult | typeof nothing;
+} {
+  return {
+    description: html`${t(
+      props.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
+      { value: props.value },
+    )}`,
+    action: props.overridden
+      ? html`
+          <button
+            type="button"
+            class="btn btn--icon"
+            title=${t("configForm.resetToDefault")}
+            aria-label=${t("configForm.resetToDefault")}
+            ?disabled=${props.disabled ?? false}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onReset();
+            }}
+          >
+            ${icons.refresh}
+          </button>
+        `
+      : nothing,
+  };
+}
+
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
   options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
@@ -235,7 +272,7 @@ export function renderSettingsSegmented<T extends string>(props: {
       class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
-      .value=${props.value}
+      .value=${live(props.value)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: string }).value;
@@ -259,7 +296,7 @@ export function renderSettingsSegmented<T extends string>(props: {
               : ""}"
             appearance="button"
             value=${option.value}
-            .checked=${option.value === props.value}
+            .checked=${live(option.value === props.value)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
           >

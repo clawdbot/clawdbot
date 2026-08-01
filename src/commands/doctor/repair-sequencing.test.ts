@@ -18,13 +18,13 @@ const mocks = vi.hoisted(() => ({
   migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
-  maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStaleConfiguredAuthOrders: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
+  repairStaleAgentModelRefs: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
@@ -51,11 +51,14 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+}));
+
+vi.mock("./shared/stale-agent-model-ref-repair.js", () => ({
+  repairStaleAgentModelRefs: mocks.repairStaleAgentModelRefs,
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
@@ -262,11 +265,6 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       warnings: [],
     }));
-    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValue({
-      detected: [],
-      changes: [],
-      warnings: [],
-    });
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -279,6 +277,11 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -555,8 +558,8 @@ describe("doctor repair sequencing", () => {
     expect(result.authProfilesRepaired).toBe(true);
   });
 
-  it("reports auth profiles repaired after OpenAI Codex auth-provider migration", async () => {
-    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValueOnce({
+  it("reports receipt-owned OpenAI auth-provider migration as an auth repair", async () => {
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce({
       changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
       warnings: [],
     });
@@ -651,6 +654,102 @@ describe("doctor repair sequencing", () => {
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
       "brave web search provider selected, enabled automatically.",
     ]);
+  });
+
+  it("installs an external provider before validating configured model references", async () => {
+    let mistralInstalled = false;
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
+      mistralInstalled = true;
+      return {
+        changes: ['Installed missing configured plugin "mistral" from @openclaw/mistral-provider.'],
+        warnings: [],
+        repairedPluginIds: ["mistral"],
+      };
+    });
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => ({
+      config: mistralInstalled
+        ? cfg
+        : {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults: {
+                ...cfg.agents?.defaults,
+                model: { primary: "openai/gpt-5.6-sol" },
+              },
+            },
+          },
+      changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
+      warnings: [],
+    }));
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.repairStaleAgentModelRefs.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
+  });
+
+  it("preserves external provider model references when plugin install repair fails", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "mistral" from @openclaw/mistral-provider: package install failed',
+      ],
+      failedPluginIds: ["mistral"],
+    });
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.repairStaleAgentModelRefs).not.toHaveBeenCalled();
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
   });
 
   it("applies doctor contracts exposed by newly installed plugins", async () => {

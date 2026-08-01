@@ -3372,6 +3372,19 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expectInvokeErrorMessage(malicious.sendInvokeResult, {
             message: "awk inline program requires explicit approval in strictInlineEval mode",
           });
+
+          const abbreviated = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: [executablePath, '--s=BEGIN{system("id")}', "/dev/null"],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+          });
+
+          expect(abbreviated.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(abbreviated.sendInvokeResult, {
+            message: "gawk --source requires explicit approval in strictInlineEval mode",
+          });
         },
       });
     } finally {

@@ -1,6 +1,6 @@
 // Manual facade. Keep loader boundary explicit.
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 type FacadeModule = {
   applyXiaomiConfig: (cfg: OpenClawConfig) => OpenClawConfig;
@@ -27,7 +27,7 @@ export const applyXiaomiProviderConfig: FacadeModule["applyXiaomiProviderConfig"
 /** Build the Xiaomi model provider entry used by setup/config helpers. */
 export const buildXiaomiProvider: FacadeModule["buildXiaomiProvider"] = ((...args) =>
   loadFacadeModule()["buildXiaomiProvider"](...args)) as FacadeModule["buildXiaomiProvider"];
-/** Default Xiaomi model id advertised by the bundled provider facade. */
+/** Default Xiaomi model id advertised by the provider facade. */
 export const XIAOMI_DEFAULT_MODEL_ID: FacadeModule["XIAOMI_DEFAULT_MODEL_ID"] =
   loadFacadeModule()["XIAOMI_DEFAULT_MODEL_ID"];
 /** Default Xiaomi provider/model reference written by setup flows. */

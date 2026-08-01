@@ -241,11 +241,21 @@ export async function installDaemonServiceAndEmit(params: {
     return;
   }
 
-  let installed;
+  let installed: boolean;
   try {
     installed = await params.service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
+  } catch (err) {
+    params.fail(
+      `${params.serviceNoun} install verification failed: ${String(err)}`,
+      await buildInstallFailureHints(err),
+    );
+    return;
+  }
+  if (!installed) {
+    params.fail(
+      `${params.serviceNoun} install verification failed: service is not ${params.service.loadedText}.`,
+    );
+    return;
   }
   params.emit({
     ok: true,

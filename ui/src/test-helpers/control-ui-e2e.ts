@@ -10,12 +10,6 @@ import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import {
-  controlUiBrowserOnlySharedModuleAliases,
-  resolveExternalPackageAliasesForVite,
-  resolveSourcePackageAliasesForVite,
-  resolveTsconfigPathAliasesForVite,
-} from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
 export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
@@ -207,6 +201,8 @@ export type ControlUiMockGatewayScenario = {
     name: string;
     provider: string;
     available?: boolean;
+    contextWindow?: number;
+    supportsTools?: boolean;
   }>;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
@@ -310,7 +306,22 @@ export async function startControlUiE2eServer(
     buildId: "e2e",
   },
 ): Promise<ControlUiE2eServer> {
-  const { createServer } = await import("vite");
+  // Shared browser fixtures import this helper; load filesystem-bound Vite
+  // configuration only when its Node-owned development server actually starts.
+  const [
+    { createServer },
+    { controlUiLocaleModulesPlugin },
+    {
+      controlUiBrowserOnlySharedModuleAliases,
+      resolveExternalPackageAliasesForVite,
+      resolveSourcePackageAliasesForVite,
+      resolveTsconfigPathAliasesForVite,
+    },
+  ] = await Promise.all([
+    import("vite"),
+    import("../../config/control-ui-locales.ts"),
+    import("../../vite.config.ts"),
+  ]);
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();
@@ -332,7 +343,7 @@ export async function startControlUiE2eServer(
       ],
     },
     publicDir: path.join(uiRoot, "public"),
-    plugins: [controlUiBrowserOnlySharedModuleAliases()],
+    plugins: [controlUiLocaleModulesPlugin(), controlUiBrowserOnlySharedModuleAliases()],
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
@@ -1360,7 +1371,7 @@ function installControlUiMockGateway(
         return { ok: true, updatedSessions: 0, ...groupsPayload() };
       }
       case "sessions.subscribe":
-        return { ok: true };
+        return { subscribed: true };
       case "sessions.messages.subscribe":
         return {
           key: isRecord(params) && typeof params.key === "string" ? params.key : "",
@@ -1430,7 +1441,7 @@ function installControlUiMockGateway(
       this.dispatchEvent(new Event("open"));
       this.deliver({
         event: "connect.challenge",
-        payload: { nonce: "control-ui-e2e-nonce" },
+        payload: { nonce: "control-ui-e2e-nonce", ts: Date.now() },
         type: "event",
       });
     }

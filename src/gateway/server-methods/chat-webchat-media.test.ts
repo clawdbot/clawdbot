@@ -63,6 +63,29 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     });
   });
 
+  it.each([
+    { extension: ".aiff", form: "AIFF" },
+    { extension: ".aif", form: "AIFF" },
+    { extension: ".aifc", form: "AIFC" },
+  ])(
+    "exposes $extension audio files with their canonical MIME type",
+    async ({ extension, form }) => {
+      const { audioPath, localRoot } = writeAudioFixture(
+        [...Buffer.from("FORM", "ascii"), 0, 0, 0, 4, ...Buffer.from(form, "ascii")],
+        extension,
+      );
+
+      const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+        [{ mediaUrl: audioPath, trustedLocalMedia: true }],
+        { localRoots: [localRoot] },
+      );
+
+      expect(blocks[0]).toMatchObject({
+        attachment: { label: `clip${extension}`, kind: "audio", mimeType: "audio/aiff" },
+      });
+    },
+  );
+
   it("preserves voice-note metadata on local audio attachments", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 

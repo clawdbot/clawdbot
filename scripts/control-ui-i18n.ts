@@ -14,6 +14,11 @@ import {
   verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
+import {
+  hashControlUiTranslationText,
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+} from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import {
@@ -26,25 +31,11 @@ import {
   type LocaleMeta,
   type TranslationBatchItem,
   type TranslationMap,
-  type TranslationMemoryEntry,
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 export { shouldReuseExistingTranslation } from "./lib/control-ui-i18n-sync-plan.ts";
-
-const { formatGeneratedModule } = (await import(
-  new URL("./lib/format-generated-module.mjs", import.meta.url).href
-)) as {
-  formatGeneratedModule: (
-    source: string,
-    options: {
-      errorLabel: string;
-      outputPath: string;
-      repoRoot: string;
-    },
-  ) => string;
-};
 
 type RunProcessParentSignalState = {
   done: boolean;
@@ -256,16 +247,8 @@ function resolveKnownTranslationProvider(): TranslationProvider {
   throw new Error(`Unsupported translation provider: ${provider}`);
 }
 
-function normalizeText(text: string): string {
-  return text.trim().split(/\s+/).join(" ");
-}
-
 function sha256(input: string | Uint8Array): string {
   return createHash("sha256").update(input).digest("hex");
-}
-
-function hashText(text: string): string {
-  return sha256(normalizeText(text));
 }
 
 function cacheNamespace(): string {
@@ -279,10 +262,6 @@ function cacheNamespace(): string {
 
 function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
   return sha256([cacheNamespace(), SOURCE_LOCALE, targetLocale, segmentId, textHash].join("|"));
-}
-
-function localeFilePath(entry: LocaleEntry): string {
-  return path.join(LOCALES_DIR, entry.fileName);
 }
 
 function glossaryPath(entry: LocaleEntry): string {
@@ -406,27 +385,6 @@ async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   }
   const raw = await readFile(filePath, "utf8");
   return JSON.parse(raw) as LocaleMeta;
-}
-
-async function loadTranslationMemory(
-  filePath: string,
-): Promise<Map<string, TranslationMemoryEntry>> {
-  const entries = new Map<string, TranslationMemoryEntry>();
-  if (!existsSync(filePath)) {
-    return entries;
-  }
-  const raw = await readFile(filePath, "utf8");
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = JSON.parse(trimmed) as TranslationMemoryEntry;
-    if (parsed.cache_key && parsed.translated.trim()) {
-      entries.set(parsed.cache_key, parsed);
-    }
-  }
-  return entries;
 }
 
 function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
@@ -801,43 +759,6 @@ export async function runProcess(
   });
 }
 
-async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const formatted = formatGeneratedModule(source, {
-    errorLabel: "control ui locale",
-    outputPath: filePath,
-    repoRoot: ROOT,
-  });
-  return restoreReplacementCorruptedStringLiterals(source, formatted);
-}
-
-function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
-  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
-    return formatted;
-  }
-
-  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
-  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
-  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
-  if (sourceLiterals.length !== formattedLiterals.length) {
-    return formatted;
-  }
-
-  let output = "";
-  let cursor = 0;
-  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
-    const replacement = sourceLiterals[index]?.[0];
-    const literal = formattedLiteral[0];
-    const start = formattedLiteral.index;
-    if (replacement === undefined || start === undefined) {
-      return formatted;
-    }
-    output += formatted.slice(cursor, start);
-    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
-    cursor = start + literal.length;
-  }
-  return `${output}${formatted.slice(cursor)}`;
-}
-
 type LocaleRunContext = {
   localeCount: number;
   localeIndex: number;
@@ -1109,10 +1030,10 @@ export async function translateNativeEntries(
     throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
   }
   const pending = entries.map((entry) => ({
-    cacheKey: cacheKey(entry.id, hashText(entry.source), targetLocale),
+    cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),
     key: entry.id,
     text: entry.source,
-    textHash: hashText(entry.source),
+    textHash: hashControlUiTranslationText(entry.source),
   }));
   const batches = buildTranslationBatches(pending);
   const clientAccess = createTranslationClientAccess(targetLocale, glossary);
@@ -1171,8 +1092,8 @@ async function syncLocale(
   const sourceHash = sha256(sourceRaw);
   const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
   const sourceFlat = flattenTranslations(sourceMap);
-  const existingPath = localeFilePath(entry);
-  const existingMap = (await loadLocaleMap(existingPath, entry.exportName)) ?? {};
+  const tm = loadControlUiTranslationMemory(tmPath(entry));
+  const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
   const existingFlat = flattenTranslations(existingMap);
   // Placeholder changes invalidate the old translation even when the key stays
   // stable. Treat it as pending so the locale bot can repair source-only PRs.
@@ -1180,7 +1101,6 @@ async function syncLocale(
   const previousMeta = await loadMeta(metaPath(entry));
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
-  const tm = await loadTranslationMemory(tmPath(entry));
   const allowTranslate = options.allowTranslate;
   const plan = createControlUiLocaleSyncPlan({
     allowTranslate,
@@ -1188,7 +1108,7 @@ async function syncLocale(
     entry,
     existingFlat: reusableExistingFlat,
     force: options.force,
-    hashText,
+    hashText: hashControlUiTranslationText,
     previousMeta,
     sourceFlat,
     sourceHash,
@@ -1277,12 +1197,10 @@ async function syncLocale(
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
 
-  const expectedLocale = await formatGeneratedTypeScript(existingPath, artifacts.localeModule);
   const expectedMeta = artifacts.meta;
   const expectedGlossary = artifacts.glossary;
   const expectedTm = artifacts.translationMemory;
 
-  const currentLocale = existsSync(existingPath) ? await readFile(existingPath, "utf8") : "";
   const currentMeta = existsSync(metaPath(entry)) ? await readFile(metaPath(entry), "utf8") : "";
   const currentGlossary = existsSync(glossaryFilePath)
     ? await readFile(glossaryFilePath, "utf8")
@@ -1290,7 +1208,6 @@ async function syncLocale(
   const currentTm = existsSync(tmPath(entry)) ? await readFile(tmPath(entry), "utf8") : "";
 
   const changed =
-    currentLocale !== expectedLocale ||
     currentMeta !== expectedMeta ||
     currentGlossary !== expectedGlossary ||
     currentTm !== expectedTm;
@@ -1314,9 +1231,7 @@ async function syncLocale(
   }
 
   if (!options.checkOnly && options.write) {
-    await mkdir(LOCALES_DIR, { recursive: true });
     await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(existingPath, expectedLocale, "utf8");
     await writeFile(metaPath(entry), expectedMeta, "utf8");
     await writeFile(glossaryFilePath, expectedGlossary, "utf8");
     if (expectedTm) {

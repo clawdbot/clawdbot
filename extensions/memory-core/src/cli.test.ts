@@ -1450,6 +1450,34 @@ describe("memory cli", () => {
     });
   });
 
+  it("suggests reindexing instead of --fix when the qmd index is missing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const missingDbPath = path.join(qmdFixtureRoot, `missing-${qmdCaseId++}.sqlite`);
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "qmd",
+            provider: "qmd",
+            model: "qmd",
+            requestedProvider: "qmd",
+            workspaceDir,
+            dbPath: missingDbPath,
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "QMD index file is missing.");
+      expectLogged(log, "Fix: openclaw memory index --agent main");
+      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("fails index when qmd db file is empty", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});

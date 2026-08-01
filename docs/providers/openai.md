@@ -569,6 +569,16 @@ account-based. OpenClaw selects auth in this order:
 3. For local stdio app-server launches only, and only when the app-server
    reports no account: `CODEX_API_KEY`, then `OPENAI_API_KEY`.
 
+The default per-agent `codex-home/auth.json` is not a runtime auth store. If
+you copied or mounted Codex CLI credentials there, import them into the agent's
+OpenClaw auth store before starting a native Codex turn. Replace `<agent-id>`
+with the configured agent that owns this Codex home:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
+```
+
 A local ChatGPT/Codex subscription sign-in is not replaced just because the
 gateway process also has `OPENAI_API_KEY` for direct OpenAI models or
 embeddings. The env API-key fallback applies only to the local stdio no-account

@@ -213,6 +213,24 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("rejects direct text deliveries that acknowledge no platform message identifier", async () => {
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn().mockResolvedValue({ code: 0, data: {} }),
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await expect(
+      sendMessageFeishu({ cfg: {} as ClawdbotConfig, to: "oc_send", text: "hello" }),
+    ).rejects.toThrow("Feishu send failed: no message_id returned");
+  });
+
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
     const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
     mockCreateFeishuClient.mockReturnValue({
@@ -379,6 +397,37 @@ describe("getMessageFeishu", () => {
       createTime: undefined,
       threadId: undefined,
     });
+  });
+
+  it("preserves the canonical root and thread returned by the Feishu message API", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_topic_child",
+            root_id: "om_topic_root",
+            thread_id: "omt_topic",
+            chat_id: "oc_topic_group",
+            msg_type: "text",
+            body: { content: JSON.stringify({ text: "topic reply" }) },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_topic_child",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_topic_child",
+        rootId: "om_topic_root",
+        threadId: "omt_topic",
+      }),
+    );
   });
 
   it("falls through empty interactive card element arrays and locale variants", async () => {
@@ -703,6 +752,129 @@ describe("getMessageFeishu", () => {
         createTime: undefined,
       },
     ]);
+  });
+
+  it("fills thread history from continuation pages after excluding the current and root messages", async () => {
+    mockClientList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          has_more: true,
+          page_token: "older-history",
+          items: [
+            { message_id: "om_current", body: { content: '{"text":"current"}' } },
+            { message_id: "om_root", body: { content: '{"text":"root"}' } },
+            { message_id: "om_newer", body: { content: '{"text":"newer"}' } },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          has_more: false,
+          items: [{ message_id: "om_older", body: { content: '{"text":"older"}' } }],
+        },
+      });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      currentMessageId: "om_current",
+      rootMessageId: "om_root",
+      limit: 2,
+    });
+
+    expect(result.map((message) => message.messageId)).toEqual(["om_older", "om_newer"]);
+    expect(mockClientList).toHaveBeenNthCalledWith(2, {
+      params: {
+        container_id_type: "thread",
+        container_id: "omt_1",
+        sort_type: "ByCreateTimeDesc",
+        page_size: 3,
+        page_token: "older-history",
+        card_msg_content_type: "user_card_content",
+      },
+    });
+  });
+
+  it("reads thread history beyond the SDK's maximum single-page size", async () => {
+    const pageOne = Array.from({ length: 50 }, (_value, index) => ({
+      message_id: `om_${String(51 - index)}`,
+      body: { content: JSON.stringify({ text: String(51 - index) }) },
+    }));
+    mockClientList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: pageOne, has_more: true, page_token: "last-message" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ message_id: "om_1", body: { content: '{"text":"1"}' } }],
+          has_more: false,
+        },
+      });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      limit: 51,
+    });
+
+    expect(result).toHaveLength(51);
+    expect(result[0]?.messageId).toBe("om_1");
+    expect(result.at(-1)?.messageId).toBe("om_51");
+  });
+
+  it("deduplicates overlapping continuation pages without consuming the history limit", async () => {
+    mockClientList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          has_more: true,
+          page_token: "overlapping-page",
+          items: [{ message_id: "om_newer", body: { content: '{"text":"newer"}' } }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            { message_id: "om_newer", body: { content: '{"text":"duplicate"}' } },
+            { message_id: "om_older", body: { content: '{"text":"older"}' } },
+          ],
+        },
+      });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      limit: 2,
+    });
+
+    expect(result.map((message) => message.messageId)).toEqual(["om_older", "om_newer"]);
+  });
+
+  it.each([
+    { name: "missing", firstToken: undefined, secondToken: undefined },
+    { name: "repeated", firstToken: "same-page", secondToken: "same-page" },
+  ])("rejects $name thread history continuation tokens", async ({ firstToken, secondToken }) => {
+    mockClientList.mockResolvedValueOnce({
+      code: 0,
+      data: { items: [], has_more: true, ...(firstToken ? { page_token: firstToken } : {}) },
+    });
+    if (firstToken) {
+      mockClientList.mockResolvedValueOnce({
+        code: 0,
+        data: { items: [], has_more: true, ...(secondToken ? { page_token: secondToken } : {}) },
+      });
+    }
+
+    await expect(
+      listFeishuThreadMessages({ cfg: {} as ClawdbotConfig, threadId: "omt_1" }),
+    ).rejects.toThrow(
+      `Feishu thread history pagination returned a ${firstToken ? "repeated" : "missing"} page token`,
+    );
   });
 
   it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {

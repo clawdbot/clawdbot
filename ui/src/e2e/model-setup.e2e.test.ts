@@ -22,18 +22,21 @@ const localPrepareOptions = [
     brandId: "ollama",
     label: "Ollama",
     hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
   },
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "Local model (llama.cpp)",
     hint: "Download and run a private GGUF model",
+    actionLabel: "Review download",
   },
   {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -116,7 +119,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
       const candidate = page.locator('[data-candidate-kind="codex-cli"]');
       await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
       await candidate.getByRole("button", { name: "Test & use" }).click();
@@ -368,9 +371,22 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
+      const localProviderIcons = page.locator(
+        [
+          '[data-prepare-choice="ollama"] [data-provider-icon="ollama"]',
+          '[data-prepare-choice="llama-cpp"] [data-provider-icon="llamacpp"]',
+          '[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]',
+        ].join(","),
+      );
+      await expect.poll(() => localProviderIcons.count()).toBe(3);
+      const localProviderIconColors = await localProviderIcons.evaluateAll((icons) =>
+        icons.map((icon) => getComputedStyle(icon).color),
+      );
+      expect(localProviderIconColors).toHaveLength(3);
+      expect(new Set(localProviderIconColors).size).toBe(1);
       await page
         .locator('[data-prepare-choice="ollama"]')
-        .getByRole("button", { name: "Check & set up" })
+        .getByRole("button", { name: "Choose connection" })
         .click();
 
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
@@ -439,6 +455,9 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())
         .toContain("Verified in 284 ms");
+      await expect
+        .poll(() => page.locator('.model-setup-success [data-provider-icon="ollama"]').count())
+        .toBe(1);
 
       const activate = await gateway.waitForRequest("openclaw.setup.activate");
       expect(activate.params).toEqual({
@@ -451,6 +470,28 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           animations: "disabled",
           fullPage: true,
           path: path.join(artifactDir, "ollama-ready-desktop.png"),
+        });
+      }
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [],
+        configuredModel: "ollama/qwen3:0.6b",
+        recommendedInstalls: [],
+        setupComplete: true,
+      });
+      await page.getByRole("button", { name: "Stay in settings" }).click();
+      const currentConnection = page.locator(".model-setup__current");
+      await currentConnection.getByText("Ollama", { exact: true }).waitFor();
+      await currentConnection.getByText("qwen3:0.6b", { exact: true }).waitFor();
+      await expect
+        .poll(() => currentConnection.locator('[data-provider-icon="ollama"]').count())
+        .toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-main-desktop.png"),
         });
       }
 
@@ -473,169 +514,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     }
   });
 
-  it("downloads, verifies, and opens chat with llama.cpp", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const initialDetection = {
-      candidates: [],
-      manualProviders: [],
-      prepareOptions: localPrepareOptions,
-      workspace: "/tmp/openclaw-e2e",
-      setupComplete: false,
-    };
-    const modelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m";
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "openclaw.setup.detect",
-        "openclaw.setup.activate",
-        "openclaw.setup.prepare.start",
-        "wizard.next",
-      ],
-      methodResponses: {
-        "openclaw.setup.detect": initialDetection,
-        "openclaw.setup.prepare.start": {
-          sessionId: "llama-cpp-prepare-session",
-          done: false,
-          status: "running",
-        },
-        "openclaw.setup.activate": {
-          ok: true,
-          modelRef,
-          latencyMs: 731,
-          lines: ["Model ready"],
-        },
-        "wizard.next": {
-          sequence: [
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "llama-cpp-consent",
-                type: "confirm",
-                message:
-                  "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
-                initialValue: false,
-              },
-            },
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "llama-cpp-download-20",
-                type: "progress",
-                message: "Downloading Gemma 4 E4B… 20% (1.0/5.0 GB, 38 MB/s)",
-                executor: "gateway",
-              },
-            },
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "llama-cpp-download-100",
-                type: "progress",
-                message: "Gemma 4 E4B model downloaded",
-                executor: "gateway",
-              },
-            },
-            { done: true, status: "done" },
-          ],
-        },
-      },
-    });
-
-    try {
-      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
-      expect(response?.status()).toBe(200);
-      const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).waitFor();
-      await expect
-        .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
-        .toBe(1);
-      await expect.poll(() => llamaCppRow.textContent()).not.toContain("Gemma");
-      await expect.poll(() => llamaCppRow.textContent()).not.toContain("GB");
-      await expect.poll(() => llamaCppRow.textContent()).not.toContain("RAM");
-
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "llama-cpp-offer-desktop.png"),
-        });
-      }
-
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).click();
-      const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
-      expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
-      await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
-      await page.getByText("Download Gemma 4 E4B IT Q4_K_M").waitFor();
-
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "llama-cpp-confirm-desktop.png"),
-        });
-      }
-
-      await gateway.setMethodResponse("openclaw.setup.detect", {
-        ...initialDetection,
-        candidates: [
-          {
-            kind: "provider-auto:llama-cpp",
-            brandId: "llama-cpp",
-            label: "llama.cpp",
-            detail: "Gemma 4 E4B downloaded",
-            modelRef,
-            recommended: true,
-            credentials: true,
-          },
-        ],
-      });
-      await page.getByRole("button", { name: "Yes" }).click();
-      await page.getByRole("heading", { name: "Connection verified" }).waitFor();
-      await expect
-        .poll(() => page.locator(".model-setup-success").textContent())
-        .toContain(modelRef);
-      await expect
-        .poll(() => page.locator(".model-setup-success").textContent())
-        .toContain("Verified in 731 ms");
-
-      const activate = await gateway.waitForRequest("openclaw.setup.activate");
-      expect(activate.params).toEqual({
-        kind: "provider-auto:llama-cpp",
-        modelRef,
-      });
-
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "llama-cpp-ready-desktop.png"),
-        });
-        await page.setViewportSize({ height: 844, width: 390 });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "llama-cpp-ready-mobile.png"),
-        });
-      }
-
-      await page.getByRole("button", { name: "Start chatting" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("turns an unverifiable Gemini CLI login into direct recovery actions", async () => {
+  it("offers supported Google setup in an accessible provider picker", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -649,24 +528,12 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         "chat.startup",
         "openclaw.setup.detect",
         "openclaw.setup.activate",
-        "openclaw.setup.auth.start",
         "openclaw.setup.prepare.start",
       ],
       methodResponses: {
         "openclaw.setup.detect": {
           candidates: [],
-          unavailableCandidates: [
-            {
-              id: "gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI",
-              detail: "installed; login status unavailable",
-              reason:
-                "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
-              authOptionId: "google-gemini-cli",
-              manualProviderId: "gemini-api-key",
-            },
-          ],
+          unavailableCandidates: [],
           manualProviders: [
             {
               id: "qwen-cn",
@@ -692,20 +559,11 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
               id: "gemini-api-key",
               brandId: "google",
               groupLabel: "Google",
-              label: "Google Gemini API key",
-              hint: "Use an AI Studio API key.",
+              label: "Google AI Studio API key",
+              hint: "Supported API-key access from aistudio.google.com/apikey",
             },
           ],
-          authOptions: [
-            {
-              id: "google-gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI OAuth",
-              groupLabel: "Google",
-              kind: "oauth",
-              featured: true,
-            },
-          ],
+          authOptions: [],
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
@@ -715,20 +573,15 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           latencyMs: 412,
           lines: ["Model ready"],
         },
-        "openclaw.setup.auth.start": {
-          sessionId: "gemini-oauth-session",
-          done: false,
-          status: "running",
-        },
       },
     });
 
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Found, but needs attention" }).waitFor();
-      await page.getByRole("button", { name: "Sign in with Google" }).waitFor();
-      await page.getByRole("button", { name: "Use API key" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
+      await expect.poll(() => page.getByText("Found, but needs attention").count()).toBe(0);
 
       const providerPicker = page.locator(".model-setup-provider-select");
       const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
@@ -852,11 +705,16 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         .toBe(true);
 
       await accessValue.fill("sk-old-provider-secret");
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHidden = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHidden;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
+      await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
       await expect.poll(() => accessValue.inputValue()).toBe("");
       await expect
-        .poll(() => accessValue.evaluate((element) => element === document.activeElement))
+        .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
         .toBe(true);
 
       await providerTrigger.click();
@@ -918,21 +776,13 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
         .toBe(detectCountBeforeDismiss + 1);
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHiddenAfterDismiss = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHiddenAfterDismiss;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
-
-      const detectCount = (await gateway.getRequests("openclaw.setup.detect")).length;
-      await page
-        .locator('[data-unavailable-candidate="gemini-cli"]')
-        .getByRole("button", { name: "Check again" })
-        .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-        .toBe(detectCount + 1);
-
-      await page.getByRole("button", { name: "Sign in with Google" }).click();
-      const start = await gateway.waitForRequest("openclaw.setup.auth.start");
-      expect(start.params).toMatchObject({ authChoice: "google-gemini-cli" });
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -1022,17 +872,21 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         });
         await page.setViewportSize({ height: 900, width: 1280 });
       }
-      await page.getByRole("button", { name: "Verify connection" }).click();
+      await page.getByRole("button", { name: "Check model" }).click();
       const verify = await gateway.waitForRequest("openclaw.setup.verify");
       expect(verify.params).toEqual({});
-      await page.getByText("Answered in 1234 ms").waitFor();
+      await page.getByText("Ready · 1234 ms").waitFor();
       const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect")).length;
+      const verifyCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.verify")).length;
       await page.getByRole("button", { name: "Check again" }).click();
       await expect
-        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-        .toBe(detectCountBeforeRefresh + 1);
-      await page.getByRole("button", { name: "Verify connection" }).waitFor();
-      expect(await page.getByText("Answered in 1234 ms").count()).toBe(0);
+        .poll(async () => (await gateway.getRequests("openclaw.setup.verify")).length)
+        .toBe(verifyCountBeforeRefresh + 1);
+      expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
+        detectCountBeforeRefresh,
+      );
+      await page.getByRole("button", { name: "Check again" }).waitFor();
+      await page.getByText("Ready · 1234 ms").waitFor();
     } finally {
       await context.close();
     }

@@ -11,6 +11,7 @@ import {
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -140,6 +141,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -159,6 +161,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -175,6 +178,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -188,6 +192,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },

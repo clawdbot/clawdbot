@@ -40,16 +40,17 @@ import {
   tasks,
   tryPersistTaskUpsert,
 } from "./task-registry-state.js";
-import type {
-  JsonValue,
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskNotifyPolicy,
-  TaskRecord,
-  TaskRuntime,
-  TaskScopeKind,
-  TaskStatus,
-  TaskTerminalOutcome,
+import {
+  parseTaskNotifyPolicy,
+  type JsonValue,
+  type TaskDeliveryState,
+  type TaskDeliveryStatus,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+  type TaskRuntime,
+  type TaskScopeKind,
+  type TaskStatus,
+  type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 
@@ -531,9 +532,10 @@ export function updateTaskNotifyPolicyById(params: {
   taskId: string;
   notifyPolicy: TaskNotifyPolicy;
 }): TaskRecord | null {
+  const notifyPolicy = parseTaskNotifyPolicy(params.notifyPolicy);
   ensureTaskRegistryReady();
   return updateTask(params.taskId, {
-    notifyPolicy: params.notifyPolicy,
+    notifyPolicy,
     lastEventAt: Date.now(),
   });
 }

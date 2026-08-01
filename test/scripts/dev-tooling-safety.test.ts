@@ -699,6 +699,13 @@ describe("script-specific dev tooling hardening", () => {
     expect(realtimeSmokeTesting.transcriptIncludesMarker(["ocean"], "glacier")).toBe(false);
   });
 
+  it("resolves the realtime relay smoke to an existing Control UI module", () => {
+    const modulePath = realtimeSmokeTesting.resolveGatewayRelayModulePath(process.cwd());
+
+    expect(modulePath.endsWith("/ui/src/pages/chat/realtime-talk-gateway-relay.ts")).toBe(true);
+    expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
+  });
+
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const response = new Response("{}", {

@@ -10,5 +10,5 @@ export {
   resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader-runtime-registry.js";
-export { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "./loader-runtime-load.js";
+export { loadOpenClawPlugins } from "./loader-runtime-load.js";
 export type { PluginLoadOptions } from "./loader-types.js";

@@ -7,6 +7,7 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import {
   countPendingDescendantRunsFromRuns,
@@ -26,6 +27,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import { extractMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
+import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
 import { resolveFocusTargetSession } from "./commands-subagents/shared.js";
 import {
@@ -205,9 +207,12 @@ describe("subagents info", () => {
       task: "do thing",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
@@ -233,6 +238,65 @@ describe("subagents info", () => {
     expect(text).toContain("Task summary: Completed the requested task");
   });
 
+  it.each([
+    {
+      name: "a killed run despite its provider error",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a killed run despite its earlier successful result",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a failed run",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      expectedStatus: "failed",
+    },
+    {
+      name: "a timed-out run",
+      outcome: { status: "timeout" } as const,
+      expectedStatus: "timeout",
+    },
+  ])(
+    "keeps /subagents info and list aligned for $name",
+    ({ endedReason, outcome, expectedStatus }) => {
+      const now = Date.now();
+      const run = {
+        runId: `commands-subagents-status-${expectedStatus}`,
+        childSessionKey: `agent:main:subagent:commands-status-${expectedStatus}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "report the actual child outcome",
+        cleanup: "keep",
+        createdAt: now - 2_000,
+        ...(endedReason ? { endedReason } : {}),
+        execution: {
+          status: "terminal",
+          startedAt: now - 2_000,
+          endedAt: now - 1_000,
+          outcome,
+        },
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(run);
+      const context = buildInfoContext({
+        cfg: buildCommandTestConfig(),
+        runs: [run],
+        restTokens: ["1"],
+      });
+
+      expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
+        `Status: ${expectedStatus}`,
+      );
+      expect(requireReplyText(handleSubagentsListAction(context).reply)).toContain(
+        ` ${expectedStatus}`,
+      );
+    },
+  );
+
   it("omits Date-invalid subagent timestamps", () => {
     const runId = "commands-subagents-info-invalid-date-run";
     const childSessionKey = "agent:main:subagent:commands-info-invalid-date";
@@ -244,10 +308,13 @@ describe("subagents info", () => {
       task: "inspect invalid timestamps",
       cleanup: "keep",
       createdAt: 8_640_000_000_000_001,
-      startedAt: 8_640_000_000_000_001,
-      endedAt: 8_640_000_000_000_001,
       archiveAtMs: 8_640_000_000_000_001,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: 8_640_000_000_000_001,
+        endedAt: 8_640_000_000_000_001,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = buildCommandTestConfig();
@@ -278,17 +345,20 @@ describe("subagents info", () => {
       task: "Inspect the stuck run",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: {
-        status: "error",
-        error: [
-          "OpenClaw runtime context (internal):",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-          "",
-          "[Internal task completion event]",
-          "source: subagent",
-        ].join("\n"),
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: {
+          status: "error",
+          error: [
+            "OpenClaw runtime context (internal):",
+            "This context is runtime-generated, not user-authored. Keep internal details private.",
+            "",
+            "[Internal task completion event]",
+            "source: subagent",
+          ].join("\n"),
+        },
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
@@ -339,9 +409,12 @@ describe("subagents info", () => {
       task: "do routed thing",
       cleanup: "keep",
       createdAt: now - 20_000,
-      startedAt: now - 20_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 20_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
@@ -379,6 +452,8 @@ describe("subagents info", () => {
 
 describe("subagents log", () => {
   function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+    const { execution = { status: "running", startedAt: Date.now() - 10_000 }, ...record } =
+      overrides;
     return {
       runId: "run-subagent-log",
       childSessionKey: "agent:main:subagent:log",
@@ -387,8 +462,8 @@ describe("subagents log", () => {
       task: "inspect logs",
       cleanup: "keep",
       createdAt: Date.now() - 10_000,
-      startedAt: Date.now() - 10_000,
-      ...overrides,
+      ...record,
+      execution,
     };
   }
 

@@ -17,18 +17,15 @@ import type { ResolvedBuzzAccount } from "./types.js";
 
 const log = createSubsystemLogger("buzz/inbound");
 
-function senderLabel(pubkey: string): string {
-  return `${pubkey.slice(0, 8)}...${pubkey.slice(-6)}`;
-}
-
 export async function handleBuzzInbound(params: {
   account: ResolvedBuzzAccount;
   cfg: OpenClawConfig;
   bus: BuzzBus;
   message: BuzzInboundMessage;
+  signal: AbortSignal;
 }) {
   const runtime = getBuzzRuntime();
-  const { account, cfg, bus, message } = params;
+  const { account, cfg, bus, message, signal } = params;
   const channelId = parseBuzzTarget(message.channelId);
   const target = buildBuzzTarget(channelId);
   const textForAgent = formatBuzzMessageForAgent(message);
@@ -82,7 +79,8 @@ export async function handleBuzzInbound(params: {
     return;
   }
 
-  const senderName = senderLabel(message.senderPubkey);
+  const senderName = bus.directory.resolveSenderName(message.senderPubkey);
+  const roomName = bus.directory.resolveRoomName(channelId);
   const body = buildEnvelope({
     channel: "Buzz",
     from: senderName,
@@ -100,7 +98,7 @@ export async function handleBuzzInbound(params: {
     conversation: {
       kind: "group",
       id: channelId,
-      label: channelId,
+      label: roomName,
       threadId: message.threadId,
       nativeChannelId: channelId,
     },
@@ -129,7 +127,7 @@ export async function handleBuzzInbound(params: {
     },
     extra: {
       GroupChannel: channelId,
-      GroupSubject: channelId,
+      GroupSubject: roomName,
       BuzzEventKind: message.kind,
     },
   });
@@ -163,6 +161,9 @@ export async function handleBuzzInbound(params: {
       onError: (error) => {
         throw error instanceof Error ? error : new Error(String(error));
       },
+    },
+    replyOptions: {
+      abortSignal: signal,
     },
     replyPipeline: {
       typing: {

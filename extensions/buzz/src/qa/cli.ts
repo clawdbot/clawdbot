@@ -4,7 +4,7 @@ import {
   runLiveTransportQaSuiteCommand,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
-} from "openclaw/plugin-sdk/qa-runtime";
+} from "openclaw/plugin-sdk/qa-runner-runtime";
 
 const DEFAULT_BUZZ_QA_SCENARIOS = ["channel-canary", "channel-mention-gating"] as const;
 

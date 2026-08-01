@@ -14,12 +14,12 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
   type OffloadedRef,
   logAttachmentFailure,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";

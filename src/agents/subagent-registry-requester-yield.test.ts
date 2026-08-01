@@ -19,7 +19,7 @@ function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord 
     task: "finish",
     cleanup: "keep",
     createdAt: 1_000,
-    endedAt: 2_000,
+    execution: { status: "terminal", endedAt: 2_000 },
     expectsCompletionMessage: true,
     delivery: { status: "delivered" },
   };
@@ -81,7 +81,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
   it("freezes active yielded children without scheduling before terminal delivery", () => {
     const entry = makeRun("run-child");
-    entry.endedAt = undefined;
+    entry.execution = { ...entry.execution, status: "running", endedAt: undefined };
     entry.delivery = { status: "pending" };
     const schedule = vi.fn();
 
