@@ -210,6 +210,57 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   };
 }
 
+function runEvidenceMode(overrides: Record<string, string> = {}) {
+  const targetSha = "a".repeat(40);
+  return spawnSync(process.execPath, [join(process.cwd(), HELPER), "resolve-evidence-mode"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CANDIDATE_SOURCE_SHA: targetSha,
+      CANDIDATE_VERSION: "2026.6.35",
+      TARGET_SHA: targetSha,
+      ...overrides,
+    },
+  });
+}
+
+function writeLegacyDirectRunnerAttestation(overrides: Record<string, string> = {}) {
+  const targetSha = "a".repeat(40);
+  const workdir = tempDirs.make("openclaw-telegram-legacy-attestation-");
+  const contextPath = join(workdir, "context.json");
+  const aggregatePath = join(workdir, "aggregate.json");
+  writeFileSync(
+    contextPath,
+    JSON.stringify({
+      version: 1,
+      kind: "telegram-sut-boundary",
+      targetSha,
+      candidateArtifact: { sourceSha: targetSha, version: "2026.6.34" },
+    }),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [join(process.cwd(), HELPER), "write-legacy-direct-runner-attestation"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        AGGREGATE_PATH: aggregatePath,
+        CANDIDATE_SOURCE_SHA: targetSha,
+        CANDIDATE_VERSION: "2026.6.34",
+        CONTEXT_PATH: contextPath,
+        TARGET_SHA: targetSha,
+        ...overrides,
+      },
+    },
+  );
+  return {
+    aggregate:
+      result.status === 0 ? JSON.parse(readFileSync(aggregatePath, "utf8")) : undefined,
+    result,
+  };
+}
+
 function runCandidateProvenance(params: { openPr?: boolean; unsignedWebFlow?: boolean } = {}) {
   const candidateSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-telegram-provenance-");
@@ -372,6 +423,60 @@ describe("release Telegram QA workflow", () => {
     expect(failure.outputs.status).toBe("failure");
     expect(failure.evidence.candidateArtifact).toMatchObject({ id: "123" });
     expect(failure.statusFile).toContain("build:failure");
+  });
+
+  it("selects the finalizer evidence contract from the attested candidate version", () => {
+    const legacy = runEvidenceMode({ CANDIDATE_VERSION: "2026.6.34" });
+    expect(legacy.status, legacy.stderr).toBe(0);
+    expect(legacy.stdout.trim()).toBe("legacy-direct-runner-v1");
+
+    const modern = runEvidenceMode();
+    expect(modern.status, modern.stderr).toBe(0);
+    expect(modern.stdout.trim()).toBe("process-boundary-v1");
+
+    const mismatchedSource = runEvidenceMode({ CANDIDATE_SOURCE_SHA: "b".repeat(40) });
+    expect(mismatchedSource.status).toBe(1);
+    expect(mismatchedSource.stderr).toContain("must exactly match TARGET_SHA");
+  });
+
+  it("writes a versioned legacy aggregate only for the exact attested candidate", () => {
+    const legacy = writeLegacyDirectRunnerAttestation();
+    expect(legacy.result.status, legacy.result.stderr).toBe(0);
+    expect(legacy.aggregate).toMatchObject({
+      evidenceMode: "legacy-direct-runner-v1",
+      legacyDirectRunnerAttestation: {
+        version: 1,
+        kind: "telegram-legacy-direct-runner-attestation",
+        targetSha: "a".repeat(40),
+        candidateArtifact: { sourceSha: "a".repeat(40), version: "2026.6.34" },
+      },
+    });
+
+    const unsupportedVersion = writeLegacyDirectRunnerAttestation({
+      CANDIDATE_VERSION: "2026.6.35",
+    });
+    expect(unsupportedVersion.result.status).toBe(1);
+    expect(unsupportedVersion.result.stderr).toContain(
+      "only defined for candidate version 2026.6.34",
+    );
+  });
+
+  it("keeps finalizer mode selection tied to the attested candidate identity", () => {
+    const archive = requireRun("build_candidate", "Archive bounded candidate tree");
+    const attestor = requireRun("attest_candidate", "Bounded extract and validate candidate");
+    const finalize = requireRun("run_telegram", "Finalize trusted Telegram execution evidence");
+    const finalizeStep = step("run_telegram", "Finalize trusted Telegram execution evidence");
+    expect(archive).toContain("candidateVersion: $candidateVersion");
+    expect(attestor).toContain(".candidateVersion == $candidateVersion");
+    expect(finalizeStep.env?.CANDIDATE_VERSION).toBe(
+      "${{ needs.build_candidate.outputs.candidate_version }}",
+    );
+    expect(finalize).toContain(".candidateArtifact.sourceSha == $targetSha");
+    expect(finalize).toContain("resolve-evidence-mode");
+    expect(finalize).toContain("write-legacy-direct-runner-attestation");
+    expect(finalize).toContain("process-boundary-v1) ;;");
+    expect(finalize).toContain("Unknown Telegram evidence mode");
+    expect(finalize).not.toContain("2dbfe013e511d0c7e0720356f5af5c7bb210db19");
   });
 
   it.runIf(process.platform === "linux")("retains only bounded, allowlisted diagnostics", () => {

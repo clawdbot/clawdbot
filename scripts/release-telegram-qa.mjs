@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Trusted helpers for the release Telegram workflow. Keep policy here so it can
 // be exercised directly rather than inferred from a workflow shell snippet.
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -17,6 +17,66 @@ function required(name) {
 
 function appendOutput(lines) {
   appendFileSync(required("GITHUB_OUTPUT"), `${lines.join("\n")}\n`, "utf8");
+}
+
+function requireExactCandidateSource() {
+  const targetSha = required("TARGET_SHA");
+  const sourceSha = required("CANDIDATE_SOURCE_SHA");
+  if (!SHA.test(targetSha) || !SHA.test(sourceSha) || sourceSha !== targetSha) {
+    throw new Error("Candidate artifact source SHA must exactly match TARGET_SHA.");
+  }
+  return targetSha;
+}
+
+function resolveEvidenceMode() {
+  requireExactCandidateSource();
+  const candidateVersion = required("CANDIDATE_VERSION");
+  const evidenceMode =
+    candidateVersion === "2026.6.34" ? "legacy-direct-runner-v1" : "process-boundary-v1";
+  process.stdout.write(`${evidenceMode}\n`);
+}
+
+function writeLegacyDirectRunnerAttestation() {
+  const targetSha = requireExactCandidateSource();
+  const candidateVersion = required("CANDIDATE_VERSION");
+  if (candidateVersion !== "2026.6.34") {
+    throw new Error(
+      "Legacy direct-runner evidence is only defined for candidate version 2026.6.34.",
+    );
+  }
+
+  const contextPath = required("CONTEXT_PATH");
+  const aggregatePath = required("AGGREGATE_PATH");
+  const context = JSON.parse(readFileSync(contextPath, "utf8"));
+  if (
+    context?.version !== 1 ||
+    context?.kind !== "telegram-sut-boundary" ||
+    context.targetSha !== targetSha ||
+    context.candidateArtifact?.sourceSha !== targetSha ||
+    context.candidateArtifact?.version !== candidateVersion
+  ) {
+    throw new Error(
+      "Legacy Telegram evidence context does not match the attested candidate identity.",
+    );
+  }
+
+  const aggregate = {
+    ...context,
+    evidenceMode: "legacy-direct-runner-v1",
+    legacyDirectRunnerAttestation: {
+      version: 1,
+      kind: "telegram-legacy-direct-runner-attestation",
+      targetSha,
+      candidateArtifact: {
+        sourceSha: targetSha,
+        version: candidateVersion,
+      },
+    },
+  };
+  writeFileSync(aggregatePath, `${JSON.stringify(aggregate, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
 
 function advisoryStatus() {
@@ -128,6 +188,10 @@ const command = process.argv[2];
 try {
   if (command === "advisory-status") {
     advisoryStatus();
+  } else if (command === "resolve-evidence-mode") {
+    resolveEvidenceMode();
+  } else if (command === "write-legacy-direct-runner-attestation") {
+    writeLegacyDirectRunnerAttestation();
   } else {
     throw new Error(`Unknown release Telegram QA command: ${command ?? ""}`);
   }
