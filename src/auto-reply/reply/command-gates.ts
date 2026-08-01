@@ -46,7 +46,7 @@ export function rejectNonOwnerCommand(
 }
 
 export function requireGatewayClientScope(
-  params: HandleCommandsParams,
+  params: Pick<HandleCommandsParams, "ctx">,
   config: {
     label: string;
     allowedScopes: string[];

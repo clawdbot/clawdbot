@@ -78,6 +78,19 @@ async function waitForTextContaining(
 function appHtml(appModuleUrl: string): string {
   return `<!doctype html>
 <meta charset="utf-8" />
+<style>
+  :root {
+    --color-background-primary: #f6f5f3;
+    --color-text-primary: #17171a;
+    --app-accent: #ff4f4f;
+  }
+  #theme-surface {
+    background: var(--color-background-primary);
+    color: var(--color-text-primary);
+    border-left: 4px solid var(--app-accent);
+  }
+</style>
+<div id="theme-surface">Host-themed surface</div>
 <button id="call-app">Call app tool</button>
 <button id="call-model">Call model tool</button>
 <button id="read-resource">Read resource</button>
@@ -96,11 +109,33 @@ function appHtml(appModuleUrl: string): string {
 <output id="message"></output>
 <output id="teardown"></output>
 <output id="isolation"></output>
+<output id="host-theme"></output>
+<output id="host-variables"></output>
+<output id="computed-theme"></output>
 <script type="module">
-import { App, McpUiResourceTeardownResultSchema } from ${JSON.stringify(appModuleUrl)};
+import {
+  App,
+  McpUiResourceTeardownResultSchema,
+  applyDocumentTheme,
+  applyHostStyleVariables,
+} from ${JSON.stringify(appModuleUrl)};
 const write = (id, value) => { document.getElementById(id).textContent = value; };
 try { void window.top.document; write("isolation", "failed"); } catch { write("isolation", "isolated"); }
 const app = new App({ name: "OpenClaw conformance fixture", version: "1.0.0" });
+const applyHostContext = () => {
+  const context = app.getHostContext();
+  if (context?.theme) applyDocumentTheme(context.theme);
+  if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
+  const surface = getComputedStyle(document.getElementById("theme-surface"));
+  write("host-theme", context?.theme ?? "missing");
+  write("host-variables", JSON.stringify(context?.styles?.variables ?? {}));
+  write("computed-theme", JSON.stringify({
+    background: surface.backgroundColor,
+    color: surface.color,
+    accent: surface.borderLeftColor,
+  }));
+};
+app.onhostcontextchanged = applyHostContext;
 app.ontoolinput = ({ arguments: args }) => write("input", JSON.stringify(args ?? {}));
 app.ontoolresult = (value) => write("result", JSON.stringify(value.structuredContent ?? value));
 app.onteardown = async () => {
@@ -142,6 +177,7 @@ document.getElementById("send-message").onclick = async () => {
 };
 document.getElementById("request-teardown").onclick = () => app.requestTeardown();
 await app.connect();
+applyHostContext();
 write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
 write("ping", JSON.stringify(await app.request(
   { method: "ping", params: {} },
@@ -304,18 +340,38 @@ window.mcpConformanceUnmount = async () => {
         }),
       ]);
       const view = document.createElement("mcp-app-view");
+      const root = document.documentElement;
+      const themeListeners = new Set<() => void>();
+      const setTheme = (theme: "light" | "dark") => {
+        root.dataset.themeMode = theme;
+        root.style.setProperty("--card", theme === "light" ? "#ffffff" : "#161920");
+        root.style.setProperty("--text", theme === "light" ? "#403c35" : "#d4d4d8");
+        for (const listener of themeListeners) {
+          listener();
+        }
+      };
+      setTheme("dark");
       Reflect.set(view, "context", {
         gateway: {
           snapshot: { client },
           connection: { gatewayUrl: params.gatewayUrl },
         },
-        theme: { subscribe: () => () => undefined },
+        theme: {
+          subscribe(listener: () => void) {
+            themeListeners.add(listener);
+            return () => themeListeners.delete(listener);
+          },
+        },
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
       view.title = "Conformance app";
       document.getElementById("mount")?.appendChild(view);
-      Object.assign(window, { mcpConformanceClient: client, mcpConformanceView: view });
+      Object.assign(window, {
+        mcpConformanceClient: client,
+        mcpConformanceView: view,
+        mcpConformanceSetTheme: setTheme,
+      });
     },
     {
       gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
@@ -357,6 +413,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       "OPENCLAW_SKIP_CHANNELS",
       "OPENCLAW_SKIP_CRON",
       "OPENCLAW_SKIP_PROVIDERS",
+      "OPENCLAW_TEST_MINIMAL_GATEWAY",
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
     ]);
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-app-conformance-"));
@@ -412,6 +469,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
     setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(tempRoot, "empty-plugins"));
     clearConfigCache();
     clearRuntimeConfigSnapshot();
@@ -499,6 +557,40 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
     await waitForText(app.locator("#ping"), "{}");
     await waitForText(app.locator("#isolation"), "isolated");
+    await waitForText(app.locator("#host-theme"), "dark");
+    await waitForTextContaining(
+      app.locator("#host-variables"),
+      '"--color-background-primary":"#161920"',
+    );
+    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#d4d4d8"');
+    await waitForText(
+      app.locator("#computed-theme"),
+      JSON.stringify({
+        background: "rgb(22, 25, 32)",
+        color: "rgb(212, 212, 216)",
+        accent: "rgb(255, 79, 79)",
+      }),
+    );
+    await controlPage.evaluate(() => {
+      const setTheme = Reflect.get(window, "mcpConformanceSetTheme") as
+        | ((theme: "light" | "dark") => void)
+        | undefined;
+      setTheme?.("light");
+    });
+    await waitForText(app.locator("#host-theme"), "light");
+    await waitForTextContaining(
+      app.locator("#host-variables"),
+      '"--color-background-primary":"#ffffff"',
+    );
+    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#403c35"');
+    await waitForText(
+      app.locator("#computed-theme"),
+      JSON.stringify({
+        background: "rgb(255, 255, 255)",
+        color: "rgb(64, 60, 53)",
+        accent: "rgb(255, 79, 79)",
+      }),
+    );
     await app.locator("#call-app").click();
     await waitForTextContaining(app.locator("#app-tool"), "companion-called");
     await app.locator("#call-model").click();

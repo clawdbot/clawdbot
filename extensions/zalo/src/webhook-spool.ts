@@ -1,11 +1,14 @@
 // Zalo plugin owns raw webhook durable admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { ZaloApiError, type ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
@@ -14,12 +17,6 @@ import { getZaloRuntime } from "./runtime.js";
 const ZALO_WEBHOOK_SPOOL_VERSION = 1;
 const ZALO_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
-const ZALO_WEBHOOK_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-// Durable tombstones dominate the retired 5-minute / 5,000-key replay cache.
-const ZALO_WEBHOOK_COMPLETED_TTL_MS = 30 * 24 * 60 * 60_000;
-const ZALO_WEBHOOK_COMPLETED_MAX_ENTRIES = 20_000;
-const ZALO_WEBHOOK_FAILED_TTL_MS = 30 * 24 * 60 * 60_000;
-const ZALO_WEBHOOK_FAILED_MAX_ENTRIES = 5_000;
 
 type ZaloWebhookSpoolPayload = {
   version: 1;
@@ -30,26 +27,14 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 
-export class ZaloWebhookPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ZaloWebhookPayloadError";
-  }
-}
+export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
+export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
 type ZaloWebhookIngress = {
   accept: (rawEvent: string) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
@@ -167,7 +152,6 @@ function createZaloWebhookIngress(options: {
     getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
       accountId: options.accountId,
     });
-  const deferredClaims = new Map<string, Promise<void>>();
   const monitor = createChannelIngressMonitor<string, string, ZaloWebhookSpoolPayload>({
     queue,
     inspect: (rawEvent) => inspectZaloWebhookEvent(rawEvent),
@@ -185,53 +169,19 @@ function createZaloWebhookIngress(options: {
     },
     deliver: async (_rawEvent, lifecycle, claim) => {
       const update = parseClaimedUpdate(claim.payload, claim.id);
-      const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        if (deferredClaims.get(claim.id) === deferredClaim) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferredClaim();
-      };
-      await options.deliver(update, {
-        ...boundLifecycle,
-        onAdopted: async () => {
-          try {
-            await boundLifecycle.onAdopted();
-          } finally {
-            settleDeferredClaim();
-          }
-        },
-        onDeferred: () => {
-          if (!deferredClaimSettled) {
-            deferredClaims.set(claim.id, deferredClaim);
-          }
-          boundLifecycle.onDeferred();
-        },
-        onAbandoned: () => {
-          void Promise.resolve(boundLifecycle.onAbandoned()).finally(settleDeferredClaim);
-        },
-      });
-      return deferredClaims.has(claim.id) ? { kind: "deferred" } : { kind: "completed" };
+      await options.deliver(
+        update,
+        bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+      );
     },
     pollIntervalMs: ZALO_WEBHOOK_DRAIN_INTERVAL_MS,
+    // Standard 30-day tombstones dominate the retired 5-minute / 5,000-key replay cache.
     retention: {
-      pruneIntervalMs: ZALO_WEBHOOK_PRUNE_INTERVAL_MS,
-      completedTtlMs: ZALO_WEBHOOK_COMPLETED_TTL_MS,
-      completedMaxEntries: ZALO_WEBHOOK_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: ZALO_WEBHOOK_FAILED_TTL_MS,
-      failedMaxEntries: ZALO_WEBHOOK_FAILED_MAX_ENTRIES,
+      failedMaxEntries: 5_000,
     },
     waitForDeliveryIdleBeforeRepump: false,
     runPumpTask: runDetachedWebhookWork,
+    deferredClaims: "wait-on-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
       startLimit: ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
@@ -259,12 +209,7 @@ function createZaloWebhookIngress(options: {
       await monitor.admit(rawEvent);
     },
     start: monitor.start,
-    stop: async () => {
-      await monitor.stop();
-      // Deferred adoption can outlive dispatch, so its channel-owned settlement
-      // remains outside the generic delivery lifetime.
-      await Promise.allSettled(deferredClaims.values());
-    },
+    stop: monitor.stop,
   };
 }
 

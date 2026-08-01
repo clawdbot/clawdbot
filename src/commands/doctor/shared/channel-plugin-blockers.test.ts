@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
   channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
@@ -21,6 +22,7 @@ function createPackageChannelEnv(channelId: string, envVars: string[]) {
 describe("channel plugin blockers", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("returns no blockers when config and package env have no channel surfaces", () => {

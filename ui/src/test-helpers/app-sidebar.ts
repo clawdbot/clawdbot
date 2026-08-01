@@ -20,7 +20,9 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
+import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
 
@@ -77,10 +79,32 @@ export type TestSessionMenu = HTMLElement & {
 };
 
 export function createGatewayHarness(client: GatewayBrowserClient) {
+  const originalRequest =
+    typeof client.request === "function"
+      ? (client.request.bind(client) as GatewayBrowserClient["request"])
+      : undefined;
+  // Custom-element registrations survive non-isolated test files, so real
+  // attention health requests must not consume sidebar feature response mocks.
+  client.request = <T = unknown>(
+    ...args: Parameters<GatewayBrowserClient["request"]>
+  ): Promise<T> => {
+    const [method] = args;
+    if (method === "cron.list") {
+      return Promise.resolve({ jobs: [], total: 0 } as T);
+    }
+    if (method === "models.authStatus") {
+      return Promise.resolve({ ts: 0, providers: [] } as T);
+    }
+    if (!originalRequest) {
+      return Promise.reject(new Error(`Unexpected sidebar gateway request: ${method}`));
+    }
+    return originalRequest<T>(...args);
+  };
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -92,6 +116,12 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   const gateway = {
     get snapshot() {
       return snapshot;
+    },
+    connection: {
+      gatewayUrl: "ws://gateway.test",
+      token: "",
+      bootstrapToken: "",
+      password: "",
     },
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
@@ -154,6 +184,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
 }
 
@@ -210,6 +241,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
+  const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
+    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    if (result === state.result) {
+      return false;
+    }
+    state = { ...state, result };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return true;
+  });
   const sessions = {
     get state() {
       return state;
@@ -222,6 +264,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    isPreparedWorkSession: () => false,
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -242,6 +285,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -264,6 +308,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -290,15 +335,29 @@ export function createContext(
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
   approvalQueue: readonly ExecApprovalRequest[] = [],
+  agentIdentity: AgentIdentityCapability = {
+    get: () => null,
+    entries: () => [],
+    ensure: async () => undefined,
+    invalidate: () => undefined,
+    subscribe: () => () => undefined,
+  },
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
     gateway,
     sessions,
     agents: {
-      state: { agentsList },
+      state: {
+        client: gateway.snapshot.client,
+        connected: gateway.snapshot.phase === "connected",
+        agentsLoading: false,
+        agentsError: null,
+        agentsList,
+      },
       subscribe: () => () => undefined,
     },
+    agentIdentity,
     agentSelection: {
       state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
       set: () => undefined,
@@ -318,8 +377,9 @@ export async function mountSidebar(
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
   approvalQueue: readonly ExecApprovalRequest[] = [],
+  agentIdentity?: AgentIdentityCapability,
 ) {
-  const context = createContext(gateway, sessions, agentsList, approvalQueue);
+  const context = createContext(gateway, sessions, agentsList, approvalQueue, agentIdentity);
   const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
@@ -328,11 +388,14 @@ export async function mountSidebar(
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  await (
-    sidebar as unknown as {
-      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-    }
-  ).sidebarMenus.preloadMenuRenderer();
+  const sidebarWithPreloads = sidebar as unknown as {
+    preloadCatalogRenderer: () => Promise<unknown>;
+    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+  };
+  await Promise.all([
+    sidebarWithPreloads.preloadCatalogRenderer(),
+    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+  ]);
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }
@@ -420,8 +483,8 @@ export function setupSidebarTest() {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     document.body.replaceChildren();
+    vi.useRealTimers();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

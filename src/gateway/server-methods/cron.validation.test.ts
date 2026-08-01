@@ -127,7 +127,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
-            throw new Error(`unknown cron job id: ${id}`);
+            throw new Error(`unknown automation id: ${id}`);
           }
           await precondition(job, Date.now());
           return await update(id, patch);
@@ -137,6 +137,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       list: vi.fn(async () => jobs),
@@ -575,6 +576,31 @@ describe("cron method validation", () => {
     });
   });
 
+  it("trims whitespace around cron.get job ids before lookup", async () => {
+    const job = createCronJob({ id: "cron-42" });
+    const { context, respond } = await invokeCronGet({ jobId: " cron-42 " }, job);
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
+    expectCronReadSuccess(respond, job);
+  });
+
+  it("trims whitespace around cron.run job ids before lookup", async () => {
+    const job = createCronJob({ id: "cron-42" });
+    const { context, respond } = await invokeCron(
+      "cron.run",
+      { id: " cron-42 " },
+      { currentJob: job },
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, enqueued: true, runId: "run-1" }),
+      undefined,
+    );
+  });
+
   it("returns a single cron job for cron.get", async () => {
     const job = createCronJob({ id: "cron-42", name: "single job" });
 
@@ -671,6 +697,18 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: missing",
     });
+  });
+
+  it("keeps the exact cron.get missing wording older CLI matchers parse", async () => {
+    const { respond } = await invokeCronGet({ jobId: "missing" });
+
+    // Wire contract: shipped CLIs detect a missing job via
+    // error.message.includes(`cron job not found: ${id}`) before falling back to
+    // name lookup (isMissingCronGetError). Rewording the server message strands
+    // older clients, so pin the legacy-matcher form here.
+    const error = respond.mock.calls.at(-1)?.[2];
+    expect(String(error?.message)).toContain("cron job not found: missing");
+    expect(String(error?.message)).not.toContain("automation not found");
   });
 
   it("scopes cron.list to the caller agent", async () => {
@@ -1834,6 +1872,20 @@ describe("cron method validation", () => {
         ownerAccountId: "default",
       },
     });
+    expectCronSuccess(respond);
+  });
+
+  it("trims whitespace around legacy cron.update job ids before lookup", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        jobId: " cron-1 ",
+        patch: { enabled: false },
+      },
+      createCronJob(),
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
     expectCronSuccess(respond);
   });
 
@@ -3143,7 +3195,7 @@ describe("cron method validation", () => {
 
   it("returns INVALID_REQUEST when cron.run cannot find the job", async () => {
     const context = createCronContext();
-    context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown cron job id: missing"));
+    context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown automation id: missing"));
     const { respond } = await invokeCron("cron.run", { id: "missing" }, { context });
 
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
@@ -3254,6 +3306,102 @@ describe("cron method validation", () => {
     });
   });
 
+  it.each([
+    { selector: "id", params: { id: "cron-1" } },
+    { selector: "jobId", params: { jobId: "cron-1" } },
+  ])("reads only the $selector-selected cron job for run history", async ({ params }) => {
+    const context = createCronContext([
+      createCronJob({ id: "cron-1", agentId: "ops" }),
+      createCronJob({ id: "cron-2", agentId: "worker" }),
+    ]);
+
+    const { respond } = await invokeCron("cron.runs", params, { context });
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("preserves deleted-job history without listing unrelated cron jobs", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "deleted-cron" }, { context });
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("deleted-cron");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("preserves explicit agent ownership for directly read cron history", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { id: "cron-1", agentId: "worker" },
+      { context },
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: id not found",
+    });
+  });
+
+  it("preserves normalized default-agent ownership for directly read cron history", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: undefined }));
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { id: "cron-1", agentId: "MAIN" },
+      { context },
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("retains full cron job discovery for all-scope history", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1" }));
+
+    const { respond } = await invokeCron("cron.runs", { scope: "all" }, { context });
+
+    expect(context.cron.list).toHaveBeenCalledExactlyOnceWith({ includeDisabled: true });
+    expect(context.cron.readJob).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("does not widen a whitespace-only cron.runs selector to all history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "   " }, { context });
+
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expect(context.cron.readJob).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: missing id",
+    });
+  });
+
   it("hides caller-scoped cron.runs for a foreign job", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
 
@@ -3263,6 +3411,8 @@ describe("cron method validation", () => {
       { context, client: callerClient("ops") },
     );
 
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
+    expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "invalid cron.runs params: id not found",
@@ -3288,6 +3438,8 @@ describe("cron method validation", () => {
       { context, client: callerClient("ops") },
     );
 
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
+    expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "invalid cron.runs params: id not found",
@@ -3329,6 +3481,10 @@ describe("cron method validation", () => {
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
       });
+      expect(context.cron.prepareWake).toHaveBeenCalledOnce();
+      expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
+        context.cron.wake.mock.invocationCallOrder[0]!,
+      );
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
@@ -3358,6 +3514,7 @@ describe("cron method validation", () => {
         sessionKey,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(context.cron.prepareWake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
 

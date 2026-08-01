@@ -1,5 +1,4 @@
 // Setup migration staging keeps provider writes isolated until verified promotion.
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -21,6 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import {
   assertDisjointPromotionTargets,
   assertSupportedStagedStateTree,
@@ -75,29 +75,6 @@ type SetupMigrationStage = {
   }) => Promise<{ config: OpenClawConfig; resume: SetupMigrationPromotionResume }>;
   cleanup: () => Promise<void>;
 };
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.keys(record)
-      .toSorted()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => [key, canonicalize(record[key])]),
-  );
-}
-
-function hashConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(canonicalize(config)))
-    .digest("hex");
-}
 
 async function pathExists(candidate: string): Promise<boolean> {
   try {
@@ -378,7 +355,7 @@ export async function createSetupMigrationStage(params: {
     async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
       disposeDatabases();
       const configBefore = await readConfigFile();
-      if (hashConfig(configBefore) !== hashConfig(expectedConfig)) {
+      if (hashSetupMigrationConfig(configBefore) !== hashSetupMigrationConfig(expectedConfig)) {
         throw new Error("Migration config changed before promotion. Review it and retry.");
       }
       const configTarget = configs.getFinalConfig();
@@ -429,8 +406,8 @@ export async function createSetupMigrationStage(params: {
         version: PROMOTION_JOURNAL_VERSION,
         status: "prepared",
         providerId: params.providerId,
-        configHashBefore: hashConfig(configBefore),
-        configHashTarget: hashConfig(configTarget),
+        configHashBefore: hashSetupMigrationConfig(configBefore),
+        configHashTarget: hashSetupMigrationConfig(configTarget),
         components: existingComponents,
         continuation: {
           ...continuation,
@@ -461,9 +438,9 @@ export async function createSetupMigrationStage(params: {
           committed = await commitConfigFile(configTarget, expectedConfig);
         } catch (error) {
           const current = await readConfigFile().catch(() => undefined);
-          if (current && hashConfig(current) === journal.configHashTarget) {
+          if (current && hashSetupMigrationConfig(current) === journal.configHashTarget) {
             committed = current;
-          } else if (current && hashConfig(current) === journal.configHashBefore) {
+          } else if (current && hashSetupMigrationConfig(current) === journal.configHashBefore) {
             throw error;
           } else {
             journal.status = "indeterminate";
@@ -475,7 +452,7 @@ export async function createSetupMigrationStage(params: {
             );
           }
         }
-        journal.configHashTarget = hashConfig(committed);
+        journal.configHashTarget = hashSetupMigrationConfig(committed);
         journal.status = "committed";
         retainForRecovery = true;
         await writePromotionJournal(journalPath, journal);

@@ -267,13 +267,20 @@ export type ClawHubPackageSearchResult = {
   package: ClawHubPackageListItem;
 };
 
+export const CLAWHUB_SKILLS_SH_TRUST_STATE = "not-scanned-by-clawhub" as const;
+export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
+export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
+
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  installRef?: string;
+  trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -283,6 +290,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -328,6 +336,9 @@ export type ClawHubSkillInstallResolutionResponse =
       channel?: string | null;
       isOfficial?: boolean | null;
       installKind: "github";
+      trust?: {
+        state: ClawHubSkillsShTrustState;
+      };
       /** Commit-pinned source approved by ClawHub's install resolver policy. */
       github: {
         repo: string;
@@ -467,6 +478,30 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function resolveClawHubImageUrl(value: string | null | undefined, baseUrl?: string) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const registryUrl = new URL(`${normalizeBaseUrl(baseUrl)}/`);
+    const url = new URL(normalized, registryUrl);
+    if (
+      url.origin !== registryUrl.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname)
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeGitHubCodeloadBaseUrl(): string {
@@ -1210,7 +1245,11 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return result.results ?? [];
+  const results = result.results ?? [];
+  for (const entry of results) {
+    entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
+  }
+  return results;
 }
 
 export async function fetchClawHubSkillDetail(params: {
@@ -1221,7 +1260,7 @@ export async function fetchClawHubSkillDetail(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillDetail> {
-  return await fetchJson<ClawHubSkillDetail>({
+  const detail = await fetchJson<ClawHubSkillDetail>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
     token: params.token,
@@ -1229,11 +1268,21 @@ export async function fetchClawHubSkillDetail(params: {
     fetchImpl: params.fetchImpl,
     search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+  return {
+    ...detail,
+    skill: detail.skill
+      ? {
+          ...detail.skill,
+          icon: resolveClawHubImageUrl(detail.skill.icon, params.baseUrl),
+        }
+      : null,
+  };
 }
 
 export async function fetchClawHubSkillInstallResolution(params: {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1248,6 +1297,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
     fetchImpl: params.fetchImpl,
     search: {
       ownerHandle: params.ownerHandle,
+      reference: params.requestedReference,
       forceInstall: params.forceInstall ? "1" : undefined,
     },
   });
@@ -1265,6 +1315,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1278,7 +1329,10 @@ export async function fetchClawHubSkillVerification(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    search: buildVersionOrTagSearch(params),
+    search: {
+      ...buildVersionOrTagSearch(params),
+      reference: params.requestedReference,
+    },
   });
 }
 
@@ -1599,6 +1653,8 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   token?: string;
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   version?: string | null;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
@@ -1623,6 +1679,8 @@ export async function reportClawHubSkillInstallTelemetry(params: {
       event: "install",
       slug,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+      ...(params.trustState ? { trustState: params.trustState } : {}),
       version: params.version ?? undefined,
     },
   });

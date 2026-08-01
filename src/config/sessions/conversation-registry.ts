@@ -1,7 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
+import { resolveStorePath } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
@@ -35,6 +37,19 @@ export type ConversationRegistryScope = {
   env?: NodeJS.ProcessEnv;
   storePath?: string;
 };
+
+export function resolveConversationRegistryScope(params: {
+  agentId: string;
+  config: OpenClawConfig;
+}): ConversationRegistryScope {
+  const configuredStore = params.config.session?.store;
+  return {
+    agentId: params.agentId,
+    ...(configuredStore
+      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
+      : {}),
+  };
+}
 
 function normalizeConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();

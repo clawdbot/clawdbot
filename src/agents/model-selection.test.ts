@@ -4,12 +4,17 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import {
+  getModelRefStatus as getNarrowModelRefStatus,
+  resolveAllowedModelRef as resolveNarrowAllowedModelRef,
+} from "./model-selection-resolve.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
+  getModelRefStatus,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -168,6 +173,15 @@ const ANTHROPIC_OPUS_CATALOG = [
   },
 ];
 
+const ANTHROPIC_OPUS_5_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    reasoning: true,
+  },
+];
+
 const ANTHROPIC_OPUS_47_CATALOG = [
   {
     provider: "anthropic",
@@ -212,6 +226,15 @@ function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
     provider: "anthropic",
     model: "claude-opus-4-6",
     catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
+
+function resolveAnthropicOpus5Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-5",
+    catalog: ANTHROPIC_OPUS_5_CATALOG,
   });
 }
 
@@ -308,6 +331,17 @@ function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
 }
 
 describe("model-selection", () => {
+  it("shares the lightweight runtime resolver with the public selection facade", () => {
+    expect(getModelRefStatus).toBe(getNarrowModelRefStatus);
+    const params = {
+      cfg: {} as OpenClawConfig,
+      catalog: [],
+      raw: "anthropic/claude-sonnet-4-6",
+      defaultProvider: "anthropic",
+    };
+    expect(resolveAllowedModelRef(params)).toEqual(resolveNarrowAllowedModelRef(params));
+  });
+
   describe("normalizeProviderId", () => {
     it("should normalize provider names", () => {
       expect(normalizeProviderId("Anthropic")).toBe("anthropic");
@@ -1585,6 +1619,28 @@ describe("model-selection", () => {
   });
 
   describe("resolveAllowedModelRef", () => {
+    it("keeps deprecated catalog refs selectable", () => {
+      const result = resolveAllowedModelRef({
+        cfg: {} as OpenClawConfig,
+        catalog: [
+          {
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            status: "deprecated",
+            replacedBy: "gpt-5.6",
+          },
+        ],
+        raw: "openai/gpt-5.5",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/gpt-5.5",
+        ref: { provider: "openai", model: "gpt-5.5" },
+      });
+    });
+
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
       const result = resolveAllowedModelRef({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
@@ -2333,6 +2389,38 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
     });
 
+    it("uses a configured custom provider when the default is only an empty overlay", () => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://openai.example.com/v1", models: [] },
+            "local-provider": {
+              baseUrl: "http://127.0.0.1:9191/v1",
+              models: [
+                {
+                  id: "local-good",
+                  name: "Local Good",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "openai",
+          defaultModel: "missing-default-model",
+        }),
+      ).toEqual({ provider: "local-provider", model: "local-good" });
+    });
+
     it("should keep default provider when it is in models.providers", () => {
       const cfg = createProviderWithModelsConfig("anthropic", [
         {
@@ -2768,6 +2856,18 @@ describe("model-selection", () => {
           model: "deepseek-v4-pro",
         }),
       ).toBe("off");
+    });
+
+    it("defaults explicitly configured Anthropic Opus 5 to high adaptive thinking", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus5Thinking(cfg)).toBe("high");
     });
 
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {

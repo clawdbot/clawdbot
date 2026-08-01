@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -43,9 +44,7 @@ async function loadModelSetupRouteData(
 }
 
 export const page = definePage({
-  id: "model-setup",
-  path: "/settings/model-setup",
-  aliases: ["/model-setup"],
+  ...routePageSpec("model-setup"),
   // Query-only first-run changes need distinct matches so the completion
   // action cannot retain a cached destination from the previous visit.
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,

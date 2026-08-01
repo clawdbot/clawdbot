@@ -73,6 +73,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     ctx,
     deliverBindingPayload,
     dispatcher,
+    getDispatchReplyOperation,
     hookRunner,
     isInternalWebchatTurn,
     markIdle,
@@ -223,7 +224,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  // Group silent-reply policy sanctions silence for ambient chatter only. A turn
+  // that explicitly addressed the bot (mention) must never end silently, matching
+  // the hard-coded direct-chat rule in resolveSilentReplyPolicyFromPolicies.
   const emptyFinalAllowedAsSilent =
+    ctx.WasMentioned !== true &&
     silentReplyConversationType !== undefined &&
     resolveSilentReplyPolicyFromPolicies({
       conversationType: silentReplyConversationType,
@@ -346,6 +351,18 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
+  // The no-visible-reply fallback exists for a user who asked and got nothing.
+  // Only positively directed turns qualify: direct chats, explicit mentions
+  // (channels fold reply-to-bot into WasMentioned), and command turns. Ambient
+  // group chatter, room events, and turns whose classification facts were lost
+  // upstream (queued followups, rebuilt contexts) can never draw a visible
+  // failure notice, even when silence policy is disallow. A command turn is the
+  // one directed room_event (mirrors the room_event source-reply suppression
+  // bypass below); every other room_event stays undirected regardless of a
+  // stray WasMentioned/direct classification.
+  const noVisibleReplyFallbackDirected =
+    explicitCommandTurnCtx ||
+    (ctx.InboundEventKind !== "room_event" && (chatType === "direct" || ctx.WasMentioned === true));
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
@@ -426,12 +443,26 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    const operation = getDispatchReplyOperation();
+    // Feedback only for pre-run drops: the user never saw output. Finalization or
+    // terminal-settle stalls already produced/settled output, so a notice is noise.
+    const droppedBeforeOutput =
+      operation?.result?.kind === "failed" &&
+      operation.result.code === "run_stalled" &&
+      (operation.staleExpiryReason === "no_activity" ||
+        operation.staleExpiryReason === "stuck_recovery");
+    const queuedFinal = droppedBeforeOutput
+      ? dispatcher.sendFinalReply({
+          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          isError: true,
+        })
+      : false;
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
+      queuedFinal,
       counts: dispatcher.getQueuedCounts(),
     });
   };
@@ -491,6 +522,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       sendPolicy,
       chatType,
       emptyFinalAllowedAsSilent,
+      noVisibleReplyFallbackDirected,
       sourceReplyPolicy,
       sourceReplyDeliveryMode,
       sessionStableSourceReplyDeliveryMode,

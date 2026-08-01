@@ -21,6 +21,7 @@ import {
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -71,8 +72,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     reasoningPayloadsEnabled,
     recordAgentDispatchCompleted,
     recordProcessed,
+    recordRoutedBlockReplyDelivery,
     replyConfig,
     replyContextAccountId,
+    replyOperationRunState,
     replyResolver,
     replyRoute,
     resolveToolDeliveryPayload,
@@ -81,6 +84,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     routeReplyTo,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
+    sendTrackedBlockReply,
     sendPlanUpdate,
     sendPolicy,
     sendPolicyDenied,
@@ -108,10 +112,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     suppressToolErrorWarnings,
     traceReplyPhase,
     trackDispatchLifecycleWork,
+    turnLedger,
     typing,
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
+  let deliberateSilentTerminalReply = false;
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
       await runWithDispatchAbortSignal(
@@ -122,9 +128,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               ctx,
               {
                 ...getReplyOptions(),
+                [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
                 sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
                 ...({
+                  onDeliberateSilentTerminalReply: () => {
+                    deliberateSilentTerminalReply = true;
+                  },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: notePreparedSession,
                 } satisfies InternalReplyResolverOptions),
@@ -310,7 +320,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await sendPayloadAsync(deliveryPayload, undefined, false);
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = dispatcher.sendToolResult(deliveryPayload);
+                      const delivered = turnLedger.sendQueued("tool", deliveryPayload).queued;
                       if (delivered && hasAskUserPayload(deliveryPayload)) {
                         // ask_user blocks until this callback resolves; drain its prompt now
                         // or the answerable UI can remain queued behind the blocked agent run.
@@ -541,15 +551,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     if (shouldRouteToOriginating) {
-                      await sendPayloadAsync(
+                      const result = await sendPayloadAsync(
                         normalizedPayload,
                         context?.abortSignal,
                         false,
                         "block",
                       );
+                      recordRoutedBlockReplyDelivery(normalizedPayload, result);
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = dispatcher.sendBlockReply(normalizedPayload);
+                      const delivered = sendTrackedBlockReply(normalizedPayload);
                       if (delivered) {
                         state.hasPendingDirectBlockReplyDelivery = true;
                       }
@@ -643,7 +654,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       }
     }
   }
-  const nextState = extendPreparedDispatchState(state, { replyResult }, {});
+  const nextState = extendPreparedDispatchState(
+    state,
+    { deliberateSilentTerminalReply, replyResult },
+    {},
+  );
   return { status: "ready" as const, state: nextState };
 }
 

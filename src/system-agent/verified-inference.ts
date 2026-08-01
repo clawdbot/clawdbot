@@ -230,7 +230,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
       provider: params.route.provider,
       config: params.route.runConfig,
       agentDir: params.route.agentDir,
-      agentId: "openclaw",
+      agentId: params.route.agentId,
       runtimeOwnerId: params.runtimeOwnerId,
       ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
       ...(params.skipLocalCredential ? { skipLocalCredential: true } : {}),
@@ -695,7 +695,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     currentRuntimeArtifactFingerprint = await resolveArtifact({
       provider: execution.provider,
       config: execution.runConfig,
-      agentId: "openclaw",
+      agentId: execution.agentId,
       runtimeArtifactId: params.auth.runtimeArtifactId.trim(),
     });
     if (currentRuntimeArtifactFingerprint !== params.auth.runtimeArtifactFingerprint) {
@@ -897,7 +897,7 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
     currentRuntimeArtifactFingerprint = await resolveArtifact({
       provider: currentExecution.provider,
       config: currentExecution.runConfig,
-      agentId: "openclaw",
+      agentId: currentExecution.agentId,
       runtimeArtifactId: binding.auth.runtimeArtifactId,
     }).catch(() => undefined);
     if (currentRuntimeArtifactFingerprint !== binding.auth.runtimeArtifactFingerprint) {

@@ -1,7 +1,8 @@
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
-} from "../internal/shared.js";
+} from "../utils/system-prompt-cache-boundary.js";
 /**
  * Anthropic-family request payload policy helpers.
  * Applies service-tier and cache-control markers only when provider endpoint
@@ -15,7 +16,7 @@ type AnthropicServiceTier = "auto" | "standard_only";
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
-  ttl?: "1h";
+  ttl?: "1h" | "5m";
 };
 
 type AnthropicPayloadPolicyInput = {
@@ -55,6 +56,8 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   return (
     hostname === "api.anthropic.com" ||
     hostname === "aiplatform.googleapis.com" ||
+    hostname === "aiplatform.us.rep.googleapis.com" ||
+    hostname === "aiplatform.eu.rep.googleapis.com" ||
     hostname.endsWith("-aiplatform.googleapis.com")
   );
 }
@@ -64,8 +67,7 @@ export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
-  const retention =
-    cacheRetention ?? (process.env.OPENCLAW_CACHE_RETENTION === "long" ? "long" : "short");
+  const retention = resolveCacheRetention(cacheRetention);
   if (retention === "none") {
     return undefined;
   }
@@ -141,7 +143,8 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
-function applyAnthropicCacheControlToMessages(
+/** Apply one shared deepest-stable-message cache breakpoint policy. */
+export function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,

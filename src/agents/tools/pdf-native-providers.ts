@@ -41,6 +41,7 @@ type NativePdfJsonRequest = {
   failureLabel: string;
   responseLabel: string;
   nonJsonMessage: string;
+  signal?: AbortSignal;
 };
 
 async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
@@ -56,6 +57,7 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
     headers,
     body: params.body,
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
     allowPrivateNetwork: params.allowPrivateNetwork,
     ssrfPolicy: params.ssrfPolicy,
@@ -113,6 +115,7 @@ export async function anthropicAnalyzePdf(params: {
   maxTokens?: number;
   baseUrl?: string;
   requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -170,6 +173,7 @@ export async function anthropicAnalyzePdf(params: {
     failureLabel: "Anthropic PDF request failed",
     responseLabel: "Anthropic PDF response",
     nonJsonMessage: "Anthropic PDF response was not JSON.",
+    signal: params.signal,
   });
 
   const responseContent = json.content as AnthropicResponseContent | undefined;
@@ -206,6 +210,7 @@ export async function geminiAnalyzePdf(params: {
   pdfs: PdfInput[];
   baseUrl?: string;
   requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -266,6 +271,7 @@ export async function geminiAnalyzePdf(params: {
     failureLabel: "Gemini PDF request failed",
     responseLabel: "Gemini PDF response",
     nonJsonMessage: "Gemini PDF response was not JSON.",
+    signal: params.signal,
   });
 
   const candidates = json.candidates as GeminiCandidate[] | undefined;

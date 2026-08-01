@@ -396,6 +396,8 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  thinkingLevel?: Parameters<typeof summarizeInStages>[0]["thinkingLevel"];
+  streamFn?: Parameters<typeof summarizeInStages>[0]["streamFn"];
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -413,6 +415,8 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    thinkingLevel: params.thinkingLevel,
+    streamFn: params.streamFn,
   });
   if (result.kind === "summary") {
     return result.text;
@@ -1059,7 +1063,13 @@ async function readWorkspaceContextForSummary(
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const { preparation, customInstructions: eventInstructions, signal } = event;
+    const {
+      preparation,
+      customInstructions: eventInstructions,
+      signal,
+      thinkingLevel,
+      streamFn,
+    } = event;
     const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
@@ -1308,13 +1318,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: structuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
+                  thinkingLevel,
+                  streamFn,
                 });
               } catch (droppedError) {
-                log.warn(
-                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${formatErrorMessage(
-                    droppedError,
-                  )}`,
-                );
+                if (signal?.aborted) {
+                  signal.throwIfAborted();
+                }
+                throw new Error("Failed to summarize dropped messages.", {
+                  cause: droppedError,
+                });
               }
             }
           }
@@ -1384,6 +1397,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  thinkingLevel,
+                  streamFn,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
@@ -1404,6 +1419,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              thinkingLevel,
+              streamFn,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
@@ -1485,6 +1502,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      // Caller cancellation is terminal, not a safeguard failure. Preserve the
+      // original abort so the runner can classify it without a false data-loss warning.
+      if (signal?.aborted) {
+        signal.throwIfAborted();
+      }
       const message = formatErrorMessage(error);
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,

@@ -1,12 +1,10 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Sms plugin module implements accounts behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredAccountValue,
-  listCombinedAccountIds,
   resolveAccountEntry,
-  resolveListedDefaultAccountId,
-  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -68,21 +66,17 @@ function hasBaseAccount(channelCfg: SmsChannelConfig | undefined): boolean {
   );
 }
 
-export function listSmsAccountIds(cfg: OpenClawConfig): string[] {
-  const channelCfg = getChannelConfig(cfg);
-  return listCombinedAccountIds({
-    configuredAccountIds: Object.keys(channelCfg?.accounts ?? {}),
-    implicitAccountId: hasBaseAccount(channelCfg) ? DEFAULT_ACCOUNT_ID : undefined,
-  });
-}
+const {
+  listAccountIds: listSmsAccountIds,
+  resolveDefaultAccountId: resolveDefaultSmsAccountId,
+  resolveAccountConfig: resolveMergedSmsAccountConfig,
+} = createAccountListHelpers<Record<string, unknown> & SmsChannelConfig>(CHANNEL_ID, {
+  fallbackAccountIdWhenEmpty: false,
+  hasImplicitDefaultAccount: (cfg) => hasBaseAccount(getChannelConfig(cfg)),
+  omitKeys: ["defaultAccount"],
+});
 
-export function resolveDefaultSmsAccountId(cfg: OpenClawConfig): string {
-  const channelCfg = getChannelConfig(cfg);
-  return resolveListedDefaultAccountId({
-    accountIds: listSmsAccountIds(cfg),
-    configuredDefaultAccountId: normalizeOptionalAccountId(channelCfg?.defaultAccount),
-  });
-}
+export { listSmsAccountIds, resolveDefaultSmsAccountId };
 
 export function resolveSmsAccount(
   cfg: OpenClawConfig,
@@ -91,23 +85,7 @@ export function resolveSmsAccount(
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = normalizeOptionalAccountId(accountId) ?? resolveDefaultSmsAccountId(cfg);
   const accountConfig = resolveAccountEntry(channelCfg.accounts, id);
-  const channelConfig: Record<string, unknown> & SmsChannelConfig = { ...channelCfg };
-  const accountEntries:
-    | Record<string, Partial<Record<string, unknown> & SmsChannelConfig>>
-    | undefined = channelCfg.accounts
-    ? Object.fromEntries(
-        Object.entries(channelCfg.accounts).map(([accountKey, account]) => [
-          accountKey,
-          { ...account },
-        ]),
-      )
-    : undefined;
-  const merged = resolveMergedAccountConfig<Record<string, unknown> & SmsChannelConfig>({
-    channelConfig,
-    accounts: accountEntries,
-    accountId: id,
-    omitKeys: ["defaultAccount"],
-  });
+  const merged = resolveMergedSmsAccountConfig(cfg, id);
 
   const useEnvFallbacks = id === DEFAULT_ACCOUNT_ID;
   const envAccountSid = useEnvFallbacks ? process.env.TWILIO_ACCOUNT_SID : undefined;

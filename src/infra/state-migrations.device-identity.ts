@@ -19,7 +19,6 @@ import {
 } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -30,12 +29,17 @@ import {
   repairInvalidCanonicalIdentity,
 } from "./state-migrations.device-identity-repair.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const IDENTITY_KEY = "primary";
 const MIGRATION_KIND = "legacy-device-identity-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const MAX_LEGACY_IDENTITY_BYTES = 128 * 1024;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -63,13 +67,7 @@ type DeviceIdentityMigrationDatabase = Pick<
   "device_identities" | "migration_runs" | "migration_sources"
 >;
 
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
+type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & {
   identity: NormalizedLegacyDeviceIdentity;
 };
 
@@ -82,16 +80,7 @@ type MigrationReceipt = {
 export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy device identity path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "device identity", false);
 }
 
 async function readLegacySourceSnapshot(params: {
@@ -99,40 +88,16 @@ async function readLegacySourceSnapshot(params: {
   stateDir: string;
   sourcePath: string;
 }): Promise<LegacySourceSnapshot> {
-  const opened = await params.stateRoot.read(
-    relativeLegacyPath(params.stateDir, params.sourcePath),
-    {
-      hardlinks: "reject",
-      maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-      symlinks: "reject",
-    },
-  );
-  if (opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error("legacy device identity changed while it was being read");
-  }
-  const identity = normalizeLegacyDeviceIdentity(JSON.parse(utf8Decoder.decode(opened.buffer)));
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    ...params,
+    maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+    label: "device identity",
+  });
+  const identity = normalizeLegacyDeviceIdentity(JSON.parse(utf8Decoder.decode(snapshot.buffer)));
   if (!identity) {
     throw new Error("legacy device identity is invalid or unsupported");
   }
-  return {
-    sourcePath: params.sourcePath,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-    size: opened.stat.size,
-    identity,
-  };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+  return { ...snapshot, identity };
 }
 
 function receiptSourceKey(sourcePath: string): string {
@@ -617,81 +582,38 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy device identity: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy device identity: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
   let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
-  try {
-    try {
-      identityCoordinator = acquireDeviceIdentityCoordinator({
-        databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
-      });
-    } catch (error) {
-      result.warnings.push(
-        `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
-      );
-    }
-    if (identityCoordinator) {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy device identity",
+    releaseLabel: "Device identity",
+    errorLabel: "Failed reading legacy device identity state",
+    beforeRelease: () => identityCoordinator?.release(),
+    run: async (env) => {
       try {
-        const hasLegacyNow = hasLegacyDeviceIdentityPath(params.detected);
-        if (hasLegacyNow) {
-          const stateRoot = await root(params.stateDir, {
-            hardlinks: "reject",
-            maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-            symlinks: "reject",
-          });
-          result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
-        } else if (params.detected.hasInvalidCanonical) {
-          result = repairInvalidCanonicalIdentity(env);
-        }
+        identityCoordinator = acquireDeviceIdentityCoordinator({
+          databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
+        });
       } catch (error) {
-        result.warnings.push(`Failed reading legacy device identity state: ${String(error)}`);
+        return {
+          changes: [],
+          warnings: [
+            `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
+          ],
+        };
       }
-    }
-  } finally {
-    try {
-      identityCoordinator?.release();
-    } catch (error) {
-      releaseError = error;
-    }
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError ??= error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Device identity migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+      if (hasLegacyDeviceIdentityPath(params.detected)) {
+        const stateRoot = await root(params.stateDir, {
+          hardlinks: "reject",
+          maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+          symlinks: "reject",
+        });
+        return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      }
+      return params.detected.hasInvalidCanonical
+        ? repairInvalidCanonicalIdentity(env)
+        : { changes: [], warnings: [] };
+    },
+  });
 }

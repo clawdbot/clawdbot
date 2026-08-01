@@ -239,7 +239,7 @@ describe("auth.test boot call", () => {
     expect(createSlackStartupAuthClientMock).toHaveBeenCalledWith(
       "bot-token",
       expect.objectContaining({
-        agent: expect.anything(),
+        fetch: expect.any(Function),
         slackApiUrl: "https://slack.test/api/",
       }),
     );
@@ -271,22 +271,22 @@ describe("auth.test boot call", () => {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
     try {
-      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 12_000 });
+      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 35_000 });
       await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
 
-      expect(server.requestCount).toBe(1);
+      expect(server.requestCount).toBe(3);
       expect(server.requestUrl).toBe("/api/auth.test");
       expect(events).toContain("auth-settled");
       expect(events.indexOf("auth-settled")).toBeLessThan(events.indexOf("app-start"));
       expect(runtimeLog).toHaveBeenCalledWith(
-        expect.stringContaining("timeout of 10000ms exceeded"),
+        expect.stringMatching(/slack auth\.test failed at boot .*timeout/i),
       );
     } finally {
       monitor.controller.abort();
       await monitor.run;
       await server.close();
     }
-  }, 20_000);
+  }, 40_000);
 
   it("preserves workspace startup when auth.test omits app_id", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({

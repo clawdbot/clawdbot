@@ -78,6 +78,16 @@ async function captureUiProof(targetPage: Page, fileName: string) {
   });
 }
 
+async function openSidebarSortMenu(targetPage: Page) {
+  const sortThreads = targetPage.getByRole("button", { name: "Sort threads" });
+  await expect.poll(() => sortThreads.count(), { timeout: 2_000 }).toBe(1);
+  await sortThreads.locator("..").hover();
+  await sortThreads.click();
+  const menu = targetPage.locator(".sidebar-session-sort-menu");
+  await menu.waitFor();
+  return menu;
+}
+
 async function replaceGatewayClient(targetPage: Page) {
   await targetPage.evaluate(() => {
     const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -131,8 +141,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
-    await currentPage.locator(".sidebar-session-sort").click();
-    const creatorMenu = currentPage.locator(".sidebar-session-sort-menu");
+    const creatorMenu = await openSidebarSortMenu(currentPage);
     await creatorMenu.locator('[value="creator:profile-ada"]').waitFor();
     await creatorMenu.evaluate((element) =>
       element.dispatchEvent(
@@ -175,14 +184,48 @@ describeControlUiE2e("Control UI session ownership", () => {
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.locator(".sidebar-session-sort").click();
-    const creatorMenu = currentPage.locator(".sidebar-session-sort-menu");
-    await creatorMenu.waitFor();
+    const creatorMenu = await openSidebarSortMenu(currentPage);
     expect(
       await creatorMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);
     expect(await creatorMenu.locator('[value^="creator:"]').count()).toBe(0);
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
+  });
+
+  it("keeps grouped single-creator thread actions accessible to keyboard users", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
+    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+
+    const threads = currentPage.locator('[data-session-section="ungrouped"]');
+    await expect.poll(() => threads.count(), { timeout: 2_000 }).toBe(1);
+    const sortThreads = threads.getByRole("button", { name: "Sort threads" });
+    await sortThreads.focus();
+    await currentPage.keyboard.press("Enter");
+
+    const menu = currentPage.locator(".sidebar-session-sort-menu");
+    await menu.waitFor();
+    expect(await menu.locator('[value^="creator:"]').count()).toBe(0);
+    await menu.getByRole("menuitemradio", { name: "None" }).click();
+
+    await expect
+      .poll(() => currentPage.locator('[data-session-section^="category:"]').count())
+      .toBe(0);
+    await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
+
+    const newThread = threads.getByRole("button", { name: "New thread" });
+    await newThread.focus();
+    await currentPage.keyboard.press("Enter");
+    await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");
   });
 
   it("keeps own drafts subtle and fades admin-visible drafts from other people", async () => {
@@ -244,7 +287,8 @@ describeControlUiE2e("Control UI session ownership", () => {
     });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByLabel("Start as draft");
+    // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
     await draftToggle.check();
@@ -326,7 +370,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByLabel("Start as draft");
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.check();
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
@@ -356,6 +400,6 @@ describeControlUiE2e("Control UI session ownership", () => {
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
     await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByLabel("Start as draft").count()).toBe(0);
+    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
   });
 });

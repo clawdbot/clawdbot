@@ -14,9 +14,6 @@ scenario:
     messages:
       groupChat:
         visibleReplies: message_tool
-    session:
-      agentToAgent:
-        maxPingPongTurns: 0
     tools:
       sessions:
         visibility: all

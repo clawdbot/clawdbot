@@ -1,8 +1,5 @@
 // Runtime bridge for invoking provider hooks supplied by plugins.
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,6 +15,7 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -60,19 +58,6 @@ type ProviderRuntimePluginHandleParams = ProviderRuntimePluginLookupParams & {
 export function clearProviderRuntimePluginCacheForTest(): void {
   providerRuntimePluginCache = new WeakMap();
   defaultProviderRuntimePluginCache.clear();
-}
-
-function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
 }
 
 function resolveProviderRuntimePluginCacheKey(
@@ -186,10 +171,10 @@ function findProviderRuntimePluginInRegistry(params: {
       if (params.apiOwnerHint) {
         return (
           matchesProviderLiteralId(plugin, params.provider) ||
-          matchesProviderId(plugin, params.apiOwnerHint)
+          matchesProviderPluginRef(plugin, params.apiOwnerHint)
         );
       }
-      return matchesProviderId(plugin, params.provider);
+      return matchesProviderPluginRef(plugin, params.provider);
     });
 }
 
@@ -276,10 +261,10 @@ export function resolveProviderRuntimePlugin(
         if (apiOwnerHint) {
           return (
             matchesProviderLiteralId(plugin, params.provider) ||
-            matchesProviderId(plugin, apiOwnerHint)
+            matchesProviderPluginRef(plugin, apiOwnerHint)
           );
         }
-        return matchesProviderId(plugin, params.provider);
+        return matchesProviderPluginRef(plugin, params.provider);
       }) ?? null
     );
   };
@@ -335,7 +320,7 @@ export function resolveProviderHookPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  }).find((candidate) => matchesProviderId(candidate, params.provider));
+  }).find((candidate) => matchesProviderPluginRef(candidate, params.provider));
 }
 
 export function resolveProviderRuntimePluginHandle(

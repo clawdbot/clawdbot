@@ -1716,6 +1716,68 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.threadId).toBe(1122);
   });
 
+  it.each([
+    {
+      description: "matching account identities",
+      sessionAccountId: "work",
+      turnSourceAccountId: "work",
+    },
+    {
+      description: "an unspecified turn-source account",
+      sessionAccountId: "work",
+      turnSourceAccountId: undefined,
+    },
+    {
+      description: "an unspecified session account",
+      sessionAccountId: undefined,
+      turnSourceAccountId: "work",
+    },
+  ])(
+    "keeps the session topic for compatible routes with $description",
+    ({ sessionAccountId, turnSourceAccountId }) => {
+      const resolved = resolveSessionDeliveryTarget({
+        entry: {
+          sessionId: "sess-forum-compatible-account-topic",
+          updatedAt: 1,
+          lastChannel: "forum",
+          lastTo: "room:ops",
+          lastAccountId: sessionAccountId,
+          lastThreadId: 1122,
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "forum",
+        turnSourceTo: "room:ops",
+        turnSourceAccountId,
+      });
+
+      expect(resolved.accountId).toBe(turnSourceAccountId);
+      expect(resolved.threadId).toBe(1122);
+      expect(resolved.threadIdSource).toBe("session");
+    },
+  );
+
+  it("does not inherit a session topic from a different account on the same channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-cross-account-topic",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        lastAccountId: "personal",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "forum",
+      turnSourceTo: "room:ops",
+      turnSourceAccountId: "work",
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.threadId).toBeUndefined();
+    expect(resolved.threadIdSource).toBeUndefined();
+    expect(resolved.lastThreadId).toBeUndefined();
+  });
+
   it("keeps topic thread routing when turnSourceTo uses the plugin-owned topic target", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {

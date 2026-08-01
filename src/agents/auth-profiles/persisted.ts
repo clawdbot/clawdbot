@@ -6,9 +6,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import { loadJsonFile } from "../../infra/json-file.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
@@ -20,7 +18,6 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveLegacyAuthStorePath } from "./paths.js";
 import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
   coerceAuthProfileState,
@@ -33,7 +30,6 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
   OAuthCredential,
-  OAuthCredentials,
 } from "./types.js";
 
 /** Legacy auth.json store shape before auth-profiles.json/SQLite. */
@@ -187,6 +183,8 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       "projectId",
       "accountId",
       "chatgptPlanType",
+      "subscriptionType",
+      "rateLimitTier",
     ] as const) {
       const value = normalizeOptionalCredentialString(entry[field]);
       if (value !== undefined) {
@@ -760,33 +758,6 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
   }
 }
 
-/** Imports the legacy oauth.json file into missing default OAuth profiles. */
-export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
-  const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
-  if (!oauthRaw || typeof oauthRaw !== "object") {
-    return false;
-  }
-  const oauthEntries = oauthRaw as Record<string, OAuthCredentials>;
-  let mutated = false;
-  for (const [provider, creds] of Object.entries(oauthEntries)) {
-    if (!creds || typeof creds !== "object") {
-      continue;
-    }
-    const profileId = `${provider}:default`;
-    if (store.profiles[profileId]) {
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider,
-      ...creds,
-    };
-    mutated = true;
-  }
-  return mutated;
-}
-
 /** Loads the persisted auth profile store and merges runtime state. */
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
@@ -807,8 +778,4 @@ export function loadPersistedAuthProfileStore(
   return merged;
 }
 
-/** Loads the legacy auth.json auth profile store if present. */
-export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
-  return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

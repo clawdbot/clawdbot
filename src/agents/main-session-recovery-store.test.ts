@@ -150,65 +150,18 @@ describe("main session recovery store", () => {
     });
   });
 
-  it("cancels a reservation after Gateway migrates its legacy session key", async () => {
-    const legacyKey = "main";
-    await seedExact({ [legacyKey]: interruptedEntry() });
-    const reservation = await reserve(legacyKey);
-    const legacyEntry = readStore()[legacyKey]!;
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [{ sessionKey: legacyKey }],
-      upserts: [{ sessionKey, entry: legacyEntry }],
-      skipMaintenance: true,
-    });
-
-    const cancelled = await commitMainSessionRecovery({
-      command: { kind: "cancel_reservation", reservation },
-      target: { sessionKey: legacyKey, storePath },
-    });
-
-    expect(cancelled.transition).toEqual({ kind: "applied" });
-    expect(read().mainRestartRecovery).toMatchObject({ chargedAttempts: 0 });
-    expect(read().mainRestartRecovery?.reservation).toBeUndefined();
-  });
-
-  it("abandons a reservation after Gateway migrates its legacy session key", async () => {
-    const legacyKey = "main";
-    await seedExact({ [legacyKey]: interruptedEntry() });
-    const reservation = await reserve(legacyKey);
-    const legacyEntry = readStore()[legacyKey]!;
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [{ sessionKey: legacyKey }],
-      upserts: [{ sessionKey, entry: legacyEntry }],
-      skipMaintenance: true,
-    });
-
-    const abandoned = await commitMainSessionRecovery({
-      command: { kind: "abandon_reservation", reservation },
-      target: { sessionKey: legacyKey, storePath },
-    });
-
-    expect(abandoned.transition).toEqual({ kind: "applied" });
-    expect(read().mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
-    expect(read().mainRestartRecovery?.reservation).toBeUndefined();
-  });
-
-  it("admits a legacy-key reservation through its canonical Gateway key", async () => {
-    const legacyKey = "main";
-    await seedExact({ [legacyKey]: interruptedEntry() });
-    await reserve(legacyKey);
-
-    const validated = await commitMainSessionRecovery({
-      command: {
-        kind: "validate_recovery",
-        lifecycleGeneration,
-        runId: "recovery-1",
-        sessionId: "session-1",
-      },
-      target: { sessionKey, storePath },
-    });
-    expect(validated.transition).toEqual({ kind: "recovery_validated" });
+  it("transfers a resumed recovery run to one durable lifecycle owner", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 1,
+          reservation: { runId: "recovery-1", attempt: 1, lifecycleGeneration },
+        },
+      }),
+    );
 
     const admitted = await commitMainSessionRecovery({
       command: {
@@ -220,25 +173,10 @@ describe("main session recovery store", () => {
       },
       target: { sessionKey, storePath },
     });
-    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
-    expect(readStore()[legacyKey]).toMatchObject({
-      abortedLastRun: false,
-      mainRestartRecovery: { chargedAttempts: 1 },
-    });
-    expect(readStore()[legacyKey]?.mainRestartRecovery?.reservation).toBeUndefined();
 
-    const restored = await commitMainSessionRecovery({
-      command: {
-        kind: "mark_admitted_recovery_interrupted",
-        lifecycleGeneration,
-        now: 400,
-        runId: "recovery-1",
-        sessionId: "session-1",
-      },
-      target: { sessionKey: admitted.sessionKey!, storePath },
-    });
-    expect(restored.transition).toEqual({ kind: "applied" });
-    expect(readStore()[legacyKey]).toMatchObject({ abortedLastRun: true });
+    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
+    expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
+    expect(read().abortedLastRun).toBe(false);
   });
 
   it("rejects an observation after the session is replaced", async () => {
@@ -326,31 +264,6 @@ describe("main session recovery store", () => {
     });
   });
 
-  it("claims an interrupted row through its pre-migration alias", async () => {
-    const legacyKey = "main";
-    await seedExact({ [legacyKey]: interruptedEntry() });
-
-    const claim = await claimMainSessionRecoveryOwner({
-      lifecycleGeneration,
-      sessionId: "session-1",
-      target: { sessionKey, storePath },
-    });
-
-    expect(claim.kind).toBe("claimed");
-    if (claim.kind !== "claimed") {
-      return;
-    }
-    expect(claim.lease.sessionKey).toBe(legacyKey);
-    expect(readStore()[legacyKey]).toMatchObject({
-      mainRestartRecovery: {
-        foregroundClaims: {
-          lifecycleGeneration,
-          tokens: [claim.lease.claimId],
-        },
-      },
-    });
-  });
-
   it("claims the exact foreground row without scanning aliases", async () => {
     await write(interruptedEntry());
     const accessorSpy = vi.spyOn(sessionAccessor, "applySessionEntryReplacements");
@@ -389,6 +302,65 @@ describe("main session recovery store", () => {
     });
     expect(read().restartRecoveryRuns).toBeUndefined();
     expect(read().mainRestartRecovery).toBeUndefined();
+  });
+
+  it("atomically clears orphaned recovery residue from a terminal row", async () => {
+    await write(
+      interruptedEntry({
+        status: "failed",
+        mainRestartRecovery: undefined,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      sessionId: "session-1",
+      status: "failed",
+      abortedLastRun: false,
+    });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+    expect(read().mainRestartRecovery).toBeUndefined();
+    expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("inspects terminal recovery residue as non-blocking before foreground cleanup", async () => {
+    const residue = interruptedEntry({
+      status: "done",
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+    await write(residue);
+
+    await expect(
+      inspectMainSessionRecoveryRequired({
+        expectedSessionId: "session-1",
+        lifecycleGeneration,
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: residue.restartRecoveryRuns,
+    });
+    expect(read().mainRestartRecovery).toBeUndefined();
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({ status: "done", abortedLastRun: false });
+    expect(read().restartRecoveryRuns).toBeUndefined();
   });
 
   it("binds a foreground claim to its lifecycle run", async () => {
@@ -531,31 +503,6 @@ describe("main session recovery store", () => {
       }),
     ).resolves.toEqual({ kind: "invalidated", reason: "recovery_exhausted" });
     expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
-  });
-
-  it("claims an interrupted legacy predecessor after its canonical key is reused", async () => {
-    const legacyKey = "main";
-    await seedExact({
-      [sessionKey]: { sessionId: "session-2", updatedAt: 200 },
-      [legacyKey]: interruptedEntry(),
-    });
-
-    const claim = await claimMainSessionRecoveryOwner({
-      lifecycleGeneration,
-      replacementSessionId: "session-2",
-      sessionId: "session-1",
-      target: { sessionKey, storePath },
-    });
-
-    expect(claim.kind).toBe("claimed");
-    if (claim.kind !== "claimed") {
-      throw new Error("expected foreground owner claim");
-    }
-    expect(claim.lease.sessionKey).toBe(legacyKey);
-    expect(readStore()[legacyKey]?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
-      claim.lease.claimId,
-    ]);
-    expect(readStore()[sessionKey]?.mainRestartRecovery).toBeUndefined();
   });
 
   it("validates a transferred owner against the latest durable row", async () => {

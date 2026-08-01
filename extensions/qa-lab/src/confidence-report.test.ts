@@ -132,6 +132,32 @@ describe("qa confidence report", () => {
     expect(report.lanes[1]).toMatchObject({ id: "optional-missing", status: "missing" });
   });
 
+  it("escapes backslashes before Markdown table delimiters", async () => {
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "missing",
+            title: "Missing",
+            kind: "qa-suite-summary",
+            artifact: "missing/qa-suite-summary.json",
+            required: true,
+            missingVerdict: "environment-blocked",
+            missingReason: String.raw`path\|fallback unavailable`,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      generatedAt: "2026-05-13T00:00:00.000Z",
+    });
+
+    expect(renderQaConfidenceMarkdownReport(report)).toContain(
+      String.raw`path\\\|fallback unavailable`,
+    );
+  });
+
   it("fails strict global pass when any lane is blocked, missing, unknown, or classified failed", async () => {
     await writeJson("classified/qa-suite-summary.json", {
       counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
@@ -544,8 +570,9 @@ describe("qa confidence report", () => {
             scenarioId: "plugin-hook-health-sentinel",
             drift: "none",
             cells: {
-              pi: { sentinelFindings: [] },
+              openclaw: { status: "pass", sentinelFindings: [] },
               codex: {
+                status: "pass",
                 sentinelFindings: [
                   {
                     kind: "plugin-hook-failure",

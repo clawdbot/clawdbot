@@ -109,6 +109,11 @@ export async function executeJobCore(
       streamBatch: options?.streamBatch,
       abortSignal,
     });
+    // Trigger scripts may settle after cancellation; never start payload work
+    // or persist trigger results for a run that has already been aborted.
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
     if (evaluation.kind === "busy") {
       state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
       return {
@@ -239,7 +244,11 @@ async function executeMainSessionCronJob(
   }
   const cronStartedAt =
     typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
-  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(job, cronStartedAt);
+  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(
+    job,
+    cronStartedAt,
+    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+  );
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   // Main-session jobs enqueue text into a per-run child session so each cron
   // execution has its own transcript and task drill-down target.
@@ -263,16 +272,23 @@ async function executeMainSessionCronJob(
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
         return { status: "error", error: timeoutErrorMessage() };
       }
-      heartbeatResult = await state.deps.runHeartbeatOnce({
-        source: "cron",
-        intent: "immediate",
-        reason,
-        agentId: job.agentId,
-        sessionKey: cronRunSessionKey,
-        owningCronJobMarker: activeJobMarker,
-        owningCronLaneTaskMarker,
-        heartbeat: { target: "last" },
-      });
+      try {
+        heartbeatResult = await state.deps.runHeartbeatOnce({
+          source: "cron",
+          intent: "immediate",
+          reason,
+          agentId: job.agentId,
+          sessionKey: cronRunSessionKey,
+          owningCronJobMarker: activeJobMarker,
+          owningCronLaneTaskMarker,
+          heartbeat: { target: "last" },
+        });
+      } catch (error) {
+        // A failed immediate heartbeat must not leave its failed run's
+        // reminder queued for an unrelated future heartbeat.
+        removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
+        throw error;
+      }
       if (abortSignal?.aborted) {
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
         return { status: "error", error: timeoutErrorMessage() };

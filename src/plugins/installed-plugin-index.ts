@@ -22,6 +22,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -43,7 +44,11 @@ export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 
 function buildInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & { refreshReason?: InstalledPluginIndexRefreshReason },
-): { index: InstalledPluginIndex; discovery: PluginDiscoveryResult | undefined } {
+): {
+  index: InstalledPluginIndex;
+  discovery: PluginDiscoveryResult | undefined;
+  manifestRegistry: PluginManifestRegistry;
+} {
   const env = params.env ?? process.env;
   const { candidates, registry, discovery } = resolveInstalledPluginIndexRegistry(params);
   const registryDiagnostics = registry.diagnostics ?? [];
@@ -80,6 +85,7 @@ function buildInstalledPluginIndex(
       diagnostics,
     },
     discovery,
+    manifestRegistry: registry,
   };
 }
 
@@ -91,7 +97,11 @@ export function loadInstalledPluginIndex(
 
 export function loadInstalledPluginIndexWithDiscovery(
   params: LoadInstalledPluginIndexParams = {},
-): { index: InstalledPluginIndex; discovery: PluginDiscoveryResult | undefined } {
+): {
+  index: InstalledPluginIndex;
+  discovery: PluginDiscoveryResult | undefined;
+  manifestRegistry: PluginManifestRegistry;
+} {
   return buildInstalledPluginIndex(params);
 }
 

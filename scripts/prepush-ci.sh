@@ -23,7 +23,7 @@ run_protocol_ci_mirror() {
   before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
 
   run_step pnpm protocol:gen
-  run_step pnpm protocol:gen:swift
+  run_step pnpm protocol:check:swift
 
   after="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
   if [[ "$before" != "$after" ]]; then

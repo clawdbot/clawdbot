@@ -69,8 +69,17 @@ flow:
             - lambda:
                 expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
-        - assert:
-            expr: "!env.mock || ((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model === 'gpt-5.6-luna-alt')"
-            message:
-              expr: "`expected gpt-5.6-luna-alt, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model ?? '')}`"
+        - if:
+            expr: "Boolean(env.mock)"
+            then:
+              - set: switchDebugRequests
+                value:
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+              - set: switchRequest
+                value:
+                  expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.followupPrompt))"
+              - assert:
+                  expr: "String(switchRequest?.model ?? '') === String(alternate?.model ?? '')"
+                  message:
+                    expr: "`expected alternate model ${String(alternate?.model ?? '')}, got ${String(switchRequest?.model ?? '')}`"
       detailsExpr: outbound.text

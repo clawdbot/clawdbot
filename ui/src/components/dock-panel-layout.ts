@@ -7,6 +7,16 @@ type DockPanelLayout<TDock extends DockPanelSide> = {
   width: number;
 };
 
+export type DockPanelLayoutStore<TDock extends DockPanelSide> = {
+  defaults: DockPanelLayout<TDock>;
+  minHeight: number;
+  minWidth: number;
+  maxHeight(): number;
+  maxWidth(): number;
+  load(): DockPanelLayout<TDock>;
+  save(layout: DockPanelLayout<TDock>): void;
+};
+
 type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
   storageKey: string;
   minHeight: number;

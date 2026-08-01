@@ -21,7 +21,6 @@ scenario:
         mentionPatterns:
           - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
   execution:
-    profiles: { "matrix:all": 54, "matrix:media": 3 }
     kind: flow
     channel: matrix
     providerMode: mock-openai

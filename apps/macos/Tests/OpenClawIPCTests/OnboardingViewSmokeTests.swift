@@ -32,6 +32,15 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
+    @Test func `discovered gateway summary uses localized runtime strings`() {
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
+                "1 gateway found on your network — click to choose it.")
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
+                "2 gateways found on your network — click to choose one.")
+    }
+
     @Test func `onboarding view builds body`() {
         let state = AppState(preview: true)
         let view = OnboardingView(

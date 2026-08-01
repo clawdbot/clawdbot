@@ -24,11 +24,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigRecoveryHint } from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
+import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 import {
   appendServiceLifecycleRepairAudit,
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
-import { getConfigActionPreflightFailure } from "./lifecycle-config-preflight.js";
 import {
   buildDaemonServiceSnapshot,
   createDaemonActionContext,
@@ -150,7 +150,7 @@ export async function runServiceUninstall(params: {
   }
 
   {
-    const preflight = await getConfigActionPreflightFailure("uninstall the gateway service");
+    const preflight = await getServiceActionPreflightFailure("uninstall");
     if (preflight) {
       fail(`${params.serviceNoun} uninstall blocked: ${preflight.message}`, preflight.hints);
       return;
@@ -218,7 +218,7 @@ export async function runServiceStart(params: {
   // Pre-flight config validation (#35862) — run for both loaded and not-loaded
   // to prevent launching from invalid config in any start path.
   {
-    const preflight = await getConfigActionPreflightFailure("start the gateway service");
+    const preflight = await getServiceActionPreflightFailure("start");
     if (preflight) {
       fail(
         preflight.hints
@@ -371,7 +371,7 @@ export async function runServiceStop(params: {
     return;
   }
   {
-    const preflight = await getConfigActionPreflightFailure("stop the gateway service");
+    const preflight = await getServiceActionPreflightFailure("stop");
     if (preflight) {
       fail(`${params.serviceNoun} stop blocked: ${preflight.message}`, preflight.hints);
       return;
@@ -521,7 +521,7 @@ export async function runServiceRestart(params: {
   // Pre-flight config validation: check before any restart action (including
   // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
   {
-    const preflight = await getConfigActionPreflightFailure("restart the gateway service");
+    const preflight = await getServiceActionPreflightFailure("restart");
     if (preflight) {
       fail(
         preflight.hints

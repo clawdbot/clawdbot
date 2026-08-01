@@ -26,8 +26,14 @@ import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
+export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
+/** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
+const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
+/** Playback renditions outlive transient media but are still retired after one week. */
+const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+let playbackCacheOperationTail = Promise.resolve();
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 type CleanOldMediaOptions = {
@@ -46,6 +52,9 @@ function setMediaStoreNetworkDepsForTest(deps?: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    enforcePlaybackTranscodeCacheLimit,
+    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
+    PLAYBACK_TRANSCODE_TTL_MS,
     setMediaStoreNetworkDepsForTest,
   };
 }
@@ -90,9 +99,9 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
   return safeSubdir ? path.join(safeSubdir, id) : id;
 }
 
-function openMediaStore(maxBytes = MAX_BYTES) {
+function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
   return fileStore({
-    rootDir: resolveMediaDir(),
+    rootDir,
     dirMode: 0o700,
     maxBytes,
     mode: MEDIA_FILE_MODE,
@@ -183,29 +192,123 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   );
 }
 
-// Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
-// maxDepth whenever it is set and only falls back to the recursive flag when maxDepth is undefined,
-// so recursive:false must resolve to depth 0 (root only). Without this, recursive:false collapses
-// to the same one-level sweep as the unset default and would still descend into — and delete —
-// retained media subdirectories (e.g. media/inbound/<id>).
-function resolveCleanupMaxDepth(recursive: boolean | undefined): number | undefined {
-  if (recursive === true) {
-    return undefined; // full-tree sweep (configured maintenance timer)
+async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
+  const dir = resolveMediaScopedDir(PLAYBACK_TRANSCODE_SUBDIR, "prunePlaybackTranscodeCacheToSize");
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = (
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.isFile() || entry.name.startsWith(".")) {
+          return null;
+        }
+        const stat = await fs.lstat(path.join(dir, entry.name)).catch(() => null);
+        return stat?.isFile() ? { name: entry.name, size: stat.size, mtimeMs: stat.mtimeMs } : null;
+      }),
+    )
+  )
+    .filter((entry): entry is { name: string; size: number; mtimeMs: number } => Boolean(entry))
+    .toSorted((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name));
+  let totalBytes = files.reduce((total, file) => total + file.size, 0);
+  for (const file of files) {
+    if (totalBytes <= PLAYBACK_TRANSCODE_MAX_CACHE_BYTES) {
+      break;
+    }
+    const relativePath = resolveMediaRelativePath(
+      file.name,
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "prunePlaybackTranscodeCacheToSize",
+    );
+    const removed = await openMediaStore()
+      .remove(relativePath)
+      .then(() => true)
+      .catch(() => false);
+    if (removed) {
+      totalBytes -= file.size;
+    }
   }
-  if (recursive === false) {
-    return 0; // root-only sweep; never descend into retained subdirectories
+}
+
+async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOptions): Promise<void> {
+  if (options.recursive === false) {
+    await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+    return;
   }
-  return 1; // default: prune the media root and its immediate first-level subdirectories
+  const mediaDir = resolveMediaDir();
+  await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+  const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === PLAYBACK_TRANSCODE_SUBDIR) {
+      continue;
+    }
+    const scopedDir = path.join(mediaDir, entry.name);
+    const recursive = options.recursive === true;
+    await openMediaStore(MAX_BYTES, scopedDir).pruneExpired({
+      ttlMs,
+      recursive,
+      maxDepth: recursive ? undefined : 0,
+      pruneEmptyDirs: options.pruneEmptyDirs,
+    });
+    if (options.pruneEmptyDirs) {
+      await fs.rmdir(scopedDir).catch(() => {});
+    }
+  }
+}
+
+async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = playbackCacheOperationTail.then(operation);
+  playbackCacheOperationTail = run.then(
+    () => {},
+    () => {},
+  );
+  return await run;
+}
+
+/** Serializes cache publication with quota enforcement and propagates failures to the writer. */
+export async function writePlaybackTranscodeCache(params: {
+  buffer: Buffer;
+  fileName: string;
+  maxBytes: number;
+  tempPrefix: string;
+}): Promise<string> {
+  return await queuePlaybackCacheOperation(async () => {
+    const relativePath = resolveMediaRelativePath(
+      params.fileName,
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "writePlaybackTranscodeCache",
+    );
+    const filePath = await openMediaStore(params.maxBytes).write(relativePath, params.buffer, {
+      maxBytes: params.maxBytes,
+      tempPrefix: params.tempPrefix,
+    });
+    await prunePlaybackTranscodeCacheToSize();
+    return filePath;
+  });
+}
+
+/** Serializes maintenance quota scans with cache insertions. */
+async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
+  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
+}
+
+async function prunePlaybackTranscodeCacheRetention(): Promise<void> {
+  await queuePlaybackCacheOperation(async () => {
+    const cacheDir = resolveMediaScopedDir(
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "prunePlaybackTranscodeCacheRetention",
+    );
+    await openMediaStore(MAX_BYTES, cacheDir).pruneExpired({
+      ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
+      recursive: true,
+      pruneEmptyDirs: true,
+    });
+    await prunePlaybackTranscodeCacheToSize();
+  });
 }
 
 /** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
-  await openMediaStore().pruneExpired({
-    maxDepth: resolveCleanupMaxDepth(options.recursive),
-    ttlMs,
-    recursive: options.recursive ?? true,
-    pruneEmptyDirs: options.pruneEmptyDirs,
-  });
+  await pruneNonPlaybackMedia(ttlMs, options);
+  await prunePlaybackTranscodeCacheRetention();
   // Trust metadata must not outlive the staged file that it authorizes.
   const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
   await pruneStaleTrustedGeneratedHtmlMarkers();

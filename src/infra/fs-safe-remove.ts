@@ -17,9 +17,24 @@ function compareDirectoryEntryNames(left: DirectoryEntry, right: DirectoryEntry)
   return left.name < right.name ? -1 : 1;
 }
 
-function isNotFoundError(error: unknown): error is NodeJS.ErrnoException {
+function isNotFoundError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "not-found" || code === "ENOENT";
+  return (
+    code === "not-found" ||
+    code === "ENOENT" ||
+    findPathAliasFilesystemCause(error)?.code === "ENOENT"
+  );
+}
+
+function findPathAliasFilesystemCause(error: unknown): NodeJS.ErrnoException | undefined {
+  if ((error as NodeJS.ErrnoException | undefined)?.code !== "path-alias") {
+    return undefined;
+  }
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const causeCode = (cause as NodeJS.ErrnoException | undefined)?.code;
+  return typeof causeCode === "string" && /^E[A-Z0-9_]+$/u.test(causeCode)
+    ? (cause as NodeJS.ErrnoException)
+    : undefined;
 }
 
 function relativeParentPath(relativePath: string): string {
@@ -58,6 +73,10 @@ async function removeRootRelativePath(
       throw new FsSafeError("not-found", "file not found", {
         cause: error instanceof Error ? error : undefined,
       });
+    }
+    const filesystemCause = findPathAliasFilesystemCause(error);
+    if (filesystemCause) {
+      throw filesystemCause;
     }
     throw error;
   }

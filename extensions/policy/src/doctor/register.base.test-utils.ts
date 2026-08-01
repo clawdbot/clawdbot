@@ -301,7 +301,6 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/sandbox-container-runtime-socket-mount",
       "policy/sandbox-container-unconfined-profile",
       "policy/sandbox-browser-cdp-source-range-missing",
-      "policy/data-handling-redaction-disabled",
       "policy/data-handling-telemetry-content-capture",
       "policy/data-handling-session-retention-not-enforced",
       "policy/data-handling-session-transcript-memory-enabled",
@@ -317,6 +316,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/exec-approvals-auto-allow-skills-enabled",
       "policy/exec-approvals-allowlist-missing",
       "policy/exec-approvals-allowlist-unexpected",
+      "policy/tools-md-migration-required",
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",
@@ -1101,7 +1101,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
-  it("does not include unrelated TOOLS.md evidence in channel-only attestations", async () => {
+  it("does not include unrelated AGENTS.md tool evidence in channel-only attestations", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
@@ -1127,7 +1127,7 @@ describe("registerPolicyDoctorChecks", () => {
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),
@@ -1562,7 +1562,6 @@ describe("registerPolicyDoctorChecks", () => {
           remote: { allow: false },
         },
         dataHandling: {
-          sensitiveLogging: { requireRedaction: true },
           telemetry: { denyContentCapture: true },
         },
       }),

@@ -58,6 +58,31 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("hydrates AVIF attachments when transport metadata only declares generic bytes", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-avif-" }, async (base) => {
+      const imagePath = path.join(base, "photo.avif");
+      const imageBytes = Buffer.from("avif-image");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          media: [{ path: imagePath, contentType: "application/octet-stream", workspaceDir: base }],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/avif",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+    });
+  });
+
   it("does not duplicate a prepared host-staged image during runner hydration", async () => {
     await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");

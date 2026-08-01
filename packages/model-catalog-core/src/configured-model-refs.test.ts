@@ -3,9 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
+  listModelRefsFromConfigValue,
 } from "./configured-model-refs.js";
 
 describe("configured model refs", () => {
+  it("lists raw refs from one model selector without normalizing them", () => {
+    expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
+    expect(
+      listModelRefsFromConfigValue({
+        primary: " primary/model ",
+        fallbacks: ["", "fallback/model", 42, "fallback/model"],
+      }),
+    ).toEqual([" primary/model ", "", "fallback/model", "fallback/model"]);
+    expect(listModelRefsFromConfigValue(["openai/gpt-5.5"])).toEqual([]);
+    expect(listModelRefsFromConfigValue({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
+  });
+
   it("collects agent, hook, message, and channel model refs with config paths", () => {
     expect(
       collectConfiguredModelRefs({
@@ -62,6 +75,33 @@ describe("configured model refs", () => {
         { includeChannelModelOverrides: false },
       ),
     ).toEqual(["openai/gpt-5.5"]);
+  });
+
+  it("preserves legacy list indices when collecting agent model refs", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          list: [
+            { id: "10", model: "openai/gpt-5.6" },
+            { id: "2", utilityModel: "anthropic/claude-sonnet-4-6" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { path: "agents.list.0.model", value: "openai/gpt-5.6" },
+      { path: "agents.list.1.utilityModel", value: "anthropic/claude-sonnet-4-6" },
+    ]);
+  });
+
+  it("ignores a shadowed legacy list when keyed entries are authoritative", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          entries: { ops: { model: "openai/gpt-5.6" } },
+          list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
+        },
+      }),
+    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
   });
 
   it("ignores array-shaped malformed records", () => {

@@ -926,6 +926,38 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect((await readMirrorMessages(target)).filter((message) => message.role)).toHaveLength(2);
   });
 
+  it("serializes concurrent mirrors with the same supplied identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-concurrent-");
+    const message = attachCodexMirrorIdentity(
+      makeAgentUserMessage({
+        content: [{ type: "text", text: "append once" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:prompt",
+    );
+
+    const results = await Promise.all([
+      mirrorCodexAppServerTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "codex-app-server:thread-1",
+      }),
+      mirrorCodexAppServerTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "codex-app-server:thread-1",
+      }),
+    ]);
+
+    expect((await readMirrorMessages(target)).filter((entry) => entry.role)).toEqual([
+      { role: "user", text: "append once" },
+    ]);
+    expect(results.map((result) => messageContent(result.userMessagesPresent[0]))).toEqual([
+      [{ type: "text", text: "append once" }],
+      [{ type: "text", text: "append once" }],
+    ]);
+  });
+
   it("reports final assistant ownership for new and idempotent mirrors", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-assistant-owned-");
     const assistantMessage = attachCodexMirrorIdentity(

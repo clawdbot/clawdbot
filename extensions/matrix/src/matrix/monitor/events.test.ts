@@ -135,6 +135,7 @@ function createHarness(params?: {
   );
   const sendMessage = vi.fn(async (_roomId: string, _payload: { body?: string }) => "$notice");
   const invalidateRoom = vi.fn();
+  const invalidateMemberDisplayName = vi.fn();
   const rememberInvite = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
@@ -200,6 +201,7 @@ function createHarness(params?: {
       invalidateRoom,
       rememberInvite,
     },
+    invalidateMemberDisplayName,
     logVerboseMessage,
     warnedEncryptedRooms: new Set<string>(),
     warnedCryptoMissingRooms: new Set<string>(),
@@ -223,6 +225,7 @@ function createHarness(params?: {
     onRoomMessage,
     sendMessage,
     invalidateRoom,
+    invalidateMemberDisplayName,
     rememberInvite,
     roomEventListener,
     listVerifications,
@@ -318,8 +321,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("invalidates direct-room membership cache on room member events", () => {
-    const { invalidateRoom, roomEventListener } = createHarness();
+  it("invalidates direct-room and observed member-display-name caches on room member events", () => {
+    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
 
     roomEventListener("!room:example.org", {
       event_id: "$member1",
@@ -333,6 +336,25 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(invalidateMemberDisplayName).toHaveBeenCalledWith(
+      "!room:example.org",
+      "@mallory:example.org",
+    );
+  });
+
+  it("does not invalidate a member display name without an authoritative state key", () => {
+    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
+
+    roomEventListener("!room:example.org", {
+      event_id: "$member-no-state-key",
+      sender: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: { membership: "join" },
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(invalidateMemberDisplayName).not.toHaveBeenCalled();
   });
 
   it("remembers invite provenance on room invites", () => {

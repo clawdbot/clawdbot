@@ -5,15 +5,12 @@ import {
   listEffectivePairedDeviceRoles,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
-import {
-  isMobilePairingSetupBootstrapProfile,
-  resolveBootstrapProfileScopesForRole,
-} from "../../../shared/device-bootstrap-profile.js";
+import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isMobileNodeBootstrapConnect,
-  isSetupCodeMobileBootstrapClient,
+  isSetupCodeHandoffBootstrapClient,
   pairedDeviceAllowsBootstrapOperator,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
@@ -148,8 +145,10 @@ export async function authorizeExistingGatewayDevice(params: {
       retryBootstrapHandoffProfile.purpose,
     );
     if (
-      isMobilePairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
-      isSetupCodeMobileBootstrapClient(connectParams.client)
+      isSetupCodeHandoffBootstrapClient({
+        profile: retryBootstrapHandoffProfile,
+        client: connectParams.client,
+      })
     ) {
       const pairedAllowsHandoff =
         pairedRoles.includes("operator") &&

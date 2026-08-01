@@ -15,9 +15,10 @@ provider or agent runtime in three different ways.
 
 <Tabs>
   <Tab title="Built-in provider (github-copilot)">
-    Use the native device-login flow to obtain a GitHub token, then exchange it for
-    Copilot API tokens when OpenClaw runs. This is the **default** and simplest path
-    because it does not require VS Code.
+    Use the native device-login flow to obtain and store a GitHub token. When
+    OpenClaw runs, it validates Copilot access and resolves the account-specific
+    Copilot API endpoint. This is the **default** and simplest path because it does
+    not require VS Code.
 
     <Steps>
       <Step title="Run the login command">
@@ -30,7 +31,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-4.7
+        openclaw models set github-copilot/claude-sonnet-5
         ```
 
         Or in config:
@@ -38,7 +39,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
+            defaults: { model: { primary: "github-copilot/claude-sonnet-5" } },
           },
         }
         ```
@@ -62,9 +63,9 @@ provider or agent runtime in three different ways.
     {
       agents: {
         defaults: {
-          model: "github-copilot/gpt-5.5",
+          model: "github-copilot/gpt-5.6-sol",
           models: {
-            "github-copilot/gpt-5.5": {
+            "github-copilot/gpt-5.6-sol": {
               agentRuntime: { id: "copilot" },
             },
           },
@@ -125,8 +126,8 @@ first-class auth choice so you do not have to hand-edit URLs.
 
   </Step>
   <Step title="Domain is persisted to config">
-    The chosen host is stored under the provider params so later token refreshes
-    and completions target the tenant automatically:
+    The chosen host is stored under the provider params so later account
+    validation and completions target the tenant automatically:
 
     ```json5
     {
@@ -141,12 +142,10 @@ first-class auth choice so you do not have to hand-edit URLs.
   </Step>
 </Steps>
 
-The device flow, token exchange, and completions resolve to
-`https://your-org.ghe.com/login/device/code`,
-`https://api.your-org.ghe.com/copilot_internal/v2/token`, and
-`https://copilot-api.your-org.ghe.com` respectively. Data-residency tokens carry
-a tenant stamp and no proxy hint, so the completions base URL falls back to the
-tenant Copilot host instead of the public endpoint.
+The device flow and account validation use the tenant's GitHub endpoints, and
+Copilot requests use `https://copilot-api.your-org.ghe.com`. This keeps both
+authentication and inference on the configured data-residency tenant instead of
+the public endpoints.
 
 <Note>
 Switching domains always re-runs the device login. If you already have a stored
@@ -162,9 +161,9 @@ token. Switching back to public `github.com` clears the persisted
 The `COPILOT_GITHUB_DOMAIN` environment variable overrides the resolved domain
 for every Copilot path that resolves it — the Enterprise device login
 (`--method device-enterprise`), the standalone
-`openclaw models auth login-github-copilot` shortcut, token refresh, embeddings,
-and completions. Set it to your `*.ghe.com` host for fully headless or CI
-setups. Leave it unset (and the config param absent) to use public `github.com`.
+`openclaw models auth login-github-copilot` shortcut, account validation,
+embeddings, and completions. Set it to your `*.ghe.com` host for fully headless
+or CI setups. Leave it unset (and the config param absent) to use public `github.com`.
 Logins persist the domain they minted the token for (and clear it when logging
 in against public `github.com`), so routing stays correct even after the
 environment variable is unset.
@@ -203,6 +202,14 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
 `tokenRef` instead of plaintext in `auth-profiles.json`.
 
+Fresh non-interactive setup validates the token before saving it. When setup
+must choose a default, it also checks the live Copilot model catalog. OpenClaw
+prefers the provider's current general-purpose model when that model is
+enabled for the account; otherwise it chooses a deterministic eligible fallback.
+Setup fails without writing a new auth profile if the account has no
+picker-visible model that supports streaming and tool calls. An explicitly
+configured default model is never replaced.
+
 <AccordionGroup>
   <Accordion title="Interactive TTY required">
     The device-login flow requires an interactive TTY. Run it directly in a
@@ -210,8 +217,9 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
   </Accordion>
 
   <Accordion title="Model availability depends on your plan">
-    Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-5.5`). See
+    Copilot model availability depends on your GitHub plan and organization
+    policy. Interactive onboarding uses the live catalog for its model picker,
+    while non-interactive onboarding selects an eligible model automatically. See
     GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
     for the current model list.
   </Accordion>
@@ -221,13 +229,16 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
     OpenClaw refreshes the model catalog on demand from `${baseUrl}/models`
     (the same endpoint VS Code Copilot uses) so the runtime tracks
     per-account entitlement and accurate context windows without manifest
-    churn. Newly published Copilot models become visible without an OpenClaw
-    upgrade, and context windows reflect the real per-model limits
+    churn. The visible live catalog excludes models hidden from GitHub's picker
+    or disabled by account policy. Automatic setup defaults additionally require
+    streaming and tool-call support.
+    Newly published Copilot models become visible without an OpenClaw upgrade,
+    and context windows reflect the real per-model limits
     (e.g. 400k for the gpt-5.x series, 1M for the internal
     `claude-opus-*-1m` variants).
 
     The bundled static catalog stays as the visible fallback when discovery
-    is disabled, the user has no GitHub auth profile, the token-exchange
+    is disabled, the user has no GitHub auth profile, runtime authentication
     fails, or the `/models` HTTPS call errors. To opt out and rely entirely
     on the static manifest catalog (offline / air-gapped scenarios):
 
@@ -253,10 +264,9 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
   </Accordion>
 
   <Accordion title="Request compatibility">
-    OpenClaw sends Copilot IDE-style request headers on Copilot transports
-    (VS Code editor/plugin versions and the `vscode-chat` integration id),
-    marks tool-result follow-up turns as agent-initiated, and sets the Copilot
-    vision header when a turn carries image input.
+    OpenClaw sends Copilot-compatible request headers with a Copilot CLI request
+    identity, marks tool-result follow-up turns as agent-initiated, and sets the
+    Copilot vision header when a turn carries image input.
   </Accordion>
 
   <Accordion title="Environment variable resolution order">
@@ -278,8 +288,10 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 
   <Accordion title="Token storage">
     The login stores a GitHub token in the auth profile store (profile id
-    `github-copilot:github`) and exchanges it for a short-lived Copilot API
-    token when OpenClaw runs. You do not need to manage the token manually.
+    `github-copilot:github`). At runtime, OpenClaw validates Copilot access,
+    resolves the account-specific API endpoint, and uses the stored GitHub token
+    for Copilot requests. You do not need to manage runtime authentication
+    manually.
   </Accordion>
 </AccordionGroup>
 
@@ -310,7 +322,7 @@ the Copilot API and picks the best one automatically.
 ### How it works
 
 1. OpenClaw resolves your GitHub token (from env vars or auth profile).
-2. Exchanges it for a short-lived Copilot API token.
+2. Validates Copilot access and resolves the account-specific API endpoint.
 3. Queries the Copilot `/models` endpoint to discover available embedding models.
 4. Picks the best model (preference order: `text-embedding-3-small`,
    `text-embedding-3-large`, `text-embedding-ada-002`).

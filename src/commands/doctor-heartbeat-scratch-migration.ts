@@ -18,6 +18,7 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
@@ -40,10 +41,6 @@ type HeartbeatSource = {
   content: string;
   sha256: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function readHeartbeatSource(
   cfg: OpenClawConfig,
@@ -574,16 +571,16 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // this run's scratch imports must revert too — otherwise those agents keep
     // serving the imported copy and ignore later edits to the restored file.
     // A monitor that had no row before must return to no-row (not a tombstone),
-    // or the runner's legacy fallback and future migrations stay suppressed.
+    // or a future migration retry treats the rolled-back import as explicitly unset.
     const rollbackCommitted = () => {
       for (const commit of committedThisRun.toReversed()) {
         if (!commit.previous) {
           // Revision-guarded atomic delete restores the pre-migration no-row
-          // state so the runner's legacy fallback stays available. Accepted
+          // state so a future migration retry can import it. Accepted
           // tradeoff: this resets the revision counter to 0, so a writer still
           // holding a pre-migration expectedRevision:0 token could CAS through
           // after the rollback; that requires a third concurrent writer racing
-          // doctor and is preferred over permanently disabling the fallback.
+          // doctor and is preferred over permanently blocking migration.
           const deleted = deleteCronJobScratch(
             storePath,
             commit.monitor.id,

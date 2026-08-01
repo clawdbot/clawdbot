@@ -127,9 +127,19 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
   return LAZY_LOCALES.includes(locale as LazyLocale);
 }
 
-export function resolveNavigatorLocale(navLang: string): Locale {
+export function resolveNavigatorLocale(browserLanguage: string): Locale {
+  const navLang = browserLanguage.toLowerCase();
   if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
+    const [, ...subtags] = navLang.split("-");
+    if (subtags.includes("hant")) {
+      return "zh-TW";
+    }
+    if (subtags.includes("hans")) {
+      return "zh-CN";
+    }
+    return subtags.some((subtag) => subtag === "tw" || subtag === "hk" || subtag === "mo")
+      ? "zh-TW"
+      : "zh-CN";
   }
   if (navLang.startsWith("pt")) {
     return "pt-BR";

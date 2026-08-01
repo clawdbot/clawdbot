@@ -1,59 +1,19 @@
 // Litellm tests cover image generation provider plugin behavior.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
   postMultipartRequestMock,
-  assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadlineMock,
   resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
-  postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork),
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined as unknown,
-  })),
-  resolveProviderOperationTimeoutMsMock: vi.fn(
-    (params: Record<string, unknown>) => params.defaultTimeoutMs,
-  ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
-}));
+} = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
-    "openclaw/plugin-sdk/provider-http",
-  );
-  return {
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    createProviderOperationDeadline: createProviderOperationDeadlineMock,
-    postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-  };
-});
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
-  vi.resetModules();
-});
+installProviderHttpMockCleanup();
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -92,12 +52,12 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("litellm image generation provider", () => {
+  beforeEach(() => {
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "litellm-key" });
+  });
+
   afterEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
-    postJsonRequestMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
+    postMultipartRequestMock.mockReset();
   });
 
   it("declares litellm id and OpenAI-compatible size hints", () => {
@@ -224,7 +184,10 @@ describe("litellm image generation provider", () => {
   });
 
   it("forwards dispatcherPolicy from resolveProviderHttpRequestConfig to postJsonRequest", async () => {
-    const dispatcherPolicy = { proxyUrl: "http://corp-proxy:3128" } as unknown;
+    const dispatcherPolicy = {
+      mode: "explicit-proxy",
+      proxyUrl: "http://corp-proxy:3128",
+    } as const;
     resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
       baseUrl: "https://proxy.example.com/v1",
       allowPrivateNetwork: false,

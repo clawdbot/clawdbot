@@ -126,6 +126,28 @@ function requireSession(socket: FakeWebSocketInstance, index = 0): Record<string
   return session as Record<string, unknown>;
 }
 
+async function openRealtimeBridge(
+  bridge: ReturnType<ReturnType<typeof buildXaiRealtimeVoiceProvider>["createBridge"]>,
+  index = 0,
+  conversationId?: string,
+) {
+  const connecting = bridge.connect();
+  await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(index + 1));
+  const socket = requireSocket(index);
+  socket.readyState = FakeWebSocket.OPEN;
+  socket.emit("open");
+  if (conversationId) {
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: conversationId } }),
+      ),
+    );
+  }
+  socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+  return { connecting, socket };
+}
+
 describe("buildXaiRealtimeVoiceProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -198,12 +220,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { socket } = await openRealtimeBridge(bridge);
     bridge.close();
 
     const url = socket.args[0] as string;
@@ -237,15 +254,86 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { socket } = await openRealtimeBridge(bridge);
     bridge.close();
 
     expect(requireSession(socket).resumption).toBeUndefined();
+  });
+
+  it("bounds pending realtime audio by aggregate bytes before session setup", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.alloc(1, 0x7f));
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(2);
+    bridge.close();
+  });
+
+  it("copies pending realtime audio views without retaining their backing allocation", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const backing = Buffer.alloc(2 * 1024 * 1024, 0x7f);
+    const view = backing.subarray(0, 1);
+
+    bridge.sendAudio(view);
+    backing[0] = 0;
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(parseSent(socket).filter((event) => event.type === "input_audio_buffer.append")).toEqual(
+      [{ type: "input_audio_buffer.append", audio: "fw==" }],
+    );
+    bridge.close();
+  });
+
+  it("drops queued realtime input on close and ignores late input until reconnect", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    bridge.sendAudio(Buffer.from([0x01]));
+    bridge.sendUserMessage?.("queued before close");
+    void bridge.submitToolResult("call-before-close", { ok: true });
+    bridge.close();
+    bridge.sendAudio(Buffer.from([0x02]));
+    bridge.sendUserMessage?.("late after close");
+    void bridge.submitToolResult("call-after-close", { ok: true });
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter(
+        (event) =>
+          event.type === "input_audio_buffer.append" ||
+          event.type === "conversation.item.create" ||
+          event.type === "response.create",
+      ),
+    ).toEqual([]);
+    bridge.close();
   });
 
   it("rejects generic response modes that xAI server VAD cannot disable", () => {
@@ -287,12 +375,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { socket } = await openRealtimeBridge(bridge);
     bridge.close();
 
     const session = requireSession(socket);
@@ -307,62 +390,30 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   it("only forwards xAI VAD values accepted by the realtime API", async () => {
     const provider = buildXaiRealtimeVoiceProvider();
-    const invalidThresholdBridge = provider.createBridge({
-      providerConfig: {
-        apiKey: "xai-test", // pragma: allowlist secret
-        vadThreshold: 1,
-        silenceDurationMs: 10_001,
-        prefixPaddingMs: -1,
+    const cases = [
+      {
+        options: { vadThreshold: 1, silenceDurationMs: 10_001, prefixPaddingMs: -1 },
+        expected: { threshold: 0.85, silence_duration_ms: 500, prefix_padding_ms: 333 },
       },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-
-    void invalidThresholdBridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const invalidThresholdSocket = requireSocket();
-    invalidThresholdSocket.readyState = FakeWebSocket.OPEN;
-    invalidThresholdSocket.emit("open");
-    invalidThresholdSocket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "session.updated" })),
-    );
-    invalidThresholdBridge.close();
-
-    expect(requireSession(invalidThresholdSocket).turn_detection).toEqual(
-      expect.objectContaining({
-        threshold: 0.85,
-        silence_duration_ms: 500,
-        prefix_padding_ms: 333,
-      }),
-    );
-
-    const validThresholdBridge = provider.createBridge({
-      providerConfig: {
-        apiKey: "xai-test", // pragma: allowlist secret
-        vadThreshold: 0.9,
-        silenceDurationMs: 10_000,
-        prefixPaddingMs: 0,
+      {
+        options: { vadThreshold: 0.9, silenceDurationMs: 10_000, prefixPaddingMs: 0 },
+        expected: { threshold: 0.9, silence_duration_ms: 10_000, prefix_padding_ms: 0 },
       },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
+    ];
 
-    void validThresholdBridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
-    const validThresholdSocket = requireSocket(1);
-    validThresholdSocket.readyState = FakeWebSocket.OPEN;
-    validThresholdSocket.emit("open");
-    validThresholdSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    validThresholdBridge.close();
-
-    expect(requireSession(validThresholdSocket).turn_detection).toEqual(
-      expect.objectContaining({
-        threshold: 0.9,
-        silence_duration_ms: 10_000,
-        prefix_padding_ms: 0,
-      }),
-    );
+    for (const [index, { options, expected }] of cases.entries()) {
+      const bridge = provider.createBridge({
+        providerConfig: {
+          apiKey: "xai-test", // pragma: allowlist secret
+          ...options,
+        },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      const { socket } = await openRealtimeBridge(bridge, index);
+      bridge.close();
+      expect(requireSession(socket).turn_detection).toEqual(expect.objectContaining(expected));
+    }
   });
 
   it("only forwards reasoning efforts accepted by the xAI Voice Agent API", async () => {
@@ -387,12 +438,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       ...callbacks,
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { socket } = await openRealtimeBridge(bridge);
     bridge.close();
 
     expect(requireSession(socket).reasoning).toEqual({ effort: "none" });
@@ -408,12 +454,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onTranscript,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.emit(
@@ -452,6 +493,90 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onTranscript).toHaveBeenCalledWith("user", "OpenClaw", true);
   });
 
+  it("forwards standard incremental input-transcription events", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "item_speech",
+          delta: "open claw",
+        }),
+      ),
+    );
+
+    expect(onTranscript).toHaveBeenCalledWith("user", "open claw", false);
+  });
+
+  it("surfaces input transcription failures and discards their stale replacement text", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+      onError,
+      onEvent,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.updated",
+          item_id: "item_speech",
+          transcript: "stale speech",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: "item_speech",
+          error: { code: "decoder_failure", message: "speech decoder exploded" },
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item_speech",
+        }),
+      ),
+    );
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "speech decoder exploded" }),
+    );
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.input_audio_transcription.failed",
+      itemId: "item_speech",
+      detail: "speech decoder exploded",
+    });
+  });
+
   it("buffers assistant transcript deltas and finalizes them when done has no text", async () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const onTranscript = vi.fn();
@@ -462,12 +587,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onTranscript,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
@@ -502,372 +622,247 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onTranscript).toHaveBeenCalledTimes(3);
   });
 
-  it("lets server VAD own interruption before an audio item exists", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+  it("preserves corrected final text from legacy realtime text events", async () => {
     const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
+    const onTranscript = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio: vi.fn(),
-      onClearAudio,
+      onClearAudio: vi.fn(),
+      onTranscript,
     });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
     socket.emit(
       "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
+      Buffer.from(JSON.stringify({ type: "response.text.delta", delta: "draft assistant" })),
     );
     socket.emit(
       "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
+      Buffer.from(JSON.stringify({ type: "response.text.done", text: "corrected assistant" })),
     );
-    bridge.close();
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
-    const sentTypes = parseSent(socket).map((event) => event.type);
-    expect(sentTypes).not.toContain("response.cancel");
-    expect(sentTypes).not.toContain("conversation.item.truncate");
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "draft assistant", false],
+      ["assistant", "corrected assistant", true],
+    ]);
   });
 
-  it("cancels and truncates active response audio on barge-in", async () => {
+  it.each([
+    {
+      name: "lets server VAD own interruption before an audio item exists",
+      hasAudio: false,
+      timestamp: 1000,
+      expectedActions: [],
+    },
+    {
+      name: "cancels and truncates active response audio on barge-in",
+      hasAudio: true,
+      manual: true,
+      timestamp: 1300,
+      expectedActions: [
+        { type: "response.cancel" },
+        {
+          type: "conversation.item.truncate",
+          item_id: "item_1",
+          content_index: 0,
+          audio_end_ms: 300,
+        },
+      ],
+    },
+    {
+      name: "truncates queued playback on server-VAD barge-in without cancelling xAI",
+      hasAudio: true,
+      timestamp: 1250,
+      expectedActions: [
+        {
+          type: "conversation.item.truncate",
+          item_id: "item_1",
+          content_index: 0,
+          audio_end_ms: 250,
+        },
+      ],
+    },
+    {
+      name: "clears relay playback on server-VAD barge-in after marks are acknowledged",
+      hasAudio: true,
+      acknowledged: true,
+      timestamp: 1250,
+      expectedActions: [],
+    },
+    {
+      name: "does not truncate completed assistant audio on a later user turn",
+      hasAudio: true,
+      acknowledged: true,
+      completed: true,
+      timestamp: 2000,
+      expectedActions: [],
+    },
+    {
+      name: "keeps completed assistant item state so relay playback cancel can truncate it",
+      hasAudio: true,
+      acknowledged: true,
+      completed: true,
+      manual: true,
+      timestamp: 1300,
+      expectedActions: [
+        {
+          type: "conversation.item.truncate",
+          item_id: "item_1",
+          content_index: 0,
+          audio_end_ms: 300,
+        },
+      ],
+    },
+    {
+      name: "lets server VAD interrupt a new response before it produces audio",
+      hasAudio: true,
+      acknowledged: true,
+      completed: true,
+      startNewResponse: true,
+      timestamp: 1500,
+      expectedActions: [],
+    },
+  ])(
+    "$name",
+    async ({
+      hasAudio,
+      acknowledged,
+      completed,
+      startNewResponse,
+      manual,
+      timestamp,
+      expectedActions,
+    }) => {
+      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+      const onAudio = vi.fn();
+      const onClearAudio = vi.fn();
+      const bridge = buildXaiRealtimeVoiceProvider().createBridge({
+        providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        onAudio,
+        onClearAudio,
+      });
+      const { socket } = await openRealtimeBridge(bridge);
+      const emit = (event: Record<string, unknown>) =>
+        socket.emit("message", Buffer.from(JSON.stringify(event)));
+
+      emit({ type: "response.created", response: { id: "resp_1" } });
+      if (hasAudio) {
+        bridge.setMediaTimestamp(1000);
+        emit({
+          type: "response.output_audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        });
+      }
+      if (acknowledged) {
+        bridge.acknowledgeMark?.();
+      }
+      if (completed) {
+        emit({ type: "response.done" });
+      }
+      if (startNewResponse) {
+        emit({ type: "response.created", response: { id: "resp_2" } });
+      }
+      bridge.setMediaTimestamp(timestamp);
+      if (manual) {
+        bridge.handleBargeIn?.({ audioPlaybackActive: true });
+      } else {
+        emit({ type: "input_audio_buffer.speech_started" });
+      }
+      bridge.close();
+
+      expect(onAudio).toHaveBeenCalledTimes(hasAudio ? 1 : 0);
+      expect(onClearAudio).toHaveBeenCalledTimes(1);
+      if (!manual) {
+        expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+      }
+      expect(
+        parseSent(socket).filter(
+          (event) =>
+            event.type === "response.cancel" || event.type === "conversation.item.truncate",
+        ),
+      ).toEqual(expectedActions);
+    },
+  );
+
+  it("terminates realtime voice on non-canonical base64 audio", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
     const onAudio = vi.fn();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    let retry: Promise<void> | undefined;
+    const handleError = (error: Error) => {
+      onError(error);
+      retry = bridge.connect();
+    };
+    const bridge = buildXaiRealtimeVoiceProvider().createBridge({
       providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio,
-      onClearAudio,
+      onClose,
+      onError: handleError,
+      onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
     socket.emit(
       "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
+      Buffer.from(JSON.stringify({ type: "response.output_audio.delta", delta: "ZE==" })),
     );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1300);
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
-    bridge.close();
 
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
-    expect(parseSent(socket).slice(-2)).toEqual([
-      { type: "response.cancel" },
-      {
-        type: "conversation.item.truncate",
-        item_id: "item_1",
-        content_index: 0,
-        audio_end_ms: 300,
-      },
-    ]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "xAI realtime voice stream returned malformed base64 audio data",
+      }),
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBe(true);
+    if (!retry) {
+      throw new Error("expected synchronous retry from onError");
+    }
+    await expect(retry).rejects.toThrow(
+      "xAI realtime voice stream returned malformed base64 audio data",
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  it("truncates queued playback on server-VAD barge-in without cancelling xAI", async () => {
+  it("rejects startup when malformed audio arrives before session.updated", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const bridge = buildXaiRealtimeVoiceProvider().createBridge({
       providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio: vi.fn(),
-      onClearAudio,
+      onClose,
+      onError,
+      onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
+    const connection = bridge.connect();
     await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     socket.emit(
       "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
+      Buffer.from(JSON.stringify({ type: "response.output_audio.delta", delta: "ZE==" })),
     );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1250);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
-    bridge.close();
 
-    const sent = parseSent(socket);
-    expect(sent.map((event) => event.type)).not.toContain("response.cancel");
-    expect(sent.slice(-1)).toEqual([
-      {
-        type: "conversation.item.truncate",
-        item_id: "item_1",
-        content_index: 0,
-        audio_end_ms: 250,
-      },
-    ]);
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
-  });
-
-  it("clears relay playback on server-VAD barge-in after marks are acknowledged", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio: vi.fn(),
-      onClearAudio,
-    });
-
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
+    await expect(connection).rejects.toThrow(
+      "xAI realtime voice stream returned malformed base64 audio data",
     );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.acknowledgeMark?.();
-    bridge.setMediaTimestamp(1250);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
-    bridge.close();
-
-    const sentTypes = parseSent(socket).map((event) => event.type);
-    expect(sentTypes).not.toContain("response.cancel");
-    expect(sentTypes).not.toContain("conversation.item.truncate");
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
-  });
-
-  it("does not truncate completed assistant audio on a later user turn", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio: vi.fn(),
-      onClearAudio,
-    });
-
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.acknowledgeMark?.();
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-    bridge.setMediaTimestamp(2000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
-    bridge.close();
-
-    const sentTypes = parseSent(socket).map((event) => event.type);
-    expect(sentTypes).not.toContain("response.cancel");
-    expect(sentTypes).not.toContain("conversation.item.truncate");
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps completed assistant item state so relay playback cancel can truncate it", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio: vi.fn(),
-      onClearAudio,
-    });
-
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.acknowledgeMark?.();
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-    bridge.setMediaTimestamp(1300);
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
-    bridge.close();
-
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.truncate",
-        item_id: "item_1",
-        content_index: 0,
-        audio_end_ms: 300,
-      },
-    ]);
-  });
-
-  it("lets server VAD interrupt a new response before it produces audio", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const provider = buildXaiRealtimeVoiceProvider();
-    const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio: vi.fn(),
-      onClearAudio,
-    });
-
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_1" },
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    bridge.acknowledgeMark?.();
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.created",
-          response: { id: "resp_2" },
-        }),
-      ),
-    );
-    bridge.setMediaTimestamp(1500);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
-    bridge.close();
-
-    const sentTypes = parseSent(socket).map((event) => event.type);
-    expect(sentTypes).not.toContain("response.cancel");
-    expect(sentTypes).not.toContain("conversation.item.truncate");
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
   });
 
   it("deduplicates repeated function-call arguments done events", async () => {
@@ -881,12 +876,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.emit(
@@ -934,6 +924,73 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
+  it.each([
+    {
+      name: "corrected streamed arguments",
+      delta: '{"city":"draft"}',
+      finalArguments: '{"city":"Paris"}',
+      expectedArguments: { city: "Paris" },
+    },
+    {
+      name: "truncated streamed arguments",
+      delta: '{"city":',
+      finalArguments: '{"city":"Paris"}',
+      expectedArguments: { city: "Paris" },
+    },
+    {
+      name: "an explicitly empty completed payload",
+      delta: '{"city":"draft"}',
+      finalArguments: "",
+      expectedArguments: {},
+    },
+  ])(
+    "uses authoritative completed tool arguments for $name",
+    async ({ delta, finalArguments, expectedArguments }) => {
+      const provider = buildXaiRealtimeVoiceProvider();
+      const onToolCall = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onToolCall,
+      });
+      const { connecting, socket } = await openRealtimeBridge(bridge);
+      await connecting;
+
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.delta",
+            item_id: "item_tool_1",
+            call_id: "call_1",
+            name: "lookup_weather",
+            delta,
+          }),
+        ),
+      );
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.done",
+            item_id: "item_tool_1",
+            call_id: "call_1",
+            name: "lookup_weather",
+            arguments: finalArguments,
+          }),
+        ),
+      );
+
+      expect(onToolCall).toHaveBeenCalledWith({
+        itemId: "item_tool_1",
+        callId: "call_1",
+        name: "lookup_weather",
+        args: expectedArguments,
+      });
+    },
+  );
+
   it("waits for all parallel tool results before sending response.create", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
@@ -944,12 +1001,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall: vi.fn(),
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     for (const callId of ["call_1", "call_2"]) {
@@ -994,12 +1046,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall: vi.fn(),
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.emit(
@@ -1046,12 +1093,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onMark,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
@@ -1102,18 +1144,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall: vi.fn(),
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_tools" } }),
-      ),
-    );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(bridge, 0, "conv_tools");
     await connecting;
 
     for (const callId of ["call_1", "call_2"]) {
@@ -1170,18 +1201,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_replay" } }),
-      ),
-    );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(bridge, 0, "conv_replay");
     await connecting;
 
     firstSocket.close(1006, "connection lost");
@@ -1231,18 +1251,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClose,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_lost_output" } }),
-      ),
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(
+      bridge,
+      0,
+      "conv_lost_output",
     );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
     firstSocket.emit(
       "message",
@@ -1284,18 +1297,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_saved_output" } }),
-      ),
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(
+      bridge,
+      0,
+      "conv_saved_output",
     );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
     firstSocket.emit(
       "message",
@@ -1372,18 +1378,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onToolCall: vi.fn(),
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_tool_queue" } }),
-      ),
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(
+      bridge,
+      0,
+      "conv_tool_queue",
     );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
     for (const callId of ["call_1", "call_2"]) {
@@ -1452,18 +1451,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_text_queue" } }),
-      ),
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(
+      bridge,
+      0,
+      "conv_text_queue",
     );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
     firstSocket.close(1006, "connection lost");
@@ -1508,18 +1500,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClose,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_reconnect" } }),
-      ),
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(
+      bridge,
+      0,
+      "conv_reconnect",
     );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
     firstSocket.close(1006, "connection lost");
@@ -1557,18 +1542,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onReady,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_ready" } }),
-      ),
-    );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(bridge, 0, "conv_ready");
     await connecting;
 
     firstSocket.close(1006, "connection lost");
@@ -1596,18 +1570,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onError,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const firstSocket = requireSocket();
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_close" } }),
-      ),
-    );
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket: firstSocket } = await openRealtimeBridge(bridge, 0, "conv_close");
     await connecting;
 
     firstSocket.close(1006, "connection lost");
@@ -1624,6 +1587,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const reconnecting = bridge.connect();
     await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const reconnectedSocket = requireSocket(1);
+    expect(String(reconnectedSocket.args[0])).not.toContain("conversation_id=");
     reconnectedSocket.readyState = FakeWebSocket.OPEN;
     reconnectedSocket.emit("open");
     reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
@@ -1685,12 +1649,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClose,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
     socket.close(1006, "connection lost");
@@ -1720,18 +1679,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClose,
     });
 
-    const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_default" } }),
-      ),
-    );
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting, socket } = await openRealtimeBridge(bridge, 0, "conv_default");
     await connecting;
 
     socket.close(1006, "connection lost");
@@ -1790,12 +1738,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const socket = requireSocket();
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { socket } = await openRealtimeBridge(bridge);
     bridge.close();
 
     const session = requireSession(socket);

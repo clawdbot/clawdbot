@@ -243,7 +243,6 @@
         "packages/terminal-core/**/*.ts",
         "packages/normalization-core/**/*.ts",
         "packages/model-catalog-core/**/*.ts",
-        "packages/web-content-core/**/*.ts",
         "packages/agent-core/**/*.ts",
         "packages/acp-core/**/*.ts",
         "packages/ai/**/*.ts",
@@ -361,6 +360,18 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/event-bridge.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

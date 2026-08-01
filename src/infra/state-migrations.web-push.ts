@@ -1,11 +1,7 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,6 +18,15 @@ import {
   type WebPushDatabase,
   type WebPushSubscription,
 } from "./push-web-store.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  legacyMigrationSourceContentMatches as contentSnapshotsMatch,
+  legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import {
   parseLegacySubscriptions,
@@ -30,19 +35,7 @@ import {
 
 const LEGACY_SUBSCRIPTIONS_MAX_BYTES = 4 * 1024 * 1024;
 const LEGACY_VAPID_KEYS_MAX_BYTES = 64 * 1024;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  raw: string;
-  sha256: string;
-  size: number;
-};
 
 type ParsedLegacyState = {
   subscriptions: Map<string, WebPushSubscription>;
@@ -57,30 +50,9 @@ function resolveLegacyWebPushPaths(stateDir: string) {
   };
 }
 
-function legacyPathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error(`legacy Web Push path is outside the state directory: ${filePath}`);
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "Web Push");
 }
-
-const sourceOrClaimMayExist = (sourcePath: string) =>
-  legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
 
 export function detectLegacyWebPush(params: {
   stateDir: string;
@@ -102,35 +74,14 @@ async function readLegacySourceSnapshot(
   sourcePath: string,
   maxBytes: number,
 ): Promise<LegacySourceSnapshot> {
-  const opened = await stateRoot.read(relativeLegacyPath(stateDir, sourcePath), {
-    hardlinks: "reject",
-    maxBytes,
-    symlinks: "reject",
-  });
-  const raw = opened.buffer.toString("utf8");
-  return {
+  return readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
     sourcePath,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
-    size: opened.stat.size,
-  };
-}
-
-function sourceSnapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
-}
-
-function contentSnapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return left.sha256 === right.sha256 && left.size === right.size;
+    maxBytes,
+    label: "Web Push",
+    hashDecodedText: true,
+  });
 }
 
 function maxBytesForSource(sourcePath: string, subscriptionsPath: string): number {
@@ -576,63 +527,23 @@ export async function migrateLegacyWebPush(params: {
     return { changes: [], warnings: [] };
   }
 
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy Web Push state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy Web Push state: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy Web Push state",
+    releaseLabel: "Web Push",
+    errorLabel: "Failed reading legacy Web Push state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: LEGACY_SUBSCRIPTIONS_MAX_BYTES,
         symlinks: "reject",
       });
-      result = await migrateLegacyWebPushWithExclusiveStateOwnership({
+      return await migrateLegacyWebPushWithExclusiveStateOwnership({
         ...params,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Web Push migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+    },
+  });
 }

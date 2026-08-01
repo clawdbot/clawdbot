@@ -1,5 +1,6 @@
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
 
@@ -14,7 +15,7 @@ const NEW_DELEGATION_TOOL_NAMES = new Set([
 ]);
 
 const REPORT_ONLY_TOOL_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["cron", new Set(["get", "list", "remove", "runs", "status"])],
+  [AUTOMATIONS_TOOL_NAME, new Set(["get", "list", "remove", "runs", "status"])],
   ["image_generate", new Set(["list", "status"])],
   ["music_generate", new Set(["list", "status"])],
   ["video_generate", new Set(["list", "status"])],

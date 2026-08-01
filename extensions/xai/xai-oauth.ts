@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -651,14 +651,14 @@ async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAut
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_DEFAULT_MODEL_REF,
+      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiConfig(ctx.config),
+      configPatch: applyXaiOAuthConfig(ctx.config),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,

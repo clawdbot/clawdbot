@@ -150,6 +150,7 @@ export function completeEmbeddedAttemptResult(
     didSendDeterministicApprovalPrompt,
     didSendViaMessagingTool,
     getAcceptedSessionSpawns,
+    getAssistantTurnCount,
     getCompactionCount,
     getHeartbeatToolResponse,
     getItemLifecycle,
@@ -347,6 +348,7 @@ export function completeEmbeddedAttemptResult(
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation: attempt.terminalReplyExpectation,
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,
@@ -375,6 +377,7 @@ export function completeEmbeddedAttemptResult(
     replayMetadata,
     currentAttemptReplayMetadata,
     itemLifecycle: getItemLifecycle(),
+    assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,

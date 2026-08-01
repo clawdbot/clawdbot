@@ -286,7 +286,6 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       const installed = await installPluginFromPluginsCommand({
         raw: pluginsCommand.spec,
         force: pluginsCommand.force,
-        config: loadedConfig.snapshot.config,
         snapshot: loadedConfig.snapshot,
       });
       if (!installed.ok) {

@@ -34,6 +34,13 @@ shared `message` tool. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+Core also owns model-picker product actions. A channel that renders a
+`ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
+the typed action in a transport-private authenticated callback envelope. Keep
+approval, command, URL, web-app, question, callback, and model-picker actions
+distinguishable until that encoding boundary; never infer picker intent from a
+raw callback string. Actor and source-message checks remain channel-owned.
+
 ## Message adapter
 
 Expose a `message` adapter with `defineChannelMessageAdapter` from
@@ -232,6 +239,15 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
 
+Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
+channel records with `toInboundMediaFacts(...)` from
+`openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
+inbound context. When a plugin must authorize local media reads, import
+`getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from the focused
+`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`agent-media-payload` builder/root facade is deprecated compatibility.
+
 ### Native payload shaping
 
 If your channel needs provider-specific shaping for `message(action="send")`,
@@ -391,6 +407,11 @@ Other approval helpers:
   lookup, transport-enabled check, target normalization, and turn-source
   target resolution. Do not use it to create core-owned channel policy
   defaults; pass the channel's documented default mode explicitly.
+- `createNativeApprovalMessagingTargetResolvers` centralizes channel matching
+  and `{ to, accountId, threadId }` normalization for messaging transports
+  whose native approval target is a channel-owned normalized destination.
+  Keep group authorization, approver mapping, and other transport policy in
+  the channel plugin.
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route
   matcher by default for `{ to, accountId, threadId }` targets. Pass
   `targetsMatch` only when a channel has provider-specific equivalence rules,

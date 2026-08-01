@@ -6,6 +6,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { isSessionsYieldAbortError, isSessionsYieldAbortReason } from "./attempt.sessions-yield.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -189,6 +190,7 @@ export function createEmbeddedAttemptRunAbort(input: {
 
   return (isTimeout = false, reason?: unknown) => {
     input.state.markAborted();
+    let effectiveReason = reason;
     if (isTimeout) {
       input.state.markTimedOut();
       if (
@@ -198,6 +200,7 @@ export function createEmbeddedAttemptRunAbort(input: {
         input.state.markTimedOutDuringToolExecution();
       }
       const timeoutReason = reason instanceof Error ? reason : createTimeoutAbortReason();
+      effectiveReason = timeoutReason;
       input.attempt.onAttemptTimeout?.(timeoutReason);
       input.runAbortController.abort(timeoutReason);
     } else {
@@ -220,6 +223,9 @@ export function createEmbeddedAttemptRunAbort(input: {
       log: input.log,
       runId: input.attempt.runId,
       abortKind: isTimeout ? "timeout abort" : "abort",
+      reason: effectiveReason,
+      terminal:
+        isTimeout || (!isSessionsYieldAbortError(reason) && !isSessionsYieldAbortReason(reason)),
     });
   };
 }
@@ -234,10 +240,14 @@ function releaseEmbeddedAttemptSessionLockForAbort(params: {
   log: AbortLockReleaseLog;
   runId: string;
   abortKind: "abort" | "timeout abort";
+  reason?: unknown;
+  terminal: boolean;
 }): void {
-  void params.sessionLockController.releaseHeldLockForAbort().catch((err: unknown) => {
-    params.log.warn(
-      `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
-    );
-  });
+  void params.sessionLockController
+    .releaseHeldLockForAbort({ reason: params.reason, terminal: params.terminal })
+    .catch((err: unknown) => {
+      params.log.warn(
+        `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
+      );
+    });
 }

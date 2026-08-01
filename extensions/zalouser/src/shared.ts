@@ -51,8 +51,7 @@ const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserA
 
 export function createZalouserPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setup"]>;
-  setupContract?: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupContract"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedZalouserAccount>,
   | "id"
@@ -63,7 +62,6 @@ export function createZalouserPluginBase(params: {
   | "reload"
   | "configSchema"
   | "config"
-  | "setup"
   | "setupContract"
 > {
   return {
@@ -84,13 +82,17 @@ export function createZalouserPluginBase(params: {
     configSchema: buildChannelConfigSchema(ZalouserConfigSchema),
     config: {
       ...zalouserConfigAdapter,
-      isConfigured: async (account) => await checkZcaAuthenticated(account.profile),
+      isConfigured: (account) => Boolean(account.profile),
+      isLinked: async (account) =>
+        (await checkZcaAuthenticated(account.profile)) ? "linked" : "not-linked",
+      unconfiguredReason: () => "not configured",
+      unlinkedReason: () => "not authenticated",
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
+          configured: Boolean(account.profile),
         }),
     },
-    setup: params.setup,
-    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
+    setupContract: params.setupContract,
   };
 }

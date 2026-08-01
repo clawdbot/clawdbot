@@ -46,6 +46,7 @@ class ChatControllerTranscriptCacheTest {
     val deletedSessions = mutableListOf<Triple<String, String, String>>()
     var beforeLastDefaultAgentLoad: suspend (String) -> Unit = {}
     var beforeLastDefaultAgentSave: suspend (String, String) -> Unit = { _, _ -> }
+    var beforeSessionsLoad: suspend (String, String) -> Unit = { _, _ -> }
 
     override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
       val cached = lastDefaultAgents[gatewayId]
@@ -64,7 +65,11 @@ class ChatControllerTranscriptCacheTest {
     override suspend fun loadSessions(
       gatewayId: String,
       agentId: String,
-    ): List<ChatSessionEntry> = sessionsByOwner[gatewayId to agentId] ?: sessions
+    ): List<ChatSessionEntry> {
+      val cached = sessionsByOwner[gatewayId to agentId] ?: sessions
+      beforeSessionsLoad(gatewayId, agentId)
+      return cached
+    }
 
     override suspend fun loadTranscript(
       gatewayId: String,
@@ -153,6 +158,60 @@ class ChatControllerTranscriptCacheTest {
         controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
       assertFalse(accepted)
       assertEquals("Gateway health not OK; cannot send", controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun delayedCachedGlobalDigestIsScopedToTheRequestedOwner() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.sessionsByOwner["gateway-a" to "work"] =
+        listOf(
+          ChatSessionEntry(
+            key = "global",
+            updatedAtMs = 5,
+            observerDigest =
+              ai.openclaw.app.gateway.SessionObserverDigest(
+                sessionKey = "global",
+                agentId = "main",
+                runId = "run-main",
+                revision = 3,
+                updatedAt = 300,
+                headline = "Main owner",
+                health = "on-track",
+              ),
+          ),
+        )
+      val loadStarted = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      cache.beforeSessionsLoad = { gatewayId, agentId ->
+        if (gatewayId == "gateway-a" && agentId == "work") {
+          loadStarted.complete(Unit)
+          releaseLoad.await()
+        }
+      }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> throw IllegalStateException("offline") },
+          transcriptCache = cache,
+          cacheScope = { gatewayScope },
+          currentDefaultAgentId = { "work" },
+        )
+
+      controller.load("global", ownerAgentId = "work")
+      loadStarted.await()
+      releaseLoad.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("global"), controller.sessions.value.map { it.key })
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .observerDigest,
+      )
     }
 
   @Test

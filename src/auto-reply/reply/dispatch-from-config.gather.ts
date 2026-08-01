@@ -10,8 +10,7 @@ import {
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
-  toPluginInboundClaimContext,
-  toPluginInboundClaimEvent,
+  toPluginInboundClaimPair,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -21,6 +20,7 @@ import {
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
@@ -43,12 +43,12 @@ import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.j
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import {
-  finalizeInboundContext,
-  isFinalizedInboundContext,
-  stripLegacyMediaContextFields,
-} from "./inbound-context.js";
+import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import {
+  resolveReplyOperationRunState,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -64,6 +64,8 @@ export async function gatherDispatchRequest(
   const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
   const state = { params: normalizedParams, messageAuditTerminal };
   const { cfg, dispatcher } = normalizedParams;
+  const replyOperationRunState: ReplyOperationRunState =
+    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
@@ -346,6 +348,7 @@ export async function gatherDispatchRequest(
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,
     trackDispatchLifecycleWork,
+    turnLedger,
   } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
     getReplyOperation: getDispatchReplyOperation,
@@ -369,14 +372,15 @@ export async function gatherDispatchRequest(
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
       messageId: messageIdForHook,
     });
+    const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    });
     return {
       hookContext: nextHookContext,
-      inboundClaimContext: toPluginInboundClaimContext(nextHookContext),
-      inboundClaimEvent: toPluginInboundClaimEvent(nextHookContext, {
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-      }),
+      inboundClaimContext: inboundClaim.context,
+      inboundClaimEvent: inboundClaim.event,
     };
   };
   let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);
@@ -407,14 +411,7 @@ export async function gatherDispatchRequest(
   };
   const buildMessageReceivedHookContext = () => {
     const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
-    const hasUnstagedRemoteMediaMetadata = Boolean(
-      hookContext.mediaPath ||
-      hookContext.mediaUrl ||
-      hookContext.mediaType ||
-      hookContext.mediaPaths?.length ||
-      hookContext.mediaUrls?.length ||
-      hookContext.mediaTypes?.length,
-    );
+    const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
     if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
       return hookContext;
     }
@@ -427,6 +424,7 @@ export async function gatherDispatchRequest(
       ...buildHookState(messageReceivedCtx).hookContext,
       mediaRemoteHost,
       mediaStagingPending: true,
+      originalMedia: hookContext.media?.map((entry) => ({ ...entry })),
       originalMediaPath: hookContext.mediaPath,
       originalMediaUrl: hookContext.mediaUrl,
       originalMediaType: hookContext.mediaType,
@@ -462,6 +460,7 @@ export async function gatherDispatchRequest(
       inboundAudio,
       sessionTtsAuto,
       workspaceDir,
+      replyOperationRunState,
       completeDispatchReplyOperation,
       dispatchHookDispatcher,
       ensureDispatchReplyOperation,
@@ -479,6 +478,7 @@ export async function gatherDispatchRequest(
       runWithDispatchLifecycleAdmission,
       throwIfDispatchOperationAborted,
       trackDispatchLifecycleWork,
+      turnLedger,
       maybeApplyTtsWithFinalizationLease,
       hookRunner,
       timestamp,

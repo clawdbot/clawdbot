@@ -25,6 +25,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
@@ -32,8 +33,11 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-readers.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
@@ -55,17 +59,14 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
-import {
-  classifySessionKey,
-  isGroupOrChannelDisplaySession,
-  parseGroupKey,
-} from "./session-utils-store.js";
+import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
-/** Adds the current human profile label without persisting rename-prone display data. */
+/** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
-  userProfileLabelById: Map<string, string | undefined> = new Map(),
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
 ): SessionCreatedActor | undefined {
   if (!actor) {
     return undefined;
@@ -74,17 +75,26 @@ export function projectSessionActor(
   if (actor.type !== "human" || !id) {
     return { type: actor.type, ...(id ? { id } : {}) };
   }
-  let label = userProfileLabelById.get(id);
-  if (!userProfileLabelById.has(id)) {
+  let identity = userProfileIdentityById.get(id);
+  if (!userProfileIdentityById.has(id)) {
     try {
-      label = normalizeOptionalString(getUserProfileListItem(id).displayName);
+      const profile = getUserProfileListItem(id);
+      const label = normalizeOptionalString(profile.displayName);
+      identity = {
+        ...(label ? { label } : {}),
+        ...(profile.hasAvatar
+          ? {
+              avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}`,
+            }
+          : {}),
+      };
     } catch {
       // Human actors can also be channel sender ids; only profile ids resolve here.
-      label = undefined;
+      identity = undefined;
     }
-    userProfileLabelById.set(id, label);
+    userProfileIdentityById.set(id, identity);
   }
-  return { type: actor.type, id, ...(label ? { label } : {}) };
+  return { type: actor.type, id, ...identity };
 }
 
 export function buildGatewaySessionRow(params: {
@@ -117,6 +127,10 @@ export function buildGatewaySessionRow(params: {
       : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
+  const sessionKind = classifySessionKind(key, entry);
+  // The older Gateway wire kind folds cron/spawn-child into direct.
+  const gatewayKind =
+    sessionKind === "cron" || sessionKind === "spawn-child" ? "direct" : sessionKind;
   const deliveryFields = projectSessionDeliveryFields(entry?.delivery);
   const channel = deliveryFields.channel ?? parsed?.channel;
   const subject = entry?.subject;
@@ -357,7 +371,7 @@ export function buildGatewaySessionRow(params: {
       storePath,
     });
     if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
     }
     if (params.includeLastMessage && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
@@ -409,13 +423,14 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileLabelById),
+    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
-    kind: classifySessionKey(key, entry),
+    kind: gatewayKind,
     label: entry?.label,
     category: entry?.category,
+    boardFace: entry?.boardFace,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -428,7 +443,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileLabelById),
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     icon: entry?.icon,
@@ -437,6 +452,7 @@ export function buildGatewaySessionRow(params: {
     agentStatus,
     observerDigest: observerDigest
       ? {
+          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
           runId: observerDigest.runId,
           headline: observerDigest.headline,
           health: observerDigest.health,
@@ -454,6 +470,7 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
+    toolOverrides: entry?.toolOverrides,
     effectiveFastMode: fastModeState.mode,
     effectiveFastModeSource: fastModeState.source,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,

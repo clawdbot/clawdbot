@@ -225,7 +225,7 @@ function collectInstallFindings(
           target: cron.schedulerJobId,
           requirement: "Claw cron health requires live Gateway corroboration by scheduler job id",
           fixHint:
-            "Recreate or reconcile the Gateway cron job before treating this Claw as healthy.",
+            "Recreate or reconcile the Gateway automation before treating this Claw as healthy.",
         }),
       );
       continue;
@@ -324,7 +324,7 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly(options);
     if (!database) {
       return [];
     }

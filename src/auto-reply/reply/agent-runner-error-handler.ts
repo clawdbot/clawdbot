@@ -15,7 +15,7 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
@@ -29,7 +29,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import type { AgentRunLoopResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildControlUiAgentFailureText,
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -106,7 +106,7 @@ export async function cancelOverloadRetryNotice(state: OverloadRetryState): Prom
 
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
-  | Extract<AgentRunLoopResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" }>;
 
 export async function handleAgentExecutionError(params: {
   turn: AgentTurnParams;
@@ -401,17 +401,9 @@ export async function handleAgentExecutionError(params: {
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }
-  if (providerRequestError) {
-    takePendingLifecycleTerminal()?.emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
-    };
-  }
   if (
     isTransientHttp &&
+    (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
@@ -425,6 +417,15 @@ export async function handleAgentExecutionError(params: {
       return abortAction;
     }
     return { kind: "retry" };
+  }
+  if (providerRequestError) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
+    };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;

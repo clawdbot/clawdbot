@@ -229,7 +229,36 @@ describe("resolveGroupToolPolicy group context validation", () => {
         accountId: "removed",
         requireConfiguredAccount: true,
       }),
-    ).toEqual({ allow: [] });
+    ).toEqual({ allow: [], deny: ["*"] });
+  });
+
+  it("denies every tool when scheduled authority names a removed account", () => {
+    const policy = resolveGroupToolPolicy({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:safe-room",
+      accountId: "removed",
+      requireConfiguredAccount: true,
+    });
+    const tools = [
+      createStubTool("read"),
+      createStubTool("write"),
+      createStubTool("exec"),
+      createStubTool("apply_patch"),
+    ];
+    expect(filterToolsByPolicy(tools, policy)).toStrictEqual([]);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("apply_patch", policy)).toBe(false);
+  });
+
+  it("fails closed when scheduled authority names a removed account without channel context", () => {
+    const policy = resolveGroupToolPolicy({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      accountId: "removed",
+      requireConfiguredAccount: true,
+    });
+    expect(policy).toEqual({ allow: [], deny: ["*"] });
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
   });
 
   it("resolves scheduled group policy for a still-configured named account", () => {
@@ -395,6 +424,32 @@ describe("resolveSubagentToolPolicyForSession", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it("applies implicit-main defaults tool restrictions to a pre-roster config", () => {
+    const cfg = {
+      agents: { defaults: { tools: { deny: ["exec"] } } },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+  });
+
+  it("uses the configured default agent policy for an unscoped session alias", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          ops: { default: true, tools: { deny: ["exec"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg, sessionKey: "main" });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+  });
+
   it("keeps slash-containing modelId scoped to the selected provider", () => {
     const cfg = {
       tools: {

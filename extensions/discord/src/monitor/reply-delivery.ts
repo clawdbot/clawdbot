@@ -235,7 +235,10 @@ export async function deliverDiscordReply(params: {
     kind: params.kind,
   }).map(formatDiscordReasoningPayload);
   if (payloads.length === 0) {
-    return;
+    return {
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" as const },
+    };
   }
 
   const send = await sendDurableMessageBatch({
@@ -266,8 +269,25 @@ export async function deliverDiscordReply(params: {
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
   }
-  const results = send.status === "sent" ? send.results : [];
+  if (send.status === "suppressed") {
+    const hookEffect = send.payloadOutcomes?.find(
+      (outcome) => outcome.status === "suppressed",
+    )?.hookEffect;
+    return {
+      visibleReplySent: false,
+      suppression: {
+        reason: send.reason,
+        ...(hookEffect?.cancelReason ? { cancelReason: hookEffect.cancelReason } : {}),
+        ...(hookEffect?.metadata ? { metadata: hookEffect.metadata } : {}),
+      },
+    };
+  }
+  const results = send.results;
   if (results.length === 0) {
     throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
   }
+  return {
+    messageIds: results.flatMap((result) => (result.messageId ? [result.messageId] : [])),
+    visibleReplySent: true,
+  };
 }

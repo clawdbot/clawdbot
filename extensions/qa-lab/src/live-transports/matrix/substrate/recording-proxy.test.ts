@@ -402,6 +402,37 @@ describe("Matrix QA recording proxy", () => {
     expect(JSON.stringify(record)).not.toContain("secret-fault-message");
   });
 
+  it("records in-place scenario faults without changing the canonical proxy URL", async () => {
+    const targetBaseUrl = await startRecordingTarget();
+    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
+    closeCallbacks.push(() => recording.stop());
+    recording.setScenarioId("matrix-in-place-fault-recording-test");
+    const baseUrl = recording.baseUrl;
+    const handle = recording.installFaultRule({
+      id: "in-place-backup-unavailable",
+      match: (request) => request.path.endsWith("/room_keys/version"),
+      response: () => ({
+        body: { errcode: "M_NOT_FOUND", error: "secret-in-place-fault" },
+        status: 404,
+      }),
+    });
+
+    const response = await fetch(`${recording.baseUrl}/_matrix/client/v3/room_keys/version`);
+    expect(response.status).toBe(404);
+    expect(recording.baseUrl).toBe(baseUrl);
+    expect(handle.hits()).toHaveLength(1);
+    expect(recording.records().at(-1)?.response).toMatchObject({
+      errcode: "M_NOT_FOUND",
+      status: 404,
+    });
+    expect(JSON.stringify(recording.records().at(-1))).not.toContain("secret-in-place-fault");
+
+    handle.remove();
+    const forwarded = await fetch(`${recording.baseUrl}/_matrix/client/v3/room_keys/version`);
+    expect(forwarded.status).toBe(401);
+    expect(handle.hits()).toHaveLength(1);
+  });
+
   it("records proxy-generated upstream failures", async () => {
     const recording = await startMatrixQaRecordingProxy({
       targetBaseUrl: "http://127.0.0.1:1",

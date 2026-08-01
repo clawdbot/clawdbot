@@ -383,6 +383,7 @@ function expectFailureAnnounceCall(params: {
   sessionKey?: string;
   inheritSessionThread?: false;
   message: string;
+  includeRunStarted?: boolean;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
   const call = sendFailureNotificationAnnounceMock.mock.calls.at(0);
@@ -399,7 +400,15 @@ function expectFailureAnnounceCall(params: {
     sessionKey: params.sessionKey,
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
-  expect(args[5]).toBe(params.message);
+  if (params.includeRunStarted) {
+    const lines = args[5].split("\n");
+    expect(lines).toEqual([
+      params.message,
+      expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
+    ]);
+  } else {
+    expect(args[5]).toBe(params.message);
+  }
 }
 
 async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
@@ -451,6 +460,42 @@ describe("gateway server cron", () => {
     vi.useRealTimers();
     sendFailureNotificationAnnounceMock.mockClear();
     closeTrackedBrowserTabsForSessionsMock.mockClear();
+  });
+
+  test("defaults cron.add agentTurn targets from available session context", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-agent-turn-default-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const withContext = await directCronReq(cronState, "cron.add", {
+        name: "conversation loop",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionKey: "agent:main:webchat:loop",
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+      expect(withContext.ok).toBe(true);
+      expect(withContext.payload).toMatchObject({
+        sessionTarget: "current",
+        sessionKey: "agent:main:webchat:loop",
+        delivery: { mode: "announce" },
+      });
+
+      const withoutContext = await directCronReq(cronState, "cron.add", {
+        name: "detached loop",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+      expect(withoutContext.ok).toBe(true);
+      expect(withoutContext.payload).toMatchObject({
+        sessionTarget: "isolated",
+        delivery: { mode: "announce" },
+      });
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
   });
 
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 45_000 }, async () => {
@@ -531,6 +576,15 @@ describe("gateway server cron", () => {
         label: "webhook:https://example.invalid/cron-finished",
         detail: "webhook",
       });
+
+      const noPreviewListRes = await directCronReq(cronState, "cron.list", {
+        includeDeliveryPreviews: false,
+        includeDisabled: true,
+      });
+      expect(noPreviewListRes.ok).toBe(true);
+      expect(
+        (noPreviewListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
+      ).toBeUndefined();
 
       const compactListRes = await directCronReq(cronState, "cron.list", {
         compact: true,
@@ -1757,7 +1811,7 @@ describe("gateway server cron", () => {
       expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
-        'Cron job "failure destination webhook" failed: unknown error',
+        'Automation "failure destination webhook" failed: unknown error',
       );
 
       fetchWithSsrFGuardMock.mockClear();
@@ -1948,7 +2002,8 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
+        includeRunStarted: true,
       });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
@@ -2006,7 +2061,8 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Cron job "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
+        includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
@@ -2058,7 +2114,8 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
+        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
+        includeRunStarted: true,
       });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

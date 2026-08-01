@@ -2,13 +2,12 @@
 // one lazy boundary prevents gateway startup paths from loading every node-event
 // helper before node traffic is actually handled.
 export { resolveSessionAgentId } from "../agents/agent-scope.js";
-export { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 export { normalizeChannelId } from "../channels/plugins/index.js";
 export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
-export { canonicalizeSessionEntryAliases } from "../config/sessions.js";
+export { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";

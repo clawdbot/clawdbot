@@ -119,7 +119,7 @@ function createRuntime(): RuntimeEnv {
 
 describe("WhatsApp setup promotion contract", () => {
   it("exposes authDir on the setup-only plugin surface", () => {
-    expect(whatsappSetupPlugin.setup?.singleAccountKeysToMove).toEqual(["authDir"]);
+    expect(whatsappSetupPlugin.setupContract?.singleAccountKeysToMove).toEqual(["authDir"]);
   });
 });
 
@@ -521,16 +521,15 @@ describe("whatsapp setup wizard", () => {
     expect(result).toEqual({ ok: false, reason: WHATSAPP_AUTH_UNSTABLE_CODE });
   });
 
-  it("does not treat unstable auth as configured in generic plugin config checks", async () => {
+  it("keeps config distinct from indeterminate linkage", async () => {
     hoisted.readWebAuthState.mockResolvedValueOnce("unstable");
+    const account = {
+      authDir: "/tmp/work",
+    } as never;
 
-    await expect(
-      whatsappSetupPlugin.config.isConfigured?.(
-        {
-          authDir: "/tmp/work",
-        } as never,
-        {} as never,
-      ),
-    ).resolves.toBe(false);
+    expect(whatsappSetupPlugin.config.isConfigured?.(account, {} as never)).toBe(true);
+    await expect(whatsappSetupPlugin.config.isLinked?.(account, {} as never)).resolves.toBe(
+      "unknown",
+    );
   });
 });

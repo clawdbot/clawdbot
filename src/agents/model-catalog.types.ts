@@ -3,6 +3,7 @@
  * Used by discovery, browsing, visibility, and provider-auth code so renderers
  * and filters agree on stable model metadata.
  */
+import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 
 /** Input modalities a catalog entry can advertise. */
@@ -13,6 +14,8 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  /** Provider-owned strongest-first picker order; internal and never projected to clients. */
+  providerOrder?: number;
   alias?: string;
   api?: ModelApi;
   /** Private transport provenance for route matching; never project directly to clients. */
@@ -24,6 +27,10 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  status?: ModelCatalogStatus;
+  statusReason?: string;
+  replaces?: string[];
+  replacedBy?: string;
 };
 
 /** Logical catalog rows plus the physical variants used for route selection. */

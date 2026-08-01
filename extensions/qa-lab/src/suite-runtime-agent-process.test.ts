@@ -9,6 +9,7 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
+const readSessionTranscriptSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
@@ -22,6 +23,10 @@ vi.mock("./node-exec.js", () => ({
 vi.mock("./suite-runtime-gateway.js", () => ({
   waitForGatewayHealthy: waitForGatewayHealthyMock,
   waitForTransportReady: waitForTransportReadyMock,
+}));
+
+vi.mock("./suite-runtime-agent-session.js", () => ({
+  readSessionTranscriptSummary: readSessionTranscriptSummaryMock,
 }));
 
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
@@ -86,6 +91,7 @@ describe("qa suite runtime agent process helpers", () => {
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
+    readSessionTranscriptSummaryMock.mockReset();
   });
 
   it("runs the qa cli through the resolved node executable", async () => {
@@ -768,6 +774,102 @@ describe("qa suite runtime agent process helpers", () => {
     });
   });
 
+  it("waits for persisted transcript tool evidence after agent completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-transcript-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      readSessionTranscriptSummaryMock
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: {},
+          completedToolCallCounts: {},
+          successfulToolCallCounts: {},
+          finalText: "",
+        })
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { web_fetch: 1 },
+          completedToolCallCounts: { web_fetch: 1 },
+          successfulToolCallCounts: { web_fetch: 1 },
+          finalText: "",
+        });
+      const env = {
+        gateway: { call: gatewayCall },
+        transport: {
+          buildAgentDelivery: vi.fn(() => ({
+            channel: "qa-channel",
+            replyChannel: "reply-channel",
+            replyTo: "reply-target",
+          })),
+        },
+      } as never;
+
+      const pending = runAgentPrompt(env, {
+        sessionKey: "session-transcript-evidence",
+        message: "call web_fetch",
+        transcriptToolName: "web_fetch",
+        requireSuccessfulTranscriptToolResult: true,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(pending).resolves.toEqual({
+        started: { runId: "run-transcript-evidence" },
+        waited: { status: "completed" },
+      });
+      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a persisted failed tool result after the call is visible", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-failed-tool-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      readSessionTranscriptSummaryMock
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { session_status: 1 },
+          completedToolCallCounts: {},
+          successfulToolCallCounts: {},
+          finalText: "",
+        })
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { session_status: 1 },
+          completedToolCallCounts: { session_status: 1 },
+          successfulToolCallCounts: {},
+          finalText: "",
+        });
+      const env = {
+        gateway: { call: gatewayCall },
+        transport: {
+          buildAgentDelivery: vi.fn(() => ({
+            channel: "qa-channel",
+            replyChannel: "reply-channel",
+            replyTo: "reply-target",
+          })),
+        },
+      } as never;
+
+      const pending = runAgentPrompt(env, {
+        sessionKey: "session-failed-tool-evidence",
+        message: "call session_status with invalid input",
+        transcriptToolName: "session_status",
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(pending).resolves.toEqual({
+        started: { runId: "run-failed-tool-evidence" },
+        waited: { status: "completed" },
+      });
+      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("waits for the latest assistant history reply", async () => {
     const gatewayCall = vi
       .fn()

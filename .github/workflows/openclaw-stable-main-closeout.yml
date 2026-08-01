@@ -75,7 +75,7 @@ jobs:
 
       - name: Checkout pushed main
         if: ${{ github.event_name == 'push' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -336,14 +336,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout resolved main state
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve.outputs.main_ref }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout shipped release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ needs.resolve.outputs.tag }}
           path: release-tag
@@ -352,7 +352,7 @@ jobs:
 
       - name: Checkout fallback evidence tag
         if: ${{ needs.resolve.outputs.fallback_correction == 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ needs.resolve.outputs.evidence_tag }}
           path: evidence-tag

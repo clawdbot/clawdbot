@@ -317,10 +317,31 @@ function resolveExtensionRelayPorts(
     .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
     .map(([name]) => name)
     .toSorted();
+  // Explicit ports can belong to any profile driver. Reserve them before
+  // allocation so an extension relay cannot bind another profile's listener.
+  const reservedPorts = new Set(
+    Object.values(profiles)
+      .map((profile) => profile.cdpPort)
+      .filter((port): port is number => typeof port === "number"),
+  );
   const ports: Record<string, number> = {};
-  names.forEach((name, index) => {
-    ports[name] = defaultPort - index;
-  });
+  const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
+  let nextPort = defaultPort;
+  for (const name of names) {
+    while (nextPort > minimumPort && reservedPorts.has(nextPort)) {
+      nextPort -= 1;
+    }
+    // The control port sits below this band; crossing it would silently
+    // collide with browser control instead of creating an extension relay.
+    if (nextPort <= minimumPort) {
+      throw new Error(
+        "No available extension relay ports in the reserved browser relay port range",
+      );
+    }
+    ports[name] = nextPort;
+    reservedPorts.add(nextPort);
+    nextPort -= 1;
+  }
   return ports;
 }
 

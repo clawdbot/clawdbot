@@ -8,7 +8,6 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -119,12 +118,16 @@ async function seedFastPathSessionStore(
   entries: Record<string, Record<string, unknown>>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry as SessionEntry);
+    await replaceSessionEntry({ storePath, sessionKey }, entry as unknown as SessionEntry);
   }
 }
 
 function readFastPathSessionEntry(storePath: string, sessionKey: string): Record<string, unknown> {
-  return (loadSessionEntry({ storePath, sessionKey }) as Record<string, unknown> | undefined) ?? {};
+  return (
+    (loadSessionEntry({ storePath, sessionKey }) as unknown as
+      | Record<string, unknown>
+      | undefined) ?? {}
+  );
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
@@ -333,46 +336,12 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       [sessionKey]: {
         sessionId: "pending-ack",
         updatedAt: Date.now(),
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "HEARTBEAT_OK",
-        pendingFinalDeliveryCreatedAt: 1,
-        pendingFinalDeliveryAttemptCount: 4,
-        pendingFinalDeliveryLastError: null,
-        pendingFinalDeliveryIntentId: "stale-heartbeat-intent",
-      },
-    });
-    const cfg = withFastReplyConfig({
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          workspace: home,
-          heartbeat: { ackMaxChars: 300 },
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "HEARTBEAT_OK",
+          createdAt: 1,
+          intentId: "stale-heartbeat-intent",
         },
-      },
-      session: { store: storePath },
-    } as OpenClawConfig);
-
-    await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
-    ).resolves.toEqual({ text: "ok" });
-
-    const stored = readFastPathSessionEntry(storePath, sessionKey);
-    expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
-    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
-  });
-
-  it("clears short heartbeat pending delivery under the fixed ack policy", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-replay-"));
-    const storePath = path.join(home, "sessions.json");
-    const sessionKey = "agent:main:telegram:123";
-    await seedFastPathSessionStore(storePath, {
-      [sessionKey]: {
-        sessionId: "pending-ack-with-remainder",
-        updatedAt: Date.now(),
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "HEARTBEAT_OK short",
       },
     });
     const cfg = withFastReplyConfig({
@@ -392,8 +361,40 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     const stored = readFastPathSessionEntry(storePath, sessionKey);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
-    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+  });
+
+  it("clears short heartbeat pending delivery under the fixed ack policy", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-replay-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await seedFastPathSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "pending-ack-with-remainder",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "HEARTBEAT_OK short",
+          createdAt: 1,
+        },
+      },
+    });
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: {},
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = readFastPathSessionEntry(storePath, sessionKey);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
   });
 
   it("does not replay stale heartbeat pending delivery", async () => {
@@ -404,9 +405,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       [sessionKey]: {
         sessionId: "pending-user-final",
         updatedAt: Date.now() - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "private prior user answer",
-        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "private prior user answer",
+          createdAt: 1,
+        },
       },
     });
     const cfg = withFastReplyConfig({
@@ -414,7 +417,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         defaults: {
           model: "openai/gpt-5.5",
           workspace: home,
-          heartbeat: { ackMaxChars: 300 },
+          heartbeat: {},
         },
       },
       session: { store: storePath },
@@ -427,9 +430,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
 
     const stored = readFastPathSessionEntry(storePath, sessionKey);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("private prior user answer");
-    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "private prior user answer",
+    });
   });
 
   it("handles native /status before workspace bootstrap", async () => {
@@ -741,7 +745,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       ),
     );
     expect(
-      (readFastPathSessionEntry(storePath, targetSessionKey) as SessionEntry).goal?.objective,
+      (readFastPathSessionEntry(storePath, targetSessionKey) as unknown as SessionEntry).goal
+        ?.objective,
     ).toBe("/status");
     const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
@@ -765,13 +770,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
   });
 
   it("stamps trusted creation provenance during fast bootstrap", () => {
@@ -823,6 +822,48 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionEntry.responseUsage).toBe("full");
+  });
+
+  it("preserves the exact multiline reset payload during fast bootstrap", () => {
+    const payload = "keep [Q3]\nline 2";
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: `/new ${payload}`,
+        BodyForCommands: `/new ${payload}`,
+        RawBody: `[Telegram id:456] İpek: /NEW: ${payload}`,
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:payload",
+      }),
+      cfg: {
+        session: { store: "/tmp/sessions.json", resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.bodyStripped).toBe(payload);
+    expect(result.sessionCtx.agentText).toBe(payload);
+  });
+
+  it("does not reset from a command projection when the raw projection is explicitly empty", () => {
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/new payload",
+        BodyForCommands: "/new payload",
+        RawBody: "",
+        SessionKey: "agent:main:telegram:empty-raw",
+      }),
+      cfg: {
+        session: { store: "/tmp/sessions.json", resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.resetTriggered).toBe(false);
   });
 
   it("preserves node provenance and lineage during fast reset bootstrap", async () => {

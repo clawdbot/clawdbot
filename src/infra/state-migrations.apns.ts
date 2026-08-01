@@ -1,6 +1,5 @@
 // Doctor-only import for the retired APNs registration JSON store.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,8 +8,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -26,13 +23,18 @@ import {
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  legacyMigrationSourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_APNS_REGISTRATION_PATH = "push/apns-registrations.json";
 const APNS_DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-apns-registrations-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 // Legacy values are wall-clock timestamps. Bounding them to ECMAScript Date's
 // finite range rejects hostile counters with ~367 trillion successor values left.
 const MAX_LEGACY_APNS_UPDATED_AT_MS = 8_640_000_000_000_000;
@@ -63,14 +65,10 @@ type ApnsMigrationDatabase = Pick<
   "apns_registrations" | "apns_registration_tombstones" | "migration_runs" | "migration_sources"
 >;
 
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-};
+type LegacySourceSnapshot = Pick<
+  LegacyMigrationSourceSnapshot,
+  "sourcePath" | "dev" | "ino" | "mtimeMs" | "sha256" | "size"
+>;
 
 type MigrationReceipt = {
   sourceKey: string;
@@ -81,21 +79,6 @@ function resolveLegacyApnsPath(stateDir: string): string {
   return path.join(stateDir, LEGACY_APNS_REGISTRATION_PATH);
 }
 
-function legacyPathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return (
-    legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`)
-  );
-}
-
 /** Detect the retired APNs store only when an explicit Doctor flow opts in. */
 export function detectLegacyApnsRegistrations(params: {
   stateDir: string;
@@ -104,21 +87,14 @@ export function detectLegacyApnsRegistrations(params: {
   const sourcePath = resolveLegacyApnsPath(params.stateDir);
   return {
     sourcePath,
-    hasLegacy: params.doctorOnlyStateMigrations === true && sourceOrClaimMayExist(sourcePath),
+    hasLegacy:
+      params.doctorOnlyStateMigrations === true &&
+      legacyMigrationSourceOrClaimMayExist(sourcePath, APNS_DOCTOR_CLAIM_SUFFIX),
   };
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy APNs path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "APNs", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -136,16 +112,6 @@ async function readLegacySourceSnapshot(
     sourcePath,
     ...snapshot,
   };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
 }
 
 function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
@@ -588,60 +554,22 @@ export async function migrateLegacyApnsRegistrations(params: {
     return { changes: [], warnings: [] };
   }
 
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy APNs state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy APNs state: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy APNs state",
+    releaseLabel: "APNs",
+    errorLabel: "Failed reading legacy APNs state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({
+      return await migrateWithExclusiveStateOwnership({
         ...params,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy APNs state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(`APNs migration lock release failed: ${formatErrorMessage(releaseError)}`);
-  }
-  return result;
+    },
+  });
 }

@@ -121,6 +121,7 @@ private final class AISetupRouteIdentity: @unchecked Sendable {
 private actor AISetupRequestRecorder {
     private var methods: [String] = []
     private var apiKeys: [String] = []
+    private var authChoices: [String] = []
 
     func record(_ message: URLSessionWebSocketTask.Message) {
         guard let request = aiSetupRequest(from: message) else { return }
@@ -128,10 +129,13 @@ private actor AISetupRequestRecorder {
         if let apiKey = request.params["apiKey"] as? String {
             self.apiKeys.append(apiKey)
         }
+        if let authChoice = request.params["authChoice"] as? String {
+            self.authChoices.append(authChoice)
+        }
     }
 
-    func snapshot() -> (methods: [String], apiKeys: [String]) {
-        (self.methods, self.apiKeys)
+    func snapshot() -> (methods: [String], apiKeys: [String], authChoices: [String]) {
+        (self.methods, self.apiKeys, self.authChoices)
     }
 }
 
@@ -246,6 +250,27 @@ private func detectedSetupResponse(
               "label": "OpenAI API key",
               "hint": null
             }],
+            "prepareOptions": [{
+              "id": "ollama",
+              "brandId": "ollama",
+              "label": "Ollama",
+              "hint": "Connect to an Ollama server and select a cloud or local model",
+              "actionLabel": "Choose connection"
+            }, {
+              "id": "llama-cpp",
+              "brandId": "llama-cpp",
+              "label": "Local model (llama.cpp)",
+              "hint": "Download and run a private GGUF model",
+              "actionLabel": "Review download"
+            }, {
+              "id": "lmstudio",
+              "brandId": "lmstudio",
+              "label": "LM Studio",
+              "hint": "Connect to a running LM Studio server and use an already loaded model",
+              "actionLabel": "Connect server",
+              "icon": "https://cdn.simpleicons.org/lmstudio",
+              "website": "https://lmstudio.ai/download"
+            }],
             "workspace": "/tmp/openclaw-workspace",
             "configuredModel": null,
             "setupComplete": false
@@ -347,7 +372,7 @@ private func configuredModelResponse(id: String) -> Data {
 
 private func waitForAISetupRequests(
     _ recorder: AISetupRequestRecorder,
-    count: Int) async -> (methods: [String], apiKeys: [String])
+    count: Int) async -> (methods: [String], apiKeys: [String], authChoices: [String])
 {
     for _ in 0..<200 {
         let snapshot = await recorder.snapshot()
@@ -357,6 +382,34 @@ private func waitForAISetupRequests(
         try? await Task.sleep(nanoseconds: 5_000_000)
     }
     return await recorder.snapshot()
+}
+
+private func wizardStartResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running"
+        }}
+        """.utf8)
+}
+
+private func wizardProgressResponse(id: String, sessionID: String, message: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running",
+          "step":{"id":"download","type":"progress","executor":"gateway","message":"\(message)"}
+        }}
+        """.utf8)
+}
+
+private func wizardDoneResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":true,"status":"done"
+        }}
+        """.utf8)
 }
 
 private func settleQueuedAISetupTasks() async {
@@ -458,6 +511,23 @@ private func failedActivationResponse(id: String) -> Data {
           "id": "\(id)",
           "ok": true,
           "payload": { "ok": false, "status": "auth", "error": "rejected" }
+        }
+        """.utf8)
+}
+
+private func successfulActivationResponse(id: String, modelRef: String, latencyMs: Int) -> Data {
+    Data(
+        """
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": true,
+          "payload": {
+            "ok": true,
+            "modelRef": "\(modelRef)",
+            "latencyMs": \(latencyMs),
+            "lines": ["Model ready"]
+          }
         }
         """.utf8)
 }
@@ -586,6 +656,186 @@ struct OnboardingAISetupTests {
 
     @Test func `provider auth transport outlives device code windows`() {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
+    }
+
+    @Test func `prepare choices use wire presentation and hide usable local models`() {
+        let candidates = [
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:ollama",
+                label: "Ollama",
+                detail: "available locally",
+                modelRef: "ollama/qwen3:8b",
+                credentials: true),
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:other-choice",
+                label: "LM Studio",
+                detail: "available locally",
+                modelRef: "lmstudio/qwen3-8b-instruct",
+                credentials: true),
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:llama-cpp",
+                label: "Local model (llama.cpp)",
+                detail: "credentials required",
+                modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
+                credentials: false),
+        ]
+        let advertised = [
+            OnboardingAISetupModel.PrepareOption(
+                id: "ollama",
+                label: "Wire Ollama",
+                hint: "Wire hint",
+                actionLabel: "Choose connection",
+                brandId: "ollama",
+                icon: "https://cdn.simpleicons.org/ollama",
+                website: "https://ollama.com/download"),
+            OnboardingAISetupModel.PrepareOption(
+                id: "llama-cpp",
+                label: "Local model (llama.cpp)",
+                hint: "Private GGUF model",
+                actionLabel: "Review download",
+                brandId: "llama-cpp",
+                icon: nil,
+                website: nil),
+            OnboardingAISetupModel.PrepareOption(
+                id: "lmstudio-local",
+                label: "LM Studio",
+                hint: "Running local service",
+                actionLabel: "Connect server",
+                brandId: "lmstudio",
+                icon: "https://cdn.simpleicons.org/lmstudio",
+                website: "https://lmstudio.ai/download"),
+        ]
+
+        let options = OnboardingAISetupModel.prepareOptions(
+            candidates: candidates,
+            advertisedOptions: advertised)
+
+        #expect(options.map(\.id) == ["llama-cpp"])
+        #expect(options.first?.label == "Local model (llama.cpp)")
+        #expect(options.first?.actionLabel == "Review download")
+        #expect(OnboardingAISetupModel.ProviderWizardKind.prepare.startMethod ==
+            "openclaw.setup.prepare.start")
+    }
+
+    @Test func `prepare starts the shared wizard and polls gateway progress`() async throws {
+        let recorder = AISetupRequestRecorder()
+        let frames = AISetupSocketGeneration()
+        let detections = AISetupSocketGeneration()
+        let completion = AISetupRequestGate()
+        let preparedModelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m"
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                    if respondToAISetupHealth(task: task, request: request) {
+                        return
+                    }
+                    await recorder.record(message)
+                    switch request.method {
+                    case "openclaw.setup.detect":
+                        if detections.claim() == 0 {
+                            task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                        } else {
+                            let response = String(decoding: detectedSetupResponse(
+                                id: request.id,
+                                kind: "provider-auto:llama-cpp",
+                                modelRef: preparedModelRef), as: UTF8.self)
+                                .replacingOccurrences(
+                                    of: #""credentials": false"#,
+                                    with: #""credentials": true"#)
+                            task.emitReceiveSuccess(.data(Data(response.utf8)))
+                        }
+                    case "openclaw.setup.activate":
+                        task.emitReceiveSuccess(.data(successfulActivationResponse(
+                            id: request.id,
+                            modelRef: preparedModelRef,
+                            latencyMs: 731)))
+                    case "openclaw.setup.prepare.start":
+                        let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
+                        task.emitReceiveSuccess(.data(wizardStartResponse(
+                            id: request.id,
+                            sessionID: sessionID)))
+                    case "wizard.next":
+                        let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
+                        // Two gateway-executed progress frames, then the terminal
+                        // result: a client that stops after the first frame never
+                        // reaches either follow-up.
+                        switch frames.claim() {
+                        case 0:
+                            task.emitReceiveSuccess(.data(wizardProgressResponse(
+                                id: request.id,
+                                sessionID: sessionID,
+                                message: "Downloading model: 25%")))
+                        case 1:
+                            task.emitReceiveSuccess(.data(wizardProgressResponse(
+                                id: request.id,
+                                sessionID: sessionID,
+                                message: "Downloading model: 80%")))
+                        default:
+                            await completion.wait()
+                            task.emitReceiveSuccess(.data(wizardDoneResponse(
+                                id: request.id,
+                                sessionID: sessionID)))
+                        }
+                    default:
+                        break
+                    }
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    let id = task.snapshotConnectRequestID() ?? "connect"
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: id,
+                        methods: [
+                            "openclaw.setup.prepare.start",
+                            "openclaw.setup.activate",
+                        ],
+                        capabilities: ["openclaw-setup-model-ref"]))
+                })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            routeIdentityProvider: { "local" })
+
+        await model.detectAndAutoConnect()
+        let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
+        model.startProviderPrepare(option)
+        // Bounded wait, not `completion.waitUntilStarted()`: a client that stops
+        // polling never reaches the gated frame, and this must fail rather than
+        // hang. Once five requests are recorded the third `wizard.next` is held
+        // at the gate, so the sheet deterministically shows the second frame.
+        let requests = await waitForAISetupRequests(recorder, count: 5)
+
+        #expect(Array(requests.methods.prefix(5)) == [
+            "openclaw.setup.detect",
+            "openclaw.setup.prepare.start",
+            "wizard.next",
+            "wizard.next",
+            "wizard.next",
+        ])
+        #expect(requests.authChoices == ["llama-cpp"])
+        #expect(model.isPreparingModel)
+        #expect(model.authStep.map(wizardStepType) == "progress")
+        #expect(model.authStep?.message == "Downloading model: 80%")
+
+        await completion.release()
+        for _ in 0..<400 where !model.connected {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.activeAuthOption == nil)
+        #expect(model.authError == nil)
+        #expect(model.connectedModelRef == preparedModelRef)
+        let completedRequests = await recorder.snapshot()
+        #expect(completedRequests.methods.suffix(2) == [
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+        ])
     }
 
     @Test func `provider auth opens only safe external links`() {

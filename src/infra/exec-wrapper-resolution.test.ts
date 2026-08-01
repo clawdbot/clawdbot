@@ -299,15 +299,28 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     });
   });
 
-  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
-    "fails closed for blocked dispatch wrapper %s",
-    (wrapper) => {
-      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
-        kind: "blocked",
-        wrapper,
-      });
-    },
-  );
+  test.each([
+    "catchsegv",
+    "chrt",
+    "doas",
+    "ionice",
+    "linux32",
+    "linux64",
+    "numactl",
+    "proxychains",
+    "proxychains4",
+    "setarch",
+    "setsid",
+    "sudo",
+    "taskset",
+    "torify",
+    "unbuffer",
+  ])("fails closed for blocked dispatch wrapper %s", (wrapper) => {
+    expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+      kind: "blocked",
+      wrapper,
+    });
+  });
 });
 
 describe("resolveDispatchWrapperTrustPlan", () => {

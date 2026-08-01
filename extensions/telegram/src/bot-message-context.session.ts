@@ -33,6 +33,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { renderTelegramTextEntities } from "./bot/body-helpers.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<
@@ -397,8 +398,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const inboundDebounceBodySegments = hasMultiMessageDebounceBatch
     ? options?.inboundDebounceMessages?.flatMap((debouncedMessage) => {
         const debouncedMedia = resolveTelegramPrimaryMedia(debouncedMessage);
+        const textParts = getTelegramTextParts(debouncedMessage);
         const segmentBody =
-          getTelegramTextParts(debouncedMessage).text ||
+          renderTelegramTextEntities(textParts.text, textParts.entities) ||
           formatMediaPlaceholderText(debouncedMedia ? [{ kind: debouncedMedia.kind }] : []);
         if (!segmentBody) {
           return [];
@@ -675,7 +677,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
+      channelStructuredContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {
@@ -765,10 +767,9 @@ export async function buildTelegramInboundContextPayload(params: {
       ? {
           sessionKey: updateLastRouteSessionKey,
           channel: "telegram" as const,
-          to:
-            isGroup && updateLastRouteThreadId != null
-              ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
-              : `telegram:${chatId}`,
+          // Persist the same canonical target used by the live context. General topic
+          // stays chat-scoped while threadId keeps its conversation distinct.
+          to: telegramTo,
           accountId: route.accountId,
           threadId: updateLastRouteThreadId,
           mainDmOwnerPin:

@@ -19,6 +19,7 @@ import {
   buildWorkspaceSkillSnapshot,
   loadVisibleWorkspaceSkillEntries,
 } from "../loading/workspace.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import type {
   SkillProposalManifest,
   SkillProposalManifestEntry,
@@ -366,6 +367,14 @@ describe("skill curator lifecycle", () => {
     addAppliedSkill({ name: "Unused Archive", appliedAtMs: nowMs - ARCHIVE_AFTER_MS - 1 });
     await runSkillCuratorSweep({ env: process.env, nowMs });
 
+    const agentDir = path.join(rootDir, "agent");
+    const archivedSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentDir,
+      config: {},
+      watch: false,
+    }).snapshot;
+    expect(archivedSnapshot.skills.map((skill) => skill.name)).not.toContain("Deep Archive");
+
     await recordSkillUsage({
       skillFile: path.join(rootDir, "agent", "skills", "dormant", "SKILL.md"),
       skillName: "Dormant",
@@ -392,6 +401,13 @@ describe("skill curator lifecycle", () => {
     ).toMatchObject({
       state: "active",
     });
+    const restoredSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentDir,
+      config: {},
+      existingSnapshot: archivedSnapshot,
+      watch: false,
+    }).snapshot;
+    expect(restoredSnapshot.skills.map((skill) => skill.name)).toContain("Deep Archive");
     expect(
       restoreCuratedSkill("unused-archive", { env: process.env, nowMs: nowMs + 3 }),
     ).toMatchObject({ state: "active" });
@@ -613,9 +629,22 @@ describe("skill curator lifecycle", () => {
     const nowMs = Date.UTC(2026, 0, 1);
     addAppliedSkill({ name: "Archived Skill", appliedAtMs: nowMs - ARCHIVE_AFTER_MS - 1 });
     addAppliedSkill({ name: "Stale Skill", appliedAtMs: nowMs - STALE_AFTER_MS - 1 });
+    const agentDir = path.join(rootDir, "agent");
+    const beforeArchiveSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentDir,
+      config: {},
+      watch: false,
+    }).snapshot;
+    expect(beforeArchiveSnapshot.skills.map((skill) => skill.name)).toContain("Archived Skill");
     await runSkillCuratorSweep({ env: process.env, nowMs });
 
-    const agentDir = path.join(rootDir, "agent");
+    const newSessionSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentDir,
+      config: {},
+      existingSnapshot: beforeArchiveSnapshot,
+      watch: false,
+    }).snapshot;
+    expect(newSessionSnapshot.skills.map((skill) => skill.name)).not.toContain("Archived Skill");
     const manualAgentDir = path.join(rootDir, "manual-agent");
     writeSkill(agentDir, "archived-skill", "Archived Skill");
     writeSkill(agentDir, "stale-skill", "Stale Skill");

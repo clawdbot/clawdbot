@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 // Doctor-only import for the retired meeting-capture JSON/JSONL store.
 import fsSync from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,

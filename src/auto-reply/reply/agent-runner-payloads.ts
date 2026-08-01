@@ -39,7 +39,7 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.runtime.js"),
 );
 
-function loadReplyPayloadsDedupeRuntime() {
+export function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
 }
 

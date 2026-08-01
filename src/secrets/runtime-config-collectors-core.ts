@@ -1,5 +1,6 @@
 /** Collects core config secret refs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
@@ -500,18 +501,16 @@ function collectAgentTtsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  const entries = isRecord(agents?.entries) ? agents.entries : undefined;
-  if (!entries) {
-    return;
-  }
-  for (const [entryId, entry] of Object.entries(entries)) {
-    if (!isRecord(entry) || !isRecord(entry.tts)) {
+  for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
+    if (!isRecord(entry.tts)) {
       continue;
     }
     collectTtsApiKeyAssignments({
       tts: entry.tts,
-      pathPrefix: `agents.entries.${entryId}.tts`,
+      pathPrefix:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.tts`
+          : `agents.list.${source.index}.tts`,
       defaults: params.defaults,
       context: params.context,
     });

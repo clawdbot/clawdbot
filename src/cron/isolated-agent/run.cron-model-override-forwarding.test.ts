@@ -159,6 +159,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     loadModelCatalogOwnerMock.mockResolvedValueOnce({
       agentId: "main",
       agentDir: "/tmp/owner-agent",
+      workspaceDir: "/tmp/replacement-workspace",
       config: ownerConfig,
       modelCatalog: { entries: ownerCatalog, routeVariants: [] },
     });

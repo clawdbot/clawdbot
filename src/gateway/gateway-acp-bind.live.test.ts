@@ -7,12 +7,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
@@ -611,7 +607,7 @@ describeLive("gateway live (ACP bind)", () => {
         await prepareCodexHomeForLiveBindTest(tempRoot);
       }
 
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
       const existingAgentOverrides: Record<string, { command?: string }> =
         typeof acpxEntry?.config === "object" &&

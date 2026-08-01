@@ -26,7 +26,7 @@ describe("resolveSlackRoomContextHints", () => {
       channelInfo: { topic: "ignore", purpose: "ignore" },
     });
 
-    expect(result.untrustedChannelMetadata).toBeUndefined();
+    expect(result.channelMetadata).toBeUndefined();
   });
 
   it("trims and skips empty prompt parts", () => {

@@ -11,6 +11,7 @@ import {
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   type AgentDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
+import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -77,9 +78,48 @@ export function constrainRestartRecoveryDeliveryPayloads(
   const exactMediaUrls = Array.from(
     new Set(mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
   );
-  if (exactMediaUrls.length > 0) {
-    constrained.push({ mediaUrls: exactMediaUrls, trustedLocalMedia: true });
+  if (exactMediaUrls.length === 0) {
+    return constrained;
   }
+
+  if (!suppressText) {
+    const visibleReplyIndex = constrained.findIndex(
+      (payload) =>
+        payload.isCommentary !== true &&
+        payload.isCompactionNotice !== true &&
+        payload.isFallbackNotice !== true &&
+        payload.isStatusNotice !== true &&
+        hasVisibleAgentPayload(
+          { payloads: [payload] },
+          {
+            includeErrorPayloads: false,
+            includeReasoningPayloads: false,
+            includeSilentReplyPayloads: false,
+          },
+        ),
+    );
+    if (visibleReplyIndex >= 0) {
+      const visibleReply = constrained[visibleReplyIndex];
+      if (visibleReply) {
+        // Recovery owns the exact artifacts; merge them with the actual final
+        // reply so automatic delivery cannot emit a caption before its media.
+        const [mergedReply] =
+          mergeAttemptToolMediaPayloads({
+            payloads: [visibleReply],
+            toolMediaUrls: exactMediaUrls,
+            hostOwnedToolMediaUrls: exactMediaUrls,
+            toolTrustedLocalMedia: true,
+            sourceReplyDeliveryMode: "automatic",
+          }) ?? [];
+        if (mergedReply) {
+          constrained[visibleReplyIndex] = mergedReply;
+          return constrained;
+        }
+      }
+    }
+  }
+
+  constrained.push({ mediaUrls: exactMediaUrls, trustedLocalMedia: true });
   return constrained;
 }
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTestEnvValue } from "../../test-utils/env.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -20,7 +21,7 @@ const tempDirs: string[] = [];
 async function createTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
-  return dir;
+  return await fs.realpath(dir);
 }
 
 function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
@@ -120,6 +121,21 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Project agents version");
     expect(prompt2).not.toContain("Personal agents version");
+  });
+
+  it("loads personal agent skills only for the default state directory", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    await writeSkill({
+      dir: path.join(fakeHome, ".agents", "skills", "personal-only"),
+      name: "personal-only",
+      description: "Personal only skill",
+    });
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, ".openclaw"));
+    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).toContain("personal-only");
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, "scratch-state"));
+    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).not.toContain("personal-only");
   });
 
   it("loads unique skills from all .agents/skills/ sources alongside others", async () => {

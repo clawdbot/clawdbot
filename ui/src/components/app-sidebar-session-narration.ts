@@ -15,6 +15,7 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
+import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -542,11 +543,7 @@ export class SidebarSessionNarrationController {
     this.observeRun(key, runId);
     const digest = { ...record, runId } as unknown as SessionObserverDigest;
     const previous = this.observerDigests.get(key);
-    if (
-      previous &&
-      (previous.revision > digest.revision ||
-        (previous.revision === digest.revision && previous.updatedAt >= digest.updatedAt))
-    ) {
+    if (previous && pickFreshestObserverDigest(previous, digest) === previous) {
       return;
     }
     this.clearNarration(key);

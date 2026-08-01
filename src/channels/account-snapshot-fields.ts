@@ -45,23 +45,21 @@ export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAcc
   return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
-function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-  return asBoolean(record[key]);
-}
-
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return asFiniteNumber(value);
-}
-
 function readNullableNumber(
   record: Record<string, unknown>,
   key: string,
 ): number | null | undefined {
-  if (record[key] === null) {
-    return null;
+  return record[key] === null ? null : asFiniteNumber(record[key]);
+}
+
+function setSnapshotField<TKey extends keyof ChannelAccountSnapshot>(
+  snapshot: Partial<ChannelAccountSnapshot>,
+  key: TKey,
+  value: ChannelAccountSnapshot[TKey],
+): void {
+  if (value !== undefined) {
+    snapshot[key] = value;
   }
-  return readNumber(record, key);
 }
 
 function readStringArray(record: Record<string, unknown>, key: string): string[] | undefined {
@@ -195,34 +193,32 @@ export function projectCredentialSnapshotFields(
   if (!record) {
     return {};
   }
-  const tokenSource = normalizeOptionalString(record.tokenSource);
-  const botTokenSource = normalizeOptionalString(record.botTokenSource);
-  const appTokenSource = normalizeOptionalString(record.appTokenSource);
-  const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
-
-  // Only project source/status fields. Token-like values stay out of account snapshots even when
-  // callers pass full runtime account objects.
-  return {
-    ...(tokenSource ? { tokenSource } : {}),
-    ...(botTokenSource ? { botTokenSource } : {}),
-    ...(appTokenSource ? { appTokenSource } : {}),
-    ...(signingSecretSource ? { signingSecretSource } : {}),
-    ...(readCredentialStatus(record, "tokenStatus")
-      ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "botTokenStatus")
-      ? { botTokenStatus: readCredentialStatus(record, "botTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "appTokenStatus")
-      ? { appTokenStatus: readCredentialStatus(record, "appTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "signingSecretStatus")
-      ? { signingSecretStatus: readCredentialStatus(record, "signingSecretStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "userTokenStatus")
-      ? { userTokenStatus: readCredentialStatus(record, "userTokenStatus") }
-      : {}),
-  };
+  type CredentialSnapshotFields = Pick<
+    Partial<ChannelAccountSnapshot>,
+    | "tokenSource"
+    | "botTokenSource"
+    | "appTokenSource"
+    | "signingSecretSource"
+    | "tokenStatus"
+    | "botTokenStatus"
+    | "appTokenStatus"
+    | "signingSecretStatus"
+    | "userTokenStatus"
+  >;
+  const snapshot: CredentialSnapshotFields = {};
+  // Only the explicit source/status allowlist crosses the credential boundary.
+  for (const key of [
+    "tokenSource",
+    "botTokenSource",
+    "appTokenSource",
+    "signingSecretSource",
+  ] as const) {
+    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  }
+  for (const key of CREDENTIAL_STATUS_KEYS) {
+    setSnapshotField(snapshot, key, readCredentialStatus(record, key));
+  }
+  return snapshot;
 }
 
 /**
@@ -238,78 +234,51 @@ export function projectSafeChannelAccountSnapshotFields(
   if (!record) {
     return {};
   }
-  const name = normalizeOptionalString(record.name);
-  const statusState = normalizeOptionalString(record.statusState);
-  const healthState = normalizeOptionalString(record.healthState);
-  const mode = normalizeOptionalString(record.mode);
-  const dmPolicy = normalizeOptionalString(record.dmPolicy);
-  const baseUrl = normalizeOptionalString(record.baseUrl);
-  const cliPath = normalizeOptionalString(record.cliPath);
-  const dbPath = normalizeOptionalString(record.dbPath);
+  const snapshot: Partial<ChannelAccountSnapshot> = {};
+  setSnapshotField(snapshot, "name", normalizeOptionalString(record.name));
+  for (const key of ["linked", "running", "connected", "restartPending"] as const) {
+    setSnapshotField(snapshot, key, asBoolean(record[key]));
+  }
+  setSnapshotField(snapshot, "reconnectAttempts", asFiniteNumber(record.reconnectAttempts));
+  setSnapshotField(snapshot, "lastConnectedAt", readNullableNumber(record, "lastConnectedAt"));
+  setSnapshotField(snapshot, "lastInboundAt", asFiniteNumber(record.lastInboundAt));
+  for (const key of ["lastOutboundAt", "lastMessageAt", "lastEventAt"] as const) {
+    setSnapshotField(snapshot, key, readNullableNumber(record, key));
+  }
+  setSnapshotField(
+    snapshot,
+    "lastTransportActivityAt",
+    asFiniteNumber(record.lastTransportActivityAt),
+  );
+  for (const key of ["statusState", "healthState"] as const) {
+    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  }
+  // False or absent ingress means unknown, never evidence that ingress is healthy.
+  if (asBoolean(record.ingressUnavailable) === true) {
+    snapshot.ingressUnavailable = true;
+  }
+  for (const key of ["terminalDisconnect", "busy"] as const) {
+    setSnapshotField(snapshot, key, asBoolean(record[key]));
+  }
+  setSnapshotField(snapshot, "activeRuns", asFiniteNumber(record.activeRuns));
+  for (const key of ["lastRunActivityAt", "activeRunStartedAt"] as const) {
+    setSnapshotField(snapshot, key, readNullableNumber(record, key));
+  }
+  for (const key of ["mode", "dmPolicy"] as const) {
+    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  }
+  setSnapshotField(snapshot, "allowFrom", readStringArray(record, "allowFrom"));
+  Object.assign(snapshot, projectCredentialSnapshotFields(account));
 
-  return {
-    ...(name ? { name } : {}),
-    ...(readBoolean(record, "linked") !== undefined
-      ? { linked: readBoolean(record, "linked") }
-      : {}),
-    ...(readBoolean(record, "running") !== undefined
-      ? { running: readBoolean(record, "running") }
-      : {}),
-    ...(readBoolean(record, "connected") !== undefined
-      ? { connected: readBoolean(record, "connected") }
-      : {}),
-    ...(readBoolean(record, "restartPending") !== undefined
-      ? { restartPending: readBoolean(record, "restartPending") }
-      : {}),
-    ...(readNumber(record, "reconnectAttempts") !== undefined
-      ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
-      : {}),
-    ...(readNullableNumber(record, "lastConnectedAt") !== undefined
-      ? { lastConnectedAt: readNullableNumber(record, "lastConnectedAt") }
-      : {}),
-    ...(readNumber(record, "lastInboundAt") !== undefined
-      ? { lastInboundAt: readNumber(record, "lastInboundAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastOutboundAt") !== undefined
-      ? { lastOutboundAt: readNullableNumber(record, "lastOutboundAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastMessageAt") !== undefined
-      ? { lastMessageAt: readNullableNumber(record, "lastMessageAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastEventAt") !== undefined
-      ? { lastEventAt: readNullableNumber(record, "lastEventAt") }
-      : {}),
-    ...(readNumber(record, "lastTransportActivityAt") !== undefined
-      ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
-      : {}),
-    ...(statusState ? { statusState } : {}),
-    ...(healthState ? { healthState } : {}),
-    ...(readBoolean(record, "terminalDisconnect") !== undefined
-      ? { terminalDisconnect: readBoolean(record, "terminalDisconnect") }
-      : {}),
-    ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
-    ...(readNumber(record, "activeRuns") !== undefined
-      ? { activeRuns: readNumber(record, "activeRuns") }
-      : {}),
-    ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
-      ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
-      : {}),
-    ...(readNullableNumber(record, "activeRunStartedAt") !== undefined
-      ? { activeRunStartedAt: readNullableNumber(record, "activeRunStartedAt") }
-      : {}),
-    ...(mode ? { mode } : {}),
-    ...(dmPolicy ? { dmPolicy } : {}),
-    ...(readStringArray(record, "allowFrom")
-      ? { allowFrom: readStringArray(record, "allowFrom") }
-      : {}),
-    ...projectCredentialSnapshotFields(account),
-    // Base URLs are useful diagnostics, but embedded credentials must not cross this boundary.
-    ...(baseUrl ? { baseUrl: stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl)) } : {}),
-    ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
-      ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
-      : {}),
-    ...(cliPath ? { cliPath } : {}),
-    ...(dbPath ? { dbPath } : {}),
-    ...(readNumber(record, "port") !== undefined ? { port: readNumber(record, "port") } : {}),
-  };
+  const baseUrl = normalizeOptionalString(record.baseUrl);
+  if (baseUrl) {
+    // Preserve diagnostics without allowing URL-embedded credentials to escape.
+    snapshot.baseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl));
+  }
+  setSnapshotField(snapshot, "allowUnmentionedGroups", asBoolean(record.allowUnmentionedGroups));
+  for (const key of ["cliPath", "dbPath"] as const) {
+    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  }
+  setSnapshotField(snapshot, "port", asFiniteNumber(record.port));
+  return snapshot;
 }

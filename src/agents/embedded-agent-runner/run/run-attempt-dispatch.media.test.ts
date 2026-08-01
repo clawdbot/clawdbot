@@ -64,9 +64,8 @@ describe("plugin harness prompt media", () => {
           message: {
             role: "user",
             content: "inspect",
-            MediaPaths: [imagePath, documentFact.path],
-            MediaTypes: ["image/png", "application/pdf"],
             __openclaw: {
+              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
               mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
             },
           },
@@ -260,9 +259,11 @@ describe("plugin harness prompt media", () => {
           message: {
             role: "user",
             content: "compare",
-            MediaPaths: ["/tmp/described.png", "/tmp/inline.png"],
-            MediaTypes: ["image/png", "image/png"],
             __openclaw: {
+              media: [
+                { path: "/tmp/described.png", contentType: "image/png" },
+                { path: "/tmp/inline.png", contentType: "image/png" },
+              ],
               mediaImageLayout: {
                 slots: [{ kind: "inline", factIndex: 1 }],
                 suppressedFactIndexes: [0],

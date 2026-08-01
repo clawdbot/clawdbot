@@ -632,8 +632,56 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
+  it("retains a cron reminder until a suppressed heartbeat can actually deliver it", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+      const reminder = "Cron: QMD maintenance completed";
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "155462274",
+      });
+      const getReplySpy = vi
+        .fn()
+        .mockResolvedValueOnce({ text: "No channel reply." })
+        .mockResolvedValueOnce({ text: "Relay this cron update now" });
+
+      enqueueSystemEvent(reminder, {
+        sessionKey,
+        contextKey: "cron:qmd-maintenance",
+      });
+
+      const runOnce = async () =>
+        await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          reason: "interval",
+          deps: {
+            getReplyFromConfig: getReplySpy,
+            telegram: sendTelegram,
+          },
+        });
+
+      expect((await runOnce()).status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEvents(sessionKey)).toEqual([reminder]);
+
+      expect((await runOnce()).status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+      for (const [context] of getReplySpy.mock.calls) {
+        expect(context).toMatchObject({ Provider: "cron-event" });
+        expect(context.Body).toContain(reminder);
+      }
+    });
+  });
+
   it("uses an internal-only cron prompt when delivery target is none", async () => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+    const {
+      result,
+      sendTelegram,
+      calledCtx,
+      sessionKey: processedSessionKey,
+    } = await runHeartbeatCase({
       tmpPrefix: "openclaw-cron-internal-",
       replyText: "Handled internally",
       reason: "cron:reminder-job",
@@ -647,10 +695,16 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("cron-event");
     expect(calledCtx?.Body).toContain("Handle this reminder internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+    expect(peekSystemEvents(processedSessionKey)).toEqual([]);
   });
 
   it("uses an internal-only exec prompt when delivery target is none", async () => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+    const {
+      result,
+      sendTelegram,
+      calledCtx,
+      sessionKey: processedSessionKey,
+    } = await runHeartbeatCase({
       tmpPrefix: "openclaw-exec-internal-",
       replyText: "Handled internally",
       reason: "exec-event",
@@ -664,6 +718,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("exec-event");
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+    expect(peekSystemEvents(processedSessionKey)).toEqual([]);
   });
 
   it("includes untrusted exec completion details in user-relay prompts", async () => {

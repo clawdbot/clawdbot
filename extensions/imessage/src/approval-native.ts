@@ -7,6 +7,7 @@ import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
+  createNativeApprovalMessagingTargetResolvers,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
@@ -48,18 +49,21 @@ import { inferIMessageTargetChatType } from "./targets.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
 type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
-type ChannelApprovalForwardTarget = Parameters<
-  NonNullable<
-    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
-  >
->[0]["target"];
-type IMessageApprovalTarget = {
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+const imessageApprovalTargetResolvers = createNativeApprovalMessagingTargetResolvers({
+  channel: "imessage",
+  normalizeTo: normalizeIMessageMessagingTarget,
+});
+type IMessageApprovalTarget = NonNullable<
+  ReturnType<typeof imessageApprovalTargetResolvers.normalizeForwardTarget>
+>;
+const {
+  normalizeForwardTarget: normalizeIMessageForwardTarget,
+  normalizeTarget: normalizeIMessageApprovalTarget,
+  resolveSessionTarget: resolveSessionIMessageOriginTarget,
+  resolveTurnSourceTarget: resolveTurnSourceIMessageOriginTarget,
+} = imessageApprovalTargetResolvers;
 const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
   "allow-once",
   "allow-always",
@@ -71,48 +75,6 @@ function isIMessageApprovalTransportEnabled(params: {
   accountId?: string | null;
 }): boolean {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function normalizeIMessageForwardTarget(
-  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
-): IMessageApprovalTarget | null {
-  if (normalizeLowercaseStringOrEmpty(target.channel) !== "imessage") {
-    return null;
-  }
-  const to = normalizeIMessageMessagingTarget(target.to);
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(target.accountId),
-    threadId: target.threadId ?? null,
-  };
-}
-
-function resolveTurnSourceIMessageOriginTarget(
-  request: ApprovalRequest,
-): IMessageApprovalTarget | null {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  if (turnSourceChannel !== "imessage") {
-    return null;
-  }
-  const to = normalizeIMessageMessagingTarget(request.request.turnSourceTo ?? "");
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(request.request.turnSourceAccountId),
-  };
-}
-
-function resolveSessionIMessageOriginTarget(sessionTarget: {
-  to: string;
-  accountId?: string | null;
-}): IMessageApprovalTarget | null {
-  const to = normalizeIMessageMessagingTarget(sessionTarget.to);
-  return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
 
 const imessageApprovalRouteGates = createNativeApprovalChannelRouteGates({
@@ -234,10 +196,7 @@ const resolveIMessageOriginTargetBase = createChannelNativeOriginTargetResolver(
   shouldHandleRequest: shouldHandleIMessageApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceIMessageOriginTarget,
   resolveSessionTarget: resolveSessionIMessageOriginTarget,
-  normalizeTarget: (target) => {
-    const to = normalizeIMessageMessagingTarget(target.to);
-    return to ? { ...target, to } : null;
-  },
+  normalizeTarget: normalizeIMessageApprovalTarget,
 });
 
 function resolveIMessageOriginTarget(params: {

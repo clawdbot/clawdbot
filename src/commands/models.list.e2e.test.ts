@@ -21,16 +21,9 @@ const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
 const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
-const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<never[]>>(async () => []);
-const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
+const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
-const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
-const loadSupplementalManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(
-  () => [],
-);
-const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
-const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
@@ -188,24 +181,6 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models/list.provider-catalog.js")>();
-  return {
-    ...actual,
-    hasProviderStaticCatalogForFilter,
-    loadProviderCatalogModelsForList,
-  };
-});
-
-vi.mock("./models/list.manifest-catalog.js", () => ({
-  loadStaticManifestCatalogRowsForList,
-  loadSupplementalManifestCatalogRowsForList,
-}));
-
-vi.mock("./models/list.provider-index-catalog.js", () => ({
-  loadProviderIndexCatalogRowsForList,
-}));
-
 vi.mock("../agents/model-suppression.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/model-suppression.js")>()),
   shouldSuppressBuiltInModel,
@@ -281,16 +256,6 @@ beforeEach(() => {
   listProfilesForProvider.mockReturnValue([]);
   loadModelCatalog.mockClear();
   loadModelCatalog.mockResolvedValue([]);
-  loadProviderCatalogModelsForList.mockReset();
-  loadProviderCatalogModelsForList.mockResolvedValue([]);
-  loadStaticManifestCatalogRowsForList.mockReset();
-  loadStaticManifestCatalogRowsForList.mockReturnValue([]);
-  loadSupplementalManifestCatalogRowsForList.mockReset();
-  loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
-  loadProviderIndexCatalogRowsForList.mockReset();
-  loadProviderIndexCatalogRowsForList.mockReturnValue([]);
-  hasProviderStaticCatalogForFilter.mockReset();
-  hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();
   shouldSuppressBuiltInModel.mockReturnValue(false);
   normalizeProviderResolvedModelWithPlugin.mockClear();
@@ -404,7 +369,6 @@ describe("models list/status", () => {
 
   async function expectZaiProviderFilter(provider: string) {
     setDefaultZaiRegistry();
-    loadProviderIndexCatalogRowsForList.mockReturnValueOnce([ZAI_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, provider, json: true }, runtime);
@@ -630,8 +594,7 @@ describe("models list/status", () => {
 
   it("models list all includes catalog rows with unknown auth availability", async () => {
     setDefaultZaiRegistry({ available: false });
-    hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
-    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    loadModelCatalog.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
     await withEnvAsync(
@@ -640,7 +603,7 @@ describe("models list/status", () => {
     );
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(payload.models).toHaveLength(1);
     const model = payload.models[0];
     expect(model.key).toBe("moonshot/kimi-k2.6");
@@ -660,18 +623,18 @@ describe("models list/status", () => {
     );
     expect(runtime.log).not.toHaveBeenCalled();
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {
     setDefaultZaiRegistry({ available: false });
-    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    loadModelCatalog.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, local: true, json: true }, runtime);
 
-    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(parseJsonLog(runtime).models).toEqual([]);
   });
 
   it("models list default does not enumerate all registry models", async () => {

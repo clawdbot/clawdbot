@@ -163,7 +163,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 name: "Step 3.5 Flash",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 65536,
               },

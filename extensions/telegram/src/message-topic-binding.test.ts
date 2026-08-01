@@ -17,6 +17,7 @@ import {
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const cfg = {
+  agents: { entries: { main: { default: true } } },
   channels: { telegram: { botToken: "tok" } },
   session: { store: "/tmp/openclaw-telegram-topic-binding-test.json" },
 } as OpenClawConfig;
@@ -66,7 +67,9 @@ async function recordMessage(params: {
   accountId?: string;
 }) {
   const cache = createTelegramMessageCache({
-    scope: resolveTelegramMessageCacheScope(resolveStorePath(cfg.session?.store)),
+    scope: resolveTelegramMessageCacheScope(
+      resolveStorePath(cfg.session?.store, { agentId: "main" }),
+    ),
   });
   await cache.record({
     accountId: params.accountId ?? "default",

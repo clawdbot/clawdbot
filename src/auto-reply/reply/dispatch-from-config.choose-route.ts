@@ -4,12 +4,15 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -25,10 +28,7 @@ import {
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
-import {
-  captureReplyDispatchDeliveryOutcome,
-  type ReplyDispatchDeliveryOutcome,
-} from "./reply-dispatcher.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
@@ -82,6 +82,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     suppressHookUserDelivery,
     traceReplyPhase,
     trackDispatchLifecycleWork,
+    turnLedger,
   } = state;
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
@@ -177,7 +178,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       await sendPayloadAsync(payload, undefined, false);
     } else {
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult(payload);
+      turnLedger.sendQueued("tool", payload);
     }
   };
   const flushPendingCommentaryProgress = async () => {
@@ -192,10 +193,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
     const itemId = payload.itemId?.trim() || undefined;
     const text = payload.progressText ?? "";
+    const repeatsBufferedText =
+      pendingCommentaryProgress !== null && pendingCommentaryProgress.text.trim() === text.trim();
     const updatesBufferedItem =
       pendingCommentaryProgress !== null &&
-      pendingCommentaryProgress.itemId !== undefined &&
-      pendingCommentaryProgress.itemId === itemId;
+      ((pendingCommentaryProgress.itemId !== undefined &&
+        pendingCommentaryProgress.itemId === itemId) ||
+        repeatsBufferedText);
     if (!text.trim()) {
       // Empty commentary with an item id means the producer retracted that
       // item; drop it if it has not been sent yet.
@@ -220,10 +224,78 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const reply = resolveSendableOutboundReplyParts(payload);
     return !reply.hasMedia && !hasExecApprovalPayload(payload);
   };
+  const deliveredBlockContentKeys = new Set<string>();
+  const pendingBlockDeliveryOutcomes = new Map<
+    string,
+    Array<Promise<ReplyDispatchDeliveryOutcome>>
+  >();
+  const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
+    const contentKey = createBlockReplyContentKey(payload);
+    const delivery = turnLedger.sendQueued("block", payload);
+    if (!delivery.queued || !delivery.outcome) {
+      return delivery.queued;
+    }
+    const outcomes = pendingBlockDeliveryOutcomes.get(contentKey);
+    if (outcomes) {
+      outcomes.push(delivery.outcome);
+    } else {
+      pendingBlockDeliveryOutcomes.set(contentKey, [delivery.outcome]);
+    }
+    return delivery.queued;
+  };
+  const recordRoutedBlockReplyDelivery = (
+    payload: ReplyPayload,
+    result: Awaited<ReturnType<typeof sendPayloadAsync>>,
+  ): void => {
+    if (result && isRoutedReplyDelivered(result)) {
+      deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
+    }
+  };
+  const wasReplyDeliveredAsBlock = async (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+  ): Promise<boolean> => {
+    const contentKey = createBlockReplyContentKey(payload);
+    if (deliveredBlockContentKeys.has(contentKey)) {
+      return true;
+    }
+    const outcomes = pendingBlockDeliveryOutcomes.get(contentKey);
+    if (!outcomes) {
+      return false;
+    }
+    pendingBlockDeliveryOutcomes.delete(contentKey);
+    const settlement = Promise.all(outcomes).then((settledOutcomes) => ({
+      kind: "settled" as const,
+      outcomes: settledOutcomes,
+    }));
+    if (abortSignal?.aborted) {
+      return false;
+    }
+    let removeAbortListener: (() => void) | undefined;
+    const result = abortSignal
+      ? await Promise.race([
+          settlement,
+          new Promise<{ kind: "aborted" }>((resolve) => {
+            const onAbort = () => resolve({ kind: "aborted" });
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+          }),
+        ]).finally(() => removeAbortListener?.())
+      : await settlement;
+    if (result.kind === "aborted") {
+      return false;
+    }
+    const delivered = result.outcomes.some((outcome) => outcome === "delivered");
+    if (delivered) {
+      deliveredBlockContentKeys.add(contentKey);
+    }
+    return delivered;
+  };
   const sendFinalPayload = async (
     payload: ReplyPayload,
     options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
   ): Promise<{
+    dedupedAgainstBlock?: boolean;
     queuedFinal: boolean;
     routedFinalCount: number;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
@@ -272,8 +344,24 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             accountId: replyRoute.accountId,
           });
     throwIfFinalDeliveryAborted();
-    const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+    let normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
     throwIfFinalDeliveryAborted();
+    const deliveredAsBlock = await wasReplyDeliveredAsBlock(payload, abortSignal);
+    throwIfFinalDeliveryAborted();
+    if (deliveredAsBlock) {
+      if (createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)) {
+        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+      }
+      // Final-only transforms such as TTS still need delivery, but the block already
+      // made the text visible. Preserve only the newly added media/rich payload.
+      normalizedPayload = copyReplyPayloadMetadata(normalizedPayload, {
+        ...normalizedPayload,
+        text: undefined,
+      });
+      if (!hasOutboundReplyContent(normalizedPayload, { trimText: true })) {
+        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+      }
+    }
     const result = await routeReplyToOriginating(normalizedPayload, {
       abortSignal,
       kind: "final",
@@ -345,10 +433,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (finalDeliveryCapture) {
       setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
     }
-    const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedPayload);
-    const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-    const dispatcherOutcome =
-      queuedFinal && deliveryOutcome.isTracked() ? deliveryOutcome.promise : undefined;
+    const { queued: queuedFinal, outcome: dispatcherOutcome } = turnLedger.sendQueued(
+      "final",
+      normalizedPayload,
+    );
     if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
       // The common settle owner runs this after successful delivery or
       // cancellation. Keeping reconciliation out of the reply operation lets a
@@ -371,6 +459,18 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (hookRunner?.hasHooks("before_dispatch")) {
+    // This outer lookup key is resolved from the routed context; fields inside
+    // sessionStoreEntry.entry cannot redirect hook or requester lineage.
+    const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+    const pluginSubagentRequester = createPluginSubagentRequesterContext({
+      sessionKey: beforeDispatchSessionKey,
+      origin: {
+        channel: routeReplyChannel,
+        to: routeReplyTo,
+        accountId: replyContextAccountId,
+        threadId: routeReplyThreadId,
+      },
+    });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
@@ -379,10 +479,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             () =>
               hookRunner.runBeforeDispatch(
                 {
+                  messageId: state.hookContext.messageId,
                   content: state.hookContext.content,
                   body: state.hookContext.bodyForAgent ?? state.hookContext.body,
                   channel: state.hookContext.channelId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -393,10 +494,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   timestamp: state.hookContext.timestamp,
                 },
                 {
+                  messageId: state.hookContext.messageId,
                   channelId: state.hookContext.channelId,
                   accountId: state.hookContext.accountId,
                   conversationId: state.inboundClaimContext.conversationId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -404,6 +506,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookContext.replyToSender,
                   replyToIsQuote: state.hookContext.replyToIsQuote,
                 },
+                pluginSubagentRequester,
               ),
             trackDispatchLifecycleWork,
           ),
@@ -520,6 +623,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       flushPendingCommentaryProgress,
       noteCommentaryProgress,
       shouldSuppressMessageToolOnlyTextErrorProgress,
+      sendTrackedBlockReply,
+      recordRoutedBlockReplyDelivery,
+      wasReplyDeliveredAsBlock,
       sendFinalPayload,
     },
     {

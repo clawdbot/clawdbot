@@ -168,6 +168,11 @@ describe("browser permission routes", () => {
       1234,
       undefined,
     );
+    expect(cdpMocks.withCdpSocket).toHaveBeenCalledWith(
+      "ws://127.0.0.1:18800/devtools/browser/test",
+      expect.any(Function),
+      { commandTimeoutMs: 1234, signal: expect.any(AbortSignal) },
+    );
     expect(cdpMocks.send).toHaveBeenCalledWith("Browser.grantPermissions", {
       origin: "https://meet.google.com",
       permissions: ["audioCapture", "videoCapture", "speakerSelection"],

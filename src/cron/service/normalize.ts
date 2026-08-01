@@ -6,11 +6,11 @@ import type { CronPayload } from "../types.js";
 /** Normalizes a required cron job name and throws the public validation error when absent. */
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
-    throw new Error("cron job name is required");
+    throw new Error("automation name is required");
   }
   const name = raw.trim();
   if (!name) {
-    throw new Error("cron job name is required");
+    throw new Error("automation name is required");
   }
   return name;
 }
@@ -59,7 +59,7 @@ export function inferCronJobName(job: {
   if (kind === "at") {
     return "One-shot";
   }
-  return "Cron job";
+  return "Automation";
 }
 
 /** Extracts the executable text from cron payload variants for main-session queueing. */

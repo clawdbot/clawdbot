@@ -24,6 +24,7 @@ import {
 import {
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
+  applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestPreflightPnpmArgs,
@@ -299,7 +300,12 @@ async function main() {
           cwd: process.cwd(),
         });
   const runSpecs = applyDefaultMultiSpecVitestCachePaths(
-    applyDefaultVitestNoOutputTimeout(rawRunSpecs, { env: baseEnv }),
+    applyDefaultVitestNoOutputTimeout(
+      applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
+      {
+        env: baseEnv,
+      },
+    ),
     { cwd: process.cwd(), env: baseEnv },
   );
 
@@ -363,7 +369,7 @@ async function main() {
       }
       releaseLockOnce();
       if (parallelExitCode !== 0) {
-        process.exit(parallelExitCode);
+        process.exitCode = parallelExitCode;
       }
       return;
     }
@@ -384,7 +390,8 @@ async function main() {
       if (spec.continueOnFailure !== true) {
         printTestSummary("failed", timings.length, performance.now() - suiteStartedAt);
         releaseLockOnce();
-        process.exit(result.code);
+        process.exitCode = result.code;
+        return;
       }
     }
   }
@@ -397,7 +404,7 @@ async function main() {
 
   releaseLockOnce();
   if (exitCode !== 0) {
-    process.exit(exitCode);
+    process.exitCode = exitCode;
   }
 }
 
@@ -412,6 +419,6 @@ main().catch(
   /** @param {unknown} error */ (error) => {
     releaseLockOnce();
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   },
 );

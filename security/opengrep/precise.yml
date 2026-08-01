@@ -1121,7 +1121,7 @@ rules:
     languages:
       - typescript
     severity: WARNING
-    message: Untrusted channel metadata is being interpolated into trusted GroupSystemPrompt parts. Route it through UntrustedContext instead.
+    message: Untrusted channel metadata is being interpolated into trusted GroupSystemPrompt parts. Route it through ChannelPromptContext (or ChannelStructuredContext for structured entries) instead.
     pattern-either:
       - pattern: |
           const $SYSTEM_PROMPT_PARTS = [

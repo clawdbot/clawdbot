@@ -50,7 +50,6 @@ export async function detectUiProtocolFreshnessIssues(
     return [];
   }
 
-  const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
   const uiHealth = await resolveControlUiDistIndexHealth({
     root,
     argv1: opts.argv1 ?? process.argv[1],
@@ -59,19 +58,15 @@ export async function detectUiProtocolFreshnessIssues(
   const uiSourcesPath = path.join(root, "ui/package.json");
 
   try {
-    const [schemaStats, uiStats, uiSourcesStats] = await Promise.all([
-      fs.stat(schemaPath).catch(() => null),
+    const [uiStats, uiSourcesStats] = await Promise.all([
       fs.stat(uiIndexPath).catch(() => null),
       fs.stat(uiSourcesPath).catch(() => null),
     ]);
-    if (!schemaStats) {
-      return [];
-    }
     const canBuild = uiSourcesStats !== null;
     if (!uiStats) {
       return [{ kind: "missing-assets", root, uiIndexPath, canBuild }];
     }
-    if (schemaStats.mtime <= uiStats.mtime) {
+    if (!canBuild) {
       return [];
     }
     const changesSinceBuild = await (
@@ -106,7 +101,7 @@ async function collectProtocolSchemaChangesSince(
       "log",
       `--since=${uiMtime.toISOString()}`,
       "--format=%h %s",
-      "packages/gateway-protocol/src/schema.ts",
+      "packages/gateway-protocol/src",
     ],
     { timeoutMs: 5000 },
   ).catch(() => null);
@@ -132,7 +127,7 @@ export function uiProtocolFreshnessIssueToHealthFinding(
       ? issue.kind === "missing-assets"
         ? "Run `openclaw doctor --fix` to build Control UI assets."
         : "Run `openclaw doctor --fix --force` to rebuild Control UI assets, or run `pnpm ui:build`."
-      : "Install from a source checkout with ui/ sources, then run `pnpm ui:build`.",
+      : "Reinstall OpenClaw to restore bundled Control UI assets.",
   };
 }
 
@@ -156,7 +151,12 @@ export function uiProtocolFreshnessIssueToRepairEffects(
 
 function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string {
   if (issue.kind === "missing-assets") {
-    return ["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n");
+    return [
+      "- Control UI assets are missing.",
+      issue.canBuild
+        ? "- Run: pnpm ui:build"
+        : "- Reinstall OpenClaw to restore bundled Control UI assets.",
+    ].join("\n");
   }
   if (issue.changesSinceBuild.length === 0) {
     return "UI assets are older than the protocol schema.";

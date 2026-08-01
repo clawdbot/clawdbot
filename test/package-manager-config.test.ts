@@ -3,12 +3,10 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  collectCurrentShrinkwrapOverrides,
-  collectPnpmLockViolations,
   mergeOverrides,
   parsePnpmPackageKey,
-  readShrinkwrapOverrides,
-} from "../scripts/generate-npm-shrinkwrap.mjs";
+  readNpmLockOverrides,
+} from "../scripts/generate-npm-package-lock.mjs";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -23,14 +21,6 @@ type RootPackageJson = {
 };
 
 type WorkspaceConfig = PnpmBuildConfig;
-type WorkspaceDependencyPolicy = WorkspaceConfig & {
-  overrides?: Record<string, string | number>;
-};
-type NpmShrinkwrap = {
-  name?: string;
-  version?: string;
-  packages?: Record<string, { name?: string; version?: string; dev?: boolean }>;
-};
 
 function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -84,21 +74,8 @@ describe("package manager build policy", () => {
     );
   });
 
-  it("keeps npm shrinkwrap aligned with workspace overrides", () => {
-    const workspace = parse(
-      fs.readFileSync("pnpm-workspace.yaml", "utf8"),
-    ) as WorkspaceDependencyPolicy;
-    const shrinkwrap = readJson("npm-shrinkwrap.json") as NpmShrinkwrap;
-
-    for (const packageName of ["@anthropic-ai/sdk", "hono", "protobufjs"]) {
-      expect(shrinkwrap.packages?.[`node_modules/${packageName}`]?.version).toBe(
-        String(workspace.overrides?.[packageName]),
-      );
-    }
-  });
-
-  it("pins forked transitive dependencies with parent-scoped shrinkwrap overrides", () => {
-    const overrides = readShrinkwrapOverrides() as Record<string, unknown>;
+  it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
+    const overrides = readNpmLockOverrides() as Record<string, unknown>;
 
     const packages = collectPnpmLockPackages();
 
@@ -115,49 +92,7 @@ describe("package manager build policy", () => {
     }
   });
 
-  it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {
-    const overrides = collectCurrentShrinkwrapOverrides(
-      {
-        packages: {
-          "": { dependencies: { "current-parent": "1.0.0" } },
-          "node_modules/current-parent": {
-            version: "1.0.0",
-            dependencies: { "forked-child": "^2.0.0" },
-          },
-          "node_modules/current-parent/node_modules/forked-child": {
-            version: "2.0.0",
-          },
-          "node_modules/legacy-parent": {
-            version: "1.0.0",
-            dependencies: { "forked-child": "1.0.0" },
-          },
-          "node_modules/legacy-parent/node_modules/forked-child": {
-            version: "1.0.0",
-          },
-          "node_modules/stable-child": {
-            version: "3.0.0",
-          },
-        },
-      },
-      new Set(["current-parent"]),
-      new Set([
-        "current-parent@1.0.0",
-        "legacy-parent@1.0.0",
-        "forked-child@1.0.0",
-        "forked-child@2.0.0",
-        "stable-child@3.0.0",
-      ]),
-    );
-
-    expect(overrides).toEqual({
-      "current-parent@1.0.0": { "forked-child": "2.0.0" },
-      "legacy-parent": { ".": "1.0.0", "forked-child": "1.0.0" },
-      "legacy-parent@1.0.0": { "forked-child": "1.0.0" },
-      "stable-child": "3.0.0",
-    });
-  });
-
-  it("merges exact current shrinkwrap pins with nested lock-derived pins", () => {
+  it("merges exact npm-lock pins with nested lock-derived pins", () => {
     expect(
       mergeOverrides(
         { "@mistralai/mistralai": "2.2.1" },
@@ -231,55 +166,5 @@ describe("package manager build policy", () => {
         {},
       ),
     ).toThrow(/conflicts with pnpm lock policy/u);
-  });
-
-  it("keeps npm shrinkwrap package versions inside the pnpm lock graph", () => {
-    const pnpmLockPackages = collectPnpmLockPackages();
-    const shrinkwrapPaths = [
-      "npm-shrinkwrap.json",
-      ...fs
-        .readdirSync("extensions", { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
-        .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
-        .toSorted((left, right) => left.localeCompare(right)),
-    ];
-
-    for (const shrinkwrapPath of shrinkwrapPaths) {
-      const shrinkwrap = readJson(shrinkwrapPath);
-      expect(collectPnpmLockViolations(shrinkwrap, pnpmLockPackages), shrinkwrapPath).toEqual([]);
-    }
-  });
-
-  it("ships shrinkwrap for every publishable plugin package", () => {
-    for (const entry of fs.readdirSync("extensions", { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const packageJsonPath = `extensions/${entry.name}/package.json`;
-      if (!fs.existsSync(packageJsonPath)) {
-        continue;
-      }
-      const packageJson = readJson(packageJsonPath) as {
-        name?: string;
-        version?: string;
-        openclaw?: { release?: { publishToNpm?: boolean } };
-      };
-      if (packageJson.openclaw?.release?.publishToNpm !== true) {
-        continue;
-      }
-
-      const shrinkwrapPath = `extensions/${entry.name}/npm-shrinkwrap.json`;
-      const shrinkwrap = readJson(shrinkwrapPath) as NpmShrinkwrap;
-      const devLockedPackages = Object.entries(shrinkwrap.packages ?? {}).filter(
-        ([, lockedPackage]) => lockedPackage.dev === true,
-      );
-
-      expect(shrinkwrap.name, shrinkwrapPath).toBe(packageJson.name);
-      expect(shrinkwrap.version, shrinkwrapPath).toBe(packageJson.version);
-      expect(shrinkwrap.packages?.[""]?.name, shrinkwrapPath).toBe(packageJson.name);
-      expect(shrinkwrap.packages?.[""]?.version, shrinkwrapPath).toBe(packageJson.version);
-      expect(devLockedPackages, shrinkwrapPath).toEqual([]);
-    }
   });
 });

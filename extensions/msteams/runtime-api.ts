@@ -1,6 +1,8 @@
 // Private runtime barrel for the bundled Microsoft Teams extension.
 // Keep this barrel thin and aligned with the local extension surface.
 
+import { msteamsQaCliRegistration } from "./src/qa/cli.js";
+
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 export {
@@ -54,6 +56,8 @@ export {
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+// Deprecated media-legacy-projection surface; the re-export stays until the
+// compat record's removeAfter window expires (deleted in retirement PR 4).
 export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -64,3 +68,5 @@ export { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";
 export { setMSTeamsRuntime } from "./src/runtime.js";
+
+export const qaRunnerCliRegistrations = [msteamsQaCliRegistration];

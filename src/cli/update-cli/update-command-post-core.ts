@@ -35,6 +35,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
@@ -82,7 +83,7 @@ import {
 } from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
-export const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
+export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
@@ -106,11 +107,13 @@ export async function reportPreMutationUpdateFailure(params: {
     steps: [],
     durationMs: 0,
   };
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result,
-    jsonMode: Boolean(params.opts.json),
-  });
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
   printResult(result, params.opts);
   defaultRuntime.exit(1);
 }
@@ -135,6 +138,15 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
@@ -152,14 +164,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             : configSnapshot.sourceConfig,
         }
       : undefined);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
   if (requestedChannel === "extended-stable") {
     const updateStatus = await checkUpdateStatus({
       root,
@@ -632,8 +636,15 @@ export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
 export function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
+  installKindChanged?: boolean;
 }): boolean {
-  return !params.downgradeRisk && didCoreUpdateChangeInstall(params.result);
+  // A package-to-git switch can land on the same version already cloned at its
+  // target SHA. The package root still changed, so old hashed chunks are unsafe.
+  return (
+    params.result.status === "ok" &&
+    !params.downgradeRisk &&
+    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

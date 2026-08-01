@@ -12,6 +12,7 @@ import {
   openAcpxProcessLeaseStateStore,
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  readAcpxProcessLeaseIdentity,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
 } from "./process-lease.js";
@@ -111,5 +112,31 @@ describe("withAcpxLeaseEnvironment", () => {
         "gateway-test",
       ].join(" "),
     );
+  });
+});
+
+describe("readAcpxProcessLeaseIdentity", () => {
+  it("reads quoted portable lease wrapper args", () => {
+    expect(
+      readAcpxProcessLeaseIdentity(
+        [
+          "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+          OPENCLAW_ACPX_LEASE_ID_ARG,
+          "'lease test'",
+          OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+          '"gateway test"',
+        ].join(" "),
+      ),
+    ).toEqual({
+      leaseId: "lease test",
+      gatewayInstanceId: "gateway test",
+    });
+  });
+
+  it("rejects incomplete lease identity", () => {
+    expect(
+      readAcpxProcessLeaseIdentity(`node wrapper.mjs ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-test`),
+    ).toBeUndefined();
+    expect(readAcpxProcessLeaseIdentity(undefined)).toBeUndefined();
   });
 });

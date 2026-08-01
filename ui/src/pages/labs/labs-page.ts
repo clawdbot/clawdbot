@@ -4,10 +4,12 @@ import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
+  renderDocsLink,
+  renderSettingsDefaultState,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
-  renderSettingsToggle,
+  renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,9 +18,10 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-l
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
-  isLabFeatureEnabled,
   labFeatureMergePatch,
+  labFeatureResetPatch,
   LAB_FEATURES,
+  resolveLabFeatureState,
   type LabFeature,
 } from "./labs-registry.ts";
 
@@ -43,13 +46,17 @@ class LabsPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  private editableConfig(): Record<string, unknown> | null {
+    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
+    return resolveEditableSnapshotConfig(snapshot);
+  }
+
   private featureEnabled(feature: LabFeature): boolean {
     const pending = this.pendingValues[feature.id];
     if (pending !== undefined) {
       return pending;
     }
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    return isLabFeatureEnabled(resolveEditableSnapshotConfig(snapshot), feature);
+    return resolveLabFeatureState(this.editableConfig(), feature).enabled;
   }
 
   private canToggle(): boolean {
@@ -68,7 +75,7 @@ class LabsPage extends OpenClawLightDomElement {
     this.pendingValues = next;
   }
 
-  private async setFeatureEnabled(feature: LabFeature, enabled: boolean) {
+  private async updateFeature(feature: LabFeature, enabled: boolean, raw: Record<string, unknown>) {
     if (!this.canToggle()) {
       return;
     }
@@ -78,7 +85,7 @@ class LabsPage extends OpenClawLightDomElement {
     this.saveError = null;
     try {
       const patched = await runtimeConfig.patch({
-        raw: labFeatureMergePatch(feature, enabled),
+        raw,
         note: `labs: update ${feature.id}`,
       });
       if (!patched) {
@@ -98,23 +105,52 @@ class LabsPage extends OpenClawLightDomElement {
     }
   }
 
+  private setFeatureEnabled(feature: LabFeature, enabled: boolean) {
+    const config = this.editableConfig();
+    const featureState = resolveLabFeatureState(config, feature);
+    const resetPatch =
+      enabled === featureState.defaultEnabled ? labFeatureResetPatch(config, feature) : null;
+    void this.updateFeature(
+      feature,
+      enabled,
+      resetPatch ?? labFeatureMergePatch(config, feature, enabled),
+    );
+  }
+
+  private resetFeature(feature: LabFeature) {
+    const config = this.editableConfig();
+    const featureState = resolveLabFeatureState(config, feature);
+    const resetPatch = labFeatureResetPatch(config, feature);
+    if (!resetPatch) {
+      return;
+    }
+    void this.updateFeature(feature, featureState.defaultEnabled, resetPatch);
+  }
+
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
+    const featureState = resolveLabFeatureState(this.editableConfig(), feature);
+    const canToggle = this.canToggle();
+    const defaultState = renderSettingsDefaultState({
+      value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
+      overridden: featureState.overridden,
+      disabled: !canToggle,
+      onReset: () => this.resetFeature(feature),
+    });
     const description = html`
       ${feature.description()}
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
       >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
+      <span>${defaultState.description}</span>
     `;
-    return renderSettingsRow({
+    return renderSettingsToggleRow({
       title,
       description,
-      control: renderSettingsToggle({
-        checked: this.featureEnabled(feature),
-        disabled: !this.canToggle(),
-        ariaLabel: title,
-        onChange: (enabled) => void this.setFeatureEnabled(feature, enabled),
-      }),
+      checked: this.featureEnabled(feature),
+      disabled: !canToggle,
+      actions: defaultState.action,
+      onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
     });
   }
 
@@ -136,7 +172,13 @@ class LabsPage extends OpenClawLightDomElement {
         },
         rows,
       ),
-      { intro: t("labsPage.intro") },
+      {
+        intro: html`${t("labsPage.intro")}
+        ${renderDocsLink(
+          "https://docs.openclaw.ai/concepts/experimental-features",
+          t("common.learnMore"),
+        )}`,
+      },
     );
     return html`
       <section class="content-header">

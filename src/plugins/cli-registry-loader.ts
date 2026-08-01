@@ -16,8 +16,8 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import type {
-  OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliContext,
+  OpenClawPluginCliRootCommandDescriptor,
   PluginLogger,
 } from "./types.js";
 
@@ -41,7 +41,7 @@ export type PluginCliRegistryLoadResult = PluginCliLoadContext & {
 export type PluginCliCommandGroupEntry = {
   pluginId: string;
   parentPath: readonly string[];
-  placeholders: readonly OpenClawPluginCliCommandDescriptor[];
+  placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
   names: readonly string[];
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
@@ -219,7 +219,7 @@ function buildPluginCliCommandGroupEntries(params: {
 
 export async function loadPluginCliDescriptors(
   params: PluginCliPublicLoadParams,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
+): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   try {
     const logger = resolvePluginCliLogger(params.logger);
     const context = resolvePluginCliLoadContext({

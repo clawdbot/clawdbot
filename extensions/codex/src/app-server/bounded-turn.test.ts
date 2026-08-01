@@ -3,6 +3,7 @@ import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function modelList() {
   return {
@@ -37,7 +38,7 @@ function threadStartResult() {
       updatedAt: 1,
       status: { type: "idle" },
       cwd: "/tmp/finalizer",
-      cliVersion: "0.144.5",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -103,6 +104,7 @@ function createClientFactory(
     errorBeforeCompletion?: { message: string; willRetry: boolean };
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
+    completeTurn?: boolean;
   } = {},
 ) {
   const methods: string[] = [];
@@ -131,6 +133,9 @@ function createClientFactory(
       return {};
     }
     if (method === "turn/start") {
+      if (options.completeTurn === false) {
+        return inProgressTurnResult();
+      }
       queueMicrotask(() => {
         for (const handler of notificationHandlers) {
           if (options.errorBeforeCompletion) {
@@ -208,6 +213,90 @@ function createClientFactory(
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it("reports its own timeout with the configured bound", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "codex app-server hosted search turn timed out after 100ms",
+    });
+  });
+
+  it("keeps a caller abort distinct from its own timeout", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const caller = new AbortController();
+    const reason = new Error("caller cancelled hosted search");
+    caller.abort(reason);
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server hosted search turn aborted",
+    });
+  });
+
+  it("does not adopt a prior turn's timeout as its own", async () => {
+    const first = createClientFactory({ completeTurn: false });
+    let priorTimeout: unknown;
+    try {
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: first.factory },
+        taskLabel: "first hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find first query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      });
+    } catch (error) {
+      priorTimeout = error;
+    }
+    expect(priorTimeout).toMatchObject({ name: "TimeoutError" });
+
+    const caller = new AbortController();
+    caller.abort(priorTimeout);
+    const second = createClientFactory({ completeTurn: false });
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: second.factory },
+        taskLabel: "second hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find second query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server second hosted search turn aborted",
+    });
+  });
+
   it("continues after a retryable error notification", async () => {
     const fake = createClientFactory({
       errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true },

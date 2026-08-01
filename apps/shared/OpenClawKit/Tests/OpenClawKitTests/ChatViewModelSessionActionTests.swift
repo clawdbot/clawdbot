@@ -132,8 +132,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let branchSwitchGate: SessionActionCompletionGate?
     private let branchListGates: [SessionActionCompletionGate]
     private let rewindEditorText: String?
+    private let rewindEditorAttachments: [OpenClawChatEditorAttachment]?
     private let forkAtMessageSessionKey: String
     private let forkAtMessageEditorText: String?
+    private let forkAtMessageEditorAttachments: [OpenClawChatEditorAttachment]?
     private let branches: [OpenClawChatSessionBranch]
     private let branchListResponses: [[OpenClawChatSessionBranch]]
     private let branchListFailureIndices: Set<Int>
@@ -148,8 +150,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         branchSwitchGate: SessionActionCompletionGate? = nil,
         branchListGates: [SessionActionCompletionGate] = [],
         rewindEditorText: String? = "rewound draft",
+        rewindEditorAttachments: [OpenClawChatEditorAttachment]? = nil,
         forkAtMessageSessionKey: String = "forked-at-message",
         forkAtMessageEditorText: String? = "forked draft",
+        forkAtMessageEditorAttachments: [OpenClawChatEditorAttachment]? = nil,
         branches: [OpenClawChatSessionBranch] = [],
         branchListResponses: [[OpenClawChatSessionBranch]] = [],
         branchListFailureIndices: Set<Int> = [],
@@ -163,8 +167,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.branchSwitchGate = branchSwitchGate
         self.branchListGates = branchListGates
         self.rewindEditorText = rewindEditorText
+        self.rewindEditorAttachments = rewindEditorAttachments
         self.forkAtMessageSessionKey = forkAtMessageSessionKey
         self.forkAtMessageEditorText = forkAtMessageEditorText
+        self.forkAtMessageEditorAttachments = forkAtMessageEditorAttachments
         self.branches = branches
         self.branchListResponses = branchListResponses
         self.branchListFailureIndices = branchListFailureIndices
@@ -215,7 +221,9 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     {
         await self.state.recordRewind(sessionKey: sessionKey, entryID: entryId)
         await self.rewindGate?.suspendCompletion()
-        return OpenClawChatRewindResponse(editorText: self.rewindEditorText)
+        return OpenClawChatRewindResponse(
+            editorText: self.rewindEditorText,
+            editorAttachments: self.rewindEditorAttachments)
     }
 
     func forkSessionAtMessage(
@@ -226,7 +234,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.forkAtMessageGate?.suspendCompletion()
         return OpenClawChatForkAtMessageResponse(
             sessionKey: self.forkAtMessageSessionKey,
-            editorText: self.forkAtMessageEditorText)
+            editorText: self.forkAtMessageEditorText,
+            editorAttachments: self.forkAtMessageEditorAttachments)
     }
 
     func listSessionBranches(
@@ -527,13 +536,30 @@ struct ChatViewModelSessionActionTests {
     }
 
     @Test func `rewind seeds editor and refreshes history`() async {
-        let transport = SessionActionTransport(rewindEditorText: "edit this turn")
+        let imageData = Data("rewound image".utf8)
+        let transport = SessionActionTransport(
+            rewindEditorText: "edit this turn",
+            rewindEditorAttachments: [
+                OpenClawChatEditorAttachment(
+                    mimeType: "image/png",
+                    data: imageData.base64EncodedString()),
+                OpenClawChatEditorAttachment(mimeType: "image/png", data: "%%%"),
+            ])
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.input = "old draft"
+        viewModel.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: Data("old image".utf8),
+            fileName: "old.png",
+            mimeType: "image/png",
+            preview: nil)]
 
         await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
 
         #expect(viewModel.input == "edit this turn")
+        #expect(viewModel.attachments.count == 1)
+        #expect(viewModel.attachments.first?.data == imageData)
+        #expect(viewModel.attachments.first?.mimeType == "image/png")
         #expect(await transport.rewoundMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
         #expect(await transport.historySessionKeys() == ["main"])
     }
@@ -969,15 +995,22 @@ struct ChatViewModelSessionActionTests {
     }
 
     @Test func `fork at message switches and seeds editor`() async {
+        let imageData = Data("forked image".utf8)
         let transport = SessionActionTransport(
             forkAtMessageSessionKey: "agent:main:forked",
-            forkAtMessageEditorText: "continue here")
+            forkAtMessageEditorText: "continue here",
+            forkAtMessageEditorAttachments: [OpenClawChatEditorAttachment(
+                mimeType: "image/webp",
+                data: imageData.base64EncodedString())])
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.forkAtMessage(self.userMessage(entryID: "message-42"))
 
         #expect(viewModel.sessionKey == "agent:main:forked")
         #expect(viewModel.input == "continue here")
+        #expect(viewModel.attachments.count == 1)
+        #expect(viewModel.attachments.first?.data == imageData)
+        #expect(viewModel.attachments.first?.mimeType == "image/webp")
         #expect(await transport.forkedMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
     }
 

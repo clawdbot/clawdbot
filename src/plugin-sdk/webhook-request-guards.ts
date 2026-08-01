@@ -13,6 +13,8 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../process/gatewa
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
+export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
+
 /** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 

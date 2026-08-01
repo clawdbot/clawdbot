@@ -1,11 +1,17 @@
 // Provider/account summary helpers for `openclaw agents list`.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  projectChannelAccountDisplayState,
+  resolveChannelAccountLinked,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
@@ -17,7 +23,14 @@ type ProviderAccountStatus = {
   providerLabel?: string;
   accountId: string;
   name?: string;
-  state: "linked" | "not linked" | "configured" | "not configured" | "enabled" | "disabled";
+  state:
+    | "linked"
+    | "not linked"
+    | "configured"
+    | "configured unavailable"
+    | "not configured"
+    | "enabled"
+    | "disabled";
   enabled?: boolean;
   configured?: boolean;
   visibleInConfiguredLists?: boolean;
@@ -150,9 +163,11 @@ export async function buildProviderStatusIndex(
         }
         map.set(providerAccountKey(plugin.id, accountId), {
           provider: plugin.id,
+          providerLabel: plugin.meta.label,
           accountId,
-          state: "not configured",
-          configured: false,
+          state: "configured unavailable",
+          configured: true,
+          visibleInConfiguredLists: isChannelVisibleInConfiguredLists(plugin.meta),
         });
         continue;
       }
@@ -170,20 +185,39 @@ export async function buildProviderStatusIndex(
         : snapshot?.configured;
       const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
       const resolvedConfigured = typeof configured === "boolean" ? configured : true;
-      const state =
-        plugin.status?.resolveAccountState?.({
-          account,
-          cfg,
-          configured: resolvedConfigured,
-          enabled: resolvedEnabled,
-        }) ??
-        (typeof snapshot?.linked === "boolean"
-          ? snapshot.linked
-            ? "linked"
-            : "not linked"
-          : resolvedConfigured
-            ? "configured"
-            : "not configured");
+      const inspectedConfigured = (account as { configured?: unknown }).configured;
+      const configuredIntent =
+        typeof inspectedConfigured === "boolean"
+          ? inspectedConfigured
+          : snapshot?.configured === true;
+      // Provider inspection owns which credentials are required. Only an account whose owner
+      // reports complete configured intent but no usable runtime credentials is unavailable.
+      const configuredUnavailable =
+        !resolvedConfigured &&
+        configuredIntent &&
+        (hasConfiguredUnavailableCredentialStatus(snapshot) ||
+          hasConfiguredUnavailableCredentialStatus(account));
+      const linkState =
+        resolvedConfigured && plugin.config.isLinked
+          ? await plugin.config.isLinked(account, cfg)
+          : undefined;
+      const linked = resolveChannelAccountLinked(linkState, snapshot?.linked);
+      const fallbackState = plugin.status?.resolveAccountState?.({
+        account,
+        cfg,
+        configured: resolvedConfigured,
+        enabled: resolvedEnabled,
+      });
+      const state = configuredUnavailable
+        ? "configured unavailable"
+        : projectChannelAccountDisplayState(
+            resolveChannelAccountState({
+              enabled: resolvedEnabled,
+              configured: resolvedConfigured,
+              linked,
+            }),
+            fallbackState,
+          );
       const name = snapshot?.name ?? (account as { name?: string }).name;
       map.set(providerAccountKey(plugin.id, accountId), {
         provider: plugin.id,
@@ -192,7 +226,7 @@ export async function buildProviderStatusIndex(
         name,
         state,
         enabled,
-        configured,
+        configured: configuredUnavailable || configured,
         visibleInConfiguredLists: isChannelVisibleInConfiguredLists(plugin.meta),
       });
     }

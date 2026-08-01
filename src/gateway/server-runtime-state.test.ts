@@ -1,6 +1,7 @@
 /**
  * Gateway runtime state construction tests.
  */
+import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
@@ -47,6 +48,37 @@ function createRegistryWithRoute(path: string) {
   return registry;
 }
 
+async function requestPluginUpgrade(port: number, path: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    let response = "";
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(response);
+    };
+    socket.setEncoding("utf8");
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: Upgrade\r\nUpgrade: demo\r\n\r\n`,
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += String(chunk);
+    });
+    socket.on("end", finish);
+    socket.on("close", finish);
+    socket.on("error", reject);
+    socket.setTimeout(2_000, () => {
+      socket.destroy();
+      reject(new Error(`plugin upgrade timed out for ${path}`));
+    });
+  });
+}
+
 describe("createGatewayRuntimeState", () => {
   beforeEach(() => {
     mocks.listenGatewayHttpServer.mockReset();
@@ -82,6 +114,140 @@ describe("createGatewayRuntimeState", () => {
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(startupRegistry);
     expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
     expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
+  });
+
+  it("delegates directly after lazily loading the plugin HTTP handler", async () => {
+    const registry = createEmptyPluginRegistry();
+    const routes = registry.httpRoutes;
+    routes.push({
+      path: "/demo",
+      auth: "plugin",
+      match: "exact",
+      handler: (_req, res) => {
+        res.statusCode = 204;
+        res.end();
+        return true;
+      },
+      pluginId: "demo",
+      source: "test",
+    });
+    let routeReads = 0;
+    Object.defineProperty(registry, "httpRoutes", {
+      configurable: true,
+      get: () => {
+        routeReads++;
+        return routes;
+      },
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(registry);
+    const server = runtimeState.httpServers[0];
+    if (!server) {
+      throw new Error("expected gateway HTTP server");
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP gateway address");
+    }
+    try {
+      routeReads = 0;
+      await expect(fetch(`http://127.0.0.1:${address.port}/demo`)).resolves.toMatchObject({
+        status: 204,
+      });
+      const firstRequestReads = routeReads;
+
+      routeReads = 0;
+      await expect(fetch(`http://127.0.0.1:${address.port}/demo`)).resolves.toMatchObject({
+        status: 204,
+      });
+
+      expect(firstRequestReads).toBe(routeReads + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("keeps a loaded plugin upgrade handler on the repinned route registry", async () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    let runtimeRegistry = startupRegistry;
+    let startupUpgradeCalls = 0;
+    startupRegistry.httpRoutes.push({
+      path: "/demo",
+      auth: "plugin",
+      match: "exact",
+      handler: () => false,
+      handleUpgrade: (_req, socket) => {
+        startupUpgradeCalls++;
+        socket.end(
+          "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: demo\r\n\r\n",
+        );
+        return true;
+      },
+      pluginId: "startup",
+      source: "test",
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry, {
+      getPluginRouteRegistry: () => runtimeRegistry,
+    });
+    const server = runtimeState.httpServers[0];
+    if (!server) {
+      throw new Error("expected gateway HTTP server");
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP gateway address");
+    }
+    try {
+      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.toContain(
+        "101 Switching Protocols",
+      );
+      expect(startupUpgradeCalls).toBe(1);
+
+      const replacementRegistry = createEmptyPluginRegistry();
+      let replacementUpgradeCalls = 0;
+      replacementRegistry.httpRoutes.push({
+        path: "/demo",
+        auth: "plugin",
+        match: "exact",
+        handler: () => false,
+        handleUpgrade: (_req, socket) => {
+          replacementUpgradeCalls++;
+          socket.end(
+            "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: demo\r\n\r\n",
+          );
+          return true;
+        },
+        pluginId: "replacement",
+        source: "test",
+      });
+      const emptyRegistry = createEmptyPluginRegistry();
+      runtimeRegistry = emptyRegistry;
+      pinActivePluginHttpRouteRegistry(emptyRegistry);
+      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.not.toContain(
+        "101 Switching Protocols",
+      );
+      expect(startupUpgradeCalls).toBe(1);
+
+      runtimeRegistry = replacementRegistry;
+      pinActivePluginHttpRouteRegistry(replacementRegistry);
+
+      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.toContain(
+        "101 Switching Protocols",
+      );
+      expect(startupUpgradeCalls).toBe(1);
+      expect(replacementUpgradeCalls).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("fails startup when the required IPv4 loopback alias cannot bind", async () => {

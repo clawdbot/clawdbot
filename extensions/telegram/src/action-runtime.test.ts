@@ -1,10 +1,10 @@
 // Telegram tests cover action runtime plugin behavior.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleTelegramAction as handleTelegramActionRuntime,
@@ -201,6 +201,7 @@ const createForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
+let openClawState: OpenClawTestState;
 
 type TopicNameEntryForTest = {
   name: string;
@@ -329,8 +330,12 @@ describe("handleTelegramAction", () => {
     expect(options.remove).toBe(false);
   }
 
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "TELEGRAM_BOT_TOKEN"]);
+  beforeEach(async () => {
+    envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-telegram-action-",
+    });
     resetTelegramTopicNameCacheForTest();
     installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
@@ -360,11 +365,12 @@ describe("handleTelegramAction", () => {
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearTelegramRuntimeForTest();
     resetTelegramTopicNameCacheForTest();
     topicNameStoresForTest.clear();
     envSnapshot.restore();
+    await openClawState.cleanup();
   });
 
   it("adds reactions when reactionLevel is minimal", async () => {
@@ -880,7 +886,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
+    const stateDir = openClawState.stateDir;
     const {
       createOutboundTestPlugin,
       createTestRegistry,
@@ -896,12 +902,18 @@ describe("handleTelegramAction", () => {
         expect(entries[0]).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [
-            {
-              text: "times out after queue write",
-              delivery: { pin: { enabled: true, required: true } },
-            },
-          ],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: {
+                  text: "times out after queue write",
+                  delivery: { pin: { enabled: true, required: true } },
+                },
+              },
+            ],
+          },
           session: { key: "agent:main:telegram:direct:12345", agentId: "main" },
           gatewayClientScopes: ["operator.write"],
           retryCount: 0,
@@ -911,18 +923,25 @@ describe("handleTelegramAction", () => {
       .mockImplementationOnce(async () => {
         const entries = readDurableQueueEntries();
         const liveEntry = entries.find((entry) =>
-          JSON.stringify(entry.payloads).includes("delivers after queue write"),
+          JSON.stringify(entry.preparedBatch).includes("delivers after queue write"),
         );
         expect(liveEntry).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [{ text: "delivers after queue write" }],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: { text: "delivers after queue write" },
+              },
+            ],
+          },
           retryCount: 0,
         });
         return { channel: "telegram", messageId: "tg-ok" };
       });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     telegramActionRuntime.sendDurableMessageBatch =
       originalTelegramActionRuntime.sendDurableMessageBatch;
     setActivePluginRegistry(
@@ -973,12 +992,18 @@ describe("handleTelegramAction", () => {
       const retryableEntries = readDurableQueueEntries();
       expect(retryableEntries).toHaveLength(1);
       expect(retryableEntries[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
       expect(String(retryableEntries[0]?.lastError)).toContain("telegram timeout");
@@ -999,17 +1024,22 @@ describe("handleTelegramAction", () => {
       });
       expect(readDurableQueueEntries()).toHaveLength(1);
       expect(readDurableQueueEntries()[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
     } finally {
       setActivePluginRegistry(createTestRegistry([]));
-      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
@@ -1824,21 +1854,26 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[3], "reply markup edit options").token).toBe("tok");
   });
 
-  it("uses Telegram caption edits when editMessage receives a caption", async () => {
+  it.each([
+    { description: "non-empty", caption: "Updated caption", richMessages: false },
+    { description: "empty", caption: "", richMessages: false },
+    { description: "non-empty rich", caption: "Updated caption", richMessages: true },
+    { description: "empty rich", caption: "", richMessages: true },
+  ])("uses Telegram caption edits for $description captions", async ({ caption, richMessages }) => {
     await handleTelegramAction(
       {
         action: "editMessage",
         chatId: "123456",
         messageId: 321,
-        caption: "Updated caption",
+        caption,
       },
-      telegramConfig(),
+      telegramConfig(richMessages ? { richMessages: true } : undefined),
     );
 
     const call = mockCall(editMessageTelegram, 0, "caption edit");
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe(321);
-    expect(call[2]).toBe("Updated caption");
+    expect(call[2]).toBe(caption);
     expect(requireRecord(call[3], "caption edit options").editMode).toBe("caption");
   });
 

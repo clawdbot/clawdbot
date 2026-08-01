@@ -2,6 +2,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "./index.ts";
 
 const MAX_CHILD_SESSION_LIST_PASSES = 4;
+// Matches the Gateway default and covers the default 50-child Swarm roster.
+// Custom larger groups keep paging through the bounded retry loop below.
+const CHILD_SESSION_LIST_PAGE_SIZE = 100;
 
 export async function fetchChildSessionRows(params: {
   sessions: SessionCapability;
@@ -10,7 +13,7 @@ export async function fetchChildSessionRows(params: {
   pageSize?: number;
 }): Promise<GatewaySessionRow[] | null> {
   const rowsByKey = new Map<string, GatewaySessionRow>();
-  const pageSize = params.pageSize ?? 20;
+  const pageSize = params.pageSize ?? CHILD_SESSION_LIST_PAGE_SIZE;
   for (let pass = 0; pass < MAX_CHILD_SESSION_LIST_PASSES; pass += 1) {
     const seenOffsets = new Set<number>();
     const rowsBeforePass = rowsByKey.size;

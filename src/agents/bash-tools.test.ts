@@ -1086,12 +1086,12 @@ describe("exec backgrounded onUpdate suppression", () => {
       const abortController = new AbortController();
       const onUpdateSpy = vi.fn(() => abortController.abort());
       // Run a command that produces output over time.
-      const command = joinCommands([
-        shellEcho("before-abort"),
-        shortDelayCmd,
-        shellEcho("after-abort"),
-      ]);
-      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
+      const beforeAbort = shellEcho("before-abort");
+      const afterAbort = shellEcho("after-abort");
+      const command = joinCommands([beforeAbort, shortDelayCmd, afterAbort]);
+      await expect(
+        execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy),
+      ).rejects.toMatchObject({ name: "AbortError" });
       expect(onUpdateSpy).toHaveBeenCalledTimes(1);
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();

@@ -74,6 +74,22 @@ export function buildCatalogSessionKey(key: CatalogSessionKey): string {
   return `catalog:${encodeURIComponent(key.catalogId)}:${encodeURIComponent(key.hostId)}:${encodeURIComponent(key.threadId)}`;
 }
 
+export function catalogSessionSearch(key: CatalogSessionKey): string {
+  return `?${new URLSearchParams({
+    catalog: key.catalogId,
+    host: key.hostId,
+    thread: key.threadId,
+  }).toString()}`;
+}
+
+export function catalogSessionKeyFromSearch(search: string): CatalogSessionKey | null {
+  const params = new URLSearchParams(search);
+  const catalogId = params.get("catalog")?.trim() ?? "";
+  const hostId = params.get("host")?.trim() ?? "";
+  const threadId = params.get("thread")?.trim() ?? "";
+  return catalogId && hostId && threadId ? { catalogId, hostId, threadId } : null;
+}
+
 export function parseCatalogSessionKey(value: string | null | undefined): CatalogSessionKey | null {
   if (!value?.startsWith("catalog:")) {
     return null;

@@ -1,11 +1,11 @@
+import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
-import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
-import { resolveCodeModeConfig } from "../../code-mode.js";
+import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   isLocalModelLeanEnabled,
@@ -15,13 +15,12 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
-import { resolveAgentToolSearchRuntimeConfig } from "../../tool-search-runtime-config.js";
 import {
   createToolSearchCatalogRef,
-  resolveToolSearchConfig,
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type { CronCreatorToolAllowlistEntry } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
@@ -54,11 +53,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
   sessionAgentId: string;
   skillUsagePaths: SkillUsagePaths;
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
+  codeModeSkills: readonly CodeModeSkill[];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const forceDirectMessageTool =
-    attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only";
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
     attempt.toolsAllow,
     {
@@ -68,7 +67,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     },
   );
   const toolsEnabled = supportsModelTools(attempt.model);
-  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
     disableTools: attempt.disableTools,
@@ -76,31 +74,24 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsEnabled,
     toolsAllow: toolsAllowWithForcedRuntimeTools,
   });
-  const codeModeConfig = resolveCodeModeConfig(attempt.config, params.sessionAgentId);
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+  const {
+    codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    toolSearchConfig,
+    toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
+    toolSearchRuntimeConfig,
+  } = resolveAgentToolSurfacePlan({
     config: attempt.config,
     agentId: params.sessionAgentId,
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
+    model: attempt.model,
+    toolsEnabled,
+    disableTools: attempt.disableTools,
+    isRawModelRun,
+    skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
+    toolsAllow: attempt.toolsAllow,
+    forceCodeModeControls: attempt.forceCodeModeTools,
   });
-  const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
-  const codeModeControlsEnabledForRun =
-    toolsEnabled &&
-    !ringZeroToolRun &&
-    attempt.disableTools !== true &&
-    !isRawModelRun &&
-    attempt.skillWorkshopProposalOnly !== true &&
-    attempt.toolsAllow?.length !== 0 &&
-    codeModeConfig.enabled;
-  const toolSearchControlsEnabledForRun =
-    toolsEnabled &&
-    !ringZeroToolRun &&
-    attempt.disableTools !== true &&
-    !isRawModelRun &&
-    attempt.skillWorkshopProposalOnly !== true &&
-    attempt.toolsAllow?.length !== 0 &&
-    !codeModeControlsEnabledForRun &&
-    toolSearchConfig.enabled;
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
       ? [...new Set([...toolsAllowWithForcedRuntimeTools, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
@@ -117,7 +108,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
       ? createToolSearchCatalogRef()
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+  const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const inheritedToolAllowlist: string[] = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -254,12 +247,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
+          webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
           skillWorkshop: {
             env: attempt.skillWorkshopProposalEnv,
             proposalOnly: attempt.skillWorkshopProposalOnly,
+            ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
             proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
@@ -303,10 +298,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
           runtimeToolAllowlist: effectiveToolsAllow,
+          inheritedToolAllowlistRef: inheritedToolAllowlist,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
+          isTurnTainted: attempt.isTurnTainted,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,
@@ -332,9 +329,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
 
   return {
     codeModeControlsEnabledForRun,
+    codeModeSkills,
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    forceDirectMessageTool,
+    inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

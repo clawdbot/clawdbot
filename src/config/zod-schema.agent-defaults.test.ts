@@ -58,7 +58,10 @@ describe("agent defaults schema", () => {
   it("rejects malformed model policy refs during config validation", () => {
     for (const entry of ["", "///", "provider//model", "nogarbageprovider"]) {
       const result = validateConfigObject({
-        agents: { defaults: { modelPolicy: { allow: [entry] } } },
+        agents: {
+          defaults: { modelPolicy: { allow: [entry] } },
+          entries: { main: { default: true } },
+        },
       });
 
       expect(result.ok, entry || "empty entry").toBe(false);
@@ -74,6 +77,7 @@ describe("agent defaults schema", () => {
   it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
     const result = validateConfigObject({
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
@@ -94,6 +98,24 @@ describe("agent defaults schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("reports keyed per-agent policy paths", () => {
+    const result = validateConfigObject({
+      agents: {
+        entries: {
+          main: { default: true },
+          runner: { modelPolicy: { allow: ["not-a-model-ref"] } },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.entries.runner.modelPolicy.allow.0" }),
+      );
+    }
   });
 
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
@@ -328,17 +350,6 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
-  it("accepts compaction.truncateAfterCompaction", () => {
-    const result = AgentDefaultsSchema.parse({
-      compaction: {
-        truncateAfterCompaction: true,
-        maxActiveTranscriptBytes: "20mb",
-      },
-    })!;
-    expect(result.compaction?.truncateAfterCompaction).toBe(true);
-    expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
-  });
-
   it.each([
     "off",
     "minimal",
@@ -388,6 +399,24 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
   });
 
+  it("accepts compaction.enabled so auto-compaction can be turned off", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        enabled: false,
+      },
+    })!;
+
+    expect(result.compaction?.enabled).toBe(false);
+  });
+
+  it("rejects a non-boolean compaction.enabled", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { enabled: "false" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts focused contextLimits on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {
@@ -425,6 +454,22 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
+  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        heartbeat: { activeHours: { start: "99:99", end: "17:00" } },
+      }),
+      "heartbeat.activeHours.start",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } },
+      }),
+      "heartbeat.activeHours.end",
+    );
+  });
+
   it("accepts per-agent TTS overrides", () => {
     const agent = AgentEntrySchema.parse({
       id: "reader",
@@ -460,6 +505,7 @@ describe("agent defaults schema", () => {
       agents: {
         entries: {
           ops: {
+            default: true,
             contextTokens: 1_048_576,
           },
         },

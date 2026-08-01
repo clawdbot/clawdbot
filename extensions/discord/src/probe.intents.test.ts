@@ -198,6 +198,27 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects invalid UTF-8 in getMe probe JSON responses", async () => {
+    const prefix = new TextEncoder().encode('{"id":"bot-1","username":"bad');
+    const suffix = new TextEncoder().encode('"}');
+    const body = new Uint8Array(prefix.length + 1 + suffix.length);
+    body.set(prefix);
+    body[prefix.length] = 0xff;
+    body.set(suffix, prefix.length + 1);
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(body, {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        }),
+    );
+
+    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("discord.probe.getMe: malformed JSON response"),
+    });
+  });
+
   it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const fetcher = withFetchPreconnect(async () =>

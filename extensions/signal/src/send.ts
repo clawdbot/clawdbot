@@ -66,6 +66,49 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
+type SignalSendRpcResult = {
+  timestamp?: number;
+  results?: unknown;
+};
+
+function assertSignalRecipientDelivery(
+  result: SignalSendRpcResult | undefined,
+  target: SignalTarget,
+): void {
+  if (!Array.isArray(result?.results)) {
+    return;
+  }
+  const failures: string[] = [];
+  let hasSuccessfulRecipient = false;
+  for (const entry of result.results) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = normalizeOptionalString(record.type);
+    if ((type && normalizeLowercaseStringOrEmpty(type) !== "success") || record.success === false) {
+      failures.push(
+        type ??
+          normalizeOptionalString(record.error) ??
+          normalizeOptionalString(record.message) ??
+          "recipient delivery failed",
+      );
+      continue;
+    }
+    if (normalizeLowercaseStringOrEmpty(type) === "success" || record.success === true) {
+      hasSuccessfulRecipient = true;
+    }
+  }
+  // Group sends fan out per member; retrying an already delivered partial
+  // success would duplicate the post for every successful recipient.
+  if (failures.length === 0 || (target.type === "group" && hasSuccessfulRecipient)) {
+    return;
+  }
+  throw new Error(
+    `Signal send failed for ${failures.length} recipient${failures.length === 1 ? "" : "s"}: ${[...new Set(failures)].join(", ")}`,
+  );
+}
+
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   if (!opts.cfg) {
     throw new Error(
@@ -333,10 +376,10 @@ export async function sendMessageSignal(
     maxAttachmentBytes: maxBytes,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
-  let result: { timestamp?: number } | undefined;
+  let result: SignalSendRpcResult | undefined;
   if (quote) {
     try {
-      result = await signalRpcRequest<{ timestamp?: number }>(
+      result = await signalRpcRequest<SignalSendRpcResult>(
         "send",
         { ...params, ...quote.params },
         sendOpts,
@@ -346,12 +389,13 @@ export async function sendMessageSignal(
       if (!isSignalQuoteMetadataRejection(error)) {
         throw error;
       }
-      result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
+      result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
       nativeReplyStatus = "fallback";
     }
   } else {
-    result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
+    result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
   }
+  assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   const replyAuthor = targetAuthor ?? targetAuthorUuid;

@@ -9,23 +9,26 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import {
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-mcp-oauth-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const MAX_LEGACY_STORE_BYTES = 4 * 1024 * 1024;
 const LEGACY_STORE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,29}-[0-9a-f]{16}\.json$/u;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
@@ -35,15 +38,7 @@ type McpOAuthMigrationDatabase = Pick<
   "mcp_oauth_stores" | "migration_runs" | "migration_sources"
 >;
 
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-  store: Record<string, unknown>;
-};
+type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & { store: Record<string, unknown> };
 
 type MigrationReceipt = {
   sourceKey: string;
@@ -114,16 +109,7 @@ export function detectLegacyMcpOAuthStores(params: {
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy MCP OAuth path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "MCP OAuth", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -132,37 +118,18 @@ async function readLegacySourceSnapshot(
   sourcePath: string,
   options: { parseStore?: boolean } = {},
 ): Promise<LegacySourceSnapshot> {
-  const opened = await stateRoot.read(relativeLegacyPath(stateDir, sourcePath), {
-    hardlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
+    sourcePath,
     maxBytes: MAX_LEGACY_STORE_BYTES,
-    symlinks: "reject",
+    label: "MCP OAuth",
   });
-  if (opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error("legacy MCP OAuth store changed while it was being read");
-  }
   const parsed =
     options.parseStore === false
       ? {}
-      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(opened.buffer)));
-  return {
-    sourcePath,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-    size: opened.stat.size,
-    store: parsed,
-  };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(snapshot.buffer)));
+  return { ...snapshot, store: parsed };
 }
 
 function storeKeyForSource(sourcePath: string): string {
@@ -564,61 +531,19 @@ export async function migrateLegacyMcpOAuthStores(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy MCP OAuth stores: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: [
-        "Failed migrating legacy MCP OAuth stores: exclusive state ownership unavailable.",
-      ],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy MCP OAuth stores",
+    releaseLabel: "MCP OAuth",
+    errorLabel: "Failed reading legacy MCP OAuth state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_STORE_BYTES,
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy MCP OAuth state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `MCP OAuth migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+      return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+    },
+  });
 }

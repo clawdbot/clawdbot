@@ -1122,9 +1122,9 @@ function resolveToolPayloadRedaction(
   return { mode: "tools", patterns };
 }
 
-// Forces tools-mode regardless of `logging.redactSensitive` (which governs log
-// output, not UI surfaces), and merges user `logging.redactPatterns` with the
-// built-in defaults so both apply.
+// Forces tools-mode so UI/tool payloads never inherit a caller-supplied "off"
+// mode, and merges user `logging.redactPatterns` with the built-in defaults so
+// both apply.
 export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }

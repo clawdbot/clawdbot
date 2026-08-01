@@ -1,7 +1,14 @@
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 // Resolves plugin-provided memory embedding providers from config and registry.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretInput } from "../config/types.secrets.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderCreateOptions,
+  EmbeddingProviderIndexIdentity,
+  EmbeddingProviderRuntime,
+} from "./embedding-provider-types.js";
 
 /** Chunk submitted to memory embedding batch processing. */
 export type MemoryEmbeddingBatchChunk = {
@@ -21,40 +28,22 @@ export type MemoryEmbeddingBatchOptions = {
 };
 
 /** Per-call options for memory embedding providers. */
-export type MemoryEmbeddingProviderCallOptions = {
-  signal?: AbortSignal;
-};
+export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
 
 /** Runtime metadata returned with memory embedding providers. */
-export type MemoryEmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData?: Record<string, unknown>;
-  /** Prior persisted model/cache identities that are equivalent to the current identity. */
-  indexIdentityAliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-  inlineQueryTimeoutMs?: number;
-  inlineBatchTimeoutMs?: number;
+export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
   sourceWideBatchEmbed?: boolean;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
 /** Provider-owned canonical identity and exact aliases for persisted indexes. */
-export type MemoryEmbeddingProviderIndexIdentity = {
-  model: string;
-  cacheKeyData: Record<string, unknown>;
-  aliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-};
+export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
 
 /** Created memory embedding provider instance. */
-export type MemoryEmbeddingProvider = {
-  id: string;
-  model: string;
-  maxInputTokens?: number;
+export type MemoryEmbeddingProvider = Pick<
+  EmbeddingProvider,
+  "id" | "model" | "maxInputTokens" | "close"
+> & {
   embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
   embedBatch: (
     texts: string[],
@@ -64,24 +53,14 @@ export type MemoryEmbeddingProvider = {
     inputs: EmbeddingInput[],
     options?: MemoryEmbeddingProviderCallOptions,
   ) => Promise<number[][]>;
-  close?: () => Promise<void> | void;
 };
 
 /** Options passed to memory embedding provider adapters. */
-export type MemoryEmbeddingProviderCreateOptions = {
-  config: OpenClawConfig;
-  agentDir?: string;
-  provider?: string;
+export type MemoryEmbeddingProviderCreateOptions = Omit<
+  EmbeddingProviderCreateOptions,
+  "dimensions" | "local" | "taskType"
+> & {
   fallback?: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-  };
-  model: string;
-  inputType?: string;
-  queryInputType?: string;
-  documentInputType?: string;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -105,11 +84,10 @@ export type MemoryEmbeddingProviderCreateResult = {
 };
 
 /** Adapter contract for registered memory embedding providers. */
-export type MemoryEmbeddingProviderAdapter = {
-  id: string;
-  defaultModel?: string;
-  transport?: "local" | "remote";
-  authProviderId?: string;
+export type MemoryEmbeddingProviderAdapter = Omit<
+  EmbeddingProviderAdapter,
+  "create" | "resolveIndexIdentity"
+> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
@@ -119,7 +97,6 @@ export type MemoryEmbeddingProviderAdapter = {
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;
-  formatSetupError?: (err: unknown) => string;
   shouldContinueAutoSelection?: (err: unknown) => boolean;
 };
 
@@ -132,14 +109,7 @@ export type RegisteredMemoryEmbeddingProvider = {
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 
 function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingProvider> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, RegisteredMemoryEmbeddingProvider>;
-  }
-  const created = new Map<string, RegisteredMemoryEmbeddingProvider>();
-  globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY] = created;
-  return created;
+  return resolveGlobalMap(MEMORY_EMBEDDING_PROVIDERS_KEY);
 }
 
 /** Registers a memory embedding provider adapter for the current process. */
@@ -158,11 +128,6 @@ export function getRegisteredMemoryEmbeddingProvider(
   id: string,
 ): RegisteredMemoryEmbeddingProvider | undefined {
   return getMemoryEmbeddingProviders().get(id);
-}
-
-/** Returns only the memory embedding provider adapter. */
-export function getMemoryEmbeddingProvider(id: string): MemoryEmbeddingProviderAdapter | undefined {
-  return getMemoryEmbeddingProviders().get(id)?.adapter;
 }
 
 /** Lists registered memory embedding provider entries. */

@@ -43,6 +43,24 @@ describe("BaseInteraction", () => {
     });
   });
 
+  it("deletes the original interaction response after defer", async () => {
+    const del = vi.fn(async () => undefined);
+    const post = vi.fn(async () => undefined);
+    const client = createInternalTestClient();
+    attachRestMock(client, { delete: del, post });
+    const interaction = createInteraction(
+      client,
+      createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
+    );
+
+    await interaction.defer();
+    expect(interaction.responseState).toBe("deferred");
+    await interaction.deleteReply();
+
+    expect(del).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original");
+    expect(interaction.responseState).toBe("replied");
+  });
+
   it("uses with_components for Components V2 follow-ups", async () => {
     const post = vi.fn(async () => undefined);
     const client = createInternalTestClient();

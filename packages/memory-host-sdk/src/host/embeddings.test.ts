@@ -1,4 +1,5 @@
 // Memory Host SDK tests cover embeddings behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,12 +15,24 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
 }));
+const forkMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    fork: forkMock,
+  };
+});
 
 vi.mock("./node-llama.js", () => ({
   importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  forkMock.mockReset();
+  forkMock.mockImplementation(actual.fork);
   nodeLlamaMock.importNodeLlamaCpp.mockReset();
 });
 
@@ -631,6 +644,206 @@ process.on("message", (message) => {
       buildType: "prebuilt",
     });
     await expect(provider.close?.()).resolves.toBeUndefined();
+  });
+
+  it("waits for the local worker process to exit before close resolves", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const exitMarker = path.join(tempDir, "worker-exited");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+const exitMarker = ${JSON.stringify(exitMarker)};
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(exitMarker, "exited");
+    process.exit(0);
+  }, 50);
+});
+process.on("message", (message) => {
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    const firstClose = provider.close?.() ?? Promise.resolve();
+    const secondClose = provider.close?.() ?? Promise.resolve();
+    await expect(Promise.all([firstClose, secondClose])).resolves.toEqual([undefined, undefined]);
+
+    await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
+  });
+
+  it("joins cancellation shutdown before a later close resolves", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const embedStarted = path.join(tempDir, "embed-started");
+    const exitMarker = path.join(tempDir, "worker-exited");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(exitMarker)}, "exited");
+    process.exit(0);
+  }, 50);
+});
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+  } else if (message.type === "embedQuery") {
+    fs.writeFileSync(${JSON.stringify(embedStarted)}, "started");
+  }
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+    const controller = new AbortController();
+    const embedPromise = provider.embedQuery("cancel me", { signal: controller.signal });
+    await expect
+      .poll(async () => {
+        try {
+          return await fs.readFile(embedStarted, "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("started");
+
+    controller.abort(new Error("cancelled"));
+    const queuedEmbedError = provider
+      .embedQuery("queued after cancel")
+      .catch((err: unknown) => err);
+    const closePromise = provider.close?.() ?? Promise.resolve();
+    await expect(embedPromise).rejects.toThrow("cancelled");
+    await expect(closePromise).resolves.toBeUndefined();
+    await expect(queuedEmbedError).resolves.toMatchObject({
+      message: "Local embedding worker client has been closed",
+    });
+
+    await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
+  });
+
+  it("escalates worker shutdown when the child ignores SIGTERM", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {});
+process.on("message", (message) => {
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(
+      settleWithin(
+        (provider.close?.() ?? Promise.resolve()).then(() => "closed" as const),
+        1_000,
+      ),
+    ).resolves.toBe("closed");
+  });
+
+  it("rejects close when worker signaling errors without a terminal event", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      connected: true,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      disconnect: vi.fn(function (this: { connected: boolean }) {
+        this.connected = false;
+      }),
+      kill: vi.fn(function (this: EventEmitter) {
+        queueMicrotask(() => this.emit("error", new Error("kill failed")));
+        return false;
+      }),
+      send: vi.fn(function (
+        this: EventEmitter,
+        message: { id: number },
+        callback: (err?: Error | null) => void,
+      ) {
+        callback();
+        queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
+        return true;
+      }),
+    });
+    forkMock.mockReturnValue(child);
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: "/mock/worker.cjs" },
+    );
+
+    const closeResult = await settleWithin(
+      (provider.close?.() ?? Promise.resolve()).then(
+        () => "closed" as const,
+        (err: unknown) => err,
+      ),
+      1_000,
+    );
+
+    expect(closeResult).toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+      message: "Local embedding worker did not exit after SIGKILL",
+    });
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+
+    child.kill.mockImplementationOnce(function (this: typeof child) {
+      this.signalCode = "SIGTERM";
+      queueMicrotask(() => this.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    await expect(provider.close?.()).resolves.toBeUndefined();
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGTERM"]]);
+  });
+
+  it("treats confirmed worker exit as closed after graceful disposal fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "close") {
+    process.send({ id: message.id, ok: false, error: "native disposal failed" });
+    return;
+  }
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(provider.close?.()).resolves.toBeUndefined();
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "native disposal failed" }),
+      {
+        code: "LOCAL_EMBEDDING_WORKER_CLOSE",
+      },
+    );
   });
 
   it("rejects pending and queued requests when closing a busy worker", async () => {

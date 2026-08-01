@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -114,7 +114,14 @@ export function loadSetupRuntimeChannelCandidate(params: {
       skipLexicalRootCheck: true,
     });
     if (!runtimeOpened.ok) {
-      params.pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      params.pushPluginLoadError(
+        describeRootFileOpenFailure({
+          failure: runtimeOpened,
+          subject: "plugin entry path",
+          boundaryLabel: "plugin root",
+          filePath: runtimeModuleSource,
+        }),
+      );
       return true;
     }
     const safeRuntimeSource = runtimeOpened.path;
@@ -247,7 +254,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
   }
   if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
-    const transaction = createPluginRegistrationTransaction({ registry: registryBuilder.registry });
+    const transaction = createPluginRegistrationTransaction({
+      registry: registryBuilder.registry,
+      activeRecord: record,
+    });
     try {
       runPluginRegisterSync(
         (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),

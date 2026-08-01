@@ -249,12 +249,6 @@ export class NodeInvokeStreamController {
   }
 
   private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {
-    // Cancel frames belong to the streaming-invoke contract only. Legacy
-    // single-result invokes must keep their pre-streaming wire behavior
-    // byte-identical, so timeouts there stay silent as before.
-    if (!pending.onProgress) {
-      return;
-    }
     this.options.sendCancel(requestId, pending);
   }
 }

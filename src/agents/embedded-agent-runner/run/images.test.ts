@@ -733,17 +733,14 @@ describe("hydratePromptMediaMessages", () => {
     }
   });
 
-  it("reconstructs recent facts from serialized transcript media fields", async () => {
+  it("reconstructs recent facts from canonical transcript media", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replayed-image-"));
     const imagePath = path.join(workspaceDir, "photo.png");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
     const message = {
       role: "user" as const,
       content: "describe the replayed image",
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: { media: [{ path: imagePath, contentType: "image/png" }] },
     } as unknown as AgentMessage;
 
     try {

@@ -15,6 +15,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
+  type MemoryEntryProvenance,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -66,6 +67,7 @@ export type MemoryIndexEntry = {
   content?: string;
   contentText?: string;
   lineMap?: number[];
+  lineProvenance?: MemoryEntryProvenance[];
 };
 
 export type MemoryIndexWorkItem = {

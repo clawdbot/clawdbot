@@ -95,6 +95,7 @@ export async function claimClawAgentConfigRemoval(params: {
   try {
     const committed = await deleteAgentConfigEntry({
       agentId: params.agentId,
+      allowConfigSizeDrop: true,
       allowMissing: params.expectedState === "missing",
       fallbackWorkspace: params.fallbackWorkspace,
       validateConfig: (config) => {

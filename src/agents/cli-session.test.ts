@@ -13,10 +13,13 @@ import {
   clearCliSession,
   getCliSessionBinding,
   hashCliSessionText,
+  resolveCliSessionClearReason,
   resolveCliSessionReuse,
   setCliSessionBinding,
   setCliSessionId,
+  shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
+import { FailoverError } from "./failover-error.js";
 
 describe("cli-session helpers", () => {
   it("persists binding metadata alongside legacy session ids", () => {
@@ -622,5 +625,37 @@ describe("cli-session helpers", () => {
   it("hashes trimmed extra system prompts consistently", () => {
     expect(hashCliSessionText("  keep this  ")).toBe(hashCliSessionText("keep this"));
     expect(hashCliSessionText("")).toBeUndefined();
+  });
+
+  it("shares failed reused-session cleanup policy across CLI entry points", () => {
+    const failover = new FailoverError("session expired", {
+      reason: "session_expired",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+    });
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+
+    const binding = { sessionId: "reused" };
+    const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
+
+    expect(shouldClearFailedCliSessionBinding({ error: failover, binding })).toBe(true);
+    expect(shouldClearFailedCliSessionBinding({ error: failover, binding: forkBinding })).toBe(
+      true,
+    );
+    expect(resolveCliSessionClearReason(failover)).toBe("session_expired");
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(true);
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: failover,
+        binding,
+        hasNewGeneratedMediaTask: true,
+      }),
+    ).toBe(false);
+    expect(resolveCliSessionClearReason(abort)).toBe("AbortError");
+    expect(
+      shouldClearFailedCliSessionBinding({ error: new Error("provider failed"), binding }),
+    ).toBe(false);
+    expect(shouldClearFailedCliSessionBinding({ error: failover })).toBe(false);
   });
 });

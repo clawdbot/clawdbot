@@ -7,6 +7,7 @@ import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
 type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
+type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
 
 function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {
@@ -36,6 +37,11 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
     defaultModelsDirty: false,
+    thinkingLevel: "off",
+    thinkingOverridden: true,
+    fastMode: false,
+    fastModeOverridden: true,
+    configBusy: false,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
@@ -69,6 +75,11 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onUtilityChange: () => undefined,
     onDefaultModelsSave: () => undefined,
     onDefaultModelsReset: () => undefined,
+    onThinkingChange: () => undefined,
+    onThinkingReset: () => undefined,
+    onFastModeChange: () => undefined,
+    onFastModeReset: () => undefined,
+    onOpenModelSetup: () => undefined,
     ...overrides,
   };
 }
@@ -90,6 +101,21 @@ function button(container: Element, label: string): HTMLButtonElement | undefine
   );
 }
 
+function settingsRow(container: Element, label: string): HTMLElement {
+  const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) => text(candidate.querySelector(".settings-row__title")) === label,
+  );
+  if (!match) {
+    throw new Error(`Missing settings row: ${label}`);
+  }
+  return match;
+}
+
+function selectSegment(group: SegmentedGroup, value: string) {
+  group.value = value;
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("renderModelProviders", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -100,6 +126,359 @@ describe("renderModelProviders", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+  });
+
+  it("renders model behavior next to default models and emits canonical values", () => {
+    const onThinkingChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: "low",
+        fastMode: "auto",
+        onThinkingChange,
+        onFastModeChange,
+      }),
+    );
+
+    const behavior = container.querySelector("#settings-model-behavior");
+    expect(behavior).not.toBeNull();
+    const thinking = settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    );
+    const fastMode = settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    );
+    expect(thinking?.value).toBe("low");
+    expect(fastMode?.value).toBe("auto");
+    expect([...fastMode!.querySelectorAll("wa-radio")].map((entry) => text(entry))).toEqual([
+      "Default",
+      "Auto",
+      "Fast",
+      "Standard",
+    ]);
+
+    selectSegment(thinking!, "high");
+    selectSegment(fastMode!, "off");
+    expect(onThinkingChange).toHaveBeenCalledWith("high", expect.any(HTMLElement));
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
+    const onThinkingReset = vi.fn();
+    const onFastModeReset = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: "adaptive",
+        fastMode: true,
+        onThinkingReset,
+        onFastModeReset,
+      }),
+    );
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinkingRow = settingsRow(behavior, "Thinking");
+    const fastRow = settingsRow(behavior, "Fast mode");
+
+    expect(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("adaptive");
+    expect(text(thinkingRow)).toContain("Adaptive");
+    expect(text(thinkingRow)).toContain("Default: Model policy");
+    expect(text(fastRow)).toContain("Default: Model policy");
+
+    thinkingRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    fastRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
+
+    selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    expect(onThinkingReset).toHaveBeenCalledTimes(2);
+    expect(onFastModeReset).toHaveBeenCalledTimes(2);
+
+    render(
+      renderModelProviders(
+        props({
+          thinkingLevel: undefined,
+          thinkingOverridden: false,
+          fastMode: undefined,
+          fastModeOverridden: false,
+        }),
+      ),
+      container,
+    );
+    const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
+    const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
+    const inheritedFast = settingsRow(inheritedBehavior, "Fast mode");
+    expect(inheritedThinking.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(inheritedFast.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(
+      (
+        inheritedThinking.querySelector('wa-radio[value=""]') as HTMLElement & {
+          checked: boolean;
+        }
+      ).checked,
+    ).toBe(true);
+    expect(
+      (inheritedFast.querySelector('wa-radio[value=""]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
+    expect(text(inheritedThinking)).toContain("Using default: Model policy");
+    expect(text(inheritedFast)).toContain("Using default: Model policy");
+    expect(
+      inheritedBehavior.querySelectorAll('button[aria-label="Reset to default"]'),
+    ).toHaveLength(0);
+  });
+
+  it("keeps invalid explicit model behavior values resettable", () => {
+    const onThinkingReset = vi.fn();
+    const onFastModeReset = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: undefined,
+        thinkingOverridden: true,
+        fastMode: undefined,
+        fastModeOverridden: true,
+        onThinkingReset,
+        onFastModeReset,
+      }),
+    );
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinking = settingsRow(behavior, "Thinking");
+    const fast = settingsRow(behavior, "Fast mode");
+
+    expect(text(thinking)).toContain("Default: Model policy");
+    expect(text(fast)).toContain("Default: Model policy");
+    thinking.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    fast.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
+  });
+
+  it("restores controlled model behavior when a reset is rejected", () => {
+    const viewProps = props({
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    const container = mount(viewProps);
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinking = settingsRow(behavior, "Thinking").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    )!;
+    const fastMode = settingsRow(behavior, "Fast mode").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    )!;
+
+    selectSegment(thinking, "");
+    selectSegment(fastMode, "");
+    render(renderModelProviders(viewProps), container);
+
+    expect(thinking.value).toBe("high");
+    expect(fastMode.value).toBe("on");
+    expect(
+      (thinking.querySelector('wa-radio[value="high"]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
+    expect(
+      (fastMode.querySelector('wa-radio[value="on"]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
+  });
+
+  it("locks model behavior while shared config work is pending", () => {
+    const container = mount(props({ configBusy: true }));
+    const behavior = container.querySelector("#settings-model-behavior");
+    const groups = behavior?.querySelectorAll<SegmentedGroup>("wa-radio-group") ?? [];
+
+    expect(groups).toHaveLength(2);
+    expect([...groups].every((group) => group.disabled)).toBe(true);
+  });
+
+  it("locks provider and default-model mutations while shared config work is pending", () => {
+    const container = mount(
+      props({
+        configBusy: true,
+        defaultModelsDirty: true,
+        defaultModels: {
+          primary: "openai/gpt-5",
+          fallbacks: ["anthropic/claude"],
+          utilityModel: null,
+        },
+        configuredModels: [
+          { id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true },
+          { id: "anthropic/claude", provider: "anthropic", name: "Claude", available: true },
+        ],
+        cards: [
+          card({
+            hasConfigApiKey: true,
+            apiKey: { source: "config" },
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+          }),
+        ],
+        keyEditorProvider: "openai",
+        keyDraft: "replacement",
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+      }),
+    );
+
+    const defaults = container.querySelector(".model-providers__defaults");
+    const defaultControls = [
+      ...(defaults?.querySelectorAll<HTMLSelectElement | HTMLButtonElement>(
+        "select, .model-providers__fallback-row button",
+      ) ?? []),
+      button(container, "Save"),
+    ];
+    expect(defaultControls.map((control) => control?.disabled)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(
+      provider?.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
+    ).toBe(true);
+    expect(button(provider!, "Replace key")?.disabled).toBe(true);
+    expect(button(provider!, "Remove key")?.disabled).toBe(true);
+    expect(button(provider!, "Log out")?.disabled).toBe(true);
+
+    const addForm = container.querySelector(".model-providers__add-form");
+    expect(
+      [
+        ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+          "select, input, button",
+        ) ?? []),
+      ].map((control) => control.disabled),
+    ).toEqual([true, true, true]);
+  });
+
+  it("locks an already-open provider form after mutation access is revoked", () => {
+    const onAddProvider = vi.fn();
+    const onAddProviderToggle = vi.fn();
+    const container = mount(
+      props({
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+        canMutate: false,
+        mutationBlockedReason: "Operator admin access required",
+        onAddProvider,
+        onAddProviderToggle,
+      }),
+    );
+    const addForm = container.querySelector(".model-providers__add-form");
+    const controls = [
+      ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+        "select, input, button",
+      ) ?? []),
+    ];
+
+    expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
+    addForm?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onAddProvider).not.toHaveBeenCalled();
+
+    const cancel = button(addForm!.closest(".settings-section")!, "Cancel");
+    expect(cancel?.disabled).toBe(false);
+    cancel?.click();
+    expect(onAddProviderToggle).toHaveBeenCalledOnce();
+  });
+
+  it("freezes provider and credential fields while adding a provider", () => {
+    const container = mount(
+      props({
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+        busy: { add: true },
+      }),
+    );
+    const addForm = container.querySelector(".model-providers__add-form");
+
+    expect(
+      [
+        ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("select, input") ?? []),
+      ].map((control) => control.disabled),
+    ).toEqual([true, true]);
+  });
+
+  it("keeps committed credential success visible beside its refresh warning", () => {
+    const container = mount(
+      props({
+        messages: {
+          openai: {
+            kind: "success",
+            text: "Secret saved.",
+            warning: "Config refresh failed after the secret was committed.",
+          },
+        },
+      }),
+    );
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    const messages = [...(provider?.querySelectorAll('[role="status"]') ?? [])];
+
+    expect(messages.map((message) => text(message))).toEqual([
+      "Secret saved.",
+      "Config refresh failed after the secret was committed.",
+    ]);
+    expect(messages[0]?.classList.contains("success")).toBe(true);
+    expect(messages[1]?.classList.contains("warning")).toBe(true);
+  });
+
+  it("keeps committed default-model success visible beside its refresh warning", () => {
+    const container = mount(
+      props({
+        messages: {
+          defaults: {
+            kind: "success",
+            text: "Default models saved.",
+            warning: "Config refresh failed after the model defaults were committed.",
+          },
+        },
+      }),
+    );
+    const defaults = container.querySelector(".model-providers__defaults");
+    const messages = [...(defaults?.querySelectorAll('[role="status"]') ?? [])];
+
+    expect(messages.map((message) => text(message))).toEqual([
+      "Default models saved.",
+      "Config refresh failed after the model defaults were committed.",
+    ]);
+    expect(messages[0]?.classList.contains("success")).toBe(true);
+    expect(messages[1]?.classList.contains("warning")).toBe(true);
+  });
+
+  it("announces provider and default-model mutation failures as accessible alerts", () => {
+    const container = mount(
+      props({
+        messages: {
+          openai: { kind: "error", text: "Provider credential could not be saved." },
+          defaults: { kind: "error", text: "Default models could not be saved." },
+        },
+      }),
+    );
+
+    expect(text(container.querySelector('[data-provider-id="openai"] [role="alert"]'))).toBe(
+      "Provider credential could not be saved.",
+    );
+    expect(text(container.querySelector('.model-providers__defaults [role="alert"]'))).toBe(
+      "Default models could not be saved.",
+    );
+  });
+
+  it("keeps model behavior available while provider data loads", () => {
+    const container = mount(props({ loading: true, thinkingLevel: "high", fastMode: true }));
+    const behavior = container.querySelector("#settings-model-behavior");
+
+    expect(behavior).not.toBeNull();
+    expect(
+      settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("high");
+    expect(
+      settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("on");
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
 
   it("renders credential provenance and probe results", () => {
@@ -129,6 +508,97 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Connected");
     expect(text(provider)).toContain("145 ms");
     expect(text(provider)).toContain("Default profile");
+  });
+
+  it("puts model recovery first when credentials expose no selectable models", () => {
+    const onOpenModelSetup = vi.fn();
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        onOpenModelSetup,
+      }),
+    );
+
+    const readiness = container.querySelector('[data-model-readiness="model-required"]');
+    expect(text(readiness)).toContain("Connect a verified AI model");
+    expect(text(readiness)).toContain("No models available");
+    expect(text(readiness)).toContain("Choose another provider");
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain("Signed in");
+
+    button(readiness!, "Choose another provider")?.click();
+    expect(onOpenModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("does not report an unverified API key as ready", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "api-key", profileCount: 0 },
+          }),
+        ],
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("API key");
+    expect(text(provider)).not.toContain("Ready");
+  });
+
+  it("starts provider setup before showing disabled model controls", () => {
+    const onOpenModelSetup = vi.fn();
+    const container = mount(
+      props({
+        cards: [],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        onOpenModelSetup,
+      }),
+    );
+
+    const readiness = container.querySelector('[data-model-readiness="model-required"]');
+    expect(text(readiness)).toContain("Model required");
+    expect(button(readiness!, "Connect a verified AI model")).toBeDefined();
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+  });
+
+  it("recovers from a saved default that is no longer selectable", () => {
+    const container = mount(
+      props({
+        configuredModels: [
+          {
+            id: "retired-model",
+            provider: "openai",
+            name: "Retired model",
+            available: false,
+          },
+        ],
+        defaultModels: {
+          primary: "openai/retired-model",
+          fallbacks: [],
+          utilityModel: null,
+        },
+      }),
+    );
+
+    expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+  });
+
+  it("shows defaults normally when a selectable model exists", () => {
+    const container = mount(props());
+    expect(container.querySelector('[data-model-readiness="model-required"]')).toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
   });
 
   it("labels provider usage and session cost as global", () => {
@@ -206,6 +676,41 @@ describe("renderModelProviders", () => {
     const probe = container.querySelector(".model-providers__probe--error");
     expect(text(probe)).toContain("Billing problem");
     expect(text(probe)).toContain("Account has no credits");
+  });
+
+  it("presents no-model probe results as a setup state, not a connection failure", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        probeResults: {
+          openai: {
+            provider: "openai",
+            status: "no_model",
+            error: "No model is available for this provider.",
+            results: [
+              {
+                profileId: "openai:chatgpt",
+                label: "ChatGPT",
+                status: "no_model",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Signed in");
+    expect(text(provider)).toContain("No models available");
+    expect(text(provider)).not.toContain("Connection failed");
   });
 
   it("qualifies slash-bearing model IDs with their catalog provider", () => {

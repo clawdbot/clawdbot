@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 
 type CreateOpenClawToolsArg = {
   beforeToolCallHookContext?: {
@@ -13,6 +14,8 @@ type CreateOpenClawToolsArg = {
   };
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   nativeChannelId?: string;
+  pluginToolDenylist?: string[];
+  senderIsOwner?: boolean;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -29,6 +32,7 @@ const hoisted = vi.hoisted(() => {
       makeTool("read"),
       makeTool("cron"),
       makeTool("exec"),
+      makeTool("conversations_send"),
     ]),
   };
 });
@@ -55,11 +59,12 @@ describe("resolveSkillDispatchTools", () => {
       workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
       provider: "openai",
       model: "gpt-5.5",
+      senderIsOwner: true,
     });
 
     const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "cron" }]);
+    expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");
   });
 
@@ -72,14 +77,16 @@ describe("resolveSkillDispatchTools", () => {
       workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
       provider: "openai",
       model: "gpt-5.5",
+      senderIsOwner: true,
     });
 
     const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
-    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec", "conversations_send"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([
       { name: "read" },
-      { name: "cron" },
+      { name: "automations" },
       { name: "exec" },
+      { name: "conversations_send" },
     ]);
   });
 
@@ -92,6 +99,7 @@ describe("resolveSkillDispatchTools", () => {
       workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
       provider: "openai",
       model: "gpt-5.5",
+      senderIsOwner: true,
       skillCommand: {
         name: "daily-brief",
         skillFile: "/workspace/skills/daily-brief/SKILL.md",
@@ -138,11 +146,44 @@ describe("resolveSkillDispatchTools", () => {
         workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
         provider: "openai",
         model: "gpt-5.5",
+        senderIsOwner: true,
       });
 
       expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("removes owner-only core tools for authorized non-owner dispatch", () => {
+    const common = {
+      message: { surface: "telegram", senderId: "allowed-user" },
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:allowed-user",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+    };
+
+    const nonOwnerTools = resolveSkillDispatchTools({
+      ...common,
+      senderIsOwner: false,
+    });
+    const nonOwnerArgs = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(nonOwnerTools.map((tool) => tool.name)).not.toContain("conversations_send");
+    expect(nonOwnerArgs?.senderIsOwner).toBe(false);
+    expect(nonOwnerArgs?.pluginToolDenylist).toEqual(
+      expect.arrayContaining([...GATEWAY_OWNER_ONLY_CORE_TOOLS]),
+    );
+
+    const ownerTools = resolveSkillDispatchTools({
+      ...common,
+      senderIsOwner: true,
+    });
+    const ownerArgs = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(ownerTools.map((tool) => tool.name)).toContain("conversations_send");
+    expect(ownerArgs?.senderIsOwner).toBe(true);
+    expect(ownerArgs?.pluginToolDenylist).not.toContain("conversations_send");
   });
 });

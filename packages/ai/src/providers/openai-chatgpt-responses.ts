@@ -26,6 +26,7 @@ function loadNodeOs(): typeof NodeOs | null {
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
 const os = loadNodeOs();
 
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -35,6 +36,8 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -66,7 +69,6 @@ import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -299,16 +301,6 @@ export const streamOpenAICodexResponses: StreamFunction<
       // backend routes by session_id/x-client-request-id). Left as-is for this fix;
       // see the SSE-path session_id addition in buildOpenAIClientHeaders (agents/openai-transport-stream.ts).
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
-      const websocketRequestId = sessionId || createCodexRequestId();
-      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
-      const websocketHeaders = buildWebSocketHeaders(
-        modelHeaders,
-        optionHeaders,
-        accountId,
-        apiKey,
-        websocketRequestId,
-      );
-      const bodyJson = JSON.stringify(body);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
@@ -320,6 +312,13 @@ export const streamOpenAICodexResponses: StreamFunction<
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
 
       if (transport !== "sse" && !websocketDisabledForSession) {
+        const websocketHeaders = buildWebSocketHeaders(
+          modelHeaders,
+          optionHeaders,
+          accountId,
+          apiKey,
+          sessionId || createCodexRequestId(),
+        );
         let websocketStarted = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
@@ -340,7 +339,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             );
 
             if (activeSignal?.aborted) {
-              throw new Error("Request was aborted");
+              throw transportAbortError(activeSignal);
             }
             stream.push({
               type: "done",
@@ -369,7 +368,7 @@ export const streamOpenAICodexResponses: StreamFunction<
                 phase: websocketStarted
                   ? "after_message_stream_start"
                   : "before_message_stream_start",
-                requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+                requestBytes: new TextEncoder().encode(JSON.stringify(body)).byteLength,
               }),
             );
             if (transport === "auto" && options?.sessionId) {
@@ -383,6 +382,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
       }
 
+      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
+      const bodyJson = JSON.stringify(body);
       const canCompressSseBody = model.provider === "openai" && !sseHeaders.has("content-encoding");
       const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
       if (compressedBody) {
@@ -397,7 +398,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (activeSignal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(activeSignal);
         }
 
         let attemptResponse: Response;
@@ -440,7 +441,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             }
           }
           const tlsCertificateError = inspectTlsCertificateError(error);
-          lastError = toLintErrorObject(error, String(error));
+          lastError = toErrorObject(error, String(error));
           // Deterministic certificate failures cannot recover through backoff.
           if (
             attempt < maxRetries &&
@@ -479,7 +480,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       await processStream(response, output, stream, model, options, firstEventAbort.abort);
 
       if (activeSignal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(activeSignal);
       }
 
       stream.push({
@@ -554,8 +555,6 @@ function buildRequestBody(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    tool_choice: "auto",
-    parallel_tool_calls: true,
   };
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
@@ -568,13 +567,10 @@ function buildRequestBody(
 
   if (context.tools) {
     const converted = convertResponsesToolPayload(context.tools, { strict: null });
-    if (converted.projection.inputToolCount > 0 || converted.projection.diagnostics.length > 0) {
+    if (converted.tools.length > 0) {
       body.tools = converted.tools;
-      if (body.tools.length === 0) {
-        delete body.tools;
-        delete body.tool_choice;
-        delete body.parallel_tool_calls;
-      }
+      body.tool_choice = "auto";
+      body.parallel_tool_calls = true;
     }
   }
 
@@ -679,6 +675,7 @@ async function processStream(
     firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
     abortFirstEventStream,
     onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+    signal: options?.signal,
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyServiceTierPricing(usage, serviceTier, model),
@@ -1021,6 +1018,31 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
   } catch {}
 }
 
+// A delayed release or expiry owns its captured socket, not a newer session lease.
+function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketConnection): void {
+  if (websocketSessionCache.get(sessionId) === entry) {
+    websocketSessionCache.delete(sessionId);
+  }
+}
+
+// An acquire that awaited connectWebSocket() must not clobber a newer lease a
+// concurrent request installed during the await. Install the fresh entry only
+// when the cache still matches what this acquire left behind before the await:
+// the stale entry it observed (and did not remove), or undefined once it removed
+// its own stale entry (or for a first connect with no prior entry). A different
+// cached entry means a concurrent request already won this session.
+function setOwnedWebSocketSession(
+  sessionId: string,
+  entry: CachedWebSocketConnection,
+  expected: CachedWebSocketConnection | undefined,
+): boolean {
+  if (websocketSessionCache.get(sessionId) === expected) {
+    websocketSessionCache.set(sessionId, entry);
+    return true;
+  }
+  return false;
+}
+
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -1030,7 +1052,7 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
       return;
     }
     closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-    websocketSessionCache.delete(sessionId);
+    deleteOwnedWebSocketSession(sessionId, entry);
   }, SESSION_WEBSOCKET_CACHE_TTL_MS);
 }
 
@@ -1138,6 +1160,12 @@ async function acquireWebSocket(
   }
 
   const cached = websocketSessionCache.get(sessionId);
+  // Track what the cache is expected to hold after this acquire's own cleanup,
+  // so the post-await install only proceeds when no concurrent request installed
+  // a newer entry. Starts as the observed entry; reset to undefined once this
+  // acquire removes its own stale entry, since owner-checked delete leaves the
+  // cache empty (and a concurrent winner would fill it with a different entry).
+  let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
       clearTimeout(cached.idleTimer);
@@ -1145,7 +1173,8 @@ async function acquireWebSocket(
     }
     if (!cached.busy && isWebSocketSessionExpired(cached)) {
       closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
-      websocketSessionCache.delete(sessionId);
+      deleteOwnedWebSocketSession(sessionId, cached);
+      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
       return {
@@ -1154,7 +1183,7 @@ async function acquireWebSocket(
         release: ({ keep } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
             closeWebSocketSilently(cached.socket);
-            websocketSessionCache.delete(sessionId);
+            deleteOwnedWebSocketSession(sessionId, cached);
             return;
           }
           cached.busy = false;
@@ -1173,25 +1202,28 @@ async function acquireWebSocket(
     }
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
-      websocketSessionCache.delete(sessionId);
+      deleteOwnedWebSocketSession(sessionId, cached);
+      expectedCacheValue = undefined;
     }
   }
 
   const socket = await connectWebSocket(url, headers, signal);
   const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
-  websocketSessionCache.set(sessionId, entry);
+  // Install only if the cache still matches what this acquire left behind (the
+  // stale entry it removed, or empty for a first connect). A different cached
+  // entry means a concurrent request already won this session during the await;
+  // let it keep the lease and leave this socket transient.
+  const ownsCache = setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
   return {
     socket,
-    entry,
+    entry: ownsCache ? entry : undefined,
     release: ({ keep } = {}) => {
-      if (!keep || !isWebSocketReusable(entry.socket)) {
+      if (!ownsCache || !keep || !isWebSocketReusable(entry.socket)) {
         closeWebSocketSilently(entry.socket);
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
         }
-        if (websocketSessionCache.get(sessionId) === entry) {
-          websocketSessionCache.delete(sessionId);
-        }
+        deleteOwnedWebSocketSession(sessionId, entry);
         return;
       }
       entry.busy = false;
@@ -1348,7 +1380,7 @@ async function* parseWebSocket(
   try {
     while (true) {
       if (signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(signal);
       }
       const next = queue.shift();
       if (next !== undefined) {
@@ -1364,7 +1396,7 @@ async function* parseWebSocket(
     }
 
     if (failed) {
-      throw toLintErrorObject(failed, "Non-Error thrown");
+      throw toErrorObject(failed, "Non-Error thrown");
     }
     if (!sawCompletion) {
       throw new Error("WebSocket stream closed before response.completed");
@@ -1481,7 +1513,7 @@ async function processWebSocketStream(
     useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
   try {
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
@@ -1499,6 +1531,7 @@ async function processWebSocketStream(
         firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+        signal: options?.signal,
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyServiceTierPricing(usage, serviceTier, model),
@@ -1710,17 +1743,4 @@ function buildWebSocketHeaders(
   return headers;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

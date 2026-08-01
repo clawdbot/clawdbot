@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -12,7 +11,6 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentSessionSharingSchemaInTransaction } from "../../state/openclaw-agent-session-sharing-schema.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -31,7 +29,6 @@ export type StoredSessionSuggestion = {
   state: StoredSessionSuggestionState;
 };
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
@@ -39,18 +36,6 @@ export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
-}
-
-function ensureSuggestionSchema(options: OpenClawAgentDatabaseOptions): OpenClawAgentDatabase {
-  const database = openOpenClawAgentDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return database;
-  }
-  runOpenClawAgentWriteTransaction((transactionDatabase) => {
-    ensureOpenClawAgentSessionSharingSchemaInTransaction(transactionDatabase.db);
-  }, options);
-  ensuredDatabases.add(database.db);
-  return database;
 }
 
 function suggestionDb(database: OpenClawAgentDatabase) {
@@ -154,7 +139,6 @@ export function addSessionSuggestion(
     throw new Error("suggestion author and text are required");
   }
   const options = resolveDatabaseOptions(scope);
-  ensureSuggestionSchema(options);
   const sessionKey = resolveSqliteScope(scope).sessionKey;
   const suggestion: StoredSessionSuggestion = {
     id: params.id ?? randomUUID(),
@@ -209,7 +193,7 @@ export function listSessionSuggestions(
   params: { authorId?: string; pendingOnly?: boolean } = {},
 ): StoredSessionSuggestion[] {
   const options = resolveDatabaseOptions(scope);
-  const database = ensureSuggestionSchema(options);
+  const database = openOpenClawAgentDatabase(options);
   const sessionKey = resolveSqliteScope(scope).sessionKey;
   let query = suggestionDb(database)
     .selectFrom("session_suggestions")
@@ -243,7 +227,6 @@ export function claimSessionSuggestionDispatch(
   },
 ): SessionSuggestionDispatchClaim | null {
   const options = resolveDatabaseOptions(scope);
-  ensureSuggestionSchema(options);
   const sessionKey = resolveSqliteScope(scope).sessionKey;
   return runOpenClawAgentWriteTransaction((database) => {
     assertSessionInstance(database, sessionKey, params.expectedSessionId);
@@ -308,7 +291,6 @@ export function releaseSessionSuggestionDispatch(
   params: { id: string; token: string; expectedSessionId?: string },
 ): boolean {
   const options = resolveDatabaseOptions(scope);
-  ensureSuggestionSchema(options);
   const sessionKey = resolveSqliteScope(scope).sessionKey;
   return runOpenClawAgentWriteTransaction((database) => {
     assertSessionInstance(database, sessionKey, params.expectedSessionId);
@@ -336,7 +318,6 @@ export function finalizeSessionSuggestionClaim(
   },
 ): StoredSessionSuggestion | null {
   const options = resolveDatabaseOptions(scope);
-  ensureSuggestionSchema(options);
   const sessionKey = resolveSqliteScope(scope).sessionKey;
   return runOpenClawAgentWriteTransaction((database) => {
     assertSessionInstance(database, sessionKey, params.expectedSessionId);

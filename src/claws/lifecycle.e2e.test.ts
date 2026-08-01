@@ -80,6 +80,13 @@ describe("claws lifecycle cli e2e", () => {
         agent: { id: "incident-response" },
         packages: expect.any(Array),
       },
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: {
+          tools: { allow: ["read", "write", "web_fetch"], deny: ["exec", "browser"] },
+          heartbeat: { every: "30m", isolatedSession: true, timeoutSeconds: 120 },
+        },
+      },
     });
   });
 
@@ -150,6 +157,8 @@ describe("claws lifecycle cli e2e", () => {
       main: { default: true },
       "internal-triage": expect.objectContaining({
         name: "Internal Triage",
+        tools: { deny: ["exec", "browser"] },
+        humanDelay: { mode: "natural" },
         workspace: join(canonicalStateDir, ".openclaw", "workspace-internal-triage"),
       }),
     });

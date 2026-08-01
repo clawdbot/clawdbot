@@ -2,6 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -74,6 +75,7 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
+const TEXT_FRAGMENT_COALESCE_TEST_GAP_MS = 5_000;
 
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
@@ -98,8 +100,10 @@ function setOpenChannelPostConfig() {
   });
 }
 
-function getChannelPostHandler() {
-  createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+function getChannelPostHandler(
+  testTimings: { mediaGroupFlushMs: number; textFragmentGapMs: number } = TELEGRAM_TEST_TIMINGS,
+) {
+  createTelegramBot({ token: "tok", testTimings });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
@@ -247,6 +251,7 @@ describe("createTelegramBot channel_post media", () => {
   beforeAll(() => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
@@ -304,7 +309,10 @@ describe("createTelegramBot channel_post media", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const handler = getChannelPostHandler();
+      const handler = getChannelPostHandler({
+        ...TELEGRAM_TEST_TIMINGS,
+        textFragmentGapMs: TEXT_FRAGMENT_COALESCE_TEST_GAP_MS,
+      });
 
       const part1 = "A".repeat(4050);
       const part2 = "B".repeat(50);
@@ -332,10 +340,7 @@ describe("createTelegramBot channel_post media", () => {
       });
 
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroupForDelay(
-        setTimeoutSpy,
-        TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
-      );
+      await flushChannelPostMediaGroupForDelay(setTimeoutSpy, TEXT_FRAGMENT_COALESCE_TEST_GAP_MS);
 
       await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { RawBody?: string };
@@ -844,15 +849,21 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
-  it("durably retries every spooled album update when shutdown aborts a download", async () => {
+  it.each([
+    { failure: "shutdown aborts a download", shutdownAbort: true },
+    { failure: "Telegram temporarily throttles a download", shutdownAbort: false },
+  ])("durably retries every spooled album update when $failure", async ({ shutdownAbort }) => {
     setOpenChannelPostConfig();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
 
     const shutdown = new AbortController();
     saveRemoteMedia.mockImplementationOnce(async () => {
-      shutdown.abort();
-      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      if (shutdownAbort) {
+        shutdown.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+      throw new MediaFetchError("http_error", "rate limited", { status: 429 });
     });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

@@ -17,7 +17,10 @@ import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
-import { loadAbortRuntime } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  loadAbortRuntime,
+  loadFastApproveRuntime,
+} from "./dispatch-from-config.runtime-loaders.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -64,15 +67,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (!fastAbortResolver || !formatAbortReplyTextResolver) {
     throw new Error("abort runtime unavailable");
   }
-  const fastAbort = await fastAbortResolver({ ctx, cfg });
-  if (fastAbort.handled) {
+  const finishFastCommand = async (fast: {
+    payload?: ReplyPayload;
+    reason: "fast_abort" | "before_dispatch_handled";
+    logKind: "fast_abort" | "fast_approve";
+  }) => {
     if (pluginOwnedBinding) {
       touchConversationBindingRecord(pluginOwnedBinding.bindingId);
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (!suppressDelivery) {
+    if (!suppressDelivery && fast.payload) {
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
       const modelSelection = {
         ...selectedModel,
@@ -85,12 +91,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         modelFull: `${selectedModel.provider}/${selectedModel.model}`,
         thinkingLevel: modelSelection.thinkLevel ?? "off",
       };
-      const payload = {
-        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
-      } satisfies ReplyPayload;
       // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
       // their prefix, so seed that live context only when no cross-channel route is used.
-      const result = await routeReplyToOriginating(payload, { responsePrefixContext });
+      const result = await routeReplyToOriginating(fast.payload, { responsePrefixContext });
       if (result) {
         queuedFinal = result.ok;
         if (isRoutedReplyDelivered(result)) {
@@ -98,22 +101,22 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         }
         if (!result.ok) {
           logVerbose(
-            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+            `dispatch-from-config: route-reply (${fast.logKind}) failed: ${result.error ?? "unknown error"}`,
           );
         }
       } else {
         markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        queuedFinal = dispatcher.sendFinalReply(payload);
+        queuedFinal = dispatcher.sendFinalReply(fast.payload);
       }
-    } else {
+    } else if (suppressDelivery) {
       logVerbose(
-        `dispatch-from-config: fast_abort reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
+        `dispatch-from-config: ${fast.logKind} reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
       );
     }
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    recordProcessed("completed", { reason: "fast_abort" });
+    recordProcessed("completed", { reason: fast.reason });
     markIdle("message_completed");
     commitInboundDedupeIfClaimed();
     completeDispatchReplyOperation();
@@ -121,9 +124,36 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
+  };
+  const fastAbort = await fastAbortResolver({ ctx, cfg });
+  if (fastAbort.handled) {
+    return await finishFastCommand({
+      payload: {
+        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
+      },
+      reason: "fast_abort",
+      logKind: "fast_abort",
+    });
+  }
+  if (/^\s*\/approve(?:@[^\s]+)?(?:\s|$)/i.test(ctx.commandText)) {
+    const fastApprove = await (
+      await loadFastApproveRuntime()
+    ).tryFastApproveFromMessage({
+      ctx,
+      cfg,
+      agentId: sessionAgentId,
+      sessionKey,
+    });
+    if (fastApprove.handled) {
+      return await finishFastCommand({
+        ...(fastApprove.reply ? { payload: fastApprove.reply } : {}),
+        reason: "before_dispatch_handled",
+        logKind: "fast_approve",
+      });
+    }
   }
   // Own the session before plugin-bound handlers or message hooks can perform
-  // work. Fast abort and inbound dedupe intentionally remain ahead of this gate.
+  // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
   const preDispatchAcquisition = await ensureDispatchReplyOperation("pre_dispatch");
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };

@@ -1,5 +1,4 @@
 /** In-memory plugin registry builder and mutation API for plugin runtime registration. */
-import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import { clearContextEnginesForOwner } from "../context-engine/registry.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
@@ -42,7 +41,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     clearPluginCommandsForPlugin(pluginId);
     clearPluginInteractiveHandlersForPlugin(pluginId);
-    clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
     registrars.rollbackHooks(pluginId);
 

@@ -259,7 +259,19 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const loadGatewayModelCatalog = vi.fn(() => Promise.resolve([]));
+    const loadGatewayModelCatalog = vi.fn(() =>
+      Promise.resolve([
+        {
+          id: "source-model",
+          name: "Source Model",
+          provider: "vllm",
+          status: "disabled",
+          contextWindow: 128_000,
+          reasoning: true,
+          input: ["text", "image"],
+        },
+      ]),
+    );
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     try {
       const { request, respond } = requestModelsList({

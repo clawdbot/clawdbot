@@ -12,22 +12,21 @@ import {
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
+import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
-  applyEditsToNormalizedContent,
+  applyEditsPreservingLineEndings,
   computeEditsDiff,
-  detectLineEnding,
   EditNoChangeError,
   type Edit,
   type EditDiffError,
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
-  normalizeToLF,
-  restoreLineEndings,
   splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
@@ -437,14 +436,13 @@ export function createEditToolDefinition(
         }
 
         const buffer = await ops.readFile(absolutePath);
-        const rawContent = buffer.toString("utf-8");
+        const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
 
           const { bom, text: content } = stripBom(rawContent);
-          const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
           const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
           const noOpEdits = editSets.noOpEdits;
@@ -459,13 +457,12 @@ export function createEditToolDefinition(
               terminate: true,
             };
           }
-          const { baseContent, newContent } = applyEditsToNormalizedContent(
-            normalizedContent,
+          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
+            content,
             realEdits,
             path,
           );
-          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-          await ops.writeFile(absolutePath, finalContent);
+          await ops.writeFile(absolutePath, bom + finalContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }

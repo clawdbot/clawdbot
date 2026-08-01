@@ -35,7 +35,7 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("OpenClaw first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"openclaw.setup"');
-    expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
+    expect(spec).toContain('"model": "claude-cli/claude-opus-5"');
     expect(spec).toContain('"planner": true');
     expect(source).toContain('const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"]');
     expect(spec).toContain("config set-ref channels.discord.token env {discordEnv}");

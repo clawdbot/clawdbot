@@ -18,13 +18,19 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.j
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  legacyMigrationPathMayExist as pathMayExist,
+  legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 import {
   markSourceRemoved,
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
+import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -39,22 +45,7 @@ import type {
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return pathMayExist(sourcePath) || pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`);
-}
 
 async function readBoundedRegularFile(params: {
   sourceRoot: Root;
@@ -141,16 +132,6 @@ function createLegacySource(
   return { ...params, rootDir, relativePath, sourcePath };
 }
 
-function snapshotsMatch(left: SourceSnapshot, right: SourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
-}
-
 function siblingAttestationNeedsDoctor(filePath: string): boolean {
   try {
     const before = fs.lstatSync(filePath);
@@ -233,6 +214,70 @@ function listOrphanAttestationSources(params: {
   return sources;
 }
 
+function addLegacyWorkspaceSources(params: {
+  workspaceDir: string;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  add: (source: LegacyWorkspaceStateSource) => void;
+}): void {
+  const identity = resolveWorkspaceStateIdentity(params.workspaceDir);
+  const paths = resolveLegacyWorkspaceSourcePaths(params.workspaceDir, {
+    env: params.env,
+    homedir: params.homedir,
+  });
+  for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
+    if (sourceOrClaimMayExist(sourcePath)) {
+      params.add(
+        createLegacySource({
+          kind: "setup",
+          rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
+            ? path.dirname(sourcePath)
+            : path.dirname(path.dirname(sourcePath)),
+          sourcePath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+          workspaceAliasPath: paths.workspacePath,
+          priority,
+        }),
+      );
+    }
+  }
+  for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
+    if (sourceOrClaimMayExist(sourcePath)) {
+      params.add(
+        createLegacySource({
+          kind: "attestation",
+          rootDir: path.dirname(path.dirname(sourcePath)),
+          sourcePath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+          workspaceAliasPath: paths.workspacePath,
+          priority,
+        }),
+      );
+    }
+  }
+  for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
+    if (
+      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !siblingAttestationNeedsDoctor(sourcePath)
+    ) {
+      continue;
+    }
+    params.add(
+      createLegacySource({
+        kind: "attestation",
+        rootDir: path.dirname(sourcePath),
+        sourcePath,
+        workspaceKey: identity.workspaceKey,
+        workspaceDir: identity.workspacePath,
+        workspaceAliasPath: paths.workspacePath,
+        priority: paths.stateDirAttestationPaths.length + index,
+      }),
+    );
+  }
+}
+
 /** Detect retired workspace files only when an explicit Doctor flow opts in. */
 export function detectLegacyWorkspaceState(params: {
   cfg: OpenClawConfig;
@@ -262,59 +307,16 @@ export function detectLegacyWorkspaceState(params: {
   };
 
   for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
-    const identity = resolveWorkspaceStateIdentity(workspaceDir);
-    const paths = resolveLegacyWorkspaceSourcePaths(workspaceDir, { env, homedir });
-    for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
-      if (sourceOrClaimMayExist(sourcePath)) {
-        add(
-          createLegacySource({
-            kind: "setup",
-            rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-              ? path.dirname(sourcePath)
-              : path.dirname(path.dirname(sourcePath)),
-            sourcePath,
-            workspaceKey: identity.workspaceKey,
-            workspaceDir: identity.workspacePath,
-            workspaceAliasPath: paths.workspacePath,
-            priority,
-          }),
-        );
-      }
-    }
-    for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
-      if (sourceOrClaimMayExist(sourcePath)) {
-        add(
-          createLegacySource({
-            kind: "attestation",
-            rootDir: path.dirname(path.dirname(sourcePath)),
-            sourcePath,
-            workspaceKey: identity.workspaceKey,
-            workspaceDir: identity.workspacePath,
-            workspaceAliasPath: paths.workspacePath,
-            priority,
-          }),
-        );
-      }
-    }
-    for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
-      if (
-        !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
-        !siblingAttestationNeedsDoctor(sourcePath)
-      ) {
-        continue;
-      }
-      add(
-        createLegacySource({
-          kind: "attestation",
-          rootDir: path.dirname(sourcePath),
-          sourcePath,
-          workspaceKey: identity.workspaceKey,
-          workspaceDir: identity.workspacePath,
-          workspaceAliasPath: paths.workspacePath,
-          priority: paths.stateDirAttestationPaths.length + index,
-        }),
-      );
-    }
+    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
+  }
+
+  for (const workspaceDir of listSandboxWorkspaceDirs({
+    cfg: params.cfg,
+    env,
+    homedir,
+    stateDir: params.stateDir,
+  })) {
+    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 
   for (const source of listOrphanAttestationSources({ stateDir: params.stateDir, homedir })) {
@@ -648,63 +650,32 @@ export async function migrateLegacyWorkspaceState(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  if (!params.detected?.hasLegacy) {
+  const detected = params.detected;
+  if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : formatErrorMessage(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy workspace state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy workspace state: exclusive state ownership unavailable."],
-    };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  let releaseError: unknown;
-  try {
-    for (const source of params.detected.sources) {
-      const result = await migrateOneSource({
-        source,
-        env,
-        ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
-        ...(params.removeSource ? { removeSource: params.removeSource } : {}),
-      });
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    warnings.push(`Workspace migration lock release failed: ${formatErrorMessage(releaseError)}`);
-  }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy workspace state",
+    releaseLabel: "Workspace",
+    formatAcquireError: formatErrorMessage,
+    run: async (env) => {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      for (const source of detected.sources) {
+        const result = await migrateOneSource({
+          source,
+          env,
+          ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
+          ...(params.removeSource ? { removeSource: params.removeSource } : {}),
+        });
+        changes.push(...result.changes);
+        warnings.push(...result.warnings);
+        notices.push(...(result.notices ?? []));
+      }
+      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+    },
+  });
 }

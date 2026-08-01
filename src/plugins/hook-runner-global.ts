@@ -20,7 +20,12 @@ import {
   createComposedHookRegistryFacade,
   getHookRunnerGlobalState,
 } from "./hook-runner-global-state.js";
-import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-types.js";
+import type {
+  PluginHookGatewayContext,
+  PluginHookGatewayStopEvent,
+  PluginHookHandlerMap,
+  PluginHookName,
+} from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 
 const getLog = () => createSubsystemLogger("plugins");
@@ -78,8 +83,11 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
 /**
  * Check if any hooks are registered for a given hook name.
  */
-export function hasGlobalHooks(hookName: Parameters<HookRunner["hasHooks"]>[0]): boolean {
-  return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName) ?? false;
+export function hasGlobalHooks<K extends PluginHookName>(
+  hookName: K,
+  ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+): boolean {
+  return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName, ctx) ?? false;
 }
 
 export async function runGlobalGatewayStopSafely(params: {

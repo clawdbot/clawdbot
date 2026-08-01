@@ -10,7 +10,12 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveEffectiveHomeDir } from "../../../infra/home-dir.js";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
-import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
+import {
+  inspectBundledPluginStartupMetadata,
+  inspectPluginStartupMetadata,
+} from "../../../plugins/bundled-plugin-startup-metadata.js";
+import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
+import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { configMayRequireStartupPluginConvergence } from "./startup-plugin-convergence-plan.js";
 
 const STATEFUL_CONFIG_KEYS = new Set([
@@ -64,9 +69,57 @@ function hasOnlyMigrationSafePluginEntries(
   if (!isRecord(plugins)) {
     return plugins === undefined;
   }
-  if (Object.keys(plugins).some((key) => !["enabled", "entries", "allow", "deny"].includes(key))) {
+  if (
+    Object.keys(plugins).some(
+      (key) => !["enabled", "entries", "allow", "deny", "load"].includes(key),
+    )
+  ) {
     return false;
   }
+
+  if (plugins.load !== undefined) {
+    if (
+      !isRecord(plugins.load) ||
+      Object.keys(plugins.load).some((key) => key !== "paths") ||
+      !Array.isArray(plugins.load.paths) ||
+      !plugins.load.paths.every((entry) => typeof entry === "string" && entry.trim().length > 0)
+    ) {
+      return false;
+    }
+    if (plugins.load.paths.length > 0) {
+      const discovery = discoverConfiguredPluginLoadPaths({
+        loadPaths: plugins.load.paths,
+        env,
+      });
+      if (discovery.candidates.length === 0) {
+        return false;
+      }
+      // Discovery alone cannot prove host compatibility or rule out a fallback
+      // doctor owner; use the same candidate acceptance as normal plugin startup.
+      const registry = loadPluginManifestRegistry({
+        config: config as OpenClawConfig,
+        discovery,
+        env,
+        installRecords: {},
+      });
+      if (
+        registry.diagnostics.length > 0 ||
+        registry.plugins.length !== discovery.candidates.length
+      ) {
+        return false;
+      }
+      for (const plugin of registry.plugins) {
+        const metadata = inspectPluginStartupMetadata({
+          pluginId: plugin.id,
+          rootDir: plugin.rootDir,
+        });
+        if (!metadata || metadata.hasDoctorContract) {
+          return false;
+        }
+      }
+    }
+  }
+
   if (!isRecord(plugins.entries)) {
     return plugins.entries === undefined;
   }

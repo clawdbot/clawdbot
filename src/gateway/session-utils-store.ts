@@ -9,6 +9,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
+  listAgentEntries,
   listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -16,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
@@ -27,6 +29,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
@@ -36,7 +39,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow, GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewayAgentRow } from "./session-utils.types.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -120,7 +123,7 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean } | undefined,
+  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -130,17 +133,27 @@ function loadSessionEntryWithMode(
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly ? { readOnly: true } : {}),
+    ...(readOnly
+      ? {
+          exactRead: true,
+          readOnly: true,
+          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
+        }
+      : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
+  const entry =
+    readOnly && opts?.clone !== false && canonicalMatch?.entry
+      ? structuredClone(canonicalMatch.entry)
+      : canonicalMatch?.entry;
   return {
     cfg,
     storePath,
     store,
-    entry: freshestMatch?.entry,
+    entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,
     legacyKey,
@@ -153,62 +166,46 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
 
 export function loadSessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean },
+  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-/** Returns both the freshest entry and the exact persisted key that owns it. */
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns the one canonical entry and the exact persisted key that owns it. */
+export function resolveCanonicalSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
+  let selected: { key: string; entry: SessionEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
       continue;
     }
     const match = { key, entry };
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
+    if (selected) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
+      );
     }
+    selected = match;
   }
-  return freshest;
+  if (selected && selected.key !== storeKeys[0]) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
+    );
+  }
+  return selected;
 }
 
-export function resolveFreshestSessionEntryFromStoreKeys(
+export function resolveCanonicalSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): SessionEntry | undefined {
-  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
-/**
- * Remove legacy key variants for one canonical session key.
- * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
- */
-function pruneLegacyStoreKeys(params: {
-  store: Record<string, unknown>;
-  canonicalKey: string;
-  candidates: Iterable<string>;
-}) {
-  const keysToDelete = new Set<string>();
-  for (const candidate of params.candidates) {
-    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed !== params.canonicalKey) {
-      keysToDelete.add(trimmed);
-    }
-  }
-  for (const key of keysToDelete) {
-    delete params.store[key];
-  }
-}
-
-export function migrateAndPruneGatewaySessionStoreKey(params: {
+export function resolveCanonicalGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
@@ -221,38 +218,8 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
-    params.store,
-    target.storeKeys,
-  );
-  if (freshestMatch) {
-    const currentPrimary = params.store[primaryKey];
-    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
-      params.store[primaryKey] = freshestMatch.entry;
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
+  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
-}
-
-export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
 }
 
 export function parseGroupKey(
@@ -317,10 +284,16 @@ function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
 ): GatewayAgentRow["model"] | undefined {
-  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  // Agent rows expose model identity to clients; credential-profile binding stays in
+  // canonical config and is consumed only by execution-time model selection.
+  const primary = splitTrailingAuthProfile(
+    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
+  ).model;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  const fallbacks = normalizeFallbackList(
+    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  );
   if (!primary && fallbacks.length === 0) {
     return undefined;
   }
@@ -345,7 +318,7 @@ export function listAgentsForGateway(
 } {
   const basic = listGatewayAgentsBasic(cfg);
   const configuredById = new Map<string, { identity?: GatewayAgentRow["identity"] }>();
-  for (const entry of cfg.agents?.list ?? []) {
+  for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }

@@ -265,4 +265,53 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(registry.httpRoutes).toHaveLength(0);
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
   });
+
+  it("returns immediately without polling startup when abort signal is pre-aborted", async () => {
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const preAborted = new AbortController();
+    preAborted.abort();
+    const runtime = createRuntimeEnv();
+
+    // With a pre-aborted signal the function must return without ever
+    // entering the polling loop (getUpdates never called).
+    await monitorZaloProvider({
+      token: "test-token",
+      account: TEST_ACCOUNT,
+      config: TEST_CONFIG,
+      runtime,
+      abortSignal: preAborted.signal,
+    });
+
+    // getUpdatesMock is a never-resolving promise in polling mode; if the
+    // early return works, this test completes. getUpdates should not be
+    // called because we never entered polling.
+    expect(getUpdatesMock).not.toHaveBeenCalled();
+    // getWebhookInfo should also be skipped — on main the polling path
+    // inspects the webhook before starting the loop, so a pre-aborted
+    // signal that misses the early return would hit getWebhookInfo first.
+    expect(getWebhookInfoMock).not.toHaveBeenCalled();
+    // The early return logs provider init but skips the try/finally block,
+    // so the "stopped" log from the finally block is not emitted.
+  });
+
+  it("returns immediately without webhook registration when abort signal is pre-aborted", async () => {
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const preAborted = new AbortController();
+    preAborted.abort();
+    const runtime = createRuntimeEnv();
+
+    await monitorZaloProvider({
+      token: "test-token",
+      account: TEST_ACCOUNT,
+      config: TEST_CONFIG,
+      runtime,
+      abortSignal: preAborted.signal,
+      useWebhook: true,
+      webhookUrl: "https://example.com/hooks/zalo",
+      webhookSecret: "test-webhook-secret",
+    });
+
+    // setWebhookMock should not be called — we returned before webhook setup.
+    expect(setWebhookMock).not.toHaveBeenCalled();
+  });
 });

@@ -37,10 +37,12 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
     { detectPolicyInlineEval },
+    { isBlockedShellWrapperCommand },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
     import("../infra/exec-control-command-guard.js"),
     import("../infra/command-analysis/policy.js"),
+    import("../infra/exec-wrapper-resolution.js"),
   ]);
   const command = params.command.trim();
   const host: ExecAutoReviewHost = params.host;
@@ -61,6 +63,10 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
     segment !== undefined &&
     segment.raw.trim() === command;
   if (!boundSingleCommand) {
+    return undefined;
+  }
+  // Blocked carriers and startup files execute outside the reviewed payload.
+  if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
     return undefined;
   }
   if (

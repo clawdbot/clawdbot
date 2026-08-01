@@ -5,18 +5,11 @@ import {
   sessionDeliveryOrigin,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./target-ids.js";
 
-function trimMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function resolveMatrixRoomTargetId(value: unknown): string | undefined {
-  const trimmed = trimMaybeString(value);
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -25,7 +18,7 @@ function resolveMatrixRoomTargetId(value: unknown): string | undefined {
 }
 
 function resolveMatrixSessionAccountId(value: unknown): string | undefined {
-  const trimmed = trimMaybeString(value);
+  const trimmed = normalizeOptionalString(value);
   return trimmed ? normalizeAccountId(trimmed) : undefined;
 }
 
@@ -54,7 +47,8 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
   }
   const deliveryContext = deliveryContextFromSession(entry);
   const origin = sessionDeliveryOrigin(entry);
-  const channel = trimMaybeString(deliveryContext?.channel) ?? trimMaybeString(origin?.provider);
+  const channel =
+    normalizeOptionalString(deliveryContext?.channel) ?? normalizeOptionalString(origin?.provider);
   const accountId =
     resolveMatrixSessionAccountId(deliveryContext?.accountId ?? origin?.accountId) ?? undefined;
   const roomId = resolveMatrixStoredRoomId({
@@ -63,16 +57,16 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
     originTo: origin?.to,
   });
   const chatType =
-    trimMaybeString(origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined;
+    normalizeOptionalString(origin?.chatType) ?? normalizeOptionalString(entry.chatType);
   const directUserId =
     chatType === "direct"
-      ? (trimMaybeString(origin?.nativeDirectUserId) ??
+      ? (normalizeOptionalString(origin?.nativeDirectUserId) ??
         resolveMatrixDirectUserId({
-          from: trimMaybeString(origin?.from),
+          from: normalizeOptionalString(origin?.from),
           to:
             (roomId ? `room:${roomId}` : undefined) ??
-            trimMaybeString(deliveryContext?.to) ??
-            trimMaybeString(origin?.to),
+            normalizeOptionalString(deliveryContext?.to) ??
+            normalizeOptionalString(origin?.to),
           chatType,
         }))
       : undefined;

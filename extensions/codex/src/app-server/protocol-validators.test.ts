@@ -7,12 +7,13 @@ import {
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {
   return {
     id: "thread-1",
     sessionId: "session-1",
-    cliVersion: "0.129.0",
+    cliVersion: CODEX_APP_SERVER_VERSION,
     createdAt: 1715299200,
     updatedAt: 1715299200,
     cwd: "/tmp",
@@ -39,8 +40,8 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
-  // sessionId must fail loudly instead of being silently normalized.
+  // The pinned Codex protocol requires both thread identities; never silently
+  // invent a session identity when a malformed response omits one.
   it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
       assertCodexThreadStartResponse,

@@ -12,10 +12,9 @@ scenario:
     - The model returns the requested exact marker through the reply path.
     - Exactly one outbound message contains the marker.
   codeRefs:
-    - src/auto-reply/reply/reply-payload.ts
+    - src/auto-reply/reply-payload.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles: { "telegram:adapter": 13, "telegram:all": 12 }
     kind: flow
     channel: telegram
     summary: Request one exact Telegram marker and verify single-message delivery.

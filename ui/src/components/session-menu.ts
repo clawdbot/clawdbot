@@ -10,6 +10,7 @@ import {
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
@@ -83,32 +84,20 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
   @state() private iconPickerOpen = false;
+  readonly menuLifecycle = new DropdownMenuController(this, {
+    getTrigger: () => this.trigger,
+    onClose: () => this.onClose(),
+    onKeydown: (event) => activateMenuShortcut(this, event),
+  });
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
     // Sidebar-hosted menus live inside the nav stacking context (z-index 10),
     // which paints below the sidebar resizer divider (z-index 20); promoting
     // the menu to the popover top layer keeps app chrome from bleeding
     // through it (same pattern as openclaw-native-link-menu).
     promoteToPopoverTopLayer(this);
   }
-
-  override disconnectedCallback() {
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    super.disconnectedCallback();
-  }
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.trigger?.focus();
-      this.onClose();
-      return;
-    }
-    activateMenuShortcut(this, event);
-  };
 
   private runAction(action: SessionMenuAction) {
     this.onClose();

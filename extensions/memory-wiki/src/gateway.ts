@@ -15,7 +15,6 @@ import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
-import { listMemoryWikiPalace } from "./memory-palace.js";
 import {
   probeObsidianCli,
   runObsidianCommand,
@@ -27,6 +26,7 @@ import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
@@ -175,13 +175,16 @@ export function registerMemoryWikiGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
+  // Renamed from wiki.palace without an alias by maintainer decision: the method was
+  // undocumented, its only known consumer is the version-locked Control UI, and stale
+  // callers get an explicit unknown-method error rather than a silent failure.
   api.registerGatewayMethod(
-    "wiki.palace",
+    "wiki.overview",
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config } = resolveRequestContext(requestParams);
         await syncImportedSourcesIfNeeded(config, appConfig);
-        respond(true, await listMemoryWikiPalace(config));
+        respond(true, await listMemoryWikiOverview(config));
       } catch (error) {
         respondError(respond, error);
       }

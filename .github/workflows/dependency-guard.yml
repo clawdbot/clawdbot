@@ -24,7 +24,7 @@ jobs:
       autoscrub-repository: ${{ steps.guard.outputs.autoscrub-repository }}
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
@@ -49,7 +49,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
@@ -95,7 +95,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false

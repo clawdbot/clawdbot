@@ -164,6 +164,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
 		translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 		translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+		translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
 			return translated, nil
@@ -217,6 +218,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
 	translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 	translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+	translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
 	}

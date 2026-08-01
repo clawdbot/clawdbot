@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -189,6 +190,34 @@ describe("runSqliteImmediateTransactionSync", () => {
       "database is busy",
     );
     expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"]);
+  });
+
+  it("clears cached state before closing after a rollback failure", () => {
+    const execCalls: string[] = [];
+    const operationError = new Error("operation failed");
+    const rollbackError = new Error("rollback failed");
+    let facadeAtClose: unknown;
+    const db = {
+      exec(sql: string) {
+        execCalls.push(sql);
+        if (sql === "ROLLBACK") {
+          throw rollbackError;
+        }
+      },
+      close() {
+        facadeAtClose = getNodeSqliteKysely(db);
+      },
+    } as import("node:sqlite").DatabaseSync;
+    const facadeBeforeClose = getNodeSqliteKysely(db);
+
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => {
+        throw operationError;
+      }),
+    ).toThrow(operationError);
+    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
+    expect(facadeAtClose).toBeDefined();
+    expect(facadeAtClose).not.toBe(facadeBeforeClose);
   });
 
   it("logs one structured warning for a terminal lock failure", () => {

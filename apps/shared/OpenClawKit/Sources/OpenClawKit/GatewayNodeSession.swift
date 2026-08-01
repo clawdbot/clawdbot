@@ -160,7 +160,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var mainSessionKey: String?
-    private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
@@ -685,6 +685,10 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
+    public func resolveGatewayHTTPURL(_ raw: String) -> URL? {
+        GatewayPluginSurfaceURL.resolveHTTPURL(raw: raw, against: self.activeURL)
+    }
+
     public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) async -> GatewayNodeSessionRoute? {
         guard let channel = self.channel else { return nil }
         if let expectedGatewayID {
@@ -704,6 +708,13 @@ public actor GatewayNodeSession {
             channelGeneration: channelGeneration,
             admissionGeneration: admissionGeneration,
             socketGeneration: socketGeneration)
+    }
+
+    public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        guard self.isCurrentRoute(route), self.channel != nil else { return nil }
+        // iOS operator routes normalize this to the effective stable ID before connect.
+        // Keep nil for unscoped clients rather than letting artifact HTTP bind to a guessed owner.
+        return self.connectOptions?.deviceAuthGatewayID
     }
 
     public func supportsServerCapability(
@@ -828,11 +839,15 @@ public actor GatewayNodeSession {
         }
 
         if let expectedRoute {
-            return try await channel.request(
+            let data = try await channel.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            guard self.isCurrentRoute(expectedRoute), self.channel === channel else {
+                throw CancellationError()
+            }
+            return data
         }
         return try await channel.request(
             method: method,
@@ -964,12 +979,13 @@ extension GatewayNodeSession {
             return true
         }
         let clamped = max(0, timeoutMs)
+        let waiterID = UUID()
         return await withCheckedContinuation { cont in
-            self.snapshotWaiters.append(cont)
+            self.snapshotWaiters[waiterID] = cont
             Task { [weak self] in
                 guard let self else { return }
                 try? await Task.sleep(nanoseconds: UInt64(clamped) * 1_000_000)
-                await self.timeoutSnapshotWaiters()
+                await self.timeoutSnapshotWaiter(id: waiterID)
             }
         }
     }
@@ -983,14 +999,16 @@ extension GatewayNodeSession {
         }
     }
 
-    private func timeoutSnapshotWaiters() {
-        guard !self.snapshotReceived else { return }
-        self.drainSnapshotWaiters(returning: false)
+    private func timeoutSnapshotWaiter(id: UUID) {
+        guard !self.snapshotReceived,
+              let waiter = self.snapshotWaiters.removeValue(forKey: id)
+        else { return }
+        waiter.resume(returning: false)
     }
 
     private func drainSnapshotWaiters(returning value: Bool) {
         if !self.snapshotWaiters.isEmpty {
-            let waiters = self.snapshotWaiters
+            let waiters = self.snapshotWaiters.values
             self.snapshotWaiters.removeAll()
             for waiter in waiters {
                 waiter.resume(returning: value)
@@ -1315,6 +1333,26 @@ extension GatewayNodeSession {
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
+    }
+
+    // periphery:ignore - package tests reproduce a stale timeout across route reset.
+    func _test_waitForSnapshot(timeoutMs: Int) async -> Bool {
+        await self.waitForSnapshot(timeoutMs: timeoutMs)
+    }
+
+    // periphery:ignore - package tests complete snapshot waits without a live socket.
+    func _test_markSnapshotReceived() {
+        self.markSnapshotReceived()
+    }
+
+    // periphery:ignore - package tests reproduce route replacement snapshot state.
+    func _test_resetConnectionState() {
+        self.resetConnectionState()
+    }
+
+    // periphery:ignore - package tests wait until a snapshot continuation is registered.
+    func _test_snapshotWaiterCount() -> Int {
+        self.snapshotWaiters.count
     }
 
     #endif

@@ -899,7 +899,7 @@ class WearProxyClientTest {
     assertTrue(reset.messages.isEmpty())
     assertEquals(null, reset.streamText)
     assertEquals(null, reset.activeRunId)
-    assertTrue(reset.sending)
+    assertTrue(!reset.sending)
     assertEquals(null, reset.failure)
   }
 

@@ -11,9 +11,9 @@
 .option-card__chip {
   justify-self: start;
   padding: 4px 8px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -80,7 +80,7 @@
 }
 
 .option-card__description {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -102,7 +102,7 @@
   padding: 2px 0;
   border: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
   text-decoration: underline;
   text-underline-offset: 3px;

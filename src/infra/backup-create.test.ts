@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -904,24 +905,27 @@ describe("createBackupArchive", () => {
 
         const restoredDatabasePath = path.join(extractDir, databaseEntry);
         const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
-        const restoredDetection = detectLegacyAuditLogs({
-          stateDir: restoredStateDir,
-          doctorOnlyStateMigrations: true,
-        });
-        expect(restoredDetection.hasLegacy).toBe(true);
-        await migrateLegacyAuditLogs({
-          detected: restoredDetection,
-          stateDir: restoredStateDir,
-        });
-        const restoredEntries = createSqliteAuditRecordStore({
-          scope: CONFIG_AUDIT_SCOPE,
-          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-          env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
-        }).entries();
-        expect(restoredEntries).toHaveLength(2);
-        expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
-        expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
-        closeOpenClawStateDatabase();
+        try {
+          const restoredDetection = detectLegacyAuditLogs({
+            stateDir: restoredStateDir,
+            doctorOnlyStateMigrations: true,
+          });
+          expect(restoredDetection.hasLegacy).toBe(true);
+          await migrateLegacyAuditLogs({
+            detected: restoredDetection,
+            stateDir: restoredStateDir,
+          });
+          const restoredEntries = createSqliteAuditRecordStore({
+            scope: CONFIG_AUDIT_SCOPE,
+            maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+            env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
+          }).entries();
+          expect(restoredEntries).toHaveLength(2);
+          expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
+          expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
+        } finally {
+          closeOpenClawStateDatabaseByPath(restoredDatabasePath);
+        }
       },
     );
   });

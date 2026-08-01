@@ -158,6 +158,7 @@ export const RequestFrameSchema = closedObject({
   id: NonEmptyString,
   method: NonEmptyString,
   params: Type.Optional(Type.Unknown()),
+  traceparent: Type.Optional(Type.String({ maxLength: 128 })),
 });
 
 /** Server response frame envelope paired with a prior request id. */

@@ -91,6 +91,7 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
 type AgentCliProcessLike = {
+  exitCode?: NodeJS.Process["exitCode"];
   on(signal: AgentCliSignal, handler: () => void): unknown;
   off(signal: AgentCliSignal, handler: () => void): unknown;
 };
@@ -441,6 +442,9 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   return {
     signal: controller.signal,
     getReceivedSignal: () => receivedSignal,
+    setExitCode: (code: number) => {
+      processLike.exitCode = code;
+    },
     dispose: detachHandlers,
   };
 }
@@ -635,6 +639,20 @@ function isInFlightGatewayAgentResponse(response: GatewayAgentResponse): boolean
   return response.status === "in_flight";
 }
 
+function markFailedGatewayAgentResponse(
+  response: GatewayAgentResponse,
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+): void {
+  if (
+    response.status === "timeout" ||
+    response.status === "error" ||
+    response.status === "cancelled"
+  ) {
+    // Let Node drain structured or text stdout before the process exits.
+    signalBridge.setExitCode(1);
+  }
+}
+
 function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
   return response.runId
     ? `Agent run ${response.runId} is already in flight; not starting a duplicate run.`
@@ -813,6 +831,7 @@ async function agentViaGatewayCommand(
 
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
+    markFailedGatewayAgentResponse(response, signalBridge);
     return response;
   }
 
@@ -828,6 +847,7 @@ async function agentViaGatewayCommand(
     if (response?.status !== "ok") {
       runtime.log(response?.summary ? response.summary : "No reply from agent.");
     }
+    markFailedGatewayAgentResponse(response, signalBridge);
     return response;
   }
 
@@ -837,6 +857,8 @@ async function agentViaGatewayCommand(
       runtime.log(out);
     }
   }
+
+  markFailedGatewayAgentResponse(response, signalBridge);
 
   return response;
 }

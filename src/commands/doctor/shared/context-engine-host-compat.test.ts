@@ -11,7 +11,8 @@ import {
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
 
-vi.mock("../../../agents/agent-scope-config.js", () => ({
+vi.mock("../../../agents/agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/agent-scope-config.js")>()),
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
 }));
 
