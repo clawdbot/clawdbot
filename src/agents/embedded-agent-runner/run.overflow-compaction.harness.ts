@@ -179,28 +179,27 @@ const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
   () => makeMockRuntimePlan() as AgentRuntimePlan,
 );
-let preparedModelRuntimePluginRegistry: ReturnType<typeof getActivePluginRegistry>;
-let preparedModelRuntimeAgentHarnesses: NonNullable<
-  typeof preparedModelRuntimePluginRegistry
->["agentHarnesses"] = [];
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
-  async (input: Record<string, unknown>) => ({
-    snapshot: {
-      agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      pluginRegistry: preparedModelRuntimePluginRegistry
-        ? {
-            ...preparedModelRuntimePluginRegistry,
-            agentHarnesses: [...preparedModelRuntimeAgentHarnesses],
-          }
-        : undefined,
-      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    },
-    release: vi.fn(),
-  }),
+  async (input: Record<string, unknown>) => {
+    const pluginRegistry = getActivePluginRegistry();
+    return {
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        pluginRegistry: pluginRegistry
+          ? {
+              ...pluginRegistry,
+              agentHarnesses: [...pluginRegistry.agentHarnesses],
+            }
+          : undefined,
+        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    };
+  },
 );
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedSleepWithAbort = vi.fn(
@@ -475,11 +474,6 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
     },
   });
-  preparedModelRuntimePluginRegistry = getActivePluginRegistry();
-  preparedModelRuntimeAgentHarnesses = [
-    ...(preparedModelRuntimePluginRegistry?.agentHarnesses ?? []),
-  ];
-
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();

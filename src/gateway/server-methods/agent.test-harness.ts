@@ -921,13 +921,15 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
 }
 
 /**
- * Pins subagent-registry deps for gateway handler tests, always keeping
  * Keep subagent registry dependencies deterministic across gateway tests.
+ * Real ended-run hooks load a plugin bundle in the background, which can
+ * replace registrations installed by the next test before it finalizes.
  */
 export function applyGatewaySubagentRegistryTestDeps(
   overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
   setSubagentRegistryDepsForTest({
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
     ...overrides,
   });
 }

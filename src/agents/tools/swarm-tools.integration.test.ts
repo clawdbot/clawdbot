@@ -131,6 +131,7 @@ describe("swarm tools integration", () => {
         restoreSubagentRunsFromDisk: vi.fn(() => 0),
         runSubagentAnnounceFlow: vi.fn(async () => true),
         ensureContextEnginesInitialized: vi.fn(),
+        loadAgentRuntimePluginRegistryHandle: vi.fn(),
         resolveContextEngine: vi.fn(async () => ({
           info: { id: "test", name: "Test", version: "0.0.1" },
           ingest: vi.fn(async () => ({ ingested: false })),

@@ -103,6 +103,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     subagentRegistryTesting.setDepsForTest({
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {},
       restoreSubagentRunsFromDisk: () => 0,

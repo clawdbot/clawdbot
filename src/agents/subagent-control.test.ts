@@ -229,6 +229,7 @@ beforeEach(() => {
   subagentRegistryTesting.setDepsForTest({
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
     getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
@@ -1455,6 +1456,7 @@ describe("killAllControlledSubagentRuns", () => {
     subagentRegistryTesting.setDepsForTest({
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       ensureContextEnginesInitialized: () => {},
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
       getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {
