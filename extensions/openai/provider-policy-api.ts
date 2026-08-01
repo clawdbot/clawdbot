@@ -1,6 +1,5 @@
 // Openai API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
-import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -12,7 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   classifyOpenAIBaseUrl,
-  isOpenAICodexBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
@@ -52,22 +50,6 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
   return params.provider.trim().toLowerCase() === "openai"
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
-}
-
-/**
- * Projects configured rows without activating the full OpenAI runtime.
- * Null means the explicit Responses row is already canonical; undefined asks
- * the caller to preserve runtime normalization for transport-sensitive routes.
- */
-export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
-  if (ctx.provider.trim().toLowerCase() !== "openai") {
-    return undefined;
-  }
-  const requiresRuntimeNormalization =
-    ctx.model.api === OPENAI_COMPLETIONS_API ||
-    ctx.model.api === OPENAI_CHATGPT_RESPONSES_API ||
-    isOpenAICodexBaseUrl(ctx.model.baseUrl);
-  return requiresRuntimeNormalization ? undefined : null;
 }
 
 function firstRouteBaseUrl(...values: unknown[]): unknown {
