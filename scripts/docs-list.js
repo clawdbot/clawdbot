@@ -54,7 +54,11 @@ function compactStrings(values) {
 /**
  * @param {string} dir
  * @param {string} base
- * @param {{ excludedDirs?: Set<string>; excludedFiles?: Set<string> }} options
+ * @param {{
+ *   excludedDirs?: Set<string>;
+ *   excludedFiles?: Set<string>;
+ *   relativePath?: (base: string, fullPath: string) => string;
+ * }} options
  * @returns {string[]}
  */
 function walkMarkdownFiles(dir, base = dir, options = {}) {
@@ -75,7 +79,7 @@ function walkMarkdownFiles(dir, base = dir, options = {}) {
       /\.(md|mdx)$/iu.test(entry.name) &&
       !options.excludedFiles?.has(entry.name)
     ) {
-      files.push(relative(base, fullPath));
+      files.push((options.relativePath ?? relative)(base, fullPath));
     }
   }
   return files.toSorted((a, b) => a.localeCompare(b));
@@ -244,13 +248,20 @@ function routeForFile(relativePath) {
   return `/${withoutExtension}`;
 }
 
+function normalizeDocsMapRelativePath(relativePath) {
+  return relativePath.replace(/\\/gu, "/");
+}
+
 /** Render the publish-only docs heading map without creating a source-tree mirror. */
-export function renderDocsHeadingMap(docsDir = DOCS_DIR) {
+export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
   assertDocsDir(docsDir);
   const files = walkMarkdownFiles(docsDir, docsDir, {
     excludedDirs: DOCS_MAP_EXCLUDED_DIRS,
     excludedFiles: DOCS_MAP_EXCLUDED_FILES,
-  }).toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    relativePath: options.relativePath,
+  })
+    .map(normalizeDocsMapRelativePath)
+    .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const lines = [
     "---",
     'summary: "Generated heading map for OpenClaw docs pages"',

@@ -646,6 +646,33 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual(["prepare-docs"]);
   });
 
+  it("keeps the docs-map lock when changelog restoration fails", async () => {
+    const outputDir = tempDirs.make("openclaw-package-restore-order-");
+    const calls: string[] = [];
+
+    await expect(
+      packOpenClawPackageForDocker("/repo", outputDir, {
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        prepareDocsMap: async () => {},
+        restoreChangelog: async () => {
+          calls.push("restore-changelog");
+          throw new Error("changelog restore failed");
+        },
+        restoreDocsMap: async () => {
+          calls.push("restore-docs");
+        },
+        runCaptureImpl: async () => {
+          const packedPath = path.join(outputDir, "openclaw-2026.8.1.tgz");
+          fs.writeFileSync(packedPath, "package");
+          return `${path.basename(packedPath)}\n`;
+        },
+      }),
+    ).rejects.toThrow("changelog restore failed");
+
+    expect(calls).toEqual(["restore-changelog"]);
+  });
+
   it("packages Unreleased notes for explicitly non-publish stable artifacts", async () => {
     const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-package-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-output-"));
@@ -667,6 +694,15 @@ describe("package-openclaw-for-docker", () => {
     fs.writeFileSync(path.join(sourceDir, "CHANGELOG.md"), sourceChangelog);
     fs.mkdirSync(path.join(sourceDir, "docs"));
     fs.writeFileSync(path.join(sourceDir, "docs", "page.md"), "# Package page\n");
+    fs.mkdirSync(path.join(sourceDir, "scripts"));
+    fs.copyFileSync(
+      path.join(process.cwd(), "scripts", "package-docs-map.mjs"),
+      path.join(sourceDir, "scripts", "package-docs-map.mjs"),
+    );
+    fs.copyFileSync(
+      path.join(process.cwd(), "scripts", "docs-list.js"),
+      path.join(sourceDir, "scripts", "docs-list.js"),
+    );
 
     try {
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
@@ -688,6 +724,42 @@ describe("package-openclaw-for-docker", () => {
       expect(tarball).toBe(path.join(outputDir, "openclaw-2026.5.29.tgz"));
       expect(fs.readFileSync(path.join(sourceDir, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
       expect(fs.existsSync(path.join(sourceDir, "docs", "docs_map.md"))).toBe(false);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a frozen pre-map source package byte-owned by that ref", async () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-frozen-package-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-frozen-output-"));
+    const docsDir = path.join(sourceDir, "docs");
+    fs.mkdirSync(docsDir);
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      '{"name":"openclaw","version":"2026.6.33"}\n',
+    );
+    fs.writeFileSync(
+      path.join(docsDir, "index.md"),
+      '---\nsummary: "Frozen OpenClaw docs"\n---\n\n# OpenClaw\n',
+    );
+    expect(fs.existsSync(path.join(sourceDir, "scripts", "package-docs-map.mjs"))).toBe(false);
+
+    try {
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        runCaptureImpl: async () => {
+          expect(fs.existsSync(path.join(docsDir, "docs_map.md"))).toBe(false);
+          const packedPath = path.join(outputDir, "openclaw-2026.6.33.tgz");
+          fs.writeFileSync(packedPath, "frozen package");
+          return `${path.basename(packedPath)}\n`;
+        },
+      });
+
+      expect(tarball).toBe(path.join(outputDir, "openclaw-2026.6.33.tgz"));
+      expect(fs.existsSync(path.join(docsDir, "docs_map.md"))).toBe(false);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(outputDir, { recursive: true, force: true });

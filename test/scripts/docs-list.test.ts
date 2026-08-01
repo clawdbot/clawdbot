@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -91,5 +92,21 @@ summary: "Page"
     expect(output).not.toContain("Hidden fenced heading");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
+  });
+
+  it("normalizes injected Windows paths for nested page routes", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-windows-");
+    const docsDir = path.join(tempRepoRoot, "docs");
+    mkdirSync(path.join(docsDir, "nested"), { recursive: true });
+    writeFileSync(path.join(docsDir, "nested", "index.mdx"), "# Nested index\n");
+    writeFileSync(path.join(docsDir, "nested", "page.md"), "# Nested page\n");
+
+    const output = renderDocsHeadingMap(docsDir, {
+      relativePath: (base, fullPath) => path.relative(base, fullPath).replace(/[\\/]+/gu, "\\"),
+    });
+
+    expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
+    expect(output).toContain("## nested/page.md\n\n- Route: /nested/page");
+    expect(output).not.toContain("\\");
   });
 });

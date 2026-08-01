@@ -14,7 +14,7 @@ const RECEIPT_PATH = path.join(".artifacts", "package-docs-map", "receipt.json")
 function activePreparationError() {
   return Object.assign(
     new Error(
-      `Another package preparation owns ${DOCS_MAP_PATH}; wait for it to finish or run \`node scripts/package-docs-map.mjs restore\` after an interrupted pack.`,
+      `Another package preparation owns ${DOCS_MAP_PATH}; wait for it to finish or run \`node scripts/openclaw-postpack.mjs\` after an interrupted pack.`,
     ),
     { code: "PACKAGE_DOCS_MAP_ACTIVE" },
   );

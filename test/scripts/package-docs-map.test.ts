@@ -2,15 +2,27 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
+import { restorePrepackArtifacts } from "../../scripts/openclaw-postpack.mjs";
+import { preparePackageChangelog } from "../../scripts/package-changelog.mjs";
 import { preparePackageDocsMap, restorePackageDocsMap } from "../../scripts/package-docs-map.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
+const sourceChangelog = `# Changelog
+
+## 2026.8.1
+- Current release notes with enough detail for package validation.
+
+## 2026.7.1
+- Previous release notes with enough detail for package validation.
+`;
 
 function makePackageRoot(): string {
   const root = makeTempDir(tempDirs, "openclaw-package-docs-map-");
   mkdirSync(path.join(root, "docs"), { recursive: true });
   writeFileSync(path.join(root, "docs", "page.md"), "# Package docs\n", "utf8");
+  writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.8.1"}\n');
+  writeFileSync(path.join(root, "CHANGELOG.md"), sourceChangelog);
   return root;
 }
 
@@ -66,7 +78,10 @@ describe("package docs map", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({
-      reason: expect.objectContaining({ code: "PACKAGE_DOCS_MAP_ACTIVE" }),
+      reason: expect.objectContaining({
+        code: "PACKAGE_DOCS_MAP_ACTIVE",
+        message: expect.stringContaining("node scripts/openclaw-postpack.mjs"),
+      }),
     });
     expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
     await expect(restorePackageDocsMap(root)).resolves.toBe(true);
@@ -81,5 +96,36 @@ describe("package docs map", () => {
 
     await expect(restorePackageDocsMap(root)).rejects.toThrow("changed after prepack");
     expect(readFileSync(mapPath, "utf8")).toBe("operator change\n");
+  });
+
+  it("keeps the lifecycle lock until interrupted changelog state is restored", async () => {
+    const root = makePackageRoot();
+    const mapPath = path.join(root, "docs", "docs_map.md");
+    const receiptPath = path.join(root, ".artifacts", "package-docs-map", "receipt.json");
+    const changelogBackupPath = path.join(
+      root,
+      ".artifacts",
+      "package-changelog",
+      "CHANGELOG.md.prepack-backup",
+    );
+    const stub = "# Docs map source\n";
+    writeFileSync(mapPath, stub);
+
+    await preparePackageDocsMap(root);
+    await preparePackageChangelog(root);
+    const packagedChangelog = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+    writeFileSync(path.join(root, "CHANGELOG.md"), "operator change\n");
+
+    await expect(restorePrepackArtifacts(root)).rejects.toThrow("changed since the backup");
+    expect(existsSync(receiptPath)).toBe(true);
+    expect(existsSync(changelogBackupPath)).toBe(true);
+    expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
+
+    writeFileSync(path.join(root, "CHANGELOG.md"), packagedChangelog);
+    await expect(restorePrepackArtifacts(root)).resolves.toBeUndefined();
+    expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    expect(readFileSync(mapPath, "utf8")).toBe(stub);
+    expect(existsSync(changelogBackupPath)).toBe(false);
+    expect(existsSync(receiptPath)).toBe(false);
   });
 });

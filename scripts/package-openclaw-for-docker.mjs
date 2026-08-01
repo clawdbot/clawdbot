@@ -11,7 +11,6 @@ import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build
 import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
-import { preparePackageDocsMap, restorePackageDocsMap } from "./package-docs-map.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -673,21 +672,29 @@ export async function prepareBundledAiRuntimePackage(
 }
 
 async function restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog) {
-  const failures = [];
+  await restoreChangelog(sourceDir);
+  // Release the lifecycle receipt only after every other source mutation settles.
+  await restoreDocsMap(sourceDir);
+}
+
+async function loadSourceDocsMapLifecycle(sourceDir) {
+  const modulePath = path.join(sourceDir, "scripts", "package-docs-map.mjs");
   try {
-    await restoreChangelog(sourceDir);
+    await fs.access(modulePath);
   } catch (error) {
-    failures.push(error);
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
   }
-  try {
-    // Release the docs-map receipt last, after the other source mutation settles.
-    await restoreDocsMap(sourceDir);
-  } catch (error) {
-    failures.push(error);
+  const lifecycle = await import(pathToFileURL(modulePath).href);
+  if (
+    typeof lifecycle.preparePackageDocsMap !== "function" ||
+    typeof lifecycle.restorePackageDocsMap !== "function"
+  ) {
+    throw new Error(`source package docs-map lifecycle is invalid: ${modulePath}`);
   }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Failed to restore package source artifacts.");
-  }
+  return lifecycle;
 }
 
 function packagePreparationRestoreError(error, restoreError) {
@@ -707,8 +714,15 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
         allowUnreleased: options.allowUnreleasedChangelog,
       }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
-  const prepareDocsMap = options.prepareDocsMap ?? preparePackageDocsMap;
-  const restoreDocsMap = options.restoreDocsMap ?? restorePackageDocsMap;
+  // Frozen refs own their package contents. Only refs carrying this lifecycle ship a generated map.
+  const sourceDocsMapLifecycle =
+    options.prepareDocsMap && options.restoreDocsMap
+      ? null
+      : await loadSourceDocsMapLifecycle(sourceDir);
+  const prepareDocsMap =
+    options.prepareDocsMap ?? sourceDocsMapLifecycle?.preparePackageDocsMap ?? (async () => false);
+  const restoreDocsMap =
+    options.restoreDocsMap ?? sourceDocsMapLifecycle?.restorePackageDocsMap ?? (async () => false);
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   const packTool = options.pnpmPack ? "pnpm" : "npm";
   if (options.packJsonPath && options.pnpmPack) {
