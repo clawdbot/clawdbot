@@ -357,7 +357,8 @@ function findSourceRuleMatch(params: {
   source: string;
   lines: string[];
 }): { line: number; evidence: string } | null {
-  if (!params.rule.pattern.test(params.source)) {
+  const sourceMatch = params.rule.pattern.exec(params.source);
+  if (!sourceMatch) {
     return null;
   }
   if (params.rule.requiresContext && !params.rule.requiresContext.test(params.source)) {
@@ -385,7 +386,15 @@ function findSourceRuleMatch(params: {
     return null;
   }
 
-  return { line: 1, evidence: truncateUtf16Safe(params.source, 120) };
+  // Multiline rules cannot match any one line. Preserve the actual match start
+  // so stored findings point at the dangerous text instead of file metadata.
+  let line = 1;
+  for (let i = 0; i < sourceMatch.index; i++) {
+    if (params.source.charCodeAt(i) === 10) {
+      line += 1;
+    }
+  }
+  return { line, evidence: params.lines[line - 1] ?? truncateUtf16Safe(params.source, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
