@@ -7,6 +7,7 @@ import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
+  diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
 import {
@@ -605,7 +606,7 @@ function emitModelCallError(
   eventBase: ModelCallEventBase,
   startedAt: number,
   state: ModelCallObservationState,
-  fields: ModelCallErrorFields,
+  err: unknown,
 ): void {
   if (state.terminalEventEmitted) {
     return;
@@ -613,7 +614,11 @@ function emitModelCallError(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, state.responseStatus);
+  const fields = modelCallErrorFields(err);
+  const errorStatus = diagnosticHttpStatusCode(err);
+  const responseStatus =
+    state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, responseStatus);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.error",
@@ -750,7 +755,7 @@ async function* observeModelCallIterator<T>(
     emitModelCallCompleted(eventBase, startedAt, state);
   } catch (err) {
     iteratorSettled = true;
-    emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+    emitModelCallError(eventBase, startedAt, state, err);
     throw err;
   } finally {
     if (!iteratorSettled) {
@@ -793,14 +798,14 @@ function createObservedResultFunction(
         return result.then(
           (resolved) => observeModelCallFinalResult(resolved, eventBase, startedAt, state),
           (err: unknown) => {
-            emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+            emitModelCallError(eventBase, startedAt, state, err);
             throw err;
           },
         );
       }
       return observeModelCallFinalResult(result, eventBase, startedAt, state);
     } catch (err) {
-      emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+      emitModelCallError(eventBase, startedAt, state, err);
       throw err;
     }
   };
@@ -903,14 +908,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt, state),
           (err: unknown) => {
-            emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+            emitModelCallError(eventBase, startedAt, state, err);
             throw err;
           },
         );
       }
       return observeModelCallResult(result, eventBase, startedAt, state);
     } catch (err) {
-      emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+      emitModelCallError(eventBase, startedAt, state, err);
       throw err;
     }
   }) as StreamFn;
