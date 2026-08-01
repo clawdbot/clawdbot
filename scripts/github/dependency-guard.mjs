@@ -54,6 +54,7 @@ const dependencyManifestFields = [
   "cpu",
   "libc",
 ];
+
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
@@ -557,12 +558,12 @@ async function readBase64FileAtRef(api, { owner, repo, path, ref }) {
 }
 
 async function collectDependencyManifestChanges(api, { owner, repo, pullRequest, files }) {
-  const manifestFiles = files
-    .filter((file) => typeof file.filename === "string" && isDependencyManifest(file.filename))
-    .toSorted((left, right) => left.filename.localeCompare(right.filename));
+  const manifestPaths = files
+    .map((file) => file.filename)
+    .filter((filename) => typeof filename === "string" && isDependencyManifest(filename))
+    .toSorted((left, right) => left.localeCompare(right));
   const changes = [];
-  for (const file of manifestFiles) {
-    const path = file.filename;
+  for (const path of manifestPaths) {
     const [baseManifest, headManifest] = await Promise.all([
       readJsonFileAtRef(api, {
         owner,
