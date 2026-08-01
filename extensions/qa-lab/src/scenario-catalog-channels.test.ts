@@ -50,6 +50,10 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("keeps the memory channel-context proof on the internal QA channel", () => {
+    expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
+  });
+
   it("marks live transport modules as live-driver-only", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",
