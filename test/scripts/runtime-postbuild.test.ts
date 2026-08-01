@@ -229,6 +229,23 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("writes export HTML assets beneath the cwd-only caller root", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
+    const sourceDir = path.join(rootDir, "src", "auto-reply", "reply", "export-html");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "template.html"), "<html></html>\n", "utf8");
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    });
+
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+    ).resolves.toBe("<html></html>\n");
+  });
+
   it("validates every postbuild root before running any phase", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-roots-");
     const distFile = path.join(rootDir, "dist", "keep.js");

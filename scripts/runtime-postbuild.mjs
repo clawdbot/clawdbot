@@ -686,7 +686,7 @@ export function runRuntimePostBuild(params = {}) {
   };
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
-  runPhase("export HTML assets", () => copyExportHtmlTemplates(params));
+  runPhase("export HTML assets", () => copyExportHtmlTemplates({ ...params, rootDir }));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("static extension assets", () => {
     if (!shouldCopyStaticExtensionAssets(params)) {
